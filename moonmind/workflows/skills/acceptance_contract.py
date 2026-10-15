@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 
 class _Record(BaseModel):
@@ -42,9 +42,17 @@ class AcceptanceScope(_Record):
     requirement_ids: list[str] = Field(alias="requirementIds", min_length=1)
 
 
+class UnverifiedCriterion(_Record):
+    """A criterion the verifier could not check with what it had."""
+
+    reason: str = Field(min_length=1)
+    verifiable_by: str = Field(alias="verifiableBy", min_length=1)
+
+
 class RequirementEvidence(_Record):
     requirement_id: str = Field(alias="requirementId", min_length=1)
-    evidence_refs: list[str] = Field(alias="evidenceRefs")
+    evidence_refs: list[str] = Field(default_factory=list, alias="evidenceRefs")
+    unverified: UnverifiedCriterion | None = None
     status: (
         Literal[
             "VERIFIED",
@@ -64,6 +72,19 @@ class RequirementEvidence(_Record):
     profile: str | None = Field(None, min_length=1)
     topology: str | None = Field(None, min_length=1)
     sampling_policy: str | None = Field(None, alias="samplingPolicy", min_length=1)
+
+    @model_validator(mode="after")
+    def evidenced_or_unverified(self) -> "RequirementEvidence":
+        if self.unverified is not None and (
+            self.evidence_refs
+            or ("status" in self.model_fields_set and self.status != "UNVERIFIED")
+        ):
+            raise ValueError(
+                "an unverified requirement has no evidenceRefs or passing status"
+            )
+        if self.status == "UNVERIFIED" and self.unverified is None:
+            raise ValueError("an unverified requirement needs its reason and owner")
+        return self
 
 
 class EvidenceFreshness(_Record):
@@ -93,6 +114,13 @@ class AcceptanceEvidence(_Record):
     completion_target: AcceptanceTarget = Field(alias="completionTarget")
     evidence: list[RequirementEvidence] = Field(min_length=1)
     freshness: EvidenceFreshness
+    # Legacy summaries are advice, not proof or completion authority.
+    candidate_success: StrictBool | None = Field(
+        None, alias="candidateSuccess", exclude=True
+    )
+    target_completion: StrictBool | None = Field(
+        None, alias="targetCompletion", exclude=True
+    )
     verification_map: list[dict[str, Any]] | None = Field(None, alias="verificationMap")
     evidence_set: dict[str, str] | None = Field(None, alias="evidenceSet")
     evidence_set_digest: str | None = Field(None, alias="evidenceSetDigest")
@@ -111,7 +139,7 @@ class AcceptanceEvidence(_Record):
             or len(set(evidenced)) != len(evidenced)
             or set(required) != set(evidenced)
             or any(
-                not item.evidence_refs
+                (not item.evidence_refs and item.unverified is None)
                 or any(not ref.strip() for ref in item.evidence_refs)
                 for item in self.evidence
             )
@@ -119,7 +147,9 @@ class AcceptanceEvidence(_Record):
             raise ValueError(
                 "acceptance evidence must bind every mandatory requirement exactly once"
             )
-        if any(row.status not in {None, "VERIFIED"} for row in self.evidence):
+        if any(
+            row.status not in {None, "VERIFIED", "UNVERIFIED"} for row in self.evidence
+        ):
             raise ValueError(
                 "objective acceptance cannot contain nonpassing requirement evidence"
             )
@@ -369,7 +399,7 @@ def _validate_requirement_row(
     declared = row.model_dump(by_alias=True)
     if (
         row.status is None
-        or (require_verified and row.status != "VERIFIED")
+        or (require_verified and row.status not in {"VERIFIED", "UNVERIFIED"})
         or row.obligation_digest
         != _binding_digest(
             {key: plan[key] for key in _OBLIGATION_FIELDS if key in plan}
@@ -426,7 +456,7 @@ def _nonpassing_coverage(
     evidence = binding.get("evidence")
     if not isinstance(evidence, list):
         raise ValueError("current judgment requires requirement evidence rows")
-    represented, verified = set(), set()
+    represented, verified, unverified = set(), set(), set()
     for row in evidence:
         if not isinstance(row, Mapping):
             raise ValueError("current judgment has malformed requirement evidence")
@@ -442,6 +472,8 @@ def _nonpassing_coverage(
         represented.add(requirement_id)
         if row.get("status") == "VERIFIED":
             verified.add(requirement_id)
+        if row.get("status") == "UNVERIFIED" or row.get("unverified") is not None:
+            unverified.add(requirement_id)
     gaps = set()
     work = gate.get("remainingWork")
     if not isinstance(work, list) or not work:
@@ -454,6 +486,10 @@ def _nonpassing_coverage(
         gaps.update(_remaining_requirement_ids(item, required, require_primary=True))
     if verified & gaps:
         raise ValueError("verified requirement cannot simultaneously be remaining work")
+    if unverified & gaps:
+        raise ValueError(
+            "unverified requirement cannot simultaneously be remaining work"
+        )
     if represented | gaps != required:
         raise ValueError(
             "current judgment must account for every mandatory requirement"

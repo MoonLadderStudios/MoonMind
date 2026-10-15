@@ -57,7 +57,7 @@ steps:
     instructions: |-
       Run moonspec-assess after moonspec-specify only when artifacts/moonspec/source-acceptance.json exists and its featureId matches the active feature. If no matching source acceptance matrix exists, report that source assessment is not applicable and continue to planning without requiring artifacts/moonspec/acceptance-assessment.json.
       When a matching source acceptance matrix exists, verify artifacts/moonspec/acceptance-assessment.json exists and has the same featureId before planning continues.
-      Treat the assessment bounded backlog as the authoritative bridge from source acceptance rows into planning.
+      Carry the assessment statuses into planning: unverified rows retain source IDs, reason and verifiableBy without tasks; needs_human rows retain the exact decision, owner, and action without execution. Only executable rows enter the implementation backlog.
     skill:
       id: moonspec-assess
       args: {}
@@ -65,14 +65,14 @@ steps:
     instructions: |-
       Run moonspec-plan when plan.md or required design artifacts are missing or stale.
       Verify that plan.md, research.md, quickstart.md, and any required data model or contracts exist before continuing.
-      Keep unit and integration test strategies explicit.
+      Keep applicable unit/integration strategies explicit for executable rows; non-executable rows retain disclosures or authority handoffs.
     skill:
       id: moonspec-plan
       args: {}
   - title: Generate TDD task breakdown
     instructions: |-
       Run moonspec-tasks when tasks.md is missing or upstream artifacts changed.
-      Verify tasks.md covers exactly one story and includes red-first unit tests, integration tests, implementation tasks, and story validation{% if inputs.run_verify %}, and final /moonspec.verify work.{% else %}. Because verification is disabled for this run (run_verify=false), do not add a final /moonspec.verify task to tasks.md so the implementation step does not run verification.{% endif %}
+      Verify tasks.md covers one story with applicable tests, red-first, implementation, and validation tasks only for executable rows; all-Unverified stories retain disclosures without new code or tests{% if inputs.run_verify %}, and final /moonspec.verify work.{% else %}. Because verification is disabled for this run (run_verify=false), do not add a final /moonspec.verify task to tasks.md so the implementation step does not run verification.{% endif %}
     skill:
       id: moonspec-tasks
       args: {}
@@ -87,7 +87,7 @@ steps:
   - title: Implement the task breakdown
     instructions: |-
       Run moonspec-implement when implementation work remains.
-      Require TDD evidence: unit and integration tests are written and confirmed failing before production code.
+      Skip implementation when no executable work remains. Require applicable TDD evidence before new production code, never for unverified or needs_human rows.
       Mark completed tasks [X] in tasks.md and preserve the selected story scope.{% if not inputs.run_verify %} Verification is disabled for this run (run_verify=false): do not run /moonspec.verify during implementation even if a verify task is present in tasks.md.{% endif %}
     skill:
       id: moonspec-implement
@@ -102,7 +102,7 @@ steps:
       If the verdict is ADDITIONAL_WORK_NEEDED, follow recommendedNextAction: run at most two bounded implementation and verification cycles only for reattempt_current_step; needs_human or blocked stops with the report's concrete reason. During an authorized reattempt, implement bounded code, test, or required in-scope documentation gaps; validate executable changes and review documentation-only corrections.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context.
       If the verdict is BLOCKED, stop and report the environment diagnostic and minimum repair.
-      Claim completion only when the verdict is FULLY_IMPLEMENTED.
+      Claim completion only when the verdict is FULLY_IMPLEMENTED and no actual needs_human authority handoff for the selected operation remains.
     skill:
       id: moonspec-verify
       args: {}

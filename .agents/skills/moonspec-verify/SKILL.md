@@ -30,7 +30,7 @@ This skill answers:
 
 ## Source Acceptance Matrix Verification
 
-When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptance-assessment.json` exists and its `featureId`, source, feature directory, issue reference, or requirement IDs match the selected verification baseline, verify every repo-verifiable source row for that baseline. Do not choose `FULLY_IMPLEMENTED` unless every required repo-verifiable source row for the selected baseline is satisfied. In source-direct verification mode, ignore stale or unrelated acceptance artifacts whose source metadata does not match the selected source.
+When `artifacts/moonspec/source-acceptance.json` or `artifacts/moonspec/acceptance-assessment.json` exists and its `featureId`, source, feature directory, issue reference, or requirement IDs match the selected verification baseline, evaluate every source row for that baseline under the shared acceptance policy. `FULLY_IMPLEMENTED` permits verified rows and valid Unverified disclosures, with no observed defect remaining. In source-direct verification mode, ignore stale or unrelated acceptance artifacts whose source metadata does not match the selected source.
 
 ## Inputs
 
@@ -112,8 +112,8 @@ In issue-brief verification mode:
 1. Read the original issue brief artifact and any supplied assessment artifact. An absent optional assessment does not replace or invalidate a usable original baseline.
 2. Use the original issue summary, description, acceptance criteria, and constraints as the verification baseline. The assessment is process context.
 3. Use a `PARTIALLY_IMPLEMENTED` assessment to prioritize gaps; verify the complete selected scope, retaining previously met requirements as regression constraints.
-4. An initial `FULLY_IMPLEMENTED` assessment only says implementation appears present. Reuse objective evidence only under the acceptance policy; otherwise execute the missing verification.
-5. Inspect production code and tests directly; do not treat the assessment itself as proof that new work is complete.
+4. An initial `FULLY_IMPLEMENTED` assessment only says implementation appears present. Reuse evidence, execute feasible missing checks, and disclose unavailable checks under the acceptance policy.
+5. Inspect production code and tests directly; do not treat the assessment itself as proof that new work is complete. Normalize issue-brief `unverifiable` and source-matrix `UNVERIFIED` to verification `UNVERIFIED`, preserving the stable source ID as `requirementId` and nonblank `unverified.reason` and `unverified.verifiableBy`. Reassess availability on the current candidate; neither spelling asserts a pass.
 6. Do not require `spec.md`, `plan.md`, `tasks.md`, or a standalone constitution file.
 
 When verification follows a remediation attempt, rebuild every controlling
@@ -157,8 +157,8 @@ judgment on the same candidate, not another implementation or full export.
 ## Evidence policy
 
 Apply [the acceptance policy](references/acceptance-policy.md) to every source
-requirement and check. Mandatory acceptance remains controlling regardless of
-tool availability; optional enrichment and diagnostics remain advisory. Record
+requirement and check. Mandatory criteria remain in scope; unavailable checks
+use Unverified disclosures, and optional diagnostics remain advisory. Record
 actual command results and exact missing evidence. Isolated implementation tests
 must proceed independently of any separately authorized production operation.
 
@@ -235,16 +235,16 @@ Build the claim inventory from the canonical source document's stable claim head
 
 For each in-scope canonical claim, classify the result with separate fields for:
 
-- Implementation status: `VERIFIED`, `PARTIAL`, `MISSING`, `CONFLICT`, or `NO_DETERMINATION`.
-- Verification status: `VERIFIED`, `PARTIAL`, `MISSING`, `CONFLICT`, or `NO_DETERMINATION`.
+- Implementation status: `VERIFIED`, `PARTIAL`, `MISSING`, `CONFLICT`, `UNVERIFIED`, or `NO_DETERMINATION`.
+- Verification status: `VERIFIED`, `PARTIAL`, `MISSING`, `CONFLICT`, `UNVERIFIED`, or `NO_DETERMINATION`.
 - Drift status: `NONE`, `POSSIBLE_DOC_DRIFT`, or `DEFINITE_DOC_DRIFT`.
 
-Each claim row must include at least one durable reference in one of these fields:
+Each claim row must include evidence or a source-linked Unverified disclosure in these fields:
 
 - Code evidence, such as repository file paths with line numbers or named code symbols.
 - Test evidence, such as test file paths, test names, and command results.
 - Artifact evidence, such as artifact refs, diagnostics refs, or report refs.
-- Gap reason, when evidence is missing, ambiguous, contradictory, or out of scope.
+- Gap reason for an observed gap, or Unverified reason and verifiableBy when evidence remains unavailable.
 
 Classify gaps separately:
 
@@ -413,8 +413,8 @@ this discovery before using `NOT RUN`, `recoverableInCurrentRuntime: false`,
 
 Use `NOT RUN` with exact owning-boundary failure evidence after attempting supported, authorized setup and execution paths.
 Use the acceptance policy when interpreting unavailable assets,
-services, credentials, or tooling. Preserve explicitly mandatory prerequisites;
-report optional diagnostics as advisory limitations.
+services, credentials, or tooling. A mandatory criterion still out of reach is
+Unverified; optional diagnostics are advisory limitations.
 
 ## Classify Items
 
@@ -424,13 +424,14 @@ Use these statuses:
 - `PARTIAL`: some implementation exists, but behavior, wiring, or test coverage is incomplete.
 - `MISSING`: no meaningful implementation evidence exists.
 - `CONFLICT`: implementation contradicts the spec, original request, source design, or relevant repo guidance.
-- `NO_DETERMINATION`: evidence is too ambiguous or unavailable to make a defensible call.
+- `UNVERIFIED`: the criterion remains outside the verifier's reach after reasonable setup; record its reason and `verifiableBy`, disclose it, and do not add it to remaining work.
+- `NO_DETERMINATION`: evidence is ambiguous or still obtainable and needed to make a defensible call.
 
 Rules:
 
-- Do not mark the feature `FULLY_IMPLEMENTED` unless every in-scope source requirement, relevant AGENTS.md principle, source design requirement, and acceptance-critical behavior is `VERIFIED`.
+- Do not mark the feature `FULLY_IMPLEMENTED` unless every in-scope source requirement, relevant AGENTS.md principle, source design requirement, and acceptance-critical behavior is `VERIFIED` or validly Unverified under the shared acceptance policy.
 - Missing required unit tests or repo-local hermetic checks is a verification failure unless the selected verification baseline clearly makes that test class irrelevant.
-- Missing repo-local hermetic integration coverage for acceptance-critical behavior is a verification gap. Unavailable external evidence follows the acceptance policy: mandatory prerequisites require a handoff, while optional diagnostics remain non-blocking.
+- Missing repo-local hermetic integration coverage for acceptance-critical behavior is a verification gap. Evidence the verifier cannot obtain follows the acceptance policy: the criterion is Unverified, and optional diagnostics remain non-blocking.
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
@@ -440,19 +441,19 @@ Rules:
 
 Choose exactly one verdict:
 
-- `FULLY_IMPLEMENTED`: implementation, unit tests, repo-local hermetic checks, source design requirements, relevant AGENTS.md principles, and original request alignment all verify.
+- `FULLY_IMPLEMENTED`: all in-scope criteria are verified or validly Unverified, with no observed defect remaining.
 - `ADDITIONAL_WORK_NEEDED`: concrete implementation or validation gaps remain.
-- `NO_DETERMINATION`: required evidence cannot be inspected or commands cannot be run enough to reach a defensible conclusion.
+- `NO_DETERMINATION`: ambiguous or still-obtainable required evidence needs another bounded verification attempt; criteria outside the verifier's reach are Unverified instead.
 - `BLOCKED`: the execution environment prevents trustworthy verification, such as `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION` from the workspace projection preflight. Include the diagnostic, whether it is recoverable in the current runtime, and the minimum repair needed.
 
 Prefer `ADDITIONAL_WORK_NEEDED` over `NO_DETERMINATION` when a concrete missing code or test gap is visible. Use `BLOCKED` only for environment failures; it says nothing about implementation completeness.
 Do not choose a blocking verdict solely because advisory validation cannot run.
-Use `FULLY_IMPLEMENTED` when the acceptance policy is satisfied. Missing required
-external evidence uses `NO_DETERMINATION` with an evidence retry when obtainable,
-or `blocked` when unavailable after supported attempts. Use `needs_human` only
-for an actual human-owned authority or information decision. Missing runtime
-capabilities preventing required checks use `BLOCKED` with `blocked`. These stopping
-verdicts preserve uncertainty about completeness; they are not assertion failures.
+Use `FULLY_IMPLEMENTED` when the acceptance policy is satisfied, including when
+some criteria are Unverified because they are outside the verifier's reach.
+Missing evidence the verifier can still obtain uses `NO_DETERMINATION` with an
+evidence retry. Use `needs_human` only for an actual human-owned authority or
+information decision. These stopping verdicts preserve uncertainty about
+completeness; they are not assertion failures.
 
 When the verdict is `ADDITIONAL_WORK_NEEDED`, include a structured Remaining Work section that remediation steps can consume. Each item must identify:
 
@@ -466,7 +467,7 @@ Distinguish implementation gaps from verification gaps:
 
 - Implementation gaps mean required behavior, wiring, persistence, contracts, UI/API behavior, or configuration is absent, partial, or contradictory.
 - Verification gaps mean tests, command evidence, fixture coverage, integration evidence, or inspectable artifacts are missing or insufficient.
-- Environment gaps prevent controlling checks: missing runtime capabilities use `BLOCKED`; required external evidence or authority decisions use `NO_DETERMINATION`. Advisory environment gaps remain non-blocking limitations, not Remaining Work.
+- Environment gaps the verifier cannot close make their criteria Unverified, not Remaining Work. A contaminated or untrustworthy environment still uses `BLOCKED`.
 
 Emit concrete `remainingWork` for every `ADDITIONAL_WORK_NEEDED` result. Each item must be bounded enough for a remediation step to act on without reinterpreting the whole report.
 
@@ -494,19 +495,24 @@ JSON is requested, use `recommendedNextAction` and
 Before requesting another attempt, identify the concrete change or controlling
 check that an authorized remediation step can actually execute. Distinguish
 repository work from prerequisites such as a missing container-test capability,
-live deployment access, or a required operator decision. Complete feasible
-repository work while preserving those prerequisites; once only unavailable
-prerequisites remain, use the appropriate stop action from the acceptance policy and name the required owner,
-the evidence they must supply, and the check that resumes verification. A newer
-commit, more unexecuted tests, or a rewritten report does not resolve an unchanged
-prerequisite. Do not spend another attempt repeating that same blocked check
-without evidence that its environment or authority changed.
+or live deployment access. Complete feasible
+repository work; criteria that remain out of the verifier's reach are
+Unverified, so once only those remain, return `FULLY_IMPLEMENTED`. Do not spend
+another attempt repeating a check that cannot run here.
 
-Keep mandatory acceptance conditions visible in this handoff. An explicitly
-required deployment drain or permission check cannot be waived as advisory just
-because the sandbox lacks access. Conversely, optional deployment diagnostics
-remain non-blocking under the test-evidence policy above. Missing test tooling is
-an environment limitation, not proof that an implementation or assertion failed.
+Unverified does not grant permission. An actual missing authorization or operator
+decision needed to act on the selected operation remains a `needs_human` handoff;
+do not perform that action or report its authorized completion until supplied.
+For an assessment or plan row marked `needs_human`, use verification row status
+`NO_DETERMINATION` and `recommendedNextAction: needs_human`, preserving the exact
+decision, owner, and action. Do not copy `needs_human` into the acceptance row status. Do not invent an
+authority gate from unavailable deployment evidence, physical testing, or test
+signoff: those remain Unverified disclosures when outside the verifier's reach.
+Separately scoped release approvals do not gate implementation completion.
+
+Keep Unverified criteria visible in the report and handoff with their reason and
+who could verify them. Missing test tooling is an environment limitation, not
+proof that an implementation or assertion failed.
 
 An explicit `needs_human` or `blocked` decision for `ADDITIONAL_WORK_NEEDED` or
 `NO_DETERMINATION` stops automatic verifier retry and implementation remediation.
@@ -527,7 +533,9 @@ For current structured judgments of every verdict, include `validatedRefs.accept
 `acceptance/v1` contract in [the acceptance policy](references/acceptance-policy.md).
 Capture subject and scope before checks and confirm content is unchanged afterward.
 Preserve source/base identity separately. Bind each mandatory requirement to actual
-command/artifact evidence. A dirty workspace needs its content digest or durable
+command/artifact evidence or a valid Unverified disclosure: stable `requirementId`,
+`status: UNVERIFIED`, nonblank `unverified.reason` and `unverified.verifiableBy`,
+and no evidence refs. A dirty workspace needs its content digest or durable
 checkpoint; never use HEAD alone. Report candidate success separately from target
 completion. Do not overwrite the initial assessment with this later result.
 
@@ -557,7 +565,7 @@ Use this structure:
 
 | Requirement | Evidence | Status | Notes |
 |-------------|----------|--------|-------|
-| FR-001 | [file/test/reference] | VERIFIED/PARTIAL/MISSING/CONFLICT/NO_DETERMINATION | [notes] |
+| FR-001 | [file/test/reference] | VERIFIED/PARTIAL/MISSING/CONFLICT/UNVERIFIED/NO_DETERMINATION | [notes] |
 
 ## Acceptance Scenario Coverage
 
@@ -568,13 +576,13 @@ Use this structure:
 
 | Item | Evidence | Status | Notes |
 |------|----------|--------|-------|
-| DOC-REQ-001 / AGENTS.md principle | [file/test/reference] | VERIFIED/PARTIAL/MISSING/CONFLICT/NO_DETERMINATION | [notes] |
+| DOC-REQ-001 / AGENTS.md principle | [file/test/reference] | VERIFIED/PARTIAL/MISSING/CONFLICT/UNVERIFIED/NO_DETERMINATION | [notes] |
 
 ## Canonical Claim Coverage
 
 | Claim | Code Evidence | Test Evidence | Artifact Evidence | Implementation Status | Verification Status | Drift Status | Gap Reason |
 |-------|---------------|---------------|-------------------|-----------------------|---------------------|--------------|------------|
-| DOC-REQ-001 | [file:line or symbol] | [test path/name or command] | [artifact/ref] | VERIFIED/PARTIAL/MISSING/CONFLICT/NO_DETERMINATION | VERIFIED/PARTIAL/MISSING/CONFLICT/NO_DETERMINATION | NONE/POSSIBLE_DOC_DRIFT/DEFINITE_DOC_DRIFT | [clear reason or empty when fully evidenced] |
+| DOC-REQ-001 | [file:line or symbol] | [test path/name or command] | [artifact/ref] | VERIFIED/PARTIAL/MISSING/CONFLICT/UNVERIFIED/NO_DETERMINATION | VERIFIED/PARTIAL/MISSING/CONFLICT/UNVERIFIED/NO_DETERMINATION | NONE/POSSIBLE_DOC_DRIFT/DEFINITE_DOC_DRIFT | [clear reason or empty when fully evidenced] |
 
 ## Original Request Alignment
 
@@ -585,6 +593,11 @@ Use this structure:
 | Doc Claim | Observed Behavior | Evidence | Severity |
 |-----------|-------------------|----------|----------|
 | [docs/ path + claim] | [verified behavior] | [file/test/reference] | definite/possible |
+
+## Unverified Criteria
+
+| Criterion | Reason | Verifiable By |
+|-----------|--------|---------------|
 
 ## Gaps
 
@@ -663,6 +676,6 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently drop an in-scope requirement the story adopted.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
-- Apply the shared acceptance policy consistently. Missing optional diagnostics cannot block acceptance; missing explicitly mandatory prerequisites cannot be waived because the environment lacks access.
+- Apply the shared acceptance policy consistently. Missing optional diagnostics cannot block acceptance; mandatory criteria outside the verifier's reach are Unverified, never blockers and never reported as passed.
 - Prefer direct, citeable repository evidence from production code, wiring, configuration, and tests.
-- Do not mark the feature complete when required behavior is only inferred and not verified.
+- Do not describe inferred or Unverified behavior as passed. Observed defects still block completion; criteria outside the verifier's reach follow the shared Unverified policy.

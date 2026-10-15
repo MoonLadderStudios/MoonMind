@@ -1656,7 +1656,7 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
 
 @pytest.mark.asyncio
 async def test_production_composition_installs_the_durable_artifact_gateway(
-    durable_artifact_storage, monkeypatch,
+    durable_artifact_storage, monkeypatch, production_transport_pool,
 ):
     """The registered Codex realizer runs on the deployment's durable gateway.
 

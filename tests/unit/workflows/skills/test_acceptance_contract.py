@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -137,9 +137,9 @@ def test_reuse_invalidates_changed_subject_scope_or_required_proof(candidate, ch
     elif change == "freshness":
         current["freshnessPolicy"] = "current-deployment"
     elif change == "expired":
-        report["validatedRefs"]["acceptance"]["freshness"]["validUntil"] = (
-            "2000-01-01T00:00:00Z"
-        )
+        report["validatedRefs"]["acceptance"]["freshness"][
+            "validUntil"
+        ] = "2000-01-01T00:00:00Z"
     elif change == "missing_check":
         report["validatedRefs"]["acceptance"]["evidence"].pop()
     else:
@@ -245,9 +245,9 @@ def test_capture_cli_is_portable_without_moonspec_packet(candidate, tmp_path):
 
 def test_expired_evidence_cannot_advance_a_current_workflow(candidate):
     _, _, report = candidate
-    report["validatedRefs"]["acceptance"]["freshness"]["validUntil"] = (
-        "2000-01-01T00:00:00Z"
-    )
+    report["validatedRefs"]["acceptance"]["freshness"][
+        "validUntil"
+    ] = "2000-01-01T00:00:00Z"
     gate = parse_step_gate_result(
         report, require_acceptance=True, validation_time=datetime.now(timezone.utc)
     )
@@ -261,6 +261,54 @@ def test_malformed_evidence_is_actionable_missing_proof(candidate, binding):
     report["validatedRefs"]["acceptance"] = binding
     assert not portable.reuse(report, current)["reusable"]
     assert acceptance_evidence(report) is None
+
+
+def _unverified_ac2(report, unverified):
+    rows = report["validatedRefs"]["acceptance"]["evidence"]
+    rows[1] = {"requirementId": "AC-2", "unverified": unverified}
+
+
+def test_null_unverified_is_absent_on_evidenced_rows(candidate):
+    _, current, report = candidate
+    report["recoverableInCurrentRuntime"] = False
+    for row in report["validatedRefs"]["acceptance"]["evidence"]:
+        row["unverified"] = None
+    assert portable.reuse(report, current)["reusable"]
+    assert portable.validate_report(report, current)["valid"]
+    assert acceptance_evidence(report) is not None
+
+
+def test_criterion_outside_verifier_reach_passes_as_unverified(candidate):
+    _, current, report = candidate
+    _unverified_ac2(
+        report,
+        {"reason": "Needs a GPU render host.", "verifiableBy": "GPU CI lane"},
+    )
+    assert portable.reuse(report, current)["reusable"]
+    evidence = acceptance_evidence(report)
+    assert evidence is not None
+    assert [
+        row.unverified.verifiable_by for row in evidence.evidence if row.unverified
+    ] == ["GPU CI lane"]
+    assert (
+        parse_step_gate_result(report, require_acceptance=True).verdict
+        == "FULLY_IMPLEMENTED"
+    )
+
+
+@pytest.mark.parametrize(
+    "unverified", [{"reason": "Needs a GPU render host."}, {"verifiableBy": "GPU CI"}]
+)
+def test_unverified_criterion_without_reason_or_owner_is_not_acceptance(
+    candidate, unverified
+):
+    _, _, report = candidate
+    _unverified_ac2(report, unverified)
+    assert acceptance_evidence(report) is None
+    assert (
+        parse_step_gate_result(report, require_acceptance=True).verdict
+        == "NO_DETERMINATION"
+    )
 
 
 def test_nonpassing_gate_cannot_reuse_an_old_candidate_or_scope(candidate):
@@ -287,7 +335,9 @@ def test_nonpassing_gate_cannot_reuse_an_old_candidate_or_scope(candidate):
 
     changed_scope = copy.deepcopy(blocked)
     changed_scope["scope"]["sourceDigest"] = "sha256:old-issue"
-    assert "scope" in " ".join(portable.validate_report(changed_scope, current)["errors"])
+    assert "scope" in " ".join(
+        portable.validate_report(changed_scope, current)["errors"]
+    )
 
 
 def test_nonpassing_gate_cannot_import_optional_or_other_issue_work(candidate):
@@ -324,9 +374,21 @@ def test_partial_report_retains_only_same_candidate_verified_rows(candidate):
         "scope": copy.deepcopy(current["scope"]),
         "verificationMap": copy.deepcopy(checks),
         "requirementCoverage": [
-            {"id": "AC-1", "verificationStatus": "VERIFIED", "testEvidenceRefs": ["artifact://passing-test"]},
-            {"id": "AC-2", "verificationStatus": "PARTIAL", "testEvidenceRefs": ["artifact://unproved"]},
-            {"id": "FULL-RELEASE-GPU", "verificationStatus": "VERIFIED", "testEvidenceRefs": ["artifact://other-scope"]},
+            {
+                "id": "AC-1",
+                "verificationStatus": "VERIFIED",
+                "testEvidenceRefs": ["artifact://passing-test"],
+            },
+            {
+                "id": "AC-2",
+                "verificationStatus": "PARTIAL",
+                "testEvidenceRefs": ["artifact://unproved"],
+            },
+            {
+                "id": "FULL-RELEASE-GPU",
+                "verificationStatus": "VERIFIED",
+                "testEvidenceRefs": ["artifact://other-scope"],
+            },
         ],
     }
     retained = portable.reuse(partial, current)
@@ -346,6 +408,7 @@ def test_partial_report_retains_only_same_candidate_verified_rows(candidate):
 
 def test_assessment_checks_can_bind_only_the_original_scope(candidate):
     _, current, _ = candidate
+
     def check(requirement, filename):
         return {
             "id": requirement,
@@ -370,9 +433,7 @@ def test_assessment_checks_can_bind_only_the_original_scope(candidate):
     assert [row["id"] for row in bound["verificationMap"]] == ["AC-1", "AC-2"]
 
     invented = copy.deepcopy(assessment)
-    invented["verificationMap"].append(
-        check("FULL-RELEASE-GPU", "test_all_maps.py")
-    )
+    invented["verificationMap"].append(check("FULL-RELEASE-GPU", "test_all_maps.py"))
     with pytest.raises(ValueError, match="original mandatory scope"):
         portable.bind_verification_map(current, invented)
 
@@ -384,7 +445,11 @@ def test_host_rejects_unrelated_blocker_and_shrunken_success_scope(candidate):
         "verdict": "BLOCKED",
         "scope": copy.deepcopy(current["scope"]),
         "remainingWork": [
-            {"requirement": "FULL-RELEASE-GPU", "gapType": "environment", "remainingWork": "Run release proof"}
+            {
+                "requirement": "FULL-RELEASE-GPU",
+                "gapType": "environment",
+                "remainingWork": "Run release proof",
+            }
         ],
     }
     assert "mandatory requirement" in " ".join(
@@ -394,7 +459,17 @@ def test_host_rejects_unrelated_blocker_and_shrunken_success_scope(candidate):
     assert assessment_scope_violations(blocked, assessment) == []
 
     success["validatedRefs"]["acceptance"]["scope"]["requirementIds"] = ["AC-1"]
-    success["validatedRefs"]["acceptance"]["evidence"] = success["validatedRefs"]["acceptance"]["evidence"][:1]
+    success["validatedRefs"]["acceptance"]["evidence"] = success["validatedRefs"][
+        "acceptance"
+    ]["evidence"][:1]
     assert "original source scope" in " ".join(
         assessment_scope_violations(success, assessment)
     )
+
+
+def test_legacy_unverified_disclosure_rejects_explicit_null_status(candidate):
+    _, current, report = candidate
+    _unverified_ac2(report, {"reason": "No GPU", "verifiableBy": "GPU CI"})
+    report["validatedRefs"]["acceptance"]["evidence"][1]["status"] = None
+    assert acceptance_evidence(report) is None
+    assert not portable.reuse(report, current)["reusable"]

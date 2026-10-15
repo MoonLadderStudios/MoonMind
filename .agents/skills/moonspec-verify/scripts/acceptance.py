@@ -36,6 +36,27 @@ def nonblank_strings(value: object) -> bool:
     )
 
 
+def _unverified(row: dict) -> bool:
+    """An Unverified record says why the verifier could not check a criterion
+    and who could; it carries no evidence refs."""
+    unverified = row.get("unverified")
+    return (
+        ("status" not in row or row["status"] == "UNVERIFIED")
+        and row.get("evidenceRefs", []) == []
+        and isinstance(unverified, dict)
+        and all(
+            isinstance(unverified.get(key), str) and unverified[key].strip()
+            for key in ("reason", "verifiableBy")
+        )
+    )
+
+
+def _evidenced_or_unverified(row: dict) -> bool:
+    if row.get("status") == "UNVERIFIED" or row.get("unverified") is not None:
+        return _unverified(row)
+    return ("status" not in row or row["status"] == "VERIFIED") and nonblank_strings(row.get("evidenceRefs"))
+
+
 def capture(
     repo: Path, repository: str, target: str, *, target_mode: bool = False
 ) -> dict:
@@ -354,13 +375,8 @@ def _normalized_remaining_work(
     errors = []
     gaps = set()
     for item in work:
-        ids = item.get("requirementIds", [item["requirement"]])
-        if (
-            not nonblank_strings(ids)
-            or len(set(ids)) != len(ids)
-            or item["requirement"] not in ids
-            or not set(ids) <= set(required)
-        ):
+        ids = _remaining_work_ids(item)
+        if ids is None or not ids <= set(required):
             errors.append(
                 "remaining work must consistently name mandatory requirements in the report source scope"
             )
@@ -575,7 +591,11 @@ def _row_errors(row: object, binding: dict, current: dict) -> list[str]:
         return ["evidence row does not bind the current source obligation"]
     if row.get("status") not in ROW_STATUSES:
         return ["evidence row has no explicit verified or nonpassing status"]
-    refs = row.get("evidenceRefs")
+    if (row.get("status") == "UNVERIFIED" or row.get("unverified") is not None) and (
+        row["status"] != "UNVERIFIED" or not _unverified(row)
+    ):
+        return ["unverified requirement needs UNVERIFIED status, reason and owner without evidence"]
+    refs = row.get("evidenceRefs", [] if _unverified(row) else None)
     if row["status"] == "VERIFIED" and not nonblank_strings(refs):
         return ["verified requirement has no objective evidence references"]
     if not isinstance(refs, list) or any(not _text(ref) for ref in refs):
@@ -755,7 +775,10 @@ def reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
             elif not errors:
                 for row in rows:
                     errors.extend(_row_errors(row, binding, current))
-                    if isinstance(row, dict) and row.get("status") != "VERIFIED":
+                    if isinstance(row, dict) and not (
+                        row.get("status") == "VERIFIED"
+                        or (row.get("status") == "UNVERIFIED" and _unverified(row))
+                    ):
                         errors.append("mandatory requirement is not verified")
             result["reasons"].extend(errors)
             result["reusable"] = not result["reasons"]
@@ -813,7 +836,7 @@ def _reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
         not nonblank_strings(required)
         or len(set(required)) != len(required)
         or sorted(row.get("requirementId", "") for row in rows) != sorted(required)
-        or any(not nonblank_strings(row.get("evidenceRefs")) for row in rows)
+        or any(not _evidenced_or_unverified(row) for row in rows)
     ):
         reasons.append("mandatory requirement evidence missing")
     target = current.get("completionTarget", {})
@@ -904,12 +927,25 @@ def _candidate_rows(report: dict, current: dict) -> list[dict]:
     return result
 
 
+def _remaining_work_ids(item: object) -> set[str] | None:
+    """Normalize handoff IDs identically for legacy and source-bound reports."""
+    if not isinstance(item, dict) or not _text(item.get("requirement")):
+        return None
+    ids = item.get("requirementIds", [item["requirement"]])
+    if (not nonblank_strings(ids) or len(set(ids)) != len(ids)
+            or item["requirement"] not in ids):
+        return None
+    return set(ids)
+
+
 def _valid_remaining_work(work: object) -> bool:
     """Require actionable handoff fields, not just a nonempty mapping."""
     if not isinstance(work, list) or not work:
         return False
     for item in work:
         if not isinstance(item, dict):
+            return False
+        if _remaining_work_ids(item) is None:
             return False
         for field in ("requirement", "gapType", "remainingWork"):
             value = item.get(field)
@@ -934,6 +970,73 @@ def _current_nonpassing_errors(report: dict, current: dict) -> list[str]:
     return errors
 
 
+def _evidence_report_errors(report: dict) -> list[str]:
+    """Validate present evidence rows, including legacy reports without source maps.
+
+    An absent legacy binding is not itself an error. Inspect declarations that
+    are present without imposing source-bound proof requirements on old reports.
+    """
+    if "validatedRefs" not in report:
+        return []
+    refs = report["validatedRefs"]
+    if not isinstance(refs, dict):
+        return ["validatedRefs must be an object when present"]
+    if "acceptance" not in refs:
+        return []
+    binding = refs["acceptance"]
+    if not isinstance(binding, dict):
+        return ["acceptance must be an object when present"]
+    if "evidence" not in binding:
+        return []
+    rows = binding["evidence"]
+    if not isinstance(rows, list):
+        return ["acceptance evidence must be a list"]
+    errors = []
+    unverified_ids = set()
+    verified_ids = set()
+    seen_ids = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            errors.append("acceptance evidence row must be an object")
+            continue
+        declared = row.get("status") == "UNVERIFIED" or row.get("unverified") is not None
+        status = row.get("status", "UNVERIFIED" if declared else "VERIFIED")
+        if not _text(row.get("requirementId")):
+            errors.append("unverified requirement needs a nonblank requirementId" if declared
+                          else "acceptance evidence row needs a nonblank requirementId")
+        if _text(row.get("requirementId")):
+            if row["requirementId"] in seen_ids:
+                errors.append("duplicate requirement evidence rows")
+            seen_ids.add(row["requirementId"])
+            if status == "VERIFIED":
+                verified_ids.add(row["requirementId"])
+        if "status" in row and (not isinstance(row["status"], str)
+                                or row["status"] not in ROW_STATUSES):
+            errors.append("acceptance evidence row has an invalid status")
+        if declared:
+            if not _unverified(row):
+                errors.append("unverified requirement needs compatible status, reason and owner without evidence")
+            if _text(row.get("requirementId")):
+                unverified_ids.add(row["requirementId"])
+        else:
+            evidence_refs = row.get("evidenceRefs")
+            if not isinstance(evidence_refs, list) or any(not _text(ref) for ref in evidence_refs):
+                errors.append("acceptance evidence row needs valid evidenceRefs")
+            elif status == "VERIFIED" and not evidence_refs:
+                errors.append("verified requirement has no objective evidence references")
+    work = report.get("remainingWork")
+    if isinstance(work, list):
+        for item in work:
+            if not isinstance(item, dict):
+                continue
+            ids = _remaining_work_ids(item)
+            if ids is not None:
+                for label, resolved_ids in (("verified", verified_ids), ("unverified", unverified_ids)):
+                    if ids & resolved_ids:
+                        errors.append(f"{label} requirement cannot also remain a blocking gap")
+    return errors
+
+
 def validate_report(report: object, current: dict | None = None) -> dict:
     """Preflight producer output, not proof that referenced checks actually ran.
 
@@ -951,7 +1054,9 @@ def validate_report(report: object, current: dict | None = None) -> dict:
         "NO_DETERMINATION": {"reattempt_current_step", "needs_human", "blocked"},
         "BLOCKED": {"blocked"},
     }
-    errors = []
+    errors = _evidence_report_errors(report)
+    if "remainingWorkRef" in report and not _text(report["remainingWorkRef"]):
+        errors.append("present remainingWorkRef must be a nonblank string")
     verdict = report.get("verdict")
     action = report.get("recommendedNextAction")
     if not isinstance(verdict, str) or verdict not in actions:
@@ -977,6 +1082,8 @@ def validate_report(report: object, current: dict | None = None) -> dict:
     elif isinstance(verdict, str) and verdict in actions:
         work = report.get("remainingWork")
         reference = report.get("remainingWorkRef")
+        if work is not None and work != [] and not _valid_remaining_work(work):
+            errors.append("present remainingWork must be a complete actionable handoff")
         if not _valid_remaining_work(work) and not (
             isinstance(reference, str) and reference.strip()
         ):
@@ -1017,11 +1124,21 @@ def validate_report(report: object, current: dict | None = None) -> dict:
                             for row in rows
                             if isinstance(row, dict) and row.get("status") == "VERIFIED"
                         }
+                        unverified = {
+                            row["requirementId"]
+                            for row in rows
+                            if isinstance(row, dict)
+                            and row.get("status") == "UNVERIFIED"
+                        }
+                        if unverified & gaps:
+                            errors.append(
+                                "unverified requirement cannot also remain a blocking gap"
+                            )
                         if passed & gaps:
                             errors.append(
                                 "verified requirement cannot also remain a blocking gap"
                             )
-                        if passed | gaps != set(current["scope"]["requirementIds"]):
+                        if passed | unverified | gaps != set(current["scope"]["requirementIds"]):
                             errors.append(
                                 "current judgment must account for every mandatory requirement"
                             )

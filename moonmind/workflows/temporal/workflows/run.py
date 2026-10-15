@@ -601,6 +601,9 @@ RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH = "run-canonical-dependency-parameters
 # completes, the dependent is canceled, or an operator bypasses the gate.
 DEPENDENCY_WAIT_THROUGH_RERUN_PATCH = "dependency-wait-through-rerun-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
+RUN_UNVERIFIED_PR_DISCLOSURE_PATCH = "run-unverified-pr-disclosure-v1"
+RUN_UNVERIFIED_PR_HEAD_BINDING_PATCH = "run-unverified-pr-head-binding-v1"
+RUN_UNVERIFIED_PR_COMMENT_PATCH = "run-unverified-pr-comment-disclosure-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
@@ -5447,6 +5450,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             max_chars=500,
         )
         if existing:
+            await self._sync_pr_unverified_criteria(existing)
             return existing
         accepted = self._accepted_published_head()
         if accepted is None:
@@ -5527,6 +5531,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "headSha": head_sha,
             }
         )
+        await self._sync_pr_unverified_criteria(pull_request_url)
         return pull_request_url
 
     def _external_handoff_operation(self, node: Mapping[str, Any]) -> str:
@@ -16031,6 +16036,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._publish_status = "published"
             self._publish_reason = "published pull request"
             self._publish_context["pullRequestUrl"] = pull_request_url
+            await self._sync_pr_unverified_criteria(pull_request_url)
         await self._complete_already_implemented_jira_if_needed(
             parameters=parameters,
         )
@@ -17965,15 +17971,165 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         publish_payload: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> str:
-        publish_body = self._coerce_text(publish_payload.get("prBody"), flatten=False)
-        if publish_body:
-            return publish_body
-        default_summary = self._resolve_task_body_instructions(task_payload)
-        if default_summary:
-            return default_summary
-        if self._summary and not self._is_transient_summary(self._summary):
-            return self._summary
-        return "Automated changes by MoonMind."
+        body = (
+            self._coerce_text(publish_payload.get("prBody"), flatten=False)
+            or self._resolve_task_body_instructions(task_payload)
+            or (
+                self._summary
+                if self._summary and not self._is_transient_summary(self._summary)
+                else None
+            )
+            or "Automated changes by MoonMind."
+        )
+        unverified = self._moonspec_unverified_body_section()
+        if unverified and self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_COMMENT_PATCH):
+            gate = self._publish_context["moonSpecGate"]
+            revision = gate["validatedRefs"]["acceptance"]["subject"]["revision"]
+            unverified = (
+                f"Initial verification snapshot for revision {revision}. "
+                "The latest MoonMind verification-disclosure comment records "
+                "the current disclosure for its named revision.\n\n"
+                + unverified
+            )
+        return (
+            f"{body.rstrip()}\n\n<!-- moonmind:unverified:start -->\n"
+            f"{unverified}\n<!-- moonmind:unverified:end -->"
+            if unverified
+            else body
+        )
+
+    async def _sync_pr_unverified_criteria(self, pull_request_url: str) -> None:
+        if not self._patched_or_false_outside_workflow(
+            RUN_UNVERIFIED_PR_DISCLOSURE_PATCH
+        ):
+            return
+        gate = self._publish_context.get("moonSpecGate")
+        if self._moonspec_disclosure_rows() is None:
+            return
+        payload = {
+            "repo": self._repo,
+            "prUrl": pull_request_url,
+            "section": self._moonspec_unverified_body_section(),
+        }
+        if self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_HEAD_BINDING_PATCH):
+            # Disclosure describes this verified candidate, never a later push.
+            payload["expectedHeadSha"] = gate["validatedRefs"]["acceptance"][
+                "subject"
+            ]["revision"]
+        await workflow.execute_activity(
+            "repo.sync_pr_unverified_criteria",
+            payload,
+            start_to_close_timeout=timedelta(minutes=2),
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+
+    def _moonspec_disclosure_rows(self) -> list[Any] | None:
+        """Read report rows for disclosure without promoting a draft to success.
+
+        These are the hydrated rows of the host-validated gate. A nonpassing
+        report cannot use AcceptanceEvidence, which deliberately requires every
+        requirement to be verified or disclosed as Unverified.
+        """
+        from moonmind.workflows.skills.acceptance_contract import (
+            AcceptanceSubject,
+            RequirementEvidence,
+            acceptance_evidence,
+        )
+
+        gate = self._publish_context.get("moonSpecGate")
+        if not isinstance(gate, Mapping) or gate.get("invalid") or gate.get("degraded"):
+            return None
+        accepted = acceptance_evidence(gate)
+        if accepted is not None:
+            return accepted.evidence
+        if not self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_HEAD_BINDING_PATCH):
+            return None
+        if gate.get("verdict") not in {
+            "ADDITIONAL_WORK_NEEDED",
+            "BLOCKED",
+            "NO_DETERMINATION",
+            "FAILED_UNRECOVERABLE",
+        }:
+            return None
+        refs = gate.get("validatedRefs")
+        binding = refs.get("acceptance") if isinstance(refs, Mapping) else None
+        if not isinstance(binding, Mapping) or not binding.get("verificationMap"):
+            return None
+        raw_rows = binding.get("evidence")
+        if not isinstance(raw_rows, list):
+            return None
+        try:
+            AcceptanceSubject.model_validate(binding.get("subject"))
+            return [RequirementEvidence.model_validate(row) for row in raw_rows]
+        except (TypeError, ValueError):
+            return None
+
+    def _moonspec_unverified_body_section(self) -> str:
+        """List criteria the verifier recorded as outside its reach."""
+        gate = self._publish_context.get("moonSpecGate")
+        source = gate if isinstance(gate, Mapping) else {}
+        rows = [
+            (
+                row.requirement_id.replace("<!--", "&lt;!--"),
+                row.unverified.reason.replace("<!--", "&lt;!--"),
+                row.unverified.verifiable_by.replace("<!--", "&lt;!--"),
+            )
+            for row in (self._moonspec_disclosure_rows() or ())
+            if row.unverified is not None
+        ]
+        if not rows:
+            return ""
+        lines = [
+            "## Unverified criteria",
+            "",
+            "MoonSpec verification could not check these criteria in its environment:",
+            "",
+        ]
+        report_ref = self._coerce_text(source.get("gateResultRef"), max_chars=700)
+        report_lines = (
+            ["", f"Full verification disclosure: {report_ref}"] if report_ref else []
+        )
+        preview_note = (
+            "Entries ending in ... are previews; the full text is preserved in the report."
+        )
+        # Read disclosure from the already validated, hydrated rows. Recompacting
+        # strict acceptance replaces it with a descriptor, which cannot be read
+        # as proof and would silently erase every disclosure from the PR.
+        overhead = len("\n".join(lines + ["", preview_note] + report_lines).encode("utf-8"))
+        overhead += sum(
+            len(requirement.encode("utf-8")) + len("- :  Verifiable by: ") + 1
+            for requirement, _, _ in rows
+        )
+        if overhead + sum(
+            len(reason.encode("utf-8")) + len(owner.encode("utf-8")) for _, reason, owner in rows
+        ) > 32000:
+            limit = max(3, min(700, (32000 - overhead) // (2 * len(rows))))
+
+            def preview(value: str) -> str:
+                if len(value.encode("utf-8")) <= limit:
+                    return value
+                prefix = value.encode("utf-8")[: limit - 3].decode("utf-8", errors="ignore")
+                return prefix.rstrip() + "..."
+
+            rows = [
+                (requirement, preview(reason), preview(owner))
+                for requirement, reason, owner in rows
+            ]
+        lines.extend(
+            f"- {requirement}: {reason} Verifiable by: {owner}"
+            for requirement, reason, owner in rows
+        )
+        if report_ref:
+            if any(
+                value.endswith("...")
+                for _, reason, owner in rows
+                for value in (reason, owner)
+            ):
+                lines.extend(["", preview_note])
+            lines.extend(report_lines)
+        return "\n".join(lines).replace("<!--", "&lt;!--")
 
     def _resolve_publish_base_branch(
         self, publish_payload: Mapping[str, Any]

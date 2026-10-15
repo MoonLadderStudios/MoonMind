@@ -1270,6 +1270,9 @@ async def test_snapshot_requires_stable_marked_turn_before_idle_terminal(
 ) -> None:
     """A stale idle projection cannot synthesize terminal on its first read."""
 
+    # Load launch dependencies before replacing the store class with a factory.
+    # Otherwise a cold import captures that factory in evaluated type hints.
+    import moonmind.omnigent.session_launch  # noqa: F401
     import moonmind.omnigent.bridge_store as bridge_store_module
     import moonmind.omnigent.control_plane as control_plane_module
 

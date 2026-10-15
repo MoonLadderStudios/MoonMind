@@ -98,6 +98,71 @@ def test_source_bound_evidence_survives_host_gate(source_bound_report):
     )
 
 
+def _disclose_unverified(report):
+    row = report["validatedRefs"]["acceptance"]["evidence"][0]
+    row.pop("evidenceRefs")
+    row.pop("proofMethod")
+    row.update(
+        status="UNVERIFIED",
+        unverified={
+            "reason": "The live provider credentials are unavailable.",
+            "verifiableBy": "existing qualified runner",
+        },
+    )
+    return row
+
+
+def test_source_bound_unverified_criterion_survives_host_gate(source_bound_report):
+    _disclose_unverified(source_bound_report)
+    accepted = acceptance_evidence(source_bound_report)
+    assert accepted is not None
+    assert accepted.evidence[0].status == "UNVERIFIED"
+    assert not accepted.evidence[0].evidence_refs
+    assert (
+        parse_step_gate_result(source_bound_report, require_acceptance=True).verdict
+        == "FULLY_IMPLEMENTED"
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing_reason",
+        "blank_owner",
+        "evidence_refs",
+        "verified_status",
+        "missing_status",
+        "missing_disclosure",
+        "wrong_obligation",
+        "wrong_subject",
+    ],
+)
+def test_source_bound_unverified_row_preserves_disclosure_and_identity_checks(
+    source_bound_report, change
+):
+    row = _disclose_unverified(source_bound_report)
+    if change == "missing_reason":
+        row["unverified"].pop("reason")
+    elif change == "blank_owner":
+        row["unverified"]["verifiableBy"] = " "
+    elif change == "evidence_refs":
+        row["evidenceRefs"] = ["artifact://actual-run"]
+    elif change == "verified_status":
+        row["status"] = "VERIFIED"
+    elif change == "missing_status":
+        row.pop("status")
+    elif change == "missing_disclosure":
+        row.pop("unverified")
+    elif change == "wrong_obligation":
+        row["obligationDigest"] = "sha256:" + "0" * 64
+    else:
+        row["testedSubject"] = {
+            **source_bound_report["validatedRefs"]["acceptance"]["subject"],
+            "contentDigest": "git-tree:other",
+        }
+    assert acceptance_evidence(source_bound_report) is None
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -353,6 +418,36 @@ def test_nonpassing_source_map_requires_truthful_complete_coverage(
         assessment=assessment,
     )
     assert (not errors and source_scope is not None) is (gap_state == "all_missing")
+
+
+@pytest.mark.parametrize("status", ["PARTIAL", "UNVERIFIED"])
+def test_nonpassing_source_map_distinguishes_work_from_disclosed_unverified(
+    source_bound_report, status
+):
+    from moonmind.workflows.skills.acceptance_contract import source_scope_from_artifact
+
+    raw, assessment = _source_reconciliation_fixture(source_bound_report)
+    row = _disclose_unverified(source_bound_report)
+    if status == "PARTIAL":
+        row.pop("unverified")
+        row.update(status="PARTIAL", evidenceRefs=[])
+    source_bound_report.update(verdict="BLOCKED", recommendedNextAction="blocked")
+    source_bound_report["remainingWork"] = [
+        {
+            "requirement": "LIVE-1",
+            "gapType": "implementation",
+            "remainingWork": "Repair the observed provider defect",
+        }
+    ]
+    scope, errors = source_scope_from_artifact(
+        source_bound_report,
+        source_bytes=raw,
+        source_ref="example/repo#1",
+        source_artifact_ref="art_original_brief",
+        assessment=assessment,
+        require_source_bound=True,
+    )
+    assert (scope is not None and not errors) is (status == "PARTIAL")
 
 
 def test_source_artifact_uri_and_id_identify_the_same_original_bytes(
