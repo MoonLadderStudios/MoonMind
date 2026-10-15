@@ -50,8 +50,9 @@ import {
 import { DEFAULT_REMEDIATION_ACTION_POLICY } from "../lib/workflowActions";
 import {
   formatRuntimeLabel as formatRuntimeTargetLabel,
+  backendOptionsForHarness,
+  formatHarnessLabel,
   resolveDefaultRuntimeId,
-  runtimeOptionGroups,
   runtimeUnavailableReason,
 } from "../runtime/runtimeTargets";
 import type {
@@ -516,8 +517,6 @@ interface DashboardConfig {
     defaultTaskModelByRuntime?: Record<string, string>;
     defaultEffortByRuntime?: Record<string, string>;
     defaultTaskEffortByRuntime?: Record<string, string>;
-    supportedAgentRuntimes?: string[];
-    supportedRuntimes?: string[];
     repositoryOptions?: {
       items?: Array<{
         value?: string | null;
@@ -5932,19 +5931,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     dashboardConfig.system?.defaultEffortByRuntime ||
     dashboardConfig.system?.defaultTaskEffortByRuntime ||
     {};
-  const supportedAgentRuntimes = dashboardConfig.system
-    ?.supportedRuntimes ||
-    dashboardConfig.system?.supportedAgentRuntimes || ["omnigent", "codex_cli", "claude_code"];
-  const agentRuntimeOptionGroups = useMemo(
-    () => runtimeOptionGroups(supportedAgentRuntimes, runtimeTargetCatalog),
-    [supportedAgentRuntimes, runtimeTargetCatalog],
-  );
-  const runtimeOptions = [
-    ...agentRuntimeOptionGroups.recommended,
-    ...agentRuntimeOptionGroups.compatibility,
-    ...agentRuntimeOptionGroups.unavailable,
-  ].map((option) => option.runtimeId);
-  const stepRuntimeOptionGroups = agentRuntimeOptionGroups;
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
@@ -5956,8 +5942,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(
     () => readDashboardPreferences().createExpertMode,
   );
+  // `runtime` is the submitted Backend route: `omnigent`, or a direct runtime
+  // id when a compatibility Backend is chosen or a Profile has no Omnigent
+  // configuration. It is authored only through the Advanced Backend control or
+  // recorded authority; otherwise the selected Provider Profile routes it.
   const [runtime, setRuntime] = useState(defaultRuntime);
   const [runtimeAuthored, setRuntimeAuthored] = useState(false);
+  // Set only by a deliberate Harness change. Otherwise the selected Provider
+  // Profile establishes the Harness.
+  const [harnessChoice, setHarnessChoice] = useState("");
+  // True once the operator picks a Provider Profile or one is restored from
+  // saved authority. Only an unauthored default follows a Harness change.
+  const [providerProfileAuthored, setProviderProfileAuthored] = useState(false);
   const omnigentCatalog = dashboardConfig.system?.omnigentExecutionCatalog;
   const omnigentProfiles = omnigentCatalog?.profiles || [];
   const omnigentPolicies = omnigentCatalog?.policies || [];
@@ -6608,7 +6604,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   ]);
 
   useEffect(() => {
-    const profiles = activeProviderProfiles;
+    // After a deliberate Harness change an unconfigured draft may take that
+    // Harness's default or sole Profile; a kept Profile is never replaced.
+    const profiles = harnessChoice
+      ? activeProviderProfiles.filter((profile) => !profile.runtime_id || profile.runtime_id === harnessChoice)
+      : activeProviderProfiles;
     if (providerProfilesQuery.isPending) return;
     const resolvedProfileId = resolveLoadedProviderProfileId({
       profiles,
@@ -6632,6 +6632,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     selectedOmnigentProviderRuntime,
     runtime,
     configuredDefaultProviderProfileRef,
+    harnessChoice,
   ]);
 
   useEffect(() => {
@@ -6653,6 +6654,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.providerProfile) {
       prevProviderProfileRef.current = draft.providerProfile;
       setProviderProfile(draft.providerProfile);
+      setProviderProfileAuthored(true);
     }
     if (draft.agentProfile?.profileId) {
       setAgentProfile(draft.agentProfile.profileId);
@@ -6778,11 +6780,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (draft.runtime?.profileId) {
       prevProviderProfileRef.current = draft.runtime.profileId;
       setProviderProfile(draft.runtime.profileId);
+      setProviderProfileAuthored(true);
     }
     if (draft.agentProfile?.profileId) {
       setAgentProfile(draft.agentProfile.profileId);
       prevProviderProfileRef.current = draft.agentProfile.providerProfileRef;
       setProviderProfile(draft.agentProfile.providerProfileRef);
+      setProviderProfileAuthored(true);
     }
     setModelSelection(readModelSelection(draft.runtime));
     if (draft.instructions) {
@@ -7482,12 +7486,49 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       isDefault: Boolean(profile.is_default),
       status: profile.enabled === false ? "Disabled" : profile.launch_ready === false ? "Needs setup" : "",
     }));
+  // Harness choices come from the authorized Profile inventory plus the
+  // server-published direct compatibility targets; the server still admits or
+  // rejects the submitted combination.
+  const harnessFromUnavailableRuntime = !harnessChoice && !selectedConfiguredProfile?.runtime_id &&
+    runtime !== "omnigent" && Boolean(selectedRuntimeUnavailableReason);
+  const harness = harnessChoice || selectedConfiguredProfile?.runtime_id ||
+    (runtime !== "omnigent" && !harnessFromUnavailableRuntime ? runtime : "");
+  const harnessOptions = Array.from(new Set([
+    ...activeProviderProfiles.map((profile) => profile.runtime_id || ""),
+    ...(runtimeTargetCatalog?.targets || [])
+      .filter((target) => target.pathClass === "direct_compatibility" && target.explicitSelectionAllowed)
+      .map((target) => target.runtimeId),
+    harness,
+  ].filter(Boolean)));
+  const harnessProviderOptions = harness
+    ? providerOptions.filter((option) => !option.runtimeId || option.runtimeId === harness)
+    : providerOptions;
+  const backendOptions = harness
+    ? backendOptionsForHarness(harness, runtimeTargetCatalog, {
+        omnigentRoute: runtime === "omnigent" || activeProviderProfiles.some(
+          (profile) => profile.runtime_id === harness && Boolean(profile.execution_selection),
+        ),
+      })
+    : [];
+  const backendSelectable = backendOptions.length > 1;
+  const selectHarness = (nextHarness: string) => {
+    setHarnessChoice(nextHarness);
+    if (!providerProfileAuthored) setProviderProfile("");
+    // A direct Backend belongs to one Harness. Another Harness returns to the
+    // shared normal route; the kept Provider Profile still decides the account.
+    if (runtime !== "omnigent" && runtime !== nextHarness) {
+      setRuntime(defaultRuntime === nextHarness ? nextHarness : "omnigent");
+      setRuntimeAuthored(false);
+    }
+  };
   const providerProfileScopeLabel =
     runtime === "omnigent" && selectedProfileIsGenericV2
       ? selectedOmnigentAgentProfile?.displayName ||
         omnigentExecutionReadinessQuery.data?.displayName ||
         "Omnigent"
-      : formatRuntimeTargetLabel(runtime === "omnigent" ? runtime : providerProfileRuntime, runtimeTargetCatalog);
+      : harness
+        ? formatHarnessLabel(harness)
+        : formatRuntimeTargetLabel(runtime === "omnigent" ? runtime : providerProfileRuntime, runtimeTargetCatalog);
   const selectedOmnigentReadiness = (omnigentCatalogQuery.data?.executionProfiles || []).find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -7544,9 +7585,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? "Choose a compatible Omnigent host policy."
         : null);
   const selectedProfileMissing = Boolean(providerProfile) && !providerProfilesQuery.isPending && !selectedConfiguredProfile;
-  const runtimeProfileMismatch = selectedConfiguredProfile?.runtime_id && runtime !== "omnigent" &&
-    selectedConfiguredProfile.runtime_id !== runtime
-      ? "This Profile is incompatible with the selected Runtime. Choose a compatible Profile or Runtime."
+  const harnessProfileMismatch = Boolean(harnessChoice && selectedConfiguredProfile?.runtime_id &&
+    selectedConfiguredProfile.runtime_id !== harnessChoice);
+  const runtimeProfileMismatch = harnessProfileMismatch
+    ? `Choose a ${formatHarnessLabel(harnessChoice)} Provider Profile. The previous Provider Profile returns if you switch the Harness back.`
+    : selectedConfiguredProfile?.runtime_id && runtime !== "omnigent" &&
+        selectedConfiguredProfile.runtime_id !== runtime
+      ? "This Provider Profile is incompatible with the selected Backend. Choose a compatible Provider Profile or Backend."
       : null;
   const configurationSelectionError = runtime === "omnigent" && pageMode.mode === "create" &&
     !remediationDraft && selectedConfiguredProfile && !selectedConfiguration
@@ -7565,7 +7610,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : omnigentSelectionGateReason
   );
   const omnigentSelectionEligible = runtime !== "omnigent" || (
-    Boolean(selectedConfiguredProfile) && selectedConfiguredProfile?.enabled !== false &&
+    Boolean(selectedConfiguredProfile) && !runtimeProfileMismatch && selectedConfiguredProfile?.enabled !== false &&
     selectedConfiguredProfile?.launch_ready !== false && !selectedConfiguredProfile?.execution_selection_error && !configurationSelectionError && !configurationDetailsUnavailable
   );
 
@@ -11801,6 +11846,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   );
               const stepTierPreviewError =
                 modelTierPreviewsQuery.data?.errors[`step:${step.localId}`];
+              const stepHarness = stepPreviewProfile?.runtime_id || harness;
+              const stepBackendOptions = stepHarness
+                ? backendOptionsForHarness(stepHarness, runtimeTargetCatalog, {
+                    omnigentRoute: activeProviderProfiles.some(
+                      (profile) => profile.runtime_id === stepHarness && Boolean(profile.execution_selection),
+                    ),
+                  })
+                : [];
               const jiraTransitionState =
                 jiraTransitionStateByStep[step.localId] || null;
               const showJiraTransitionOptions =
@@ -12533,66 +12586,67 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   {showAdvancedStepOptions ? (
                     <div
                       className="grid-2"
-                      aria-label={`Step ${index + 1} runtime selection`}
+                      aria-label={`Step ${index + 1} execution selection`}
                     >
                       <label>
-                        {`Step ${index + 1} Runtime`}
+                        {`Step ${index + 1} Provider Profile`}
                         <select
-                          data-step-field="runtimeMode"
-                          data-step-index={String(index)}
-                          value={step.runtimeMode && runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) ? "" : step.runtimeMode}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              runtimeMode: event.target.value,
-                            })
-                          }
-                        >
-                          <option value="">Inherit agent runtime</option>
-                          {step.runtimeMode && runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) ? (
-                            <option value="" disabled>Choose a supported runtime</option>
-                          ) : step.runtimeMode && !runtimeOptions.includes(step.runtimeMode) ? (
-                            <option value={step.runtimeMode}>
-                              {formatRuntimeTargetLabel(step.runtimeMode, runtimeTargetCatalog)} (Current selection)
-                            </option>
-                          ) : null}
-                          {stepRuntimeOptionGroups.recommended.map((option) => (
-                            <option
-                              key={option.runtimeId}
-                              value={option.runtimeId}
-                            >
-                              {option.label}
-                            </option>
-                          ))}
-                          {stepRuntimeOptionGroups.compatibility.length > 0 ? (
-                            <optgroup label="Compatibility paths">
-                              {stepRuntimeOptionGroups.compatibility.map(
-                                (option) => (
-                                  <option
-                                    key={option.runtimeId}
-                                    value={option.runtimeId}
-                                  >
-                                    {option.label}
-                                  </option>
-                                ),
-                              )}
-                            </optgroup>
-                          ) : null}
-                        </select>
-                      </label>
-                      <label>
-                        {`Step ${index + 1} Profile`}
-                        <input
                           data-step-field="runtimeProviderProfile"
                           data-step-index={String(index)}
                           value={step.runtimeProviderProfile}
-                          placeholder="inherit workflow profile"
                           onChange={(event) =>
                             updateStep(step.localId, {
                               runtimeProviderProfile: event.target.value,
                             })
                           }
-                        />
+                        >
+                          <option value="">Inherit workflow Provider Profile</option>
+                          {step.runtimeProviderProfile && !providerOptions.some((option) => option.id === step.runtimeProviderProfile) ? (
+                            <option value={step.runtimeProviderProfile}>
+                              {step.runtimeProviderProfile} (Current selection)
+                            </option>
+                          ) : null}
+                          {Array.from(new Set(providerOptions.map((option) => option.runtimeId))).map((group) => (
+                            <optgroup key={group || "unknown"} label={group ? formatHarnessLabel(group) : "Other"}>
+                              {providerOptions.filter((option) => option.runtimeId === group).map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.isDefault ? `${option.label} (Default)` : option.label}
+                                  {option.status ? ` · ${option.status}` : ""}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </select>
                       </label>
+                      {step.runtimeMode || stepBackendOptions.length > 1 ? (
+                        <label>
+                          {`Step ${index + 1} Backend`}
+                          <select
+                            data-step-field="runtimeMode"
+                            data-step-index={String(index)}
+                            value={step.runtimeMode && runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) ? "" : step.runtimeMode}
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                runtimeMode: event.target.value,
+                              })
+                            }
+                          >
+                            <option value="">Inherit workflow Backend</option>
+                            {step.runtimeMode && runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) ? (
+                              <option value="" disabled>Choose a supported Backend</option>
+                            ) : step.runtimeMode && !stepBackendOptions.some((option) => option.runtimeId === step.runtimeMode) ? (
+                              <option value={step.runtimeMode}>
+                                {formatRuntimeTargetLabel(step.runtimeMode, runtimeTargetCatalog)} (Current selection)
+                              </option>
+                            ) : null}
+                            {stepBackendOptions.map((option) => (
+                              <option key={option.runtimeId} value={option.runtimeId}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
                       <ModelSelectionFields
                         scope={`Step ${index + 1}`}
                         value={step.runtimeSelection}
@@ -12772,39 +12826,26 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         >
         <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
           <div className="stack"><label>
-            Runtime
+            Harness
             <select
-              name="runtime"
-              value={selectedRuntimeUnavailableReason ? "" : runtime}
-              onChange={(event) => {
-                setRuntime(event.target.value);
-                setRuntimeAuthored(true);
-              }}
+              name="harness"
+              value={harness}
+              onChange={(event) => selectHarness(event.target.value)}
             >
-              {selectedRuntimeUnavailableReason ? (
-                <option value="" disabled>Choose a supported runtime</option>
-              ) : runtime && !runtimeOptions.includes(runtime) ? (
-                <option value={runtime}>
-                  {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)} (Current selection)
+              {!harness ? (
+                <option value="" disabled>
+                  {harnessFromUnavailableRuntime
+                    ? "Choose a supported Harness"
+                    : providerProfilesQuery.isPending
+                      ? "Loading Harness choices…"
+                      : "Choose a Harness"}
                 </option>
               ) : null}
-              {agentRuntimeOptionGroups.unavailable.map((option) => (
-                <option key={option.runtimeId} value={option.runtimeId} disabled>{option.label} (Unavailable)</option>
-              ))}
-              {agentRuntimeOptionGroups.recommended.map((option) => (
-                <option key={option.runtimeId} value={option.runtimeId}>
-                  {option.label}
+              {harnessOptions.map((option) => (
+                <option key={option} value={option}>
+                  {formatHarnessLabel(option)}
                 </option>
               ))}
-              {agentRuntimeOptionGroups.compatibility.length > 0 ? (
-                <optgroup label="Compatibility paths">
-                  {agentRuntimeOptionGroups.compatibility.map((option) => (
-                    <option key={option.runtimeId} value={option.runtimeId}>
-                      {option.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ) : null}
             </select>
             {runtime === "omnigent" && selectedOmnigentAgentProfileVersion && (
               selectedProfileIsGenericV2
@@ -12824,6 +12865,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               Uses {formatRuntimeTargetLabel(selectedHarnessId.replace(/-native$/, ""))} through Omnigent.
             </span>
           ) : null}
+          {runtime !== "omnigent" && !(showAdvancedStepOptions && backendSelectable) ? (
+            <span className="small" data-backend-summary>
+              Backend: {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)}
+            </span>
+          ) : null}
           {selectedRuntimeUnavailableReason ? (
             <span className="small" role="status" data-runtime-unavailable>
               {selectedRuntimeUnavailableReason}
@@ -12835,13 +12881,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           {providerOptions.length > 0 || providerProfile ? (
             <div id="queue-provider-profile-wrap">
               <label>
-                Profile
+                Provider Profile
                 <select
                   name="providerProfile"
-                  value={providerProfile}
+                  value={harnessProfileMismatch ? "" : providerProfile}
                   onChange={(event) => {
+                    const nextProfile = activeProviderProfiles.find((profile) => profile.profile_id === event.target.value);
                     setProviderProfile(event.target.value);
+                    setProviderProfileAuthored(true);
+                    setHarnessChoice("");
                     setOmnigentLaunchPolicyAuthored(false);
+                    // A direct Backend cannot serve another Harness's Profile.
+                    if (runtime !== "omnigent" && nextProfile?.runtime_id && nextProfile.runtime_id !== runtime) {
+                      setRuntimeAuthored(false);
+                    }
                   }}
                   disabled={providerProfilesQuery.isPending}
                 >
@@ -12849,19 +12902,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     <option value="">Loading profiles…</option>
                   ) : (
                     <>
-                      {providerProfile && !providerOptions.some((option) => option.id === providerProfile) ? (
+                      {harnessProfileMismatch ? (
+                        <option value="" disabled>
+                          Choose a {formatHarnessLabel(harness)} Provider Profile
+                        </option>
+                      ) : providerProfile && !providerOptions.some((option) => option.id === providerProfile) ? (
                         <option value={providerProfile} disabled>
                           {historicalOmnigentProviderProfile?.label || providerProfile} (Unavailable — replacement required)
                         </option>
                       ) : null}
-                      {Array.from(new Set(providerOptions.map((option) => runtime === "omnigent" ? option.runtimeId : ""))).map((group) => {
-                        const options = providerOptions.filter((option) => runtime !== "omnigent" || option.runtimeId === group).map((option) => (
+                      {Array.from(new Set(harnessProviderOptions.map((option) => harness ? "" : option.runtimeId))).map((group) => {
+                        const options = harnessProviderOptions.filter((option) => !group || option.runtimeId === group).map((option) => (
                           <option key={option.id} value={option.id}>
                             {option.isDefault ? `${option.label} (Default)` : option.label}
                             {option.status ? ` · ${option.status}` : ""}
                           </option>
                         ));
-                        return group ? <optgroup key={group} label={formatRuntimeTargetLabel(group)}>{options}</optgroup> : options;
+                        return group ? <optgroup key={group} label={formatHarnessLabel(group)}>{options}</optgroup> : options;
                       })}
                     </>
                   )}
@@ -12870,6 +12927,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               {providerProfilesQuery.isError ? (
                 <p className="small" id="queue-auth-profile-hint">
                   Failed to load provider profiles.
+                </p>
+              ) : harness && harnessProviderOptions.length === 0 && !providerProfilesQuery.isPending ? (
+                <p className="small" role="alert" id="queue-provider-profile-empty">
+                  No Provider Profiles are configured for {formatHarnessLabel(harness)}. Configure one in
+                  Settings or choose another Harness.
                 </p>
               ) : null}
             </div>
@@ -12889,6 +12951,33 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             </div>
           )}
         </div>
+
+        {showAdvancedStepOptions && backendSelectable ? (
+          <label>
+            Backend
+            <select
+              name="backend"
+              value={selectedRuntimeUnavailableReason ? "" : runtime}
+              onChange={(event) => {
+                setRuntime(event.target.value);
+                setRuntimeAuthored(true);
+              }}
+            >
+              {selectedRuntimeUnavailableReason ? (
+                <option value="" disabled>Choose a supported Backend</option>
+              ) : !backendOptions.some((option) => option.runtimeId === runtime) ? (
+                <option value={runtime}>
+                  {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)} (Current selection)
+                </option>
+              ) : null}
+              {backendOptions.map((option) => (
+                <option key={option.runtimeId} value={option.runtimeId}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
 
         {runtime.trim().toLowerCase() === "omnigent" && (omnigentProfiles.length > 0 || Boolean(selectedGenericOmnigentTarget)) && showAdvancedStepOptions ? (
           <div className="grid-2" aria-label="Omnigent host policy">

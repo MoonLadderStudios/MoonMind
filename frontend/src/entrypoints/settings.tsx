@@ -230,7 +230,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
         return next;
       });
       setNotice(null);
-    }, 'Change the runtime filter? Your unsaved Provider Profile draft will be discarded.');
+    }, 'Change the Harness filter? Your unsaved Provider Profile draft will be discarded.');
   };
 
   return (

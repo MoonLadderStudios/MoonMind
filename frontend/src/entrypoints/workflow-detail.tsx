@@ -2287,27 +2287,23 @@ export function resolveWorkflowSourceContext(execution: {
   return { repository, startingBranch, hasRepository, startingBranchState };
 }
 
-function renderProviderProfileSummary(
+// Provider Profile identity and the upstream Provider stay separate facts, so
+// a provider name is never presented as the recorded Profile.
+function recordedProviderSummary(
   execution: z.infer<typeof ExecutionDetailSchema>,
   launchProfileId?: string | null,
 ): ReactNode {
-  const profileId = launchProfileId?.trim() || execution.profileId?.trim();
   const launchProfileChanged = Boolean(
     launchProfileId?.trim() && launchProfileId?.trim() !== execution.profileId?.trim(),
   );
-  const providerLabel = launchProfileChanged ? undefined : execution.providerLabel?.trim();
-  const providerId = launchProfileChanged ? undefined : execution.providerId?.trim();
-  const primary = providerLabel || providerId || profileId;
-  if (!primary) return '—';
-
+  if (launchProfileChanged) return null;
+  const providerLabel = execution.providerLabel?.trim();
+  const providerId = execution.providerId?.trim();
+  const primary = providerLabel || providerId;
+  if (!primary) return null;
   return (
     <span className="stack gap-1">
-      <code className="text-xs break-all">{primary}</code>
-      {profileId && profileId !== primary ? (
-        <span className="small">
-          Profile ID: <code className="text-xs break-all">{profileId}</code>
-        </span>
-      ) : null}
+      <span>{primary}</span>
       {providerId && providerId !== primary ? (
         <span className="small">
           Provider ID: <code className="text-xs break-all">{providerId}</code>
@@ -5368,13 +5364,13 @@ function BranchExplorerPanel({
             </select>
           </label>
           <label>
-            Profile
+            Provider Profile
             <select value={draft.providerProfileRef} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, providerProfileRef: event.target.value }))}>
-              <option value="">Inherit execution Profile</option>
+              <option value="">Inherit execution Provider Profile</option>
               {draft.providerProfileRef && !(profilesQuery.data || []).some((profile) => profile.profile_id === draft.providerProfileRef) ? <option value={draft.providerProfileRef}>{draft.providerProfileRef} · Unavailable</option> : null}
               {(profilesQuery.data || []).map((profile) => <option key={profile.profile_id} value={profile.profile_id}>{profile.account_label || profile.profile_id}{profile.enabled === false ? ' · Disabled' : profile.launch_ready === false ? ' · Needs setup' : ''}</option>)}
             </select>
-            {profilesQuery.isError ? <span role="status">Profiles could not be loaded. Your selection is preserved.</span> : null}
+            {profilesQuery.isError ? <span role="status">Provider Profiles could not be loaded. Your selection is preserved.</span> : null}
           </label>
           <label>
             Execution profile / launch policy
@@ -10452,8 +10448,17 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 skillRuntime={execution.skillRuntime}
               />
 
-              <FactGroup title="Runtime">
-                {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
+              <FactGroup title="Agent">
+                {/* Recorded identity only: an Omnigent run records its target
+                    path below, not a Harness name to guess from. */}
+                {execution.targetRuntime && execution.targetRuntime !== 'omnigent' ? (
+                  <Fact label="Harness">{formatRuntimeLabel(execution.targetRuntime)}</Fact>
+                ) : null}
+                {execution.targetRuntime ? (
+                  <Fact label="Backend">
+                    {execution.targetRuntime === 'omnigent' ? 'Omnigent' : 'Direct'}
+                  </Fact>
+                ) : null}
                 {historicalModel ? (
                   <Fact label="Model">
                     <code className="text-xs">{historicalModel}</code>
@@ -10461,7 +10466,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 ) : null}
                 {historicalProfileId ? (
                   <Fact label="Provider Profile">
-                    {renderProviderProfileSummary(execution, historicalProfileId)}
+                    <code className="text-xs break-all">{historicalProfileId}</code>
+                  </Fact>
+                ) : null}
+                {historicalProfileId && recordedProviderSummary(execution, historicalProfileId) ? (
+                  <Fact label="Provider">
+                    {recordedProviderSummary(execution, historicalProfileId)}
                   </Fact>
                 ) : null}
                 {historicalEffort ? <Fact label="Effort">{historicalEffort}</Fact> : null}

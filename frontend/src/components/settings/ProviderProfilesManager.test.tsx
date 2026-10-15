@@ -1092,7 +1092,7 @@ describe('ProviderProfilesManager form controls', () => {
     );
     expect(labels).toEqual([
       'Profile',
-      'Runtime',
+      'Harness',
       'Provider',
       'Credential',
       'Secret refs',
@@ -1104,7 +1104,11 @@ describe('ProviderProfilesManager form controls', () => {
     );
     expect(profileRow?.querySelector('td[data-label="Profile"]')?.getAttribute('headers')).toBe(
       'provider-profile-header-profile',
-    );
+    );    // The Harness column names the agent implementation and keeps the stable
+    // runtime code available without presenting it as the label.
+    const harnessCell = profileRow?.querySelector('td[data-label="Harness"]');
+    expect(harnessCell?.textContent).toBe('Codex CLI');
+    expect(harnessCell?.getAttribute('title')).toBe('codex_cli');
   });
 
   it('sends runtime default changes when updating an edited profile', async () => {
