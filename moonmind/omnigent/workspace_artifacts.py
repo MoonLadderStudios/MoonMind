@@ -56,7 +56,6 @@ MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_CHECKPOINT_BYTES = MAX_TOTAL_BYTES
 STREAM_CHUNK_BYTES = 1024 * 1024
 RESTORE_PRINCIPAL = "service:omnigent_workspace_restore"
-ATTACHMENT_PRINCIPAL = "service:omnigent_workspace_attachment"
 
 STAGING_PREFIX = ".moonmind-import-"
 
@@ -334,7 +333,9 @@ class WorkspaceArtifactProjector:
             workspace,
             refs=refs,
             subdir="attachments",
-            principal=ATTACHMENT_PRINCIPAL,
+            # The materializer carries the admitted Step Execution's owner.
+            # A generic host service principal is not an artifact read grant.
+            principal=f"workflow:{workflow_id}",
             noun="attachments",
             required_workflow_id=workflow_id,
             runtime_uid=runtime_uid,

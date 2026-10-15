@@ -1196,11 +1196,12 @@ async def test_historical_remediation_request_materializes_named_evidence_and_re
 
     class Artifacts:
         async def get_metadata(self, *, artifact_id, principal):
-            assert principal == 'service:omnigent_workspace_attachment'
+            assert principal == 'workflow:workflow-1'
             return (SimpleNamespace(size_bytes=len(payloads[artifact_id])),
                     [SimpleNamespace(workflow_id='workflow-1')])
 
         async def read_chunks(self, *, artifact_id, **kwargs):
+            assert kwargs['principal'] == 'workflow:workflow-1'
             return SimpleNamespace(), iter((payloads[artifact_id],))
 
     async def no_clone(*args, **kwargs):
