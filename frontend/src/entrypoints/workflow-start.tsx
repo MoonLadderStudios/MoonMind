@@ -2927,7 +2927,72 @@ function validatePrimaryStepSubmission(
   };
 }
 
+const REPOSITORY_INPUT_ERROR =
+  "Repository must be a repository name or Git URL without spaces, embedded credentials, or local paths.";
+
+// Repository identity belongs to the connection that resolves it (GitHub
+// shorthand, other Git hosts, nested group paths), so Create applies no
+// hosting-provider shape. It rejects only what can never be a token-free
+// remote source: whitespace, embedded credentials, and local paths.
 function isValidRepositoryInput(value: string): boolean {
+  const candidate = value.trim();
+  if (!candidate || /\s/.test(candidate)) {
+    return false;
+  }
+  if (/^(file:|\/|\.{1,2}\/|~)/i.test(candidate)) {
+    return false;
+  }
+  if (candidate.includes("://")) {
+    try {
+      const parsed = new URL(candidate);
+      return Boolean(parsed.hostname) && !parsed.username && !parsed.password;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+const PUBLICATION_OUTCOME_ID = "workflow-publication-outcome";
+
+function destinationPublishLabel(selection: string): string {
+  const mode = normalizePublishModeSelection(selection);
+  if (mode === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE) {
+    return "PR with Merge Automation";
+  }
+  if (mode === "pr") {
+    return "PR";
+  }
+  return mode === "branch" ? "Branch" : "";
+}
+
+function blankSourcePublishNotice(selection: string): string {
+  const label = destinationPublishLabel(selection);
+  return label
+    ? `${label} publishing needs a repository. Add one, or choose None to keep results save-only.`
+    : "";
+}
+
+function publicationOutcomeText(selection: string, repository: string): string {
+  const mode = normalizePublishModeSelection(selection);
+  if (mode === "auto") {
+    return "The selected skill decides whether and where to publish.";
+  }
+  if (mode === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE) {
+    return `Opens a pull request on ${repository} and enables merge automation.`;
+  }
+  if (mode === "pr") {
+    return `Opens a pull request on ${repository}.`;
+  }
+  if (mode === "branch") {
+    return `Pushes a branch to ${repository}.`;
+  }
+  return "Saves results on this workflow; nothing is published.";
+}
+
+// Branch discovery is GitHub-backed advisory lookup; other identities skip it
+// and submit with the backend's default-branch semantics.
+function canLookupRepositoryBranches(value: string): boolean {
   const candidate = value.trim();
   if (!candidate) {
     return false;
@@ -2950,10 +3015,6 @@ function isValidRepositoryInput(value: string): boolean {
     }
   }
   return candidate.startsWith("git@");
-}
-
-function canLookupRepositoryBranches(value: string): boolean {
-  return isValidRepositoryInput(value);
 }
 
 // MoonLadderStudios/MoonMind#4353: the account-free instance presents one
@@ -5711,8 +5772,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
     return rememberedRepository || defaultRepository;
   }, [defaultRepository, repositoryOptions]);
+  // The server resolves the deployment's publish default; without it the page
+  // stays save-only rather than inventing a destination.
   const defaultPublishMode = String(
-    dashboardConfig.system?.defaultPublishMode || "pr",
+    dashboardConfig.system?.defaultPublishMode || "none",
   );
   const defaultTaskModelByRuntime =
     dashboardConfig.system?.defaultModelByRuntime ||
@@ -5880,6 +5943,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const submitArrowExitHeldRef = useRef(false);
   const submitArrowExitTimeoutRef = useRef<number | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
+  const repositoryInputRef = useRef<HTMLInputElement | null>(null);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
@@ -6525,7 +6589,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     remediationDraftIdRef.current = draftId;
     setRemediationDraftFailure(null);
     setRemediationDraft(draft);
-    setRepository(draft.repository || "MoonLadderStudios/MoonMind");
+    setRepository(draft.repository || "");
     setRepositoryTouched(true);
     if (draft.branch) {
       syncBranchDraft(draft.branch, false);
@@ -6885,6 +6949,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     !isSelfManagedPublishSkill(effectiveSkillDetail) &&
     !isRepositoryPublishDisabledSkill(effectiveSkillDetail);
   const autoPublishAvailable = isSelfManagedPublishSkill(effectiveSkillDetail);
+  // Branch/PR modes need a destination; a blank source offers only None/Auto.
+  const destinationPublishAvailable =
+    mergeAutomationAvailable && Boolean(repository.trim());
   // A blank source has no repository to publish to: until the operator picks
   // a mode, Create shows and submits save-only (None) instead of the page's
   // repository default. Skill-owned Auto keeps its own declared target.
@@ -9181,20 +9248,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? defaultBranch
         : "");
     if (normalizedRepository && !isValidRepositoryInput(normalizedRepository)) {
-      setSubmitMessage(
-        "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).",
-      );
-      clearSubmitBusy();
-      return;
-    }
-    if (normalizedRepository && !submissionBranch) {
-      setSubmitMessage(
-        branchMetadataQuery.isLoading
-          ? "Wait for the repository default branch to load, or enter a branch before starting this workflow."
-          : liveBranchTouched
-            ? "Choose a branch before starting this repository-backed workflow."
-            : "No repository default branch is available. Enter a branch before starting this workflow.",
-      );
+      setSubmitMessage(REPOSITORY_INPUT_ERROR);
+      repositoryInputRef.current?.focus();
       clearSubmitBusy();
       return;
     }
@@ -9483,6 +9538,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             mode: effectivePublishMode,
           }
         : { mode: effectivePublishMode };
+    if (
+      !normalizedRepository &&
+      (effectivePublishMode === "branch" || effectivePublishMode === "pr")
+    ) {
+      setSubmitMessage(blankSourcePublishNotice(sourcePublishMode));
+      repositoryInputRef.current?.focus();
+      clearSubmitBusy();
+      return;
+    }
     if (effectivePublishMode === "branch" && !submissionBranch) {
       setSubmitMessage(
         "Choose a branch before saving or rerunning this publish-mode workflow.",
@@ -10417,15 +10481,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       priority: effectivePriority,
       maxAttempts: effectiveMaxAttempts,
       payload: {
-        ...(normalizedRepository && submissionBranch
+        ...(normalizedRepository
           ? {
               // Create has no connection selector: an omitted connectionRef
-              // selects the deployment's default connection server-side.
-              repository: {
-                provider: "git",
-                repository: { name: normalizedRepository },
-                branch: { name: submissionBranch },
-              },
+              // selects the deployment's default connection server-side. An
+              // omitted branch submits the bare name (the CLI's form), which
+              // the backend clones at the remote's default branch, so
+              // submission never waits on advisory branch discovery.
+              repository: submissionBranch
+                ? {
+                    provider: "git",
+                    repository: { name: normalizedRepository },
+                    branch: { name: submissionBranch },
+                  }
+                : normalizedRepository,
             }
           : {}),
         ...(mergedCapabilities.length > 0
@@ -10794,13 +10863,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : pageMode.mode === "rerun"
         ? "Start a new run from this workflow draft"
         : "Start this workflow";
-  const repositoryTooltip = "Select the GitHub repository for this workflow";
+  const repositoryTooltip =
+    "Repository for this workflow: owner/repo or a token-free Git URL. Leave blank for save-only scratch work.";
   const branchTooltip = branchMetadataQuery.isLoading
     ? "Loading the repository default branch..."
     : branchControlDisabled
       ? branchStatusMessage ||
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the workflow starts";
+  const sourcePublishNotice = repository.trim()
+    ? ""
+    : blankSourcePublishNotice(sourcePublishMode);
+  const publicationOutcome =
+    sourcePublishNotice ||
+    publicationOutcomeText(sourcePublishMode, repository.trim());
   const publishModeTooltip = autoPublishAvailable
     ? "Auto is available because the selected skill owns publishing"
     : !mergeAutomationAvailable
@@ -12977,6 +13053,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               {branchStatusMessage}
             </p>
           ) : null}
+          <p
+            id={PUBLICATION_OUTCOME_ID}
+            className={
+              sourcePublishNotice
+                ? "queue-authoring-controls-status small notice error"
+                : "queue-authoring-controls-status small"
+            }
+            aria-live="polite"
+          >
+            {publicationOutcome}
+          </p>
           <div className="queue-floating-bar-row">
             <div
               className="queue-inline-selector queue-inline-selector--repo"
@@ -12984,12 +13071,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             >
               <RepoIcon />
               <input
+                ref={repositoryInputRef}
                 name="repository"
-                aria-label="GitHub Repo"
+                aria-label="Repository"
                 title={repositoryTooltip}
                 list={REPOSITORY_OPTIONS_DATALIST_ID}
                 value={repository}
-                placeholder="owner/repo"
+                placeholder="owner/repo (optional)"
                 onChange={(event) =>
                   handleRepositoryChange(event.target.value)
                 }
@@ -13026,6 +13114,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               <select
                 name="publishMode"
                 aria-label="Publish Mode"
+                aria-describedby={PUBLICATION_OUTCOME_ID}
                 title={publishModeTooltip}
                 value={sourcePublishMode}
                 onChange={(event) => {
@@ -13041,15 +13130,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   Auto
                 </option>
                 <option value="none">None</option>
-                <option value="branch" disabled={!mergeAutomationAvailable}>
+                <option
+                  value="branch"
+                  disabled={!destinationPublishAvailable}
+                >
                   Branch
                 </option>
-                <option value="pr" disabled={!mergeAutomationAvailable}>
+                <option value="pr" disabled={!destinationPublishAvailable}>
                   PR
                 </option>
                 <option
                   value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
-                  disabled={!mergeAutomationAvailable}
+                  disabled={!destinationPublishAvailable}
                 >
                   PR with Merge Automation
                 </option>
