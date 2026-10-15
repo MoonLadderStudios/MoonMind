@@ -60,6 +60,30 @@ let fetchSpy: MockInstance;
 let cleanupRender: (() => void) | null = null;
 let createRequests: Array<Record<string, unknown>>;
 let rejectNextCreate: boolean;
+let updateRequests: Array<Record<string, unknown>>;
+
+// A recorded anonymous public-repository run opened for edit.
+const RECORDED_EDIT = {
+  workflowId: 'mm:recorded-edit',
+  workflowType: 'MoonMind.UserWorkflow',
+  state: 'executing',
+  targetRuntime: 'codex_cli',
+  publishMode: 'none',
+  inputParameters: {
+    targetRuntime: 'codex_cli',
+    repository: 'octo/public',
+    publishMode: 'none',
+    workspaceSpec: {
+      workspaceSource: { kind: 'repository', repository: 'octo/public', accessMode: 'anonymous' },
+    },
+    workflow: {
+      instructions: 'Summarize the public repository.',
+      runtime: { mode: 'codex_cli' },
+      publish: { mode: 'none' },
+    },
+  },
+  actions: { canUpdateInputs: true, canRerun: false },
+};
 
 beforeEach(() => {
   window.sessionStorage.clear();
@@ -67,6 +91,7 @@ beforeEach(() => {
   window.history.replaceState({}, '', '/workflows/new');
   createRequests = [];
   rejectNextCreate = false;
+  updateRequests = [];
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -81,6 +106,16 @@ beforeEach(() => {
           );
         }
         return jsonResponse({ workflowId: 'mm:created', runId: 'created-run' }, 201);
+      }
+      if (url === '/api/executions/mm%3Arecorded-edit?source=temporal') {
+        return jsonResponse(RECORDED_EDIT);
+      }
+      if (url === '/api/executions/mm%3Arecorded-edit/update') {
+        updateRequests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return jsonResponse(
+          { detail: { code: 'invalid_execution_request', message: BACKEND_REJECTION } },
+          422,
+        );
       }
       if (url.startsWith('/api/v1/provider-profiles')) {
         return jsonResponse([
@@ -168,7 +203,9 @@ describe('Create workspace source and publication intent', () => {
       await userEvent.fill(instructions, 'Write a scratch report.');
       rejectNextCreate = true;
       await userEvent.click(start);
-      expect(await screen.findByText(BACKEND_REJECTION)).toBeTruthy();
+      const rejection = await screen.findByText(BACKEND_REJECTION);
+      // Focus moves to the reason so keyboard and screen-reader users hear it.
+      await waitFor(() => expect(document.activeElement).toBe(rejection));
       expect(createRequests).toHaveLength(1);
       expect((createRequests[0]?.payload as Record<string, unknown>).repository).toBeUndefined();
       // Rejection keeps the draft for correction.
@@ -196,6 +233,53 @@ describe('Create workspace source and publication intent', () => {
           : ((submitted as { repository?: { name?: string } }).repository?.name ?? '');
       expect(submittedName).toBe('octo/repo');
       expect((createRequests[1]?.payload as Record<string, unknown>).publishMode).toBe('pr');
+    });
+  }
+
+  for (const viewport of [DESKTOP, MOBILE]) {
+    it(`keeps an edited anonymous source and focuses a rejection at ${viewport.width}px`, async () => {
+      await page.viewport(viewport.width, viewport.height);
+      window.history.replaceState({}, '', '/workflows/new?editExecutionId=mm%3Arecorded-edit');
+      const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+      cleanupRender = unmount;
+
+      const instructions = (await screen.findByLabelText(
+        'Instructions',
+        {},
+        { timeout: 10_000 },
+      )) as HTMLTextAreaElement;
+      await waitFor(() => expect(instructions.value).toBe('Summarize the public repository.'));
+      const anonymous = screen.getByLabelText(
+        'Read without credentials (public repository)',
+      ) as HTMLInputElement;
+      const publish = screen.getByLabelText('Publish Mode') as HTMLSelectElement;
+      const save = screen.getByRole('button', { name: 'Save Changes' });
+      expect(anonymous.checked).toBe(true);
+      expect(publish.value).toBe('none');
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 2);
+      for (const control of [anonymous, publish, save]) {
+        const rectangle = control.getBoundingClientRect();
+        expect(rectangle.left).toBeGreaterThanOrEqual(-1);
+        expect(rectangle.right).toBeLessThanOrEqual(window.innerWidth + 1);
+      }
+
+      await userEvent.fill(instructions, 'Summarize the public repository again.');
+      await userEvent.click(save);
+      const rejection = await screen.findByText(BACKEND_REJECTION);
+      await waitFor(() => expect(document.activeElement).toBe(rejection));
+      expect(updateRequests).toHaveLength(1);
+      const patch = updateRequests[0]?.parametersPatch as Record<string, unknown>;
+      expect(patch.workspace).toEqual({
+        workspaceSource: { kind: 'repository', repository: 'octo/public', accessMode: 'anonymous' },
+      });
+      // Rejection keeps the edited draft and its source choice.
+      expect(instructions.value).toBe('Summarize the public repository again.');
+      expect(anonymous.checked).toBe(true);
+
+      // The source choice stays keyboard operable.
+      anonymous.focus();
+      await userEvent.keyboard(' ');
+      expect(anonymous.checked).toBe(false);
     });
   }
 });
