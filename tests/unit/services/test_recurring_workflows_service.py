@@ -1528,7 +1528,7 @@ async def test_create_manual_run_triggers_temporal_schedule(
                         workflow=workflow_type,
                         id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
-                        task_queue="mm.workflow.user.v2",
+                        task_queue="mm.workflow.user.v2.publication-v1",
                         memo=created_metadata["memo"],
                         typed_search_attributes=_build_typed_search_attributes(
                             {key: [value] for key, value in created_metadata["search_attributes"].items()}
