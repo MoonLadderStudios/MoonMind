@@ -116,7 +116,6 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     OmnigentHostLease,
-    RepositoryOutcomePolicy,
 )
 from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
@@ -159,26 +158,6 @@ _REPOSITORY_PUBLICATION_CONTINUATION_DIGEST = compute_digest(
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _trusted_no_commit_repository_policy(
-    request: AgentExecutionRequest,
-) -> RepositoryOutcomePolicy | None:
-    """Validate the exact workflow-owned authority required for no-commit success."""
-
-    parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
-    raw_policy = parameters.get("repositoryOutcomePolicy")
-    if not isinstance(raw_policy, Mapping):
-        return None
-    try:
-        policy = RepositoryOutcomePolicy.model_validate(raw_policy)
-    except (TypeError, ValueError):
-        return None
-    if policy.assessed_repository != authored_repository_source(request):
-        return None
-    if policy.assessed_branch != authored_starting_branch(request):
-        return None
-    return policy
 
 
 def _compile_persisted_effective_launch(
@@ -1956,7 +1935,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                 publication_requested or running_turn_recovery is not None
             ):
                 publication_stage = "repository_publication"
-                no_commit_policy = _trusted_no_commit_repository_policy(request)
                 for continuation_index in range(
                     REPOSITORY_PUBLICATION_CONTINUATION_LIMIT + 1
                 ):
@@ -2092,10 +2070,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     push_status = str(
                         publication.get("push_status") or ""
                     ).strip().lower()
-                    no_commit_accepted = (
-                        push_status == "no_commits" and no_commit_policy is not None
-                    )
-                    if push_status == "pushed" or no_commit_accepted:
+                    # The publisher proves that saved work is retained remotely.
+                    # Like the generic host path, return its canonical no-change
+                    # outcome without asking the agent to invent more changes.
+                    # The workflow's verifier still owns task acceptance; this
+                    # transport evidence does not turn an unverified result into
+                    # a completed issue or override a blocking verification gate.
+                    if push_status in {"pushed", "no_commits"}:
                         evidence = AcceptedRepositoryEvidence(
                             pushStatus=push_status,
                             branch=publication.get("push_branch"),
@@ -2135,18 +2116,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                                     "remote_verified"
                                 ),
                                 "continuationCount": continuation_index,
-                                **(
-                                    {
-                                        "noCommitAuthority": (
-                                            no_commit_policy.authority
-                                        ),
-                                        "assessmentArtifactRef": (
-                                            no_commit_policy.assessment_artifact_ref
-                                        ),
-                                    }
-                                    if no_commit_accepted
-                                    else {}
-                                ),
                             },
                         )
                         break

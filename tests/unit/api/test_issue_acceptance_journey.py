@@ -6,10 +6,12 @@ from real Git refs and acceptance evidence comes from executed fixture tests.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from datetime import datetime, timezone
 import json
 import subprocess
+import sys
 from unittest.mock import AsyncMock
 from urllib.parse import unquote
 
@@ -547,3 +549,71 @@ async def test_post_merge_activity_validates_real_merge_before_github_completion
     assert completed is succeeds, gate._post_merge_github_result
     assert issue["state"] == ("closed" if succeeds else "open")
     assert any(method != "GET" for method, _ in requests) is succeeds
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observed_defect", [False, True])
+async def test_already_landed_no_code_result_reaches_truthful_verification(
+    candidate, pull_request, github_boundary, monkeypatch, observed_defect
+):
+    """No new commit is needed; unavailable live proof is not an observed defect."""
+    repo, current, report = candidate
+    issue, requests = github_boundary
+    squash = git(repo, "commit-tree", git(repo, "rev-parse", "HEAD^{tree}"),
+                 "-p", "release", "-m", "previously merged implementation")
+    git(repo, "update-ref", "refs/heads/release", squash)
+    pull_request.update(state="closed", merged=True, merge_commit_sha=squash)
+    git(repo, "checkout", "release")
+    before = git(repo, "rev-parse", "HEAD")
+    current.update(portable.capture(repo, "example/repo", "release", target_mode=True))
+    binding = report["validatedRefs"]["acceptance"]
+    binding["completionTarget"] = current["completionTarget"]
+    binding["evidence"][1] = {
+        "requirementId": "AC-2",
+        "status": "UNVERIFIED",
+        "unverified": {
+            "reason": "Protected live integration cannot execute in this runtime.",
+            "verifiableBy": "The authorized protected-workflow runner",
+        },
+    }
+    parent = run_module.MoonMindRunWorkflow()
+    parent._repo = "example/repo"
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    monkeypatch.setattr(run_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    parent._record_no_commit_publish_evidence({"push_status": "no_commits"})
+    assert parent._has_no_commit_publish_evidence()
+    # A no-code transport outcome or an agent's advisory booleans is not proof.
+    assert parent._target_acceptance_evidence() is None
+    if observed_defect:
+        failed = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, "-c", "import app; assert app.value() == 0"],
+            cwd=repo, capture_output=True, text=True, check=False,
+        )
+        assert failed.returncode != 0
+        binding["evidence"][0]["status"] = "FAILED"
+        report.update(verdict="ADDITIONAL_WORK_NEEDED", recommendedNextAction="stop")
+    gate = parent._moonspec_verify_gate_result(report)
+    parent._publish_context["moonSpecGate"] = gate.to_payload()
+    assert (gate.verdict == "FULLY_IMPLEMENTED") is (not observed_defect)
+    assert (parent._target_acceptance_evidence() is not None) is (not observed_defect)
+    store = ArtifactStore({"current-verification": report})
+    result = await update_github_issue_status(
+        {
+            "repository": "example/repo", "issueNumber": 1,
+            "mode": "finalize_after_pr_or_done",
+            "previousOutputs": {
+                "moonSpecVerifyArtifactRef": "current-verification",
+                "push_status": "no_commits",
+                "repositoryCodeChangeRequired": False,
+                "completionProven": True,
+            },
+        },
+        {"temporal_artifact_service": store},
+    )
+    assert result.status == ("FAILED" if observed_defect else "COMPLETED")
+    assert issue["state"] == ("open" if observed_defect else "closed")
+    assert requests.count(("PATCH", "/repos/example/repo/issues/1")) == (0 if observed_defect else 1)
+    assert git(repo, "rev-parse", "HEAD") == before
+    assert git(repo, "status", "--porcelain") == ""
+    assert binding["evidence"][1]["status"] == "UNVERIFIED"
