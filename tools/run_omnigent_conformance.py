@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from moonmind.omnigent.conformance import (  # noqa: E402
     ConformanceContractError,
     assert_secret_free,
+    redact_secrets,
 )
 
 # Activation contract for the bounded fake/stock-compatible provider path.  A
@@ -208,6 +209,13 @@ def main() -> int:
                 text=True,
             )
         log_paths.append(log_path)
+        if completed.returncode:
+            print(
+                f"Conformance layer {index} failed with exit code "
+                f"{completed.returncode}; log: {_artifact_ref(log_path)}"
+            )
+            redacted_log = redact_secrets(log_path.read_text(encoding="utf-8"))
+            print("\n".join(redacted_log.splitlines()[-200:]))
         command_results.append(
             {
                 "commandIndex": index,

@@ -2435,7 +2435,7 @@ async def test_reconcile_skips_update_when_metadata_and_action_match(
                         workflow="MoonMind.UserWorkflow",
                         id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
-                        task_queue="mm.workflow.user.v2",
+                        task_queue="mm.workflow.user.v2.publication-v1",
                         memo=created["memo"],
                         typed_search_attributes=_build_typed_search_attributes(
                             {key: [value] for key, value in created["search_attributes"].items()}
