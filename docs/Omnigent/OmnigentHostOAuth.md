@@ -544,6 +544,10 @@ Terminal host inventory includes only matching Provider Profile leases in `held`
 or `cleanup_requested` state. Released lease tombstones remain fencing history
 and do not trigger repeated host/session probes. Expiry alone does not release
 capacity. Active-host and orphan reconciliation remain independent of this filter.
+An upstream session-stop error remains diagnostic, but confirmed teardown of
+the owning host ends its runner and tunnel independently. Upstream stop is
+non-sticky and does not delete retained conversation history. Unconfirmed host
+teardown retains capacity and remains eligible for cleanup retry.
 
 On-demand OAuth initialization uses a deterministic `<host-container>-init`
 container carrying the host lease, profile, and credential generation labels.

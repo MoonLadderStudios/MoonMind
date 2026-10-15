@@ -890,6 +890,10 @@ class OmnigentOAuthHostJanitor:
                         await self._client.interrupt(lease.omnigent_session_id)
                         await self._client.stop_session(lease.omnigent_session_id)
                     except Exception as exc:
+                        # Upstream stop terminates this host's runner/tunnel;
+                        # it does not delete the retained conversation. The
+                        # verified host teardown below still ends that consumer.
+                        # If teardown fails, keep capacity and retry next pass.
                         actions.append(
                             {
                                 "hostLeaseRef": lease.lease_id,
