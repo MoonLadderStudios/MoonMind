@@ -373,13 +373,15 @@ async def omnigent_evaluate_session_admission_activity(
         )
         if plan is None:
             raise ValueError("admitted Omnigent execution plan is unavailable")
-    else:
-        # Plan-less admission is retained only for histories admitted before
-        # persisted plans. It follows the same rollback control as plan
-        # admission instead of a separate rollout selection.
-        _assert_rollback_allows_new_admission(
-            settings.feature_flags, recorded_execution_owner=""
-        )
+
+    # Reference-only plans and retained plan-less histories follow the same
+    # rollback control as fully bound plans.
+    _assert_rollback_allows_new_admission(
+        settings.feature_flags,
+        recorded_execution_owner=(
+            plan.payload.executionRealizerRef if plan is not None else ""
+        ),
+    )
 
     admitted = True
     reason = "enabled"
