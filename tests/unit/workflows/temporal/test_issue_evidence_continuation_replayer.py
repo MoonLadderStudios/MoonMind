@@ -21,6 +21,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.workflows.run import (
     RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH,
+    INTEGRATIONS_TASK_QUEUE,
     MoonMindRunWorkflow,
 )
 from tests.unit.workflows.temporal.test_remediation_loop import _spec, _state
@@ -268,7 +269,14 @@ def _activities():
             }
         }
 
-    return [publish, persist, collect, verify], calls, saved, verified
+    @activity.defn(name="repo.sync_pr_unverified_criteria")
+    async def disclose(payload: dict) -> dict:
+        assert payload["expectedHeadSha"] == _HEAD
+        assert payload["section"] == ""
+        calls.append({"action": "disclose"})
+        return {"updated": True}
+
+    return [publish, persist, collect, verify, disclose], calls, saved, verified
 
 
 def _scheduled(history):
@@ -294,6 +302,7 @@ async def test_old_completed_history_replays_without_new_evidence_commands():
             workflow_runner=UnsandboxedWorkflowRunner(),
         ),
         Worker(env.client, task_queue=queue + "-activities", activities=activities),
+        Worker(env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=activities),
     ):
         handle = await env.client.start_workflow(
             _LegacyOwner.run, id=queue, task_queue=queue
@@ -320,6 +329,7 @@ async def test_partial_inventory_wait_survives_worker_restart_and_real_replay():
             data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
         ) as env,
         Worker(env.client, task_queue=queue + "-activities", activities=activities),
+        Worker(env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=activities),
         Worker(
             env.client,
             task_queue=queue + "-children",
@@ -368,12 +378,14 @@ async def test_partial_inventory_wait_survives_worker_restart_and_real_replay():
     )
     assert result["implementationAttempts"] == 0 and result["evidenceRetries"] == 1
     assert len(verified) == 2
+    assert _scheduled(history).count("repo.sync_pr_unverified_criteria") == 1
     assert [row.get("action", "collect") for row in calls] == [
         "collect",
         "verify_candidate",
         "collect",
         "collect",
         "verify_candidate",
+        "disclose",
         "mark_ready",
     ]
     children = [
