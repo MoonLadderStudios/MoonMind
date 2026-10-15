@@ -2,7 +2,7 @@
 
 # Update agent context files with information from plan.md
 #
-# This script maintains AI agent context files by parsing feature specifications 
+# This script maintains AI agent context files by parsing feature specifications
 # and updating agent-specific configuration files with project information.
 #
 # Agent context files are lasting repository guidance. Routine planning keeps
@@ -78,7 +78,7 @@ for arg in "$@"; do
     esac
 done
 
-# Agent-specific file paths  
+# Agent-specific file paths
 CLAUDE_FILE="$REPO_ROOT/CLAUDE.md"
 GEMINI_FILE="$REPO_ROOT/GEMINI.md"
 COPILOT_FILE="$REPO_ROOT/.github/agents/copilot-instructions.md"
@@ -99,8 +99,13 @@ BOB_FILE="$REPO_ROOT/AGENTS.md"
 TEMPLATE_FILE="$REPO_ROOT/.specify/templates/agent-file-template.md"
 
 # Resolved agent files already updated in this run
-UPDATED_AGENT_FILES=""
+# Keep a sentinel so Bash <=4.3 does not treat the array as unset under -u.
+UPDATED_AGENT_FILES=("")
 AGENT_UPDATE_TEMP_FILE=""
+RESOLVED_AGENT_FILE=""
+RESOLVED_AGENT_PARENT_DIRS=("")
+RESOLVED_AGENT_ALIAS_PATHS=("")
+PROTECTED_AGENTS_TARGETS=("")
 
 # Global variables for parsed plan data
 NEW_LANG=""
@@ -159,7 +164,7 @@ validate_environment() {
         fi
         exit 1
     fi
-    
+
     # Check if plan.md exists
     if [[ ! -f "$NEW_PLAN" ]]; then
         log_error "No plan.md found at $NEW_PLAN"
@@ -169,7 +174,7 @@ validate_environment() {
         fi
         exit 1
     fi
-    
+
     # Check if template exists (needed for new files)
     if [[ ! -f "$TEMPLATE_FILE" ]]; then
         log_warning "Template file not found at $TEMPLATE_FILE"
@@ -184,7 +189,7 @@ validate_environment() {
 extract_plan_field() {
     local field_pattern="$1"
     local plan_file="$2"
-    
+
     grep "^\*\*${field_pattern}\*\*: " "$plan_file" 2>/dev/null | \
         head -1 | \
         sed "s|^\*\*${field_pattern}\*\*: ||" | \
@@ -195,39 +200,39 @@ extract_plan_field() {
 
 parse_plan_data() {
     local plan_file="$1"
-    
+
     if [[ ! -f "$plan_file" ]]; then
         log_error "Plan file not found: $plan_file"
         return 1
     fi
-    
+
     if [[ ! -r "$plan_file" ]]; then
         log_error "Plan file is not readable: $plan_file"
         return 1
     fi
-    
+
     log_info "Parsing plan data from $plan_file"
-    
+
     NEW_LANG=$(extract_plan_field "Language/Version" "$plan_file")
     NEW_FRAMEWORK=$(extract_plan_field "Primary Dependencies" "$plan_file")
     NEW_DB=$(extract_plan_field "Storage" "$plan_file")
     NEW_PROJECT_TYPE=$(extract_plan_field "Project Type" "$plan_file")
-    
+
     # Log what we found
     if [[ -n "$NEW_LANG" ]]; then
         log_info "Found language: $NEW_LANG"
     else
         log_warning "No language information found in plan"
     fi
-    
+
     if [[ -n "$NEW_FRAMEWORK" ]]; then
         log_info "Found framework: $NEW_FRAMEWORK"
     fi
-    
+
     if [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]]; then
         log_info "Found database: $NEW_DB"
     fi
-    
+
     if [[ -n "$NEW_PROJECT_TYPE" ]]; then
         log_info "Found project type: $NEW_PROJECT_TYPE"
     fi
@@ -237,11 +242,11 @@ format_technology_stack() {
     local lang="$1"
     local framework="$2"
     local parts=()
-    
+
     # Add non-empty parts
     [[ -n "$lang" && "$lang" != "NEEDS CLARIFICATION" ]] && parts+=("$lang")
     [[ -n "$framework" && "$framework" != "NEEDS CLARIFICATION" && "$framework" != "N/A" ]] && parts+=("$framework")
-    
+
     # Join with proper formatting
     if [[ ${#parts[@]} -eq 0 ]]; then
         echo ""
@@ -263,7 +268,7 @@ format_technology_stack() {
 
 get_project_structure() {
     local project_type="$1"
-    
+
     if [[ "$project_type" == *"web"* ]]; then
         echo "backend/\\nfrontend/\\ntests/"
     else
@@ -273,7 +278,7 @@ get_project_structure() {
 
 get_commands_for_language() {
     local lang="$1"
-    
+
     case "$lang" in
         *"Python"*)
             echo "cd src && pytest && ruff check ."
@@ -296,85 +301,184 @@ get_language_conventions() {
 }
 
 resolve_agent_file() {
-    local path="$1"
-    local link
+    local pending="$1" resolved="/" component candidate link had_separator
     local symlink_hops=0
-
-    while [[ -L "$path" ]]; do
-        ((symlink_hops += 1))
-        if ((symlink_hops > 40)); then
-            log_error "Agent-file symlink cycle or chain deeper than 40 links: $1"
-            return 1
-        fi
-        if ! link=$(readlink "$path"); then
-            log_error "Failed to read agent-file symlink: $path"
-            return 1
-        fi
-        if [[ "$link" == /* ]]; then
-            path="$link"
+    if [[ "$pending" != /* ]]; then
+        log_error "Agent-file path must be absolute: $pending"
+        return 1
+    fi
+    # Resolve identity without creating directories. Track missing traversal
+    # parents separately; only an allowed writer may create them later.
+    RESOLVED_AGENT_PARENT_DIRS=("")
+    RESOLVED_AGENT_ALIAS_PATHS=("")
+    pending=${pending#/}
+    while [[ -n "$pending" ]]; do
+        component=${pending%%/*}
+        if [[ "$pending" == */* ]]; then
+            pending=${pending#*/}
+            had_separator=true
         else
-            path="$(dirname "$path")/$link"
+            pending=""
+            had_separator=false
+        fi
+        # A terminal slash, . or .. requires a directory, never an agent file.
+        # Reject before creating parents or flattening that requirement away.
+        if [[ -z "$pending" ]] && { [[ "$had_separator" == true ]] || [[ "$component" == . || "$component" == .. ]]; }; then
+            log_error "Agent-file target must not be a directory path: $1"
+            return 1
+        fi
+        case "$component" in
+            ''|.) continue ;;
+            ..)
+                resolved=${resolved%/*}
+                resolved=${resolved:-/}
+                continue
+                ;;
+        esac
+        candidate="${resolved%/}/$component"
+        if [[ -L "$candidate" ]]; then
+            RESOLVED_AGENT_ALIAS_PATHS+=("$candidate")
+            ((symlink_hops += 1))
+            if ((symlink_hops > 40)); then
+                log_error "Agent-file symlink cycle or chain deeper than 40 links: $1"
+                return 1
+            fi
+            # Preserve destination newlines; strip only readlink's terminator.
+            if ! link=$(readlink "$candidate" && printf '.'); then
+                log_error "Failed to read agent-file symlink: $candidate"
+                return 1
+            fi
+            link=${link%.}
+            link=${link%$'\n'}
+            if [[ "$link" == /* ]]; then
+                resolved="/"
+                link=${link#/}
+            fi
+            pending="$link${pending:+/$pending}"
+        else
+            if [[ -n "$pending" ]]; then
+                if [[ -e "$candidate" && ! -d "$candidate" ]]; then
+                    log_error "Agent-file parent is not a directory: $candidate"
+                    return 1
+                fi
+                if [[ ! -d "$candidate" ]]; then
+                    RESOLVED_AGENT_PARENT_DIRS+=("$candidate")
+                fi
+            fi
+            resolved="$candidate"
         fi
     done
-
-    if [[ -d "$(dirname "$path")" ]]; then
-        path="$(CDPATH="" cd "$(dirname "$path")" && pwd -P)/$(basename "$path")"
+    if [[ "$resolved" == / ]]; then
+        log_error "Agent-file target must not be a directory path: $1"
+        return 1
     fi
-    echo "$path"
+    # A path used as a traversal parent must remain a directory, even when a
+    # later .. component names it again as the apparent final destination.
+    local required_dir
+    for required_dir in "${RESOLVED_AGENT_PARENT_DIRS[@]}"; do
+        if [[ "$required_dir" == "$resolved" ]]; then
+            log_error "Agent-file target must not be a directory path: $1"
+            return 1
+        fi
+    done
+    # Variable return preserves trailing newlines in names on all callers.
+    RESOLVED_AGENT_FILE="$resolved"
+}
+
+resolve_protected_agents_target() {
+    PROTECTED_AGENTS_TARGETS=("")
+    local path directory guidance
+    # Inspect only root guidance and ancestors of the selected destination
+    # and its traversed aliases. This is read-only and does not crawl unrelated repository files.
+    for path in "$AGENTS_FILE" "$@"; do
+        directory="${path%/*}"
+        while [[ -n "$directory" ]]; do
+            guidance="${directory%/}/AGENTS.md"
+            if [[ -e "$guidance" || -L "$guidance" ]]; then
+                resolve_agent_file "$guidance" || return 1
+                PROTECTED_AGENTS_TARGETS+=("$RESOLVED_AGENT_FILE")
+            fi
+            [[ "$directory" == / ]] && break
+            directory="${directory%/*}"
+            directory=${directory:-/}
+        done
+    done
 }
 
 is_manual_additions_start() {
     [[ "$1" == "<!-- MANUAL ADDITIONS START -->" ]]
 }
 
-agent_file_accepts_plan_history() {
+agent_file_is_protected() (
     local target_file="$1"
-    local logical_target_file="${2:-$target_file}"
-    [[ "$(basename "$logical_target_file")" != "AGENTS.md" ]] && \
-        [[ "$(basename "$target_file")" != "AGENTS.md" ]]
-}
+    local logical_target_file="$2"
+    # Exact guidance names remain protected. Compare existing aliases by
+    # filesystem identity before case folding; distinct files remain writable.
+    if [[ "${logical_target_file##*/}" == "AGENTS.md" ]] ||
+        [[ "${target_file##*/}" == "AGENTS.md" ]]; then
+        return 0
+    fi
+    local protected_target
+    for protected_target in "${PROTECTED_AGENTS_TARGETS[@]}"; do
+        [[ -n "$protected_target" ]] || continue
+        [[ "$target_file" -ef "$protected_target" ]] && return 0
+        if [[ -e "$target_file" && -e "$protected_target" ]]; then
+            continue
+        fi
+        # Missing identities can be case-only aliases on another filesystem.
+        shopt -s nocasematch
+        [[ "$target_file" == "$protected_target" ]] && return 0
+        shopt -u nocasematch
+    done
+    # With an existing destination and no matching protected identity, absent
+    # AGENTS.md is evidence of a distinct name even on case-insensitive disks.
+    [[ -e "$target_file" ]] && return 1
+    # An absent destination has no identity: avoid creating ambiguous guidance.
+    shopt -s nocasematch
+    [[ "${logical_target_file##*/}" == "AGENTS.md" ]] ||
+        [[ "${target_file##*/}" == "AGENTS.md" ]]
+)
 
 create_new_agent_file() {
     local target_file="$1"
     local temp_file="$2"
     local project_name="$3"
     local current_date="$4"
-    local logical_target_file="${5:-$target_file}"
-    
+
     if [[ ! -f "$TEMPLATE_FILE" ]]; then
         log_error "Template not found at $TEMPLATE_FILE"
         return 1
     fi
-    
+
     if [[ ! -r "$TEMPLATE_FILE" ]]; then
         log_error "Template file is not readable: $TEMPLATE_FILE"
         return 1
     fi
-    
+
     log_info "Creating new agent context file from template..."
-    
+
     # Keep the temporary file writable during generation, without template modes.
     if ! cp "$TEMPLATE_FILE" "$temp_file"; then
         log_error "Failed to copy template file"
         return 1
     fi
-    
+
     # Replace template placeholders
     local project_structure
     project_structure=$(get_project_structure "$NEW_PROJECT_TYPE")
-    
+
     local commands
     commands=$(get_commands_for_language "$NEW_LANG")
-    
+
     local language_conventions
     language_conventions=$(get_language_conventions "$NEW_LANG")
-    
+
     # Perform substitutions with error checking using safer approach
     # Escape special characters for sed by using a different delimiter or escaping
     local escaped_lang=$(printf '%s\n' "$NEW_LANG" | sed 's/[\[\.*^$()+{}|]/\\&/g')
     local escaped_framework=$(printf '%s\n' "$NEW_FRAMEWORK" | sed 's/[\[\.*^$()+{}|]/\\&/g')
     local escaped_branch=$(printf '%s\n' "$CURRENT_BRANCH" | sed 's/[\[\.*^$()+{}|]/\\&/g')
-    
+
     # Build technology stack and recent change strings conditionally
     local tech_stack
     if [[ -n "$escaped_lang" && -n "$escaped_framework" ]]; then
@@ -407,7 +511,7 @@ create_new_agent_file() {
         "s|\[LANGUAGE-SPECIFIC, ONLY FOR LANGUAGES IN USE\]|$language_conventions|"
         "s|\[LAST 3 FEATURES AND WHAT THEY ADDED\]|$recent_change|"
     )
-    
+
     for substitution in "${substitutions[@]}"; do
         if ! sed -i.bak -e "$substitution" "$temp_file"; then
             log_error "Failed to perform substitution: $substitution"
@@ -415,20 +519,11 @@ create_new_agent_file() {
             return 1
         fi
     done
-    
+
     # Convert \n sequences to actual newlines
     newline=$(printf '\n')
     sed -i.bak2 "s/\\\\n/${newline}/g" "$temp_file" || return 1
 
-    if ! agent_file_accepts_plan_history "$target_file" "$logical_target_file"; then
-        sed -i.bak3 '/^## Active Technologies$/,/^## Project Structure$/{
-            /^## Project Structure$/!d
-        }' "$temp_file" || return 1
-        sed -i.bak4 '/^## Recent Changes$/,/^<!-- MANUAL ADDITIONS START -->$/{
-            /^<!-- MANUAL ADDITIONS START -->$/!d
-        }' "$temp_file" || return 1
-    fi
-    
     # Clean up backup files
     rm -f "$temp_file.bak" "$temp_file.bak2" "$temp_file.bak3" "$temp_file.bak4"
 
@@ -439,7 +534,7 @@ create_new_agent_file() {
         log_error "Failed to apply consumer file-creation permissions"
         return 1
     fi
-    
+
     return 0
 }
 
@@ -449,13 +544,12 @@ create_new_agent_file() {
 update_existing_agent_file() {
     local target_file="$1"
     local current_date="$2"
-    local logical_target_file="${3:-$target_file}"
-    
+
     log_info "Updating existing agent context file..."
-    
+
     # Use a single temporary file for atomic update
     local temp_file
-    temp_file=$(mktemp "$(dirname "$target_file")/.agent_update.XXXXXX") || {
+    temp_file=$(mktemp "${target_file%/*}/.agent_update.XXXXXX") || {
         log_error "Failed to create temporary file"
         return 1
     }
@@ -466,33 +560,29 @@ update_existing_agent_file() {
         AGENT_UPDATE_TEMP_FILE=""
         return 1
     fi
-    
+
     # Process the file in one pass
     local tech_stack
     tech_stack=$(format_technology_stack "$NEW_LANG" "$NEW_FRAMEWORK")
     local new_tech_entries=()
     local new_change_entry=""
-    local accepts_plan_history=false
-    if agent_file_accepts_plan_history "$target_file" "$logical_target_file"; then
-        accepts_plan_history=true
-    fi
-    
+
     # Prepare new technology entries
-    if [[ $accepts_plan_history == true ]] && [[ -n "$tech_stack" ]] && ! grep -q "$tech_stack" "$target_file"; then
+    if [[ -n "$tech_stack" ]] && ! grep -q "$tech_stack" "$target_file"; then
         new_tech_entries+=("- $tech_stack ($CURRENT_BRANCH)")
     fi
-    
-    if [[ $accepts_plan_history == true ]] && [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]] && ! grep -q "$NEW_DB" "$target_file"; then
+
+    if [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]] && ! grep -q "$NEW_DB" "$target_file"; then
         new_tech_entries+=("- $NEW_DB ($CURRENT_BRANCH)")
     fi
-    
+
     # Prepare new change entry
-    if [[ $accepts_plan_history == true ]] && [[ -n "$tech_stack" ]]; then
+    if [[ -n "$tech_stack" ]]; then
         new_change_entry="- $CURRENT_BRANCH: Added $tech_stack"
-    elif [[ $accepts_plan_history == true ]] && [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]]; then
+    elif [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]]; then
         new_change_entry="- $CURRENT_BRANCH: Added $NEW_DB"
     fi
-    
+
     if [[ ${#new_tech_entries[@]} -eq 0 ]] && [[ -z "$new_change_entry" ]]; then
         log_info "No new plan context for $target_file"
         rm -f "$temp_file"
@@ -503,15 +593,15 @@ update_existing_agent_file() {
     # Check if sections exist in the file
     local has_active_technologies=0
     local has_recent_changes=0
-    
+
     if grep -q "^## Active Technologies" "$target_file" 2>/dev/null; then
         has_active_technologies=1
     fi
-    
+
     if grep -q "^## Recent Changes" "$target_file" 2>/dev/null; then
         has_recent_changes=1
     fi
-    
+
     # Process file line by line
     local in_tech_section=false
     local in_changes_section=false
@@ -519,7 +609,7 @@ update_existing_agent_file() {
     local changes_entries_added=false
     local existing_changes_count=0
     local file_ended=false
-    
+
     while IFS= read -r line || [[ -n "$line" ]]; do
         # Handle Active Technologies section
         if [[ "$line" == "## Active Technologies" ]]; then
@@ -544,7 +634,7 @@ update_existing_agent_file() {
             echo "$line" >> "$temp_file" || return 1
             continue
         fi
-        
+
         # Handle Recent Changes section
         if [[ "$line" == "## Recent Changes" ]]; then
             echo "$line" >> "$temp_file" || return 1
@@ -567,7 +657,7 @@ update_existing_agent_file() {
             fi
             continue
         fi
-        
+
         # Update timestamp
         if [[ "$line" =~ \*\*Last\ updated\*\*:.*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] ]]; then
             echo "$line" | sed "s/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/$current_date/" >> "$temp_file" || return 1
@@ -575,13 +665,13 @@ update_existing_agent_file() {
             echo "$line" >> "$temp_file" || return 1
         fi
     done < "$target_file"
-    
+
     # Post-loop check: if we're still in the Active Technologies section and haven't added new entries
     if [[ $in_tech_section == true ]] && [[ $tech_entries_added == false ]] && [[ ${#new_tech_entries[@]} -gt 0 ]]; then
         printf '%s\n' "${new_tech_entries[@]}" >> "$temp_file" || return 1
         tech_entries_added=true
     fi
-    
+
     # If sections don't exist, add them at the end of the file
     if [[ $has_active_technologies -eq 0 ]] && [[ ${#new_tech_entries[@]} -gt 0 ]]; then
         echo "" >> "$temp_file" || return 1
@@ -589,14 +679,14 @@ update_existing_agent_file() {
         printf '%s\n' "${new_tech_entries[@]}" >> "$temp_file" || return 1
         tech_entries_added=true
     fi
-    
+
     if [[ $has_recent_changes -eq 0 ]] && [[ -n "$new_change_entry" ]]; then
         echo "" >> "$temp_file" || return 1
         echo "## Recent Changes" >> "$temp_file" || return 1
         echo "$new_change_entry" >> "$temp_file" || return 1
         changes_entries_added=true
     fi
-    
+
     # cp -p can succeed without preserving a foreign uid/gid for this account.
     local target_ownership temp_ownership
     if ! target_ownership=$(LC_ALL=C ls -nd "$target_file" | awk 'NR == 1 { print $3 ":" $4 }') || \
@@ -617,7 +707,7 @@ update_existing_agent_file() {
     fi
     rm -f "$temp_file"
     AGENT_UPDATE_TEMP_FILE=""
-    
+
     return 0
 }
 #==============================================================================
@@ -628,40 +718,63 @@ update_agent_file() {
     local target_file="$1"
     local agent_name="$2"
     local logical_target_file="$target_file"
-    
+
     if [[ -z "$target_file" ]] || [[ -z "$agent_name" ]]; then
         log_error "update_agent_file requires target_file and agent_name parameters"
         return 1
     fi
-    
-    target_file=$(resolve_agent_file "$target_file") || return 1
+
+    resolve_agent_file "$target_file" || return 1
+    target_file="$RESOLVED_AGENT_FILE"
+    local target_parent_dirs=("${RESOLVED_AGENT_PARENT_DIRS[@]}")
+    local target_alias_paths=("${RESOLVED_AGENT_ALIAS_PATHS[@]}")
+    resolve_protected_agents_target "$logical_target_file" "$target_file" "${target_alias_paths[@]}" || return 1
+    RESOLVED_AGENT_PARENT_DIRS=("${target_parent_dirs[@]}")
+    if agent_file_is_protected "$target_file" "$logical_target_file"; then
+        log_info "Skipping protected AGENTS guidance or an ambiguous alias; plan-derived content stays in plan.md: $logical_target_file"
+        return 0
+    fi
     if [[ -e "$target_file" && ! -f "$target_file" ]]; then
         log_error "Unsupported non-regular agent context target: $target_file"
         return 1
     fi
-    if [[ "$UPDATED_AGENT_FILES" == *$'\n'"$target_file"$'\n'* ]]; then
-        log_info "Skipping $agent_name context file already updated: $target_file"
-        return 0
-    fi
-    UPDATED_AGENT_FILES="${UPDATED_AGENT_FILES:-$'\n'}$target_file"$'\n'
 
     log_info "Updating $agent_name context file: $target_file"
-    
+
     local project_name
     project_name=$(basename "$REPO_ROOT")
     local current_date
     current_date=$(date +%Y-%m-%d)
-    
-    # Create directory if it doesn't exist
-    local target_dir
-    target_dir=$(dirname "$target_file")
-    if [[ ! -d "$target_dir" ]]; then
-        if ! mkdir -p "$target_dir"; then
-            log_error "Failed to create directory: $target_dir"
+
+    # Identity checks above are read-only. Create only the selected unprotected
+    # target's traversal parents, retaining dangling symlink usability.
+    local required_dir
+    for required_dir in "${RESOLVED_AGENT_PARENT_DIRS[@]}"; do
+        if [[ -n "$required_dir" ]] && ! mkdir -p "$required_dir"; then
+            log_error "Failed to create directory: $required_dir"
             return 1
         fi
+    done
+    local target_dir="${target_file%/*}"
+    target_dir=${target_dir:-/}
+    if ! mkdir -p "$target_dir"; then
+        log_error "Failed to create directory: $target_dir"
+        return 1
     fi
-    
+    if [[ -e "$target_file" && ! -f "$target_file" ]]; then
+        log_error "Unsupported non-regular agent context target: $target_file"
+        return 1
+    fi
+    local updated_file
+    for updated_file in "${UPDATED_AGENT_FILES[@]}"; do
+        if [[ "$updated_file" == "$target_file" ]]; then
+            log_info "Skipping $agent_name context file already updated: $target_file"
+            return 0
+        fi
+    done
+    UPDATED_AGENT_FILES+=("$target_file")
+
+
     if [[ ! -f "$target_file" ]]; then
         # Create new file from template
         local temp_file
@@ -670,8 +783,8 @@ update_agent_file() {
             return 1
         }
         AGENT_UPDATE_TEMP_FILE="$temp_file"
-        
-        if create_new_agent_file "$target_file" "$temp_file" "$project_name" "$current_date" "$logical_target_file"; then
+
+        if create_new_agent_file "$target_file" "$temp_file" "$project_name" "$current_date"; then
             if mv -f "$temp_file" "$target_file"; then
                 rm -f "$temp_file"
                 AGENT_UPDATE_TEMP_FILE=""
@@ -693,13 +806,13 @@ update_agent_file() {
             log_error "Cannot read existing file: $target_file"
             return 1
         fi
-        
+
         if [[ ! -w "$target_file" ]]; then
             log_error "Cannot write to existing file: $target_file"
             return 1
         fi
-        
-        if update_existing_agent_file "$target_file" "$current_date" "$logical_target_file"; then
+
+        if update_existing_agent_file "$target_file" "$current_date"; then
             log_success "Updated existing $agent_name context file"
         else
             log_error "Failed to update existing agent file"
@@ -708,7 +821,7 @@ update_agent_file() {
             return 1
         fi
     fi
-    
+
     return 0
 }
 
@@ -718,7 +831,7 @@ update_agent_file() {
 
 update_specific_agent() {
     local agent_type="$1"
-    
+
     case "$agent_type" in
         claude)
             update_agent_file "$CLAUDE_FILE" "Claude Code"
@@ -784,38 +897,38 @@ update_all_existing_agents() {
         update_agent_file "$AGENTS_FILE" "Codex/opencode" || return 1
         found_agent=true
     fi
-    
+
     # Check each possible agent file and update if it exists
     if [[ -e "$CLAUDE_FILE" || -L "$CLAUDE_FILE" ]]; then
         update_agent_file "$CLAUDE_FILE" "Claude Code" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$GEMINI_FILE" || -L "$GEMINI_FILE" ]]; then
         update_agent_file "$GEMINI_FILE" "Gemini CLI" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$COPILOT_FILE" || -L "$COPILOT_FILE" ]]; then
         update_agent_file "$COPILOT_FILE" "GitHub Copilot" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$CURSOR_FILE" || -L "$CURSOR_FILE" ]]; then
         update_agent_file "$CURSOR_FILE" "Cursor IDE" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$QWEN_FILE" || -L "$QWEN_FILE" ]]; then
         update_agent_file "$QWEN_FILE" "Qwen Code" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$WINDSURF_FILE" || -L "$WINDSURF_FILE" ]]; then
         update_agent_file "$WINDSURF_FILE" "Windsurf" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$KILOCODE_FILE" || -L "$KILOCODE_FILE" ]]; then
         update_agent_file "$KILOCODE_FILE" "Kilo Code" || return 1
         found_agent=true
@@ -825,7 +938,7 @@ update_all_existing_agents() {
         update_agent_file "$AUGGIE_FILE" "Auggie CLI" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$ROO_FILE" || -L "$ROO_FILE" ]]; then
         update_agent_file "$ROO_FILE" "Roo Code" || return 1
         found_agent=true
@@ -845,12 +958,12 @@ update_all_existing_agents() {
         update_agent_file "$Q_FILE" "Amazon Q Developer CLI" || return 1
         found_agent=true
     fi
-    
+
     if [[ -e "$BOB_FILE" || -L "$BOB_FILE" ]]; then
         update_agent_file "$BOB_FILE" "IBM Bob" || return 1
         found_agent=true
     fi
-    
+
     # If no agent files exist, create a default Claude file
     if [[ "$found_agent" == false ]]; then
         log_info "No existing agent files found, creating default Claude file..."
@@ -860,19 +973,19 @@ update_all_existing_agents() {
 print_summary() {
     echo
     log_info "Summary of changes:"
-    
+
     if [[ -n "$NEW_LANG" ]]; then
         echo "  - Added language: $NEW_LANG"
     fi
-    
+
     if [[ -n "$NEW_FRAMEWORK" ]]; then
         echo "  - Added framework: $NEW_FRAMEWORK"
     fi
-    
+
     if [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]]; then
         echo "  - Added database: $NEW_DB"
     fi
-    
+
     echo
 
     log_info "Usage: $0 --write [claude|gemini|copilot|cursor-agent|qwen|opencode|codex|windsurf|kilocode|auggie|codebuddy|shai|q|bob]"
@@ -891,18 +1004,22 @@ main() {
 
     # Validate environment before proceeding
     validate_environment
-    
+
     log_info "=== Updating agent context files for feature $CURRENT_BRANCH ==="
-    
+
+    # Resolve protected guidance identity before making any changes. Failure is
+    # an operational error, never a successful "history prohibited" decision.
+    resolve_protected_agents_target || exit 1
+
     # Parse the plan file to extract project information
     if ! parse_plan_data "$NEW_PLAN"; then
         log_error "Failed to parse plan data"
         exit 1
     fi
-    
+
     # Process based on agent type argument
     local success=true
-    
+
     if [[ -z "$AGENT_TYPE" ]]; then
         # No specific agent provided - update all existing agent files
         log_info "No agent specified, updating all existing agent files..."
@@ -916,10 +1033,10 @@ main() {
             success=false
         fi
     fi
-    
+
     # Print summary
     print_summary
-    
+
     if [[ "$success" == true ]]; then
         log_success "Agent context update completed successfully"
         exit 0

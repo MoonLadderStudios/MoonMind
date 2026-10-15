@@ -7,7 +7,7 @@ description: "Task list template for single-story MoonSpec implementation"
 **Input**: Design documents from `/specs/[###-feature-name]/`
 **Prerequisites**: plan.md (required), spec.md (required for the story), research.md, data-model.md, contracts/
 
-**Tests**: Unit tests and integration tests are REQUIRED. Write tests first, confirm they fail for the intended reason, then implement the production code until they pass.
+**Status precedence**: `needs_human` preserves the exact decision, owner, and action without executing it. `unverified` preserves the source ID, reason and verifiableBy without tasks. Only executable rows need setup, applicable tests, red-first confirmation, and implementation. An all-Unverified story retains disclosures and final `/moonspec.verify` only; remove all unused sample tasks.
 
 **Organization**: Tasks are grouped by phase around a single user story so the work stays focused, traceable, and independently testable.
 
@@ -17,8 +17,8 @@ description: "Task list template for single-story MoonSpec implementation"
 
 **Test Commands**:
 
-- Unit tests: `[UNIT TEST COMMAND]`
-- Integration tests: `[INTEGRATION TEST COMMAND]`
+- Unit tests: `[COMMAND or N/A for non-executable rows]`
+- Integration tests: `[COMMAND or N/A for non-executable rows]`
 - Final verification: `/moonspec.verify`
 
 ## Format: `[ID] [P?] Description`
@@ -47,7 +47,7 @@ description: "Task list template for single-story MoonSpec implementation"
   - Entities from data-model.md
   - Endpoints from contracts/
 
-  Tasks MUST be organized so the story can be:
+  Organize executable tasks so their work can be:
   - Implemented with a test-first workflow
   - Covered by both unit tests and integration tests
   - Traced back to source requirements
@@ -60,7 +60,7 @@ description: "Task list template for single-story MoonSpec implementation"
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Project initialization and basic structure
+**Purpose**: Initialization only when executable work requires it
 
 - [ ] T001 Create project structure in src/ and tests/ per implementation plan (No source claim applies: setup task)
 - [ ] T002 Initialize [language] project with [framework] dependencies in [config file] (No source claim applies: setup task)
@@ -72,9 +72,9 @@ description: "Task list template for single-story MoonSpec implementation"
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Core infrastructure that MUST be complete before story implementation can begin
+**Purpose**: Prerequisites needed by executable story work only
 
-**⚠️ CRITICAL**: No story implementation work can begin until this phase is complete
+**Dependency**: Complete applicable prerequisites before dependent executable work; omit this phase's tasks when none are needed
 
 Examples of foundational tasks (include only what the story truly depends on):
 
@@ -112,7 +112,7 @@ Examples of foundational tasks (include only what the story truly depends on):
 
 ### Unit Tests (write first) ⚠️
 
-> **NOTE: Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.**
+> For executable implementation rows, write applicable tests first and confirm the expected failure before new production code. Omit this section's tasks for non-executable rows.
 
 - [ ] T013 [P] Add failing unit test for [domain behavior] covering CLAIM-001 / FR-001 in tests/unit/test_[name].py
 - [ ] T014 [P] Add failing unit test for [edge case] covering CLAIM-002 / FR-002 in tests/unit/test_[name].py
@@ -135,7 +135,7 @@ Examples of foundational tasks (include only what the story truly depends on):
 - [ ] T025 Add logging/observability for the story flow in src/[location]/[file].py (No source claim applies: operational support task)
 - [ ] T026 Run `[UNIT TEST COMMAND]` and `[INTEGRATION TEST COMMAND]` for tests/unit/ and tests/integration/, fix failures, and verify the story passes end-to-end (No source claim applies: validation task)
 
-**Checkpoint**: The story is fully functional, covered by unit and integration tests, and testable independently
+**Checkpoint**: Executable work has its required evidence; non-executable source rows remain disclosed or handed to their authority owner
 
 ---
 
@@ -161,9 +161,11 @@ Examples of foundational tasks (include only what the story truly depends on):
 - **Setup (Phase 1)**: No dependencies - can start immediately
 - **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS story work
 - **Story (Phase 3)**: Depends on Foundational phase completion
-- **Polish (Phase 4)**: Depends on the story being functionally complete and tests passing
+- **Polish (Phase 4)**: Applicable polish follows completed executable work; final verification also accepts disclosure-only stories
 
 ### Within The Story
+
+Apply this order only to existing executable tasks; do not generate tasks for non-executable rows.
 
 - Unit tests MUST be written and FAIL before implementation
 - Integration tests MUST be written and FAIL before implementation
@@ -203,6 +205,8 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 
 ### Test-Driven Story Delivery
 
+For executable work, omit inapplicable steps. With no executable work, preserve disclosures or authority handoffs and proceed to final verification.
+
 1. Complete Phase 1: Setup
 2. Complete Phase 2: Foundational (CRITICAL - blocks story work)
 3. Build the story traceability inventory from `spec.md`
@@ -219,10 +223,10 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 - [P] tasks = different files, no dependencies
 - The task list should cover one story only
 - The story should be independently completable and testable
-- Each in-scope requirement, scenario, success criterion, and stable source claim mapping must have task coverage
+- Each executable in-scope requirement, scenario, success criterion, and stable source claim mapping must have task coverage; other rows retain disclosures or authority handoffs
 - Each task must map to stable claim IDs or state `No source claim applies: <reason>`
-- Verify unit and integration tests fail before implementing
+- Verify applicable unit and integration tests fail before new production code
 - Run `/moonspec.verify` after implementation to check the final result against the original request
 - Commit after each task or logical group
 - Stop at the checkpoint to validate the story independently
-- Avoid: vague tasks, optional testing, same file conflicts, multi-story phases, or hidden scope beyond the story
+- Avoid: vague tasks, skipped feasible testing, same file conflicts, multi-story phases, or hidden scope beyond the story

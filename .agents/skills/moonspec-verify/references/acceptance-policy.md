@@ -44,6 +44,14 @@ does not produce a non-passing verdict, remaining work, or a stop. A defect that
 any check actually observes still blocks. The selected scope is unchanged:
 Unverified criteria stay in it, are reported, and are never described as passed.
 
+Unverified does not grant permission. An actual missing authorization or operator
+decision needed to act on the selected operation remains a `needs_human` handoff;
+do not perform that action or report its authorized completion until supplied.
+Name the exact decision, required owner, and affected action. Do not invent an
+authority gate from unavailable deployment evidence, physical testing, or test
+signoff: those remain Unverified disclosures when outside the verifier's reach.
+Separately scoped release approvals do not gate implementation completion.
+
 Recover truncated mandatory source content through its authorized owning reader.
 When recovery cannot supply it, assess the visible scope and identify the missing
 source fields. Never fabricate a requirement from a truncation marker. Set scope
@@ -54,8 +62,9 @@ optional MoonSpec packet is not a gap when a usable original baseline exists.
 
 Browser execution, browser installation, live UI access, screenshots, and human
 visual signoff are optional diagnostics by default, including for frontend and
-UI changes. These defaults apply when the controlling source has no explicit
-browser or human visual acceptance requirement. The need for a browser must
+UI changes. These defaults apply when the controlling source, caller, and applicable
+root or scoped `AGENTS.md` instructions have no explicit browser or human visual
+acceptance requirement. The need for a browser must
 never block verification or fail a workflow under these defaults. An unavailable
 browser is `NOT RUN` with an advisory limitation, never by itself Remaining Work,
 `ADDITIONAL_WORK_NEEDED`,
@@ -73,8 +82,9 @@ Merely naming a browser suite in repository guidance, a source document, a
 derived plan, or an earlier report does not make browser execution mandatory.
 Apply this default to the evidence method while preserving the underlying
 behavior to prove. An explicit acceptance requirement in the original
-implementation instructions, selected canonical source, or caller instruction
-for this verification run requires that evidence. Preserve explicitly required
+implementation instructions, selected canonical source, caller instruction, or
+applicable root or scoped `AGENTS.md` instructions for this verification run
+requires that evidence. Preserve explicitly required
 human visual signoff and its authority; automated evidence cannot replace it.
 Disclose the requirement and its exact source; otherwise use the non-browser
 path and record any limits of the evidence honestly.
@@ -98,6 +108,71 @@ uncertain job effects before resubmitting; do not repeat an unchanged rejected
 setup or consume repair attempts merely to obtain unavailable evidence. Stop an
 affected action when its supplied budget or authority prevents it, preserving
 its exact blocker and next authorized action.
+
+## Source-bound verification map and feasibility
+
+Before expensive implementation, builds, exports, or specialized execution, extend
+the existing assessment `verificationMap`; do not create a second acceptance
+framework. Each row records `id`, `sourceRef`, `sourceDigest`, `sourceLocator`,
+`classification` (`mandatory`, `optional`, or `separate_release`), and
+`requiredBehavior`. Source reference/digest match the independently captured
+original scope, and the locator identifies the actual requirement within it.
+Mandatory IDs must match `scope.requirementIds` exactly. Preserve any existing
+`mandatory` boolean consistently; a prior assessment cannot expand or waive scope.
+
+When correcting invented historical IDs, preserve `scopeReconciliation` in the
+current snapshot and acceptance binding: `previousScope` is the unchanged prior
+scope, `currentScope` is the independently captured scope, and
+`removedRequirements` contains each removed `id`, concrete `reason`, and current
+`sourceLocator`. Account for every removed ID exactly once. The host compares
+provenance to the actual old assessment and independently read source; the
+verifier owns semantic classification and completeness. No human approval is
+needed merely to retire an invented or inherited gate. Removing an explicit
+source requirement is still invalid. Optional `sourceQuote` is an exact substring
+of the original source and participates in the obligation digest.
+
+A mandatory row also records `executableChecks`, source-allowed `proofMethods`,
+and the existing execution `owner`. Include `target`, `profile`, `topology`, and
+`samplingPolicy` only when the source requires them. These are nonblank strings;
+methods and commands are nonempty string lists. Record a real required render,
+live-provider, protected-request, or target profile precisely. A fake backend,
+generic CI pass, or static test cannot replace it. Retain all required samples:
+a failing first sample cannot be discarded just because a later one passed.
+Do not invent a physical computer, human operator, browser, production credential,
+or full-content export gate. Reconcile an explicitly physical-only requirement
+that conflicts with the authorized automated implementation lane; preserve the
+unproven product/release claim instead of silently calling it passed.
+
+Free-form quality suggestions and `suggestedEvidence` are strictly advisory.
+They cannot add a mandatory row, create remaining work, veto publication, or
+trigger a retry. A concrete observed defect still blocks its actual source row.
+Documentation-only work uses its source-required prose/link/repository checks;
+it does not inherit gameplay or GPU execution or close separate implementation.
+
+Record each mandatory row's current `capability` probe as `status` (`ready`,
+`busy`, `unavailable`, or `unauthorized`), `evidenceRefs`, and a useful
+`resumeCheck`. When relevant, `prerequisites` is a list of similarly probed records
+with stable `id` and existing `owner`. The inventory below must contain actual
+probe bytes. Discover existing authorized test/CI/content-authoring owners;
+missing local tooling alone does not mean no owner is available. Probe cheaply
+before spending execution budgets. Separate an isolated test namespace from a
+production signer or live execution authority. Do not repeat root content sync
+when a specific content-authoring dependency is missing.
+
+The helper's `admission --current current.json [--previous admission.json]`
+returns `readyRequirementIds`, `waitingRequirementIds`, `blockedRequirementIds`,
+`fingerprint`, `madeProgress`, and diagnostics. `--previous` is the prior admission
+result, not a prior assessment. Run independent ready rows; busy work stays with
+its existing owner. Classify unavailable/unauthorized probe results by cause:
+an actual required grant for the selected action remains `needs_human`, with
+the exact decision, owner, and action; do not execute it or claim it complete.
+Evidence inaccessible due to unavailable credentials or test environments remains
+Unverified with reason and verifiableBy. A probe status alone does not establish
+a missing human authorization. Missing or unresolved probes are never presumed ready. The fingerprint
+uses source, content, obligations, and readiness; changing a report ID, timestamp,
+or probe artifact while readiness stays unchanged is not implementation progress.
+A changed evidence inventory can still resume evidence-only verification. This
+helper does not dispatch work, consume/reset attempts, or authorize any action.
 
 ## Assessment and verification
 
@@ -130,14 +205,63 @@ Bind objective evidence in the existing `validatedRefs.acceptance` field using
 - `completionTarget`: intended ref, its observed revision and content digest.
   Resolve an explicitly configured target first, otherwise the remote default
   branch. A feature branch's upstream is not the default/completion target.
-- `evidence`: one record per mandatory requirement with its ID and either objective
-  `evidenceRefs` or an `unverified` object with nonblank `reason` and
-  `verifiableBy`, never both. All records describe the enclosing subject and scope.
+- `evidence`: records with mandatory `requirementId` and either `evidenceRefs` or
+  an `unverified` object with nonblank `reason` and `verifiableBy` (and status
+  `UNVERIFIED` on a source-bound row), never both nonempty evidence and Unverified. `evidenceRefs` may be omitted or
+  empty for Unverified rows; `unverified: null` is absent on evidenced rows. A
+  success accounts for every required row exactly once; a non-pass may preserve
+  passed rows, valid Unverified rows, and source-linked remaining work to
+  account for the complete scope. Unverified rows must not appear in `remainingWork`.
 - `freshness`: the required policy identity and optional expiry for time-sensitive
   evidence. Content-bound evidence need not expire arbitrarily.
 
+For source-bound structured work, carry the map in
+`validatedRefs.acceptance.verificationMap`. Extend the same `acceptance/v1`
+binding with `evidenceSet` (reference to SHA-256 digest of actual inspected bytes)
+and `evidenceSetDigest` (SHA-256 of its sorted, compact UTF-8 JSON, with Unicode
+preserved). The authorized artifact owner supplies this inventory. Never invent
+it from artifact metadata, URLs, a green aggregate, or a prior verifier assertion.
+
+Each objective row also has `status` (`VERIFIED`, `PARTIAL`, `MISSING`, `CONFLICT`,
+`UNVERIFIED`, `NO_DETERMINATION`, or `FAILED`) and `obligationDigest`. A verified
+row has a `proofMethod` from the source row's allowed methods and matching values
+for each source-declared target/profile/topology/sampling policy. Its
+`testedSubject` records the actual tested repository/revision/content; omitted
+means the enclosing binding's subject. Never relabel an old tested SHA as new.
+The helper returns reused rows with the original tested identity explicitly.
+
+`obligationDigest` hashes sorted compact UTF-8 JSON of only these present map
+fields: `id`, `sourceRef`, `sourceDigest`, `sourceLocator`, `classification`,
+`sourceQuote`, `requiredBehavior`, `executableChecks`, `proofMethods`, `owner`, `target`,
+`profile`, `topology`, `samplingPolicy`. Advice and transient probes are excluded.
+Every proof reference must resolve to unchanged bytes in the current inventory.
+This is a binding check, not a parser asserting that those bytes prove success;
+the verifier must still inspect actual counts, assertions, artifacts and rubric.
+Skipped/zero-test summaries, wrong SHA/tree/profile/checkpoint, expired policy,
+or a failed required sample cannot pass their source row.
+
 Use `scripts/acceptance.py` beside this Skill to capture Git identities and check
-reuse. It uses an isolated Git index for dirty content and never switches the
+reuse. `capture --assessment assessment.json` validates/copies the existing map
+against the separately captured source; repeat `--evidence REF PATH` for actual
+owner-retrieved report/probe files. This hashes bytes without fetching or running
+anything. `--evidence` and `--source-artifact-ref` require `--assessment`, so
+capture cannot emit an inventory/selector without its required map. With a map
+and no files, the inventory is explicitly empty.
+
+When original source is a trusted artifact, preserve `sourceBinding` with its
+`artifactRef` and RFC6901 `pointer`. An empty pointer hashes the whole original
+artifact's raw bytes; an explicit pointer must select an original source string,
+whose exact UTF-8 bytes are hashed. The owning host independently reads that
+artifact and verifies canonical source identity. `capture --source-artifact-ref
+REF [--source-pointer /description]` records this selector and applies it to the
+local `--source` file. The original caller, never the verifier, selects the
+pointer. Issue-driven hosts bind the complete trusted original brief's raw bytes,
+including acceptance criteria and constraints. Do not guess a normalization or
+omit source constraints by choosing a narrower field than the original authorized
+scope. Current reports must preserve the supplied selector and reconciliation
+provenance.
+
+The helper uses an isolated Git index for dirty content and never switches the
 user's checkout. A checkpoint ref/digest supplied by an existing workspace owner
 may be used instead. Keep the original base/source revision, candidate revision,
 and publication branch distinct in the report.
@@ -147,6 +271,39 @@ scope, requirement IDs, completion policy, and required freshness. A changed
 candidate, source, or expired proof requires the affected verification again.
 Identical valid evidence needs no arbitrary full-suite repeat. An unchanged
 checkout and a previous verdict alone are not objective evidence.
+
+For unchanged source and candidate bindings, reuse of a disclosed Unverified
+disposition preserves its status, reason, and verifier owner; it is not proof that
+the check passed. A fresh requested verification may reassess available checks,
+but possible capability changes alone do not require rerunning accepted disclosures.
+
+`reuse` returns qualified `reusableRows` from source-bound objective bindings even
+when the aggregate is blocked or nonpassing. It checks each row's obligation,
+subject content, referenced bytes and freshness independently; newly added
+inventory need not rerun eleven genuinely passed rows to collect a twelfth proof.
+Reevaluate actual observations under a changed policy rather than rerunning an
+unchanged workload when those observations still prove the new obligation.
+Rows named by either remaining-work ID field are not reusable, even if also
+marked `VERIFIED`; a nonpass with absent/empty inline gaps or an opaque-only gap
+reference cannot certify partial passes. Judgment and reuse share the same
+normalized handoff validation: unknown/optional IDs, contradictory ID fields,
+missing actionable fields, and wrong-candidate gaps are report errors, never an
+empty blocker set. Historical gaps use their own verified source scope only after
+exact current reconciliation lineage is established, so a correctly retired
+inherited obligation does not discard unrelated executed proof.
+Current handoffs use canonical primary `requirement` IDs; if `requirementIds` is
+also present it must include that primary ID. Narrative belongs in `remainingWork`.
+A validated exact previous/current scope reconciliation can retain unchanged
+rows after inherited IDs are retired, but never reuses the historical aggregate.
+Legacy coverage may yield `candidateRows` solely as artifacts to inspect, never
+accepted proof. Neither partial result means aggregate success or issue closure.
+
+The helper conservatively rejects changed content. Any owner-provided scoped
+reuse across different content requires verified unaffected production, test,
+build/toolchain, Content, workload and topology dependencies. An unchanged
+filename list or a report-only label is insufficient; unknown impact reruns
+only the affected proof once its dependencies are established. Same-content
+commits and squash merges retain the original tested identity.
 
 ## Automated evidence continuation
 
@@ -162,9 +319,10 @@ Use repository-approved AI artifact review for rendered or semantic criteria whe
 permitted. The reviewer must inspect the actual artifacts against the rubric, not
 infer visible behavior from source, logs, or artifact existence. Ambiguity in
 controlling evidence requires better observations or an explicit non-pass, not
-automatic human escalation. For an explicitly required browser gate, never
-substitute structural tests for required pixels. Under the browser-independent defaults, report visual diagnostic
-limits without turning browser access into a gate. Never override failed
+automatic human escalation. For an explicit acceptance requirement for rendered
+artifacts or a browser gate, never substitute structural tests for required pixels.
+Under the browser-independent defaults, report visual diagnostic limits without
+turning browser access into a gate. Never override failed
 controlling machine checks.
 
 Every non-passing result needs concrete `remainingWork` or a durable
@@ -196,8 +354,22 @@ python3 <resolved-skill>/scripts/acceptance.py validate-report --report <report.
 ```
 
 `current.json` is the freshly captured subject, original scope, completion target,
-and freshness policy used for the checks. It is required for success preflight;
-a truthful non-pass can omit it when identity capture itself is unavailable.
+and freshness policy used for the checks, plus the source-bound map and actual
+artifact inventory for structured source-bound work. It is required for success
+preflight. Every current verdict, including `BLOCKED` and `NO_DETERMINATION`,
+checks exact candidate revision, source obligations, target snapshot, freshness,
+and the current evidence-set digest. A historical blocker is not a current
+judgment after later evidence arrives; re-read newly available authorized bytes,
+including after a prior 403 or expiry, before repeating it. Actual assertion
+failures, explicit proof requirements and permission holds remain controlling.
+
+A current non-pass includes inline, mandatory-source-linked `remainingWork` even
+when a durable `remainingWorkRef` also exists. Passed rows, valid Unverified rows, and source-linked remaining work cover the
+complete mandatory scope without contradiction; Unverified rows are not gaps and
+must not appear in `remainingWork`; optional/unknown criteria cannot
+block it. Retain the original historical assessment unchanged. Historical no-map
+reports and a truthful non-pass without identity capture remain readable for
+compatibility; they do not acquire current source-bound or completion authority.
 The helper returns only `valid` and `errors`, with exit 1 on invalid output. It
 checks steering fields and reuses the existing acceptance binding check. It does
 not fetch artifacts, judge requirements, replace the host's envelope validation,
@@ -206,7 +378,8 @@ or turn syntactically valid output into product approval.
 If preflight fails, preserve the original response and diagnostics and make one
 bounded report-only repair from the existing findings, then revalidate. Do not
 change source, tests, scope, evidence, or a truthful verdict to satisfy formatting.
-Missing substantive evidence returns to its existing owner instead. Unresolved
+Missing obtainable evidence returns to its existing owner; evidence outside the
+verifier's reach is disclosed as Unverified instead. Unresolved
 output errors remain a report-production failure, not a fabricated product
 failure, unavailable environment, or human-review requirement. The caller retains
 the last trustworthy verdict and owns any further authorized continuation.

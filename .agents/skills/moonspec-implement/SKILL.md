@@ -35,14 +35,16 @@ Do not use this skill to split a broad design, write a spec, create a plan, or g
 - `tasks.md` must be specific enough to execute without inventing hidden product scope.
 - Use absolute paths in reports and cite files changed or validated.
 
-If `tasks.md` is missing or incomplete, stop and recommend `/moonspec.tasks`. If the source input is a broad technical or declarative design that has not been split into one-story specs, stop and recommend `/moonspec.breakdown`.
+Apply requirement statuses before all coverage and execution gates: `unverified` rows retain source IDs, reason and verifiableBy without executable tasks; `needs_human` rows retain the exact decision, owner, and action without executing it or claiming its completion. Only executable rows require code, tests, setup, and red-first evidence. Observed defects remain executable remediation; unavailable checks do not become defects. For all-Unverified stories, skip setup and code/test execution and run final verification with the disclosures.
+
+If `tasks.md` is missing or lacks coverage for executable rows, stop and recommend `/moonspec.tasks`. If the source input is a broad technical or declarative design that has not been split into one-story specs, stop and recommend `/moonspec.breakdown`.
 
 ## Pre-Implement Hooks
 
 Before implementation, check for extension hooks:
 
 1. If `.specify/extensions.yml` exists, read it and look for `hooks.before_implement`.
-2. If the YAML cannot be parsed or is invalid, report an explicit hook-configuration failure naming `.specify/extensions.yml` and the parse error, and stop hook processing at this step. Do not silently skip required hook configuration or proceed as if no hooks were registered. A missing file, or a file with no `hooks.before_implement` entries, means no hooks are registered: skip silently.
+2. If the YAML cannot be parsed or is invalid, skip hook checking silently.
 3. Ignore hooks where `enabled` is explicitly `false`; hooks without `enabled` are enabled.
 4. Do not evaluate non-empty `condition` expressions. Treat hooks with no condition, null condition, or empty condition as executable. Skip hooks with non-empty conditions.
 5. For each executable hook:
@@ -107,7 +109,7 @@ Report a table:
 | requirements.md | 12 | 12 | 0 | PASS |
 ```
 
-If any checklist has incomplete items, do not ask for blanket approval to proceed. Instead, report the incomplete items and complete the ones that name in-scope prerequisites or artifacts by doing that bounded work, then re-scan the checklists and gather the required evidence. Never record a user approval that was not given and never mark an unverified item complete. An incomplete item that names missing authority (credentials, access, or an approval the story explicitly requires) or a consequential product ambiguity the story does not resolve stays a specific decision: record it as the blocking item with its owner, continue independent safe work that does not depend on it, and proceed past it only on that explicit decision. An explicit approval the story requires is never waived.
+Match incomplete checklist items to requirement status before gating. Unverified checks remain disclosed and unchecked, not blocking; actual `needs_human` items preserve their authority handoff. For other unfinished executable prerequisites, stop and ask whether to proceed.
 
 ## Load Context
 
@@ -126,26 +128,26 @@ Read enough context to implement without guessing:
 Validate before editing code:
 
 - `spec.md` has exactly one independently testable user story.
-- Any `DESIGN-REQ-*` or `DOC-REQ-*` mappings are traceable to planned code or test work.
+- Source mappings remain traceable to executable work, Unverified disclosures, or actual authority handoffs.
 - Relevant `AGENTS.md` principles and testing discipline are represented in the plan or tasks when they affect implementation.
-- `tasks.md` includes unit test tasks and integration test tasks unless the spec clearly makes one class irrelevant.
+- Executable rows include applicable unit/integration test tasks; non-executable rows do not require test tasks.
 - Implementation tasks do not introduce scope outside the story, original request, source design constraints, or relevant repo guidance.
 
 If the spec contains multiple stories, stop and tell the user to split the design with `/moonspec.breakdown` or regenerate a one-story spec with `/moonspec.specify`.
 
 ## Project Setup Verification
 
-Before story work, verify only the ignore files for tooling the selected work actually uses, as detected from the repository:
+Only when executable work needs setup, create or verify the relevant ignore files:
 
-- If `git rev-parse --git-dir` succeeds and the story produces generated outputs, dependencies, local env files, logs, caches, or test artifacts, ensure `.gitignore` covers them.
-- If the story builds or ships containers and Dockerfiles or Docker usage are present, create or verify `.dockerignore`.
-- If the story touches JavaScript or TypeScript and ESLint legacy config exists, create or verify `.eslintignore`; if `eslint.config.*` exists, ensure `ignores` covers required generated paths.
-- If the story touches JavaScript or TypeScript and Prettier config exists, create or verify `.prettierignore`.
-- If the story publishes a package and package publishing is present, create or verify `.npmignore`.
-- If the story touches Terraform files, create or verify `.terraformignore`.
-- If the story touches Helm charts, create or verify `.helmignore`.
+- If `git rev-parse --git-dir` succeeds, ensure `.gitignore` exists and covers generated outputs, dependencies, local env files, logs, caches, and test artifacts.
+- If Dockerfiles or Docker usage are present, create or verify `.dockerignore`.
+- If ESLint legacy config exists, create or verify `.eslintignore`; if `eslint.config.*` exists, ensure `ignores` covers required generated paths.
+- If Prettier config exists, create or verify `.prettierignore`.
+- If package publishing is present, create or verify `.npmignore`.
+- If Terraform files exist, create or verify `.terraformignore`.
+- If Helm charts exist, create or verify `.helmignore`.
 
-Create a missing file or append a missing critical pattern only when the story's own artifacts require it. Leave ignore files, dependencies, and durable guidance untouched when the selected work does not require the change. Append only missing critical patterns. Do not rewrite existing ignore files wholesale. Do not set up tooling the story does not use.
+Append only missing critical patterns. Do not rewrite existing ignore files wholesale.
 
 Common patterns by stack:
 
@@ -168,7 +170,7 @@ Parse `tasks.md` into:
 - Dependencies: sequential work, parallel `[P]` tasks, file conflicts, and phase gates.
 - Final verification: the task that runs `/moonspec.verify`, when present.
 
-Execute phase by phase:
+Execute only applicable planned work for executable rows; omit absent phases and never execute `needs_human` actions:
 
 1. Complete setup tasks.
 2. Complete foundational prerequisites before story work.
@@ -196,8 +198,8 @@ Rules:
 - Keep the work scoped to the single story.
 - Do not weaken requirements, delete source design mappings, or remove the preserved original request.
 - Do not add hidden scope beyond the story, source design constraints, relevant repo guidance, or explicit user guidance.
-- Write unit tests for domain rules, transformations, validation, edge cases, and failure modes named by the spec.
-- Write integration tests for acceptance scenarios, end-to-end workflows, contracts, persistence, external services, startup wiring, or user-facing interfaces when the design implies them.
+- For executable rows, write applicable unit tests for required domain behavior and edge cases.
+- For executable rows, write applicable integration tests for required workflows and boundaries.
 - Confirm new tests fail before implementing production behavior, then make them pass.
 - Refactor only after tests pass.
 - Preserve unrelated user changes in the worktree.
@@ -208,11 +210,11 @@ Rules:
 Before reporting completion:
 
 1. Verify every required task in `tasks.md` is complete.
-2. Verify production behavior matches the single story in `spec.md`.
+2. Evaluate production behavior against the story using evidence or valid Unverified disclosures; never describe unavailable checks as passed.
 3. Verify the implementation remains aligned with the original feature request or declarative design preserved in `spec.md` `**Input**`.
-4. Verify every in-scope `DESIGN-REQ-*` or `DOC-REQ-*` has implementation and test evidence.
+4. Account for every in-scope source row with evidence, an Unverified disclosure, or a pending authority handoff; do not claim an unauthorized operation complete.
 5. Verify relevant `AGENTS.md` principles and testing discipline were not violated.
-6. Run unit tests and integration tests named in `plan.md`, `tasks.md`, `quickstart.md`, or project conventions.
+6. Run feasible planned tests for executable rows; preserve unavailable-check disclosures.
 7. Run quickstart validation when present and feasible.
 8. Confirm no hidden scope or contradiction was introduced.
 9. Run the final `/moonspec.verify` task when present.
@@ -277,7 +279,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 - Implement exactly one story from the active MoonSpec.
 - TDD is the default strategy.
-- Unit tests and integration tests are both expected implementation evidence.
+- Unit and integration tests are expected for applicable executable work, not for non-executable rows.
 - Confirm tests fail for the intended reason before production code.
 - Preserve traceability to the original request and source design mappings.
 - Preserve relevant `AGENTS.md` principles and repo constraints.
