@@ -111,62 +111,40 @@ async def _attach_primary_success(store: OmnigentControlPlaneStore, session) -> 
     return current, terminal_ref
 
 
-async def test_production_admission_is_bounded_and_disable_only_blocks_new_selection(
+async def test_planless_admission_is_not_decided_by_retired_rollout_settings(
     monkeypatch,
 ) -> None:
-    flags = settings.feature_flags
-    monkeypatch.setattr(flags, "omnigent_session_supervisor_admission_mode", "canary")
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_canary_owner_ids",
-        "agent-canary",
-    )
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_allowed_execution_profile_refs",
-        "profile-canary",
-    )
-    payload = {
-        "workflowId": "workflow-admission",
-        "stepExecutionId": "step-admission",
-        "agentRunId": "agent-canary",
-        "executionProfileRef": "profile-canary",
-    }
+    # A request without plan authority (a history admitted before plan binding)
+    # keeps the default supervisor admission. The retired canary/allowlist/
+    # generation/disable rollout settings no longer select a second lane, and a
+    # deployment that still supplies them starts and admits unchanged.
+    from moonmind.config.settings import FeatureFlagsSettings
 
-    admitted = await omnigent_evaluate_session_admission_activity(payload)
-    assert admitted["admitted"] is True
-    assert admitted["reasonCode"] == "canary_selected"
+    for name, value in {
+        "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE": "disabled",
+        "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS": "agent-x",
+        "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS": (
+            "profile-x"
+        ),
+        "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION": "superseded",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(settings, "feature_flags", FeatureFlagsSettings(_env_file=None))
 
-    denied = await omnigent_evaluate_session_admission_activity(
-        {**payload, "agentRunId": "agent-outside-canary"}
-    )
-    assert denied["admitted"] is False
-    assert denied["reasonCode"] == "canary_owner_not_allowlisted"
-
-    profile_denied = await omnigent_evaluate_session_admission_activity(
-        {**payload, "executionProfileRef": "profile-outside-canary"}
-    )
-    assert profile_denied["admitted"] is False
-    assert profile_denied["reasonCode"] == "execution_profile_not_allowlisted"
-
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_generation",
-        "superseded-generation",
-    )
-    generation_denied = await omnigent_evaluate_session_admission_activity(payload)
-    assert generation_denied["admitted"] is False
-    assert generation_denied["reasonCode"] == "feature_generation_mismatch"
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_generation",
-        "omnigent-session-v1",
+    decision = await omnigent_evaluate_session_admission_activity(
+        {
+            "workflowId": "workflow-admission",
+            "stepExecutionId": "step-admission",
+            "agentRunId": "agent-outside-any-canary",
+            "executionProfileRef": "profile-outside-any-allowlist",
+        }
     )
 
-    monkeypatch.setattr(flags, "omnigent_session_supervisor_admission_mode", "disabled")
-    disabled = await omnigent_evaluate_session_admission_activity(payload)
-    assert disabled["admitted"] is False
-    assert disabled["reasonCode"] == "new_selection_disabled"
+    assert decision["admitted"] is True
+    assert decision["reasonCode"] == "enabled"
+    assert decision["admissionMode"] == "enabled"
+    assert decision["admittedFeatureGeneration"] == "omnigent-session-v1"
+    assert decision["executionRealizerRef"] is None
 
 
 async def test_failure_authority_validates_immutable_child_ownership(

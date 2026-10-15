@@ -13,7 +13,6 @@ import pytest
 from moonmind.omnigent.legacy_retirement import (
     OBSOLETE_CONFIGURATION,
     RETIREMENT_INVENTORY,
-    TEMPORARY_ROLLOUT_FLAGS,
     LegacyAdmissionRejected,
     LegacyPathRecord,
     ObsoleteConfiguration,
@@ -24,7 +23,6 @@ from moonmind.omnigent.legacy_retirement import (
     assert_new_admission_allowed,
     assert_obsolete_configuration,
     assert_surface_admits_new_work,
-    assert_temporary_flags_have_retirement,
     evaluate_new_admission,
     get_retirement_record,
 )
@@ -351,42 +349,3 @@ def test_obsolete_configuration_cannot_skip_its_deprecation_window() -> None:
             replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
             removed=True,
         )
-
-
-# ------------------------------------------------------------ rollout flags
-
-
-def test_temporary_flags_all_have_retirement_trigger() -> None:
-    assert TEMPORARY_ROLLOUT_FLAGS
-    assert_temporary_flags_have_retirement()
-
-
-def test_temporary_flag_without_trigger_is_rejected() -> None:
-    with pytest.raises(RetirementGuardError):
-        assert_temporary_flags_have_retirement(
-            {"omnigent_session_supervisor_rollback_mode": ""}
-        )
-
-
-def test_temporary_flags_cover_supervisor_settings_fields() -> None:
-    # The supervisor rollout flags must be registered as temporary so they can
-    # never silently become a permanent alternate architecture.
-    from moonmind.config.settings import FeatureFlagsSettings
-
-    model_fields = set(FeatureFlagsSettings.model_fields)
-    for flag in TEMPORARY_ROLLOUT_FLAGS:
-        assert flag in model_fields
-
-
-def test_every_retained_supervisor_flag_declares_its_retirement() -> None:
-    # MoonLadderStudios/MoonMind#3935: a retained-lane flag that is not
-    # registered here has no exit condition and can outlive the lane.
-    from moonmind.config.settings import FeatureFlagsSettings
-
-    supervisor_flags = {
-        field
-        for field in FeatureFlagsSettings.model_fields
-        if field.startswith("omnigent_session_supervisor_")
-    }
-    assert supervisor_flags
-    assert supervisor_flags <= set(TEMPORARY_ROLLOUT_FLAGS)

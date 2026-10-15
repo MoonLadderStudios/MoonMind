@@ -286,7 +286,7 @@ def _enforce_session_worker_authority_barrier(plan: Any) -> None:
 async def omnigent_evaluate_session_admission_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Freeze the bounded rollout decision before a new child is launched."""
+    """Freeze the admission decision before a new child is launched."""
 
     from moonmind.config.settings import settings
 
@@ -366,49 +366,17 @@ async def omnigent_evaluate_session_admission_activity(
         )
         if plan is None:
             raise ValueError("admitted Omnigent execution plan is unavailable")
-    flags = settings.feature_flags
-    mode = flags.omnigent_session_supervisor_admission_mode
-    generation = str(flags.omnigent_session_supervisor_generation or "").strip()
-    canary_owners = {
-        item.strip()
-        for item in flags.omnigent_session_supervisor_canary_owner_ids.split(",")
-        if item.strip()
-    }
-    allowed_profiles = {
-        item.strip()
-        for item in (
-            flags.omnigent_session_supervisor_allowed_execution_profile_refs.split(",")
-        )
-        if item.strip()
-    }
-
+    # Recorded plan authority alone decides admission. A request that carries
+    # no plan (for example a history recorded before plan binding) keeps the
+    # default supervisor admission; no deployment setting selects another lane.
     admitted = True
     reason = "enabled"
-    effective_mode = mode
-    if plan is not None:
-        # Normal-product admission already persisted exact immutable authority.
-        # It must not depend on a legacy rollout flag whose omission could route
-        # the same request into a parallel lifecycle.
-        effective_mode = "enabled"
-        if plan.payload.executionRealizerRef != "codex-profile-bound@1":
-            admitted = False
-            reason = "realizer_managed_lifecycle"
-    elif generation != OMNIGENT_SESSION_FEATURE_GENERATION:
-        admitted = False
-        reason = "feature_generation_mismatch"
-    elif mode == "disabled":
-        admitted = False
-        reason = "new_selection_disabled"
-    elif mode == "canary" and (
-        not canary_owners or request.agent_run_id not in canary_owners
+    if (
+        plan is not None
+        and plan.payload.executionRealizerRef != "codex-profile-bound@1"
     ):
         admitted = False
-        reason = "canary_owner_not_allowlisted"
-    elif allowed_profiles and request.execution_profile_ref not in allowed_profiles:
-        admitted = False
-        reason = "execution_profile_not_allowlisted"
-    elif mode == "canary":
-        reason = "canary_selected"
+        reason = "realizer_managed_lifecycle"
 
     capacity_authority = (
         await _plan_capacity_authority(
@@ -420,7 +388,7 @@ async def omnigent_evaluate_session_admission_activity(
     return OmnigentSessionAdmissionDecision(
         admitted=admitted,
         reasonCode=reason,
-        admissionMode=effective_mode,
+        admissionMode="enabled",
         admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
         executionRealizerRef=(
             plan.payload.executionRealizerRef if plan is not None else None
