@@ -134,6 +134,10 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.cutover import assert_runtime_new_admission
 from moonmind.omnigent.native_ui import native_ui_unavailable_reason
 from moonmind.omnigent.settings import resolved_native_ui_serving_enabled
+from moonmind.omnigent.workspace_sources import (
+    WorkspaceSourceError,
+    compile_workspace_source,
+)
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
@@ -284,6 +288,7 @@ from moonmind.workflows.executions.provider_profile_projection import (
 )
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
+    authored_repository_access,
     compile_repository_target,
     github_repository_name_from_value,
     repository_branch_from_value,
@@ -10968,7 +10973,7 @@ def _snapshot_source_payload_from_parameters(
             list(capabilities_value) if isinstance(capabilities_value, list) else []
         ),
     }
-    workspace_value = parameters.get("workspace")
+    workspace_value = parameters.get("workspaceSpec") or parameters.get("workspace")
     if isinstance(workspace_value, Mapping):
         payload["workspace"] = copy.deepcopy(dict(workspace_value))
     return payload, task
@@ -11931,6 +11936,84 @@ def _normalize_submitted_repository(
     )
 
 
+def _admit_workspace_source(
+    value: object,
+    *,
+    repository_payload: str | Mapping[str, Any] | None,
+    repository: str | None,
+    workflow_id: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate authored ``payload.workspace`` with the plan's source compiler.
+
+    Returns the spec for ``initialParameters.workspaceSpec``, the key plan
+    admission and the agent request read, plus the repository the source
+    selects. Create, the CLI, and the API share this path, so it is how
+    anonymous, artifact, and checkpoint sources reach plan admission.
+    """
+
+    if value is None:
+        return None, repository
+    if not isinstance(value, Mapping):
+        raise _invalid_workflow_request("payload.workspace must be an object.")
+    workspace = copy.deepcopy(dict(value))
+    authored = _coerce_mapping(workspace.get("workspaceSource"))
+    kind = str(authored.get("kind") or "").strip().lower()
+    access_mode = authored.get("accessMode")
+    if access_mode is not None and access_mode not in {
+        "explicit",
+        "routed",
+        "anonymous",
+    }:
+        raise _invalid_workflow_request(
+            "payload.workspace.workspaceSource.accessMode must be explicit, "
+            "routed, or anonymous."
+        )
+    if repository_payload is not None and kind not in {"", "repository"}:
+        raise _invalid_workflow_request(
+            f"payload.repository conflicts with a {kind} workspace source; "
+            "name its base repository in the workspace source instead."
+        )
+    authored_repository = authored.get("repository") or _coerce_mapping(
+        authored.get("repositoryTarget")
+    ).get("repository")
+    if isinstance(authored_repository, Mapping):
+        authored_repository = authored_repository.get("name")
+    authored_name = str(authored_repository or "").strip()
+    if authored_name and repository and authored_name != repository:
+        raise _invalid_workflow_request(
+            f"payload.repository {repository!r} conflicts with workspace source "
+            f"repository {authored_name!r}."
+        )
+    spec = dict(workspace)
+    if isinstance(repository_payload, Mapping):
+        spec.setdefault("repositoryTarget", dict(repository_payload))
+    elif repository_payload:
+        spec.setdefault("repository", repository_payload)
+    try:
+        source = compile_workspace_source(
+            spec,
+            workflow_id=workflow_id,
+            step_execution_id=workflow_id,
+            runtime="omnigent",
+        )
+    except WorkspaceSourceError as exc:
+        raise _invalid_workflow_request(f"payload.workspace is invalid: {exc}") from exc
+    if source.kind == "repository" and not source.repository_ref:
+        raise _invalid_workflow_request(
+            "A repository workspace source requires a repository."
+        )
+    connection_ref, anonymous = authored_repository_access(
+        {"repository": repository_payload, "workspaceSpec": workspace}
+    )
+    if anonymous and (connection_ref or not source.repository_ref):
+        raise _invalid_workflow_request(
+            "anonymous access reads a selected repository without a "
+            "connectionRef; remove the connection or choose routed or explicit "
+            "access."
+        )
+    return workspace, repository or source.repository_ref
+
+
 def _selected_repository_skill_names(
     task_payload: Mapping[str, Any],
 ) -> set[str]:
@@ -12215,6 +12298,12 @@ async def _create_execution_from_workflow_request(
         repository_payload=repository_payload,
         task_payload=task_payload,
         publish_payload=early_publish_payload,
+    )
+    workspace_spec, repository = _admit_workspace_source(
+        payload.get("workspace"),
+        repository_payload=repository_payload,
+        repository=repository,
+        workflow_id=reserved_workflow_id,
     )
 
     # --- Schedule routing ---
@@ -12721,6 +12810,8 @@ async def _create_execution_from_workflow_request(
         # without a phase gate or SHA/digest fingerprint.
         "runtimeCutover": dict(new_work_runtime_evidence),
     }
+    if workspace_spec is not None:
+        initial_parameters["workspaceSpec"] = workspace_spec
     if principal.is_workflow_principal:
         initial_parameters["parentWorkflowId"] = principal.workflow_id
     if isinstance(payload.get("omnigent"), Mapping):
