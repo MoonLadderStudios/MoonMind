@@ -9939,7 +9939,7 @@ describe('Workflow Detail Entrypoint', () => {
       status: 'completed',
       state: 'completed',
       rawState: 'completed',
-      targetRuntime: 'codex_cli',
+      targetRuntime: 'omnigent',
       model: 'gpt-5',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
@@ -9998,6 +9998,20 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
       expect(screen.getByText('Claude Code')).toBeTruthy();
       expect(screen.getByText('claude-sonnet-test')).toBeTruthy();
+      // Recorded targetRuntime splits into Harness and Backend columns; an
+      // Omnigent run records no Harness, so none is guessed for it.
+      const comparison = screen
+        .getByRole('heading', { name: 'Run Comparison' })
+        .closest('section') as HTMLElement;
+      expect(
+        within(comparison).getAllByRole('columnheader').map((cell) => cell.textContent),
+      ).toEqual(['Relation', 'Workflow', 'Run', 'Status', 'Harness', 'Backend', 'Model']);
+      const cellsFor = (label: string) =>
+        Array.from(
+          within(comparison).getByText(label).closest('tr')?.querySelectorAll('td') ?? [],
+        ).map((cell) => cell.textContent);
+      expect(cellsFor('current').slice(4, 6)).toEqual(['—', 'Omnigent']);
+      expect(cellsFor('test-456').slice(4, 6)).toEqual(['Claude Code', 'Direct']);
       fireEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
       expect(screen.getByRole('menuitem', { name: 'Compare run' }).getAttribute('href')).toBe(
         taskCompareHref('test-123'),
