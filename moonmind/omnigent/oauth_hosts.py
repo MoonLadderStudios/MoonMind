@@ -24,6 +24,7 @@ from api_service.db.models import (
     OmnigentOAuthHostLeaseRecord,
     ProviderProfileSlotLease,
 )
+from moonmind.provider_profiles.lease_client import ACTIVE_DURABLE_LEASE_STATES
 from moonmind.provider_profiles.oauth_policy import (
     is_claude_oauth_profile,
     is_codex_oauth_profile,
@@ -783,9 +784,14 @@ class OmnigentOAuthHostRepository:
                         == OmnigentOAuthHostLeaseRecord.provider_lease_id,
                     )
                     .where(
+                        ProviderProfileSlotLease.profile_id
+                        == OmnigentOAuthHostLeaseRecord.provider_profile_id,
+                        ProviderProfileSlotLease.lease_state.in_(
+                            sorted(ACTIVE_DURABLE_LEASE_STATES)
+                        ),
                         OmnigentOAuthHostLeaseRecord.status.in_(
                             TERMINAL_HOST_STATES
-                        )
+                        ),
                     )
                 )
             ).scalars()
