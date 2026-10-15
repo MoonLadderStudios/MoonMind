@@ -602,6 +602,7 @@ RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH = "run-canonical-dependency-parameters
 DEPENDENCY_WAIT_THROUGH_RERUN_PATCH = "dependency-wait-through-rerun-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 RUN_UNVERIFIED_PR_DISCLOSURE_PATCH = "run-unverified-pr-disclosure-v1"
+RUN_UNVERIFIED_PR_HEAD_BINDING_PATCH = "run-unverified-pr-head-binding-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
@@ -17987,39 +17988,80 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             RUN_UNVERIFIED_PR_DISCLOSURE_PATCH
         ):
             return
-        from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
-
         gate = self._publish_context.get("moonSpecGate")
-        evidence = acceptance_evidence(gate) if isinstance(gate, Mapping) else None
-        if evidence is None or gate.get("invalid") or gate.get("degraded"):
+        if self._moonspec_disclosure_rows() is None:
             return
+        payload = {
+            "repo": self._repo,
+            "prUrl": pull_request_url,
+            "section": self._moonspec_unverified_body_section(),
+        }
+        if self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_HEAD_BINDING_PATCH):
+            # Disclosure describes this verified candidate, never a later push.
+            payload["expectedHeadSha"] = gate["validatedRefs"]["acceptance"][
+                "subject"
+            ]["revision"]
         await workflow.execute_activity(
             "repo.sync_pr_unverified_criteria",
-            {
-                "repo": self._repo,
-                "prUrl": pull_request_url,
-                "section": self._moonspec_unverified_body_section(),
-            },
+            payload,
             start_to_close_timeout=timedelta(minutes=2),
             task_queue=INTEGRATIONS_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
 
-    def _moonspec_unverified_body_section(self) -> str:
-        """List criteria the verifier recorded as outside its reach."""
-        from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+    def _moonspec_disclosure_rows(self) -> list[Any] | None:
+        """Read report rows for disclosure without promoting a draft to success.
+
+        These are the hydrated rows of the host-validated gate. A nonpassing
+        report cannot use AcceptanceEvidence, which deliberately requires every
+        requirement to be verified or disclosed as Unverified.
+        """
+        from moonmind.workflows.skills.acceptance_contract import (
+            AcceptanceSubject,
+            RequirementEvidence,
+            acceptance_evidence,
+        )
 
         gate = self._publish_context.get("moonSpecGate")
+        if not isinstance(gate, Mapping) or gate.get("invalid") or gate.get("degraded"):
+            return None
+        accepted = acceptance_evidence(gate)
+        if accepted is not None:
+            return accepted.evidence
+        if not self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_HEAD_BINDING_PATCH):
+            return None
+        if gate.get("verdict") not in {
+            "ADDITIONAL_WORK_NEEDED",
+            "BLOCKED",
+            "NO_DETERMINATION",
+            "FAILED_UNRECOVERABLE",
+        }:
+            return None
+        refs = gate.get("validatedRefs")
+        binding = refs.get("acceptance") if isinstance(refs, Mapping) else None
+        if not isinstance(binding, Mapping) or not binding.get("verificationMap"):
+            return None
+        raw_rows = binding.get("evidence")
+        if not isinstance(raw_rows, list):
+            return None
+        try:
+            AcceptanceSubject.model_validate(binding.get("subject"))
+            return [RequirementEvidence.model_validate(row) for row in raw_rows]
+        except (TypeError, ValueError):
+            return None
+
+    def _moonspec_unverified_body_section(self) -> str:
+        """List criteria the verifier recorded as outside its reach."""
+        gate = self._publish_context.get("moonSpecGate")
         source = gate if isinstance(gate, Mapping) else {}
-        evidence = acceptance_evidence(source)
         rows = [
             (
                 row.requirement_id.replace("<!--", "&lt;!--"),
                 row.unverified.reason.replace("<!--", "&lt;!--"),
                 row.unverified.verifiable_by.replace("<!--", "&lt;!--"),
             )
-            for row in (evidence.evidence if evidence else ())
+            for row in (self._moonspec_disclosure_rows() or ())
             if row.unverified is not None
         ]
         if not rows:

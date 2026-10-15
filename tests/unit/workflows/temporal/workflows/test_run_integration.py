@@ -10798,3 +10798,57 @@ def test_long_unverified_disclosure_preserves_rows_with_report_backed_previews(
     for row in binding["evidence"]:
         assert row["requirementId"] in section
         assert row["unverified"]["reason"] == text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('current', [True, False], ids=['current', 'retained-history'])
+async def test_disclosure_sync_binds_verified_candidate_head(
+    mock_run_workflow, monkeypatch, unverified_publication_gate, current
+):
+    owner = mock_run_workflow
+    owner._publish_context['moonSpecGate'] = unverified_publication_gate
+    owner._publish_context['acceptedPublishedHead'] = {'branch': 'work', 'headSha': 'newer-head'}
+    execute = AsyncMock()
+    monkeypatch.setattr(run_workflow_module.workflow, 'execute_activity', execute)
+    monkeypatch.setattr(run_workflow_module.workflow, 'patched', lambda key: current if key == 'run-unverified-pr-head-binding-v1' else True)
+    await owner._sync_pr_unverified_criteria('https://github.com/org/repo/pull/7')
+    payload = execute.await_args.args[1]
+    if current:
+        assert payload['expectedHeadSha'] == 'abc'
+    else:
+        assert 'expectedHeadSha' not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('invalid', [False, True])
+@pytest.mark.parametrize('current', [True, False], ids=['current', 'retained-history'])
+async def test_nonpassing_draft_discloses_unverified_without_accepting_success(
+    mock_run_workflow, monkeypatch, unverified_publication_gate, invalid, current
+):
+    from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+    gate = unverified_publication_gate
+    gate['verdict'] = 'ADDITIONAL_WORK_NEEDED'
+    gate['recommendedNextAction'] = 'remediate'
+    gate['remainingWork'] = [{'requirement': 'AC-1', 'gapType': 'implementation'}]
+    binding = gate['validatedRefs']['acceptance']
+    binding['verificationMap'] = [{'id': 'AC-1'}, {'id': 'AC-2'}]
+    binding['evidence'][0]['status'] = 'PARTIAL'
+    binding['evidence'][1]['status'] = 'UNVERIFIED'
+    gate['invalid'] = invalid
+    owner = mock_run_workflow
+    owner._publish_context['moonSpecGate'] = gate
+    assert acceptance_evidence(gate) is None
+    execute = AsyncMock()
+    monkeypatch.setattr(run_workflow_module.workflow, 'execute_activity', execute)
+    monkeypatch.setattr(run_workflow_module.workflow, 'patched', lambda key: current if key == 'run-unverified-pr-head-binding-v1' else True)
+    body = owner._resolve_native_pr_body(publish_payload={'prBody': 'Incomplete implementation'}, task_payload={})
+    await owner._sync_pr_unverified_criteria('https://github.com/org/repo/pull/7')
+    if invalid or not current:
+        assert 'AC-2' not in body
+        execute.assert_not_awaited()
+    else:
+        assert 'AC-2' in body and 'Needs a GPU render host.' in body
+        assert 'AC-1' not in body
+        assert execute.await_args.args[1]['expectedHeadSha'] == 'abc'
+        assert 'AC-2' in execute.await_args.args[1]['section']
+        assert acceptance_evidence(gate) is None

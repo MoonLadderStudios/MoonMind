@@ -46,6 +46,21 @@ _TEMPORAL_BOUNDARY_TEST_PATHS = {
 _TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES = (Path("tests/unit/workflows/temporal"),)
 
 
+@pytest_asyncio.fixture()
+async def production_transport_pool(monkeypatch):
+    from moonmind.omnigent import production
+    from moonmind.omnigent.transport import OmnigentTransportPool
+
+    # Each pytest test has its own loop, unlike executions within one worker.
+    # Own a real pool here without borrowing or closing another test's pool.
+    pool = OmnigentTransportPool()
+    monkeypatch.setattr(production, "_TRANSPORT_POOL", pool)
+    try:
+        yield pool
+    finally:
+        await pool.aclose()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def global_test_settings():
     from moonmind.config.settings import settings
