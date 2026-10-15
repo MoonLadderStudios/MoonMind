@@ -10,9 +10,9 @@ code-owned retirement class is proven to gate real Codex plan admission.
 
 They also prove the two ordering rules the issue insists on:
 
-* new admission stops *only* when the class says so — today every legacy row is
-  ``active_product_path`` because #3833 has not promoted the qualified generic
-  rows, so Codex plan compilation still succeeds; and
+* new admission stops *only* when the class says so — the profile-bound
+  realizer is still ``active_product_path``, so Codex plan compilation still
+  succeeds; and
 * disabling new admission never touches execution, cancellation, cleanup, or
   reads for an already-recorded plan.
 """

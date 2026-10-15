@@ -653,7 +653,6 @@ Legacy `oauth_host_runtime.py`, profile-bound Codex realization, direct-runtime 
 - Temporal replay passes
 - historical reads remain available
 - protected live generic parity passes
-- rollback without the legacy path is exercised
 - retention and retirement policy permits removal
 
 Legacy code may remain as a replay-visible wrapper without remaining a selectable product path.
