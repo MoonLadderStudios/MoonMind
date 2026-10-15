@@ -299,7 +299,7 @@ During an authorized architecture removal, update obsolete test ownership, fixtu
 
 ### Deterministic Conformance Deduplication
 
-The deterministic runner has two Python layers and one frontend target. At this revision the Python inventory contains 194 modules in layer 1 and 8 in layer 2. `test_embedded_recovery.py` previously appeared in both: the first layer's integration directory recursively included its 18 collected nodes and the second invoked it explicitly. The first layer now ignores that module; the explicit second-layer invocation remains its single owner and supplies the same report evidence on success or failure. Regression tests check the inventory and evidence attribution. Both Python layers retain the same interpreter, environment, working directory and execution flags.
+The deterministic runner has two Python layers and one frontend target. `test_embedded_recovery.py` runs only in the second layer, which owns its recovery evidence on success or failure. Both Python layers use the same interpreter, environment, working directory and execution flags. Failed layers print redacted diagnostics in the job log and retain their full artifact logs, so identifying a failure does not require downloading artifacts. Secret-scan failures still fail the run.
 
 No wider cross-job result reuse is implemented. Such reuse needs a complete inventory and successful owner evidence for the same head/tree/run/attempt/mode, including all required nodes. Missing, corrupt, truncated, cancelled or skipped-required results must fail reuse. Report redaction and distinct live/exact-artifact checks must remain; a similarly named test or passing job is not equivalence evidence.
 

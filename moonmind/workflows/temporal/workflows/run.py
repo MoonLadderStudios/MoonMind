@@ -247,6 +247,8 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityRoute,
     build_default_activity_catalog,
     get_workflow_child_task_queue,
+    get_activity_task_queue,
+    PUBLICATION_GIT_IDENTITY_FLEETS,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
@@ -620,6 +622,8 @@ RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v
 RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 # New gates bind objective acceptance; old histories retain their recorded routing.
 RUN_ACCEPTANCE_EVIDENCE_PATCH = "run-acceptance-evidence-v1"
+RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH = "run-acceptance-source-handoff-v1"
+RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH = "run-issue-evidence-continuation-v1"
 # MoonLadderStudios/MoonMind#4099: automatic "<base>: #<number>" display-title
 # enrichment for opt-in issue-search presets. Gated so in-flight histories
 # replay without the new memo/search-attribute commands.
@@ -821,6 +825,13 @@ RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
 # Explicit action requirements and resolved Skill metadata change the AgentRun
 # payload. Retained histories keep their original payload when this is absent.
 RUN_GITHUB_ACTION_PERMISSIONS_PATCH = "run-github-action-permissions-v1"
+RUN_PUBLICATION_GIT_IDENTITY_PAYLOAD_PATCH = "run-publication-git-identity-payload-v1"
+RUN_PUBLICATION_GIT_IDENTITY_CONTINUATION_PATCH = (
+    "run-publication-git-identity-continuation-v1"
+)
+RUN_PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH = (
+    "run-publication-git-identity-child-memo-v1"
+)
 # The launching controller attests the closed canonical turn source and the Step
 # Execution a remediation attempt repairs (#3707).  This adds a field to the
 # AgentRun request payload and therefore requires a replay gate: an in-flight
@@ -1962,8 +1973,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 retry_policy,
                 maximum_attempts=max_attempts_override,
             )
+        current_queue = ""
+        if route.fleet in PUBLICATION_GIT_IDENTITY_FLEETS:
+            try:
+                current_queue = workflow.info().task_queue
+            except Exception as exc:
+                if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                    raise
         kwargs: dict[str, Any] = {
-            "task_queue": route.task_queue,
+            "task_queue": get_activity_task_queue(route, current_queue),
             "start_to_close_timeout": timedelta(
                 seconds=route.timeouts.start_to_close_seconds
             ),
@@ -4340,6 +4358,35 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._sync_remediation_loop_projection()
         self._sync_progress_snapshot(updated_at=workflow.now())
 
+    @staticmethod
+    def _publication_identity_memo() -> dict[str, object]:
+        from moonmind.omnigent.git_identity import publication_git_identity_memo
+
+        try:
+            return publication_git_identity_memo(workflow.memo() or {})
+        except Exception as exc:
+            if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            return {}
+
+    def _continue_remediation_loop_as_new(
+        self, *, ordered_nodes: Sequence[Mapping[str, Any]]
+    ) -> None:
+        continuation_options = {}
+        if self._workflow_patch_enabled(
+            RUN_PUBLICATION_GIT_IDENTITY_CONTINUATION_PATCH
+        ):
+            continuation_options["memo"] = {
+                **(workflow.memo() or {}),
+                **self._publication_identity_memo(),
+            }
+        workflow.continue_as_new(
+            self._build_remediation_loop_continue_as_new_input(
+                ordered_nodes=ordered_nodes,
+            ),
+            **continuation_options,
+        )
+
     def _build_remediation_loop_continue_as_new_input(
         self,
         *,
@@ -5067,11 +5114,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._sync_progress_snapshot(updated_at=workflow.now())
         if continue_after_admission:
             await workflow.wait_condition(workflow.all_handlers_finished)
-            workflow.continue_as_new(
-                self._build_remediation_loop_continue_as_new_input(
-                    ordered_nodes=ordered_nodes,
-                )
-            )
+            self._continue_remediation_loop_as_new(ordered_nodes=ordered_nodes)
+
         return admitted
 
     def _capture_prepared_input_refs(self, parameters: Mapping[str, Any]) -> list[str]:
@@ -5322,6 +5366,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or ""
         ).strip().upper()
         if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
+            if verdict == "BLOCKED" and self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH):
+                from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+                gate = self._publish_context.get("moonSpecGate")
+                evidence = acceptance_evidence(gate) if isinstance(gate, Mapping) else None
+                return bool(evidence and gate.get("verdict") == "FULLY_IMPLEMENTED"
+                            and not gate.get("invalid") and not gate.get("degraded")
+                            and evidence.is_current(workflow.now()) and not self._target_acceptance_evidence())
             return bool(verdict and verdict != "BLOCKED" and not self._target_acceptance_evidence())
         return verdict in {"PARTIALLY_IMPLEMENTED", "NOT_IMPLEMENTED"}
 
@@ -9149,6 +9200,25 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "invalid": gate_result.invalid,
             "degraded": gate_result.degraded,
         }
+        if self._patched_or_false_outside_workflow(
+            RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH
+        ):
+            projection = gate_context["validatedRefs"].get("acceptanceProjection")
+            for source in self._moonspec_verify_sources(outputs):
+                remaining = source.get("remainingWork")
+                if isinstance(remaining, list) and remaining:
+                    gate_context["evidenceContinuationEligible"] = bool(
+                        isinstance(projection, Mapping)
+                        and not gate_result.invalid
+                        and not gate_result.degraded
+                        and gate_result.recommended_next_action != "needs_human"
+                        and all(
+                            isinstance(item, Mapping)
+                            and item.get("gapType") in {"evidence", "verification", "environment"}
+                            for item in remaining
+                        )
+                    )
+                    break
         if gate_result.downgrade_reason:
             gate_context["downgradeReason"] = gate_result.downgrade_reason
         if gate_result_ref:
@@ -9845,6 +9915,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "FAILED_UNRECOVERABLE",
         }:
             return False
+        if (
+            self._patched_or_false_outside_workflow(RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH)
+            and gate_context.get("evidenceContinuationEligible")
+            and gate_context.get("recommendedNextAction") != "needs_human"
+        ):
+            return True
         return bool(gate_context.get("degraded") or gate_context.get("invalid"))
 
     def _moonspec_draft_publication_policy(
@@ -9880,7 +9956,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     ) -> str:
         summary = (
             "MoonSpec verification incomplete; publishing draft pull request "
-            f"for operator review. {gate_reason}"
+            f"for automated evidence continuation. {gate_reason}"
         )
         self._moonspec_draft_publication_reason = gate_reason
         self._attention_required = True
@@ -10890,7 +10966,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._active_agent_child_workflow_id = None
             self._active_agent_id = None
 
-        execution_result = self._map_agent_run_result(child_result)
+        execution_result = await self._hydrate_acceptance_result(
+            self._map_agent_run_result(child_result)
+        )
         if self._activity_result_status(execution_result) != "COMPLETED":
             return None
         return execution_result
@@ -13836,7 +13914,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             finally:
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
-                            execution_result = self._map_agent_run_result(child_result)
+                            execution_result = await self._hydrate_acceptance_result(
+                                self._map_agent_run_result(child_result)
+                            )
                             try:
                                 progress_state = self._agent_run_progress_by_child.get(
                                     child_workflow_id
@@ -15893,6 +15973,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         )
                         if created_head_sha:
                             self._publish_context["headSha"] = created_head_sha
+                        draft_publication = self._publish_context.get(
+                            "moonSpecDraftPublication"
+                        )
+                        if isinstance(draft_publication, dict):
+                            # Delayed evidence may mark only its own draft ready.
+                            draft_publication["createdByWorkflow"] = created is True
                         if (
                             self._moonspec_draft_publication_reason is not None
                             and not created
@@ -15955,6 +16041,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
+        await self._resume_published_issue_evidence(
+            parameters=parameters, ordered_nodes=ordered_nodes,
+        )
         await self._maybe_start_merge_gate(
             parameters=parameters,
             pull_request_url=pull_request_url,
@@ -16792,7 +16881,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             finally:
                 self._active_agent_child_workflow_id = None
                 self._active_agent_id = None
-            return self._map_agent_run_result(child_result)
+            return await self._hydrate_acceptance_result(
+                self._map_agent_run_result(child_result)
+            )
         except Exception as exc:
             diagnostic = self._record_failure_diagnostic(
                 exc,
@@ -17080,7 +17171,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             id=child_workflow_id,
                             task_queue=self._workflow_child_task_queue(),
                         )
-                        current_result = self._map_agent_run_result(child_result)
+                        current_result = await self._hydrate_acceptance_result(
+                            self._map_agent_run_result(child_result)
+                        )
                     except Exception as exc:
                         diagnostic = self._record_failure_diagnostic(
                             exc,
@@ -21256,6 +21349,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return f"merge automation {status or 'failed'}: {summary}"
         return f"merge automation {status or 'failed'}"
 
+    async def _resume_published_issue_evidence(
+        self, *, parameters: Mapping[str, Any], ordered_nodes: list[dict[str, Any]],
+    ) -> None:
+        if not self._patched_or_false_outside_workflow(RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH):
+            return
+        from moonmind.workflows.temporal.workflows.issue_evidence_continuation import (
+            resume_published_issue_evidence,
+        )
+        await resume_published_issue_evidence(
+            self, parameters=parameters, ordered_nodes=ordered_nodes,
+        )
+
     async def _maybe_start_merge_gate(
         self,
         *,
@@ -21318,6 +21423,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 ),
                 static_summary="Waiting for pull request merge readiness",
                 static_details=f"Merge automation for {pull_request_url}",
+                **(
+                    {"memo": self._publication_identity_memo()}
+                    if self._workflow_patch_enabled(
+                        RUN_PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH
+                    )
+                    else {}
+                ),
             )
 
         try:
@@ -21858,6 +21970,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         node_inputs: Mapping[str, Any],
         node_id: str,
     ) -> None:
+        if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH):
+            # Authored plan/runtime parameters cannot mint source or evidence
+            # authority. The publication owner injects observed proof only after
+            # this request has been constructed.
+            for key in ("acceptanceScopeContract", "assessmentArtifactRef", "briefArtifactRef",
+                        "evidenceSet", "evidenceSetDigest", "acceptanceSubject", "evidenceManifestRef"):
+                parameters.pop(key, None)
         nested_inputs = node_inputs.get("inputs")
         skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
         verify_artifact_path = None
@@ -21879,6 +21998,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         if self._assessment_context and self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
             parameters["acceptanceContract"] = "acceptance/v1"
+            if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH):
+                parameters["acceptanceScopeContract"] = "source-bound/v1"
+                for canonical, alias in (
+                    ("assessmentArtifactRef", "assessment_artifact_ref"),
+                    ("briefArtifactRef", "brief_artifact_ref"),
+                ):
+                    value = self._coerce_text(
+                        self._assessment_context.get(canonical)
+                        or self._assessment_context.get(alias), max_chars=400,
+                    )
+                    if value:
+                        parameters[canonical] = value
+                    else:
+                        parameters.pop(canonical, None)
 
     def _ensure_assessment_parameters(
         self,
@@ -23496,6 +23629,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "source": "validated_temporal_parent",
             }
 
+        if self._workflow_patch_enabled(RUN_PUBLICATION_GIT_IDENTITY_PAYLOAD_PATCH):
+            # Final boundary after every authored/runtime parameter projection.
+            # A pre-update worker may omit this key even with updated API input;
+            # histories without the marker retain their original Activity shape.
+            parameters.pop("_publicationGitIdentity", None)
+            parameters.pop("publicationGitIdentityAdmission", None)
+            projected_runtime = parameters.get("runtime")
+            if isinstance(projected_runtime, Mapping):
+                explicit = projected_runtime.get("parameters")
+                if isinstance(explicit, Mapping) and {
+                    "_publicationGitIdentity",
+                    "publicationGitIdentityAdmission",
+                }.intersection(explicit):
+                    parameters["runtime"] = {
+                        **projected_runtime,
+                        "parameters": {
+                            key: value
+                            for key, value in explicit.items()
+                            if key
+                            not in {
+                                "_publicationGitIdentity",
+                                "publicationGitIdentityAdmission",
+                            }
+                        },
+                    }
+            parameters.update(self._publication_identity_memo())
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
@@ -24133,6 +24293,65 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             ),
             "outputs": outputs,
         }
+
+    async def _hydrate_acceptance_result(
+        self, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Read publisher-bound full proof before any acceptance or target decision."""
+        outputs = result.get("outputs")
+        if not isinstance(outputs, Mapping):
+            return result
+        hydrated = dict(outputs)
+        keys = (
+            "moonSpecVerify",
+            "moonspecVerify",
+            "moonspec_verify",
+            "verification",
+            "verificationResult",
+            "verification_result",
+            "gate",
+            "review",
+            None,
+        )
+        for key in keys:
+            gate = hydrated if key is None else hydrated.get(key)
+            if not isinstance(gate, Mapping):
+                continue
+            refs = gate.get("validatedRefs")
+            projection = (
+                refs.get("acceptanceProjection") if isinstance(refs, Mapping) else None
+            )
+            if not isinstance(projection, Mapping):
+                continue
+            if not workflow.patched(RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH):
+                raise ValueError(
+                    "Acceptance projection requires source-bound owner support"
+                )
+            from moonmind.workflows.temporal.agent_result_payloads import (
+                hydrate_acceptance_projection,
+            )
+
+            report_ref = projection.get("reportRef")
+            if not isinstance(report_ref, str) or not report_ref:
+                raise ValueError(
+                    "Acceptance projection requires an immutable full report"
+                )
+            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+            report_bytes = await execute_typed_activity(
+                "artifact.read",
+                ArtifactReadInput(principal=self._principal(), artifact_ref=report_ref),
+                **self._execute_kwargs_for_route(route),
+            )
+            if not isinstance(report_bytes, bytes):
+                raise ValueError("Acceptance report read did not return original bytes")
+            full = hydrate_acceptance_projection(
+                gate, report_bytes=report_bytes, report_ref=report_ref
+            )
+            if key is None:
+                hydrated.update(full)
+            else:
+                hydrated[key] = full
+        return {**result, "outputs": hydrated}
 
     def _map_agent_run_result(self, result: Any) -> dict[str, Any]:
         """Convert ``AgentRunResult`` to the dict format the execution loop expects."""

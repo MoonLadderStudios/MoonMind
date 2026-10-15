@@ -109,6 +109,7 @@ class OmnigentHostPreparationPort(Protocol):
         restore_input_refs: tuple[str, ...] = (),
         workspace_checkpoint_restore_ref: str | None = None,
         attachment_refs: tuple[str, ...] = (),
+        publication_git_identity: Mapping[str, str] | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -128,6 +129,7 @@ class OmnigentWorkspacePublicationPort(Protocol):
         repository: str,
         github_token: str | None,
         accepted_published_head: Mapping[str, Any] | None = None,
+        publication_git_identity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
 

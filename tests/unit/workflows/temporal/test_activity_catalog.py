@@ -127,7 +127,9 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     fleets = {fleet.fleet: fleet for fleet in catalog.fleets}
     assert fleets[ARTIFACTS_FLEET].task_queues == (ARTIFACTS_TASK_QUEUE,)
     assert fleets[LLM_FLEET].task_queues == (LLM_TASK_QUEUE,)
-    assert fleets[SANDBOX_FLEET].task_queues == (SANDBOX_TASK_QUEUE,)
+    assert fleets[SANDBOX_FLEET].task_queues == (
+        SANDBOX_TASK_QUEUE, SANDBOX_TASK_QUEUE + ".publication-v1",
+    )
     assert fleets[INTEGRATIONS_FLEET].task_queues == (INTEGRATIONS_TASK_QUEUE,)
     assert fleets[DEPLOYMENT_FLEET].task_queues == (DEPLOYMENT_TASK_QUEUE,)
     assert "deployment_control" in fleets[DEPLOYMENT_FLEET].capabilities
@@ -186,6 +188,8 @@ def test_terminal_evidence_evaluation_routes_to_agent_runtime_fleet() -> None:
     assert fleet.task_queues == (
         AGENT_RUNTIME_TASK_QUEUE,
         temporal_settings.activity_agent_runtime_control_task_queue,
+        AGENT_RUNTIME_TASK_QUEUE + ".publication-v1",
+        temporal_settings.activity_agent_runtime_control_task_queue + ".publication-v1",
     )
 
 

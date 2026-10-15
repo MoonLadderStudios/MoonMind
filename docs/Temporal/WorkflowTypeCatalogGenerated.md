@@ -67,6 +67,9 @@ New workflow starts use `mm.workflow.user.v2`. The workflow fleet polls:
 - `mm.workflow.user.v2`
 - `mm.workflow`
 - `mm.workflow.merge_automation`
+- `mm.workflow.user.v2.publication-v1`
+- `mm.workflow.publication-v1`
+- `mm.workflow.merge_automation.publication-v1`
 
 A pre-patch replay queue is polled only when it differs from the
 start queue (`get_workflow_poll_task_queues`). This conditional queue
@@ -161,6 +164,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `execution.notify_completion` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `execution.record_terminal_state` | `artifacts` | `mm.activity.artifacts` |
 | `github_issue.assess_legacy` | `integrations` | `mm.activity.integrations` |
+| `github_issue.collect_evidence` | `integrations` | `mm.activity.integrations` |
 | `github_issue.finalize_failed_attempt` | `integrations` | `mm.activity.integrations` |
 | `github_issue.plan_legacy_repair` | `integrations` | `mm.activity.integrations` |
 | `github_issue.reconcile_handoffs` | `integrations` | `mm.activity.integrations` |
