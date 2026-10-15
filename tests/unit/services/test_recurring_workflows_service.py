@@ -199,6 +199,7 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
             ),
             artifact_refs=("art_profile", "art_skills", "art_plan"),
             resolved_skillset_ref="art_skills",
+            runtime_provider_rollout={"targetId": "codex.generic-omnigent"},
         )
     )
     monkeypatch.setattr(
@@ -272,6 +273,12 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
             actor=SimpleNamespace(id=uuid4()),
         )
 
+    # The created target is provenance, not a pin: fresh occurrences follow
+    # the installed backend's qualified target.
+    assert definition.target["runtimeProviderTarget"] == {
+        "targetId": "codex.generic-omnigent"
+    }
+    assert "runtimeProviderTargetUpdatePolicy" not in definition.target
     initial_parameters = definition.target["initialParameters"]
     assert initial_parameters["agentProfileSnapshot"] == snapshot
     assert initial_parameters["omnigent"] == {
@@ -2926,7 +2933,7 @@ async def test_schedule_refresh_rejects_unverifiable_original_principal(
     assert initial_parameters["omnigentExecutionPlan"] == _schedule_plan_binding("1")
 
 
-async def test_schedule_pins_its_runtime_provider_target_on_first_refresh(
+async def test_schedule_records_its_runtime_provider_target_on_first_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_compiled_plan(
@@ -2952,14 +2959,16 @@ async def test_schedule_pins_its_runtime_provider_target_on_first_refresh(
     assert definition.target["runtimeProviderTarget"]["targetId"] == (
         "codex.generic-omnigent"
     )
-    assert definition.target["runtimeProviderTargetUpdatePolicy"] == "pinned"
+    assert "runtimeProviderTargetUpdatePolicy" not in definition.target
     # Advancing the schedule's authority advances its revision.
     assert definition.version == 5
 
 
-async def test_pinned_schedule_rejects_a_runtime_provider_target_change(
+async def test_unauthored_schedule_follows_a_changed_installed_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A fresh occurrence uses the installed target without recreating the schedule."""
+
     _stub_compiled_plan(
         monkeypatch,
         binding=_schedule_plan_binding("2"),
@@ -2977,23 +2986,29 @@ async def test_pinned_schedule_rejects_a_runtime_provider_target_change(
         ),
     }
     service, definition = _pinned_schedule_service(monkeypatch, target=target)
+    definition_id = definition.id
 
-    with pytest.raises(
-        RecurringWorkflowValidationError, match="explicit schedule revision"
-    ):
-        await service._refresh_omnigent_execution_plan_target(
-            definition, target=target, initial_parameters=initial_parameters
-        )
-    # The recorded plan authority is preserved for an explicit operator revision.
-    assert initial_parameters["omnigentExecutionPlan"] == (
-        _schedule_plan_binding("1")
+    changed = await service._refresh_omnigent_execution_plan_target(
+        definition, target=target, initial_parameters=initial_parameters
     )
-    assert definition.version == 4
+
+    assert changed is True
+    assert definition.id == definition_id
+    assert definition.target["runtimeProviderTarget"]["targetId"] == (
+        "codex.generic-omnigent"
+    )
+    assert definition.target["initialParameters"]["targetRuntime"] == "omnigent"
+    assert definition.target["agentProfileSnapshot"] == {
+        "providerProfileRef": "codex_openai_oauth"
+    }
+    assert definition.version == 5
 
 
-async def test_follow_qualified_default_adopts_the_new_target_as_a_revision(
+async def test_stored_retired_pin_does_not_block_the_installed_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A legacy ``pinned`` value is history, not authority over new occurrences."""
+
     _stub_compiled_plan(
         monkeypatch,
         binding=_schedule_plan_binding("2"),
@@ -3009,7 +3024,7 @@ async def test_follow_qualified_default_adopts_the_new_target_as_a_revision(
         "runtimeProviderTarget": _rollout_record(
             "codex.legacy-profile-bound-omnigent"
         ),
-        "runtimeProviderTargetUpdatePolicy": "follow_qualified_default",
+        "runtimeProviderTargetUpdatePolicy": "pinned",
     }
     service, definition = _pinned_schedule_service(monkeypatch, target=target)
 
@@ -3021,34 +3036,8 @@ async def test_follow_qualified_default_adopts_the_new_target_as_a_revision(
     assert definition.target["runtimeProviderTarget"]["targetId"] == (
         "codex.generic-omnigent"
     )
+    assert "runtimeProviderTargetUpdatePolicy" not in definition.target
     assert definition.version == 5
-
-
-async def test_unsupported_schedule_target_update_policy_fails_fast(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _stub_compiled_plan(
-        monkeypatch,
-        binding=_schedule_plan_binding("2"),
-        rollout=_rollout_record("codex.generic-omnigent"),
-    )
-    initial_parameters = {
-        "targetRuntime": "omnigent",
-        "omnigentExecutionPlan": _schedule_plan_binding("1"),
-    }
-    target = {
-        "initialParameters": initial_parameters,
-        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
-        "runtimeProviderTargetUpdatePolicy": "always_upgrade",
-    }
-    service, definition = _pinned_schedule_service(monkeypatch, target=target)
-
-    with pytest.raises(
-        RecurringWorkflowValidationError, match="update policy"
-    ):
-        await service._refresh_omnigent_execution_plan_target(
-            definition, target=target, initial_parameters=initial_parameters
-        )
 
 
 @pytest.mark.parametrize("lost_ack", [False, True])

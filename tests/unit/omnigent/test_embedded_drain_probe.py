@@ -1,6 +1,6 @@
 """Live durable-count wiring for the retired embedded host transport.
 
-MoonLadderStudios/MoonMind#3955 (remediation): Stage 1 disabled new admission
+MoonLadderStudios/MoonMind#3955 (remediation): new admission is disabled
 while in-flight sessions drain. The side-effect-free decoder/summary in
 :mod:`moonmind.omnigent.embedded_drain` is only half of the disposition story;
 this suite pins the other half — the production-boundary wiring that feeds

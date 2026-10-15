@@ -29,7 +29,10 @@ from moonmind.omnigent.legacy_retirement import (
     evaluate_new_admission,
     get_retirement_record,
 )
-from moonmind.omnigent.retirement_surfaces import discover_legacy_surfaces
+from moonmind.omnigent.retirement_surfaces import (
+    discover_legacy_surfaces,
+    parse_surface_ref,
+)
 from moonmind.omnigent.session_supervisor_rollback import (
     RollbackExerciseDecision,
     RollbackExerciseRecord,
@@ -161,21 +164,26 @@ def test_inventory_covers_every_discovered_legacy_surface() -> None:
     assert_inventory_is_complete()
 
 
-def test_discovery_finds_the_surfaces_the_issue_enumerates() -> None:
+def test_discovery_finds_every_inventoried_surface_it_derives() -> None:
+    # Completeness alone passes when discovery silently finds nothing, so the
+    # detector must still see every row surface of a kind it derives from the
+    # repository. Deleting a legacy component deletes its row, not this test.
+    derived_schemes = {
+        "realizer",
+        "runtime-strategy",
+        "script",
+        "compose-service",
+        "compose-profile",
+        "env",
+    }
     discovered = discover_legacy_surfaces()
-    for expected in (
-        "realizer:codex-profile-bound@1",
-        "runtime-strategy:codex_cli",
-        "runtime-strategy:claude_code",
-        "compose-service:omnigent-host-codex",
-        "compose-service:omnigent-host-claude",
-        "compose-profile:omnigent-host-codex",
-        "script:start-codex-oauth-host.sh",
-        "script:start-claude-oauth-host.sh",
-        "env:OMNIGENT_HOST_IMAGE_REF",
-        "env:OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-    ):
-        assert expected in discovered, expected
+    missed = sorted(
+        ref
+        for path in RETIREMENT_INVENTORY
+        for ref in path.surfaces
+        if parse_surface_ref(ref)[0] in derived_schemes and ref not in discovered
+    )
+    assert missed == []
 
 
 def test_unclassified_new_legacy_dependency_fails_ci() -> None:
