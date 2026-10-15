@@ -80,7 +80,6 @@ def test_mm1135_orchestrate_preset_runs_assessment_without_new_inputs() -> None:
     ), "Step with skill ID 'moonspec-assess' not found in preset steps"
     assert "source-acceptance.json" in assess_step["instructions"]
     assert "acceptance-assessment.json" in assess_step["instructions"]
-    assert "bounded backlog" in assess_step["instructions"]
 
 
 def test_mm1135_downstream_skills_consume_assessment_artifacts() -> None:

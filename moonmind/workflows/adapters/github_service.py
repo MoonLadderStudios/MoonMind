@@ -2134,6 +2134,58 @@ class GitHubService:
                     ),
                 )
 
+    async def sync_pull_request_unverified_criteria(
+        self, *, repo: str, pr_url: str, section: str
+    ) -> bool:
+        """Reconcile only the verifier-owned body section on an existing PR."""
+        parsed = self.parse_github_pr_url(pr_url)
+        if not parsed or f"{parsed[0]}/{parsed[1]}".lower() != repo.lower():
+            raise ValueError(
+                "Unverified criteria PR must belong to the workflow repository"
+            )
+        token, resolution_error = await self.resolve_github_token(repo=repo)
+        if not token:
+            raise ValueError(
+                resolution_error or self._missing_auth_summary("update a PR")
+            )
+        api_url = f"https://api.github.com/repos/{repo}/pulls/{parsed[2]}"
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(api_url, headers=headers)
+            response.raise_for_status()
+            document = response.json()
+            if document.get("state") != "open":
+                raise ValueError(
+                    "Unverified criteria can only be synchronized on an open PR"
+                )
+            body = document.get("body") or ""
+            match = re.search(
+                r"(?ms)^## Unverified criteria[ \t]*\n.*?(?=^## |\Z)", body
+            )
+            section = section.strip()
+            if match:
+                replacement = (
+                    section + ("\n\n" if match.end() < len(body) else "")
+                    if section
+                    else ""
+                )
+                updated = body[: match.start()] + replacement + body[match.end() :]
+            elif section:
+                updated = body.rstrip() + ("\n\n" if body.strip() else "") + section
+            else:
+                updated = body
+            if updated == body:
+                return False
+            response = await client.patch(
+                api_url, headers=headers, json={"body": updated}
+            )
+            response.raise_for_status()
+            if response.json().get("body") != updated:
+                raise ValueError(
+                    "GitHub did not confirm the Unverified criteria body update"
+                )
+            return True
+
     async def reconcile_pull_request(
         self,
         *,

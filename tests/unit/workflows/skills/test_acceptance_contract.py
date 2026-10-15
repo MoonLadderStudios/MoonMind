@@ -268,6 +268,16 @@ def _unverified_ac2(report, unverified):
     rows[1] = {"requirementId": "AC-2", "unverified": unverified}
 
 
+def test_null_unverified_is_absent_on_evidenced_rows(candidate):
+    _, current, report = candidate
+    report["recoverableInCurrentRuntime"] = False
+    for row in report["validatedRefs"]["acceptance"]["evidence"]:
+        row["unverified"] = None
+    assert portable.reuse(report, current)["reusable"]
+    assert portable.validate_report(report, current)["valid"]
+    assert acceptance_evidence(report) is not None
+
+
 def test_criterion_outside_verifier_reach_passes_as_unverified(candidate):
     _, current, report = candidate
     _unverified_ac2(

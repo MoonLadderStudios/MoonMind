@@ -599,6 +599,7 @@ RUN_CANONICAL_DEPENDENCY_PARAMETERS_PATCH = "run-canonical-dependency-parameters
 # completes, the dependent is canceled, or an operator bypasses the gate.
 DEPENDENCY_WAIT_THROUGH_RERUN_PATCH = "dependency-wait-through-rerun-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
+RUN_UNVERIFIED_PR_DISCLOSURE_PATCH = "run-unverified-pr-disclosure-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
@@ -5405,6 +5406,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             max_chars=500,
         )
         if existing:
+            await self._sync_pr_unverified_criteria(existing)
             return existing
         accepted = self._accepted_published_head()
         if accepted is None:
@@ -5485,6 +5487,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "headSha": head_sha,
             }
         )
+        await self._sync_pr_unverified_criteria(pull_request_url)
         return pull_request_url
 
     def _external_handoff_operation(self, node: Mapping[str, Any]) -> str:
@@ -15989,6 +15992,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._publish_status = "published"
             self._publish_reason = "published pull request"
             self._publish_context["pullRequestUrl"] = pull_request_url
+            await self._sync_pr_unverified_criteria(pull_request_url)
         await self._complete_already_implemented_jira_if_needed(
             parameters=parameters,
         )
@@ -17935,6 +17939,30 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         unverified = self._moonspec_unverified_body_section()
         return f"{body.rstrip()}\n\n{unverified}" if unverified else body
+
+    async def _sync_pr_unverified_criteria(self, pull_request_url: str) -> None:
+        if not self._patched_or_false_outside_workflow(
+            RUN_UNVERIFIED_PR_DISCLOSURE_PATCH
+        ):
+            return
+        from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+
+        gate = self._publish_context.get("moonSpecGate")
+        evidence = acceptance_evidence(gate) if isinstance(gate, Mapping) else None
+        if evidence is None or gate.get("invalid") or gate.get("degraded"):
+            return
+        await workflow.execute_activity(
+            "repo.sync_pr_unverified_criteria",
+            {
+                "repo": self._repo,
+                "prUrl": pull_request_url,
+                "section": self._moonspec_unverified_body_section(),
+            },
+            start_to_close_timeout=timedelta(minutes=2),
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
 
     def _moonspec_unverified_body_section(self) -> str:
         """List criteria the verifier recorded as outside its reach."""

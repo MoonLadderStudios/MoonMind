@@ -1096,6 +1096,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     # General-purpose repo operations (provider-agnostic)
     "github_issue.collect_evidence": ("integrations", "github_issue_collect_evidence"),
     "repo.create_pr": ("integrations", "repo_create_pr"),
+    "repo.sync_pr_unverified_criteria": (
+        "integrations",
+        "repo_sync_pr_unverified_criteria",
+    ),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
     "publication_recovery.observe": ("integrations", "publication_recovery_observe"),
     "publication_recovery.publish": ("integrations", "publication_recovery_publish"),
@@ -5062,6 +5066,13 @@ class TemporalIntegrationActivities:
     async def repo_create_pr(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
         return await repo_create_pr_activity(payload)
+
+    async def repo_sync_pr_unverified_criteria(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.jules_activities import (
+            repo_sync_pr_unverified_criteria_activity,
+        )
+
+        return await repo_sync_pr_unverified_criteria_activity(payload)
 
     async def repo_merge_pr(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
