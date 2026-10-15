@@ -89,7 +89,7 @@ exists yet, so the parent's existing bounded step retry starts a fresh Step
 Execution instead of failing the workflow. Hermetic coverage
 lives in `test_mounted_tool_preflight.py` and the full handoff regression in
 `test_generic_platform_production_services.py`.
-| `moonmind/omnigent/legacy_retirement.py`, `session_migration_inventory.py`, `session_supervisor_rollback.py` | Legacy admission table, migration inventory, rollback authority | Governance |
+| `moonmind/omnigent/legacy_retirement.py`, `session_supervisor_rollback.py` | Legacy admission table, rollback authority | Governance |
 
 ## 3. Allowed dependency direction
 
