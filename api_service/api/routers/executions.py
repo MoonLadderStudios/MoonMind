@@ -136,6 +136,7 @@ from moonmind.omnigent.native_ui import native_ui_unavailable_reason
 from moonmind.omnigent.settings import resolved_native_ui_serving_enabled
 from moonmind.omnigent.workspace_sources import (
     WorkspaceSourceError,
+    check_source_runtime_supported,
     compile_workspace_source,
 )
 from moonmind.runtime_intent import (
@@ -11942,17 +11943,18 @@ def _admit_workspace_source(
     repository_payload: str | Mapping[str, Any] | None,
     repository: str | None,
     workflow_id: str,
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Validate authored ``payload.workspace`` with the plan's source compiler.
 
     Returns the spec for ``initialParameters.workspaceSpec``, the key plan
-    admission and the agent request read, plus the repository the source
-    selects. Create, the CLI, and the API share this path, so it is how
-    anonymous, artifact, and checkpoint sources reach plan admission.
+    admission and the agent request read, the repository the source selects,
+    and the compiled source kind. Create, the CLI, and the API share this
+    path, so it is how anonymous, artifact, and checkpoint sources reach plan
+    admission. The selected runtime is checked once it is resolved.
     """
 
     if value is None:
-        return None, repository
+        return None, repository, None
     if not isinstance(value, Mapping):
         raise _invalid_workflow_request("payload.workspace must be an object.")
     workspace = copy.deepcopy(dict(value))
@@ -11968,17 +11970,28 @@ def _admit_workspace_source(
             "payload.workspace.workspaceSource.accessMode must be explicit, "
             "routed, or anonymous."
         )
-    if repository_payload is not None and kind not in {"", "repository"}:
+    if kind in {"", "repository"}:
+        authored_repository = authored.get("repository") or _coerce_mapping(
+            authored.get("repositoryTarget")
+        ).get("repository")
+    else:
+        authored_repository = authored.get("baseRepository") or authored.get(
+            "base_repository"
+        )
+    if isinstance(authored_repository, Mapping):
+        authored_repository = authored_repository.get("name")
+    authored_name = str(authored_repository or "").strip()
+    # A recorded run projects the source's base repository to
+    # payload.repository, so an edit or rerun may repeat that same name.
+    if (
+        repository_payload is not None
+        and kind not in {"", "repository"}
+        and not authored_name
+    ):
         raise _invalid_workflow_request(
             f"payload.repository conflicts with a {kind} workspace source; "
             "name its base repository in the workspace source instead."
         )
-    authored_repository = authored.get("repository") or _coerce_mapping(
-        authored.get("repositoryTarget")
-    ).get("repository")
-    if isinstance(authored_repository, Mapping):
-        authored_repository = authored_repository.get("name")
-    authored_name = str(authored_repository or "").strip()
     if authored_name and repository and authored_name != repository:
         raise _invalid_workflow_request(
             f"payload.repository {repository!r} conflicts with workspace source "
@@ -12002,6 +12015,16 @@ def _admit_workspace_source(
         raise _invalid_workflow_request(
             "A repository workspace source requires a repository."
         )
+    target_branch = repository_branch_from_value(repository_payload)
+    if (
+        target_branch
+        and source.repository_branch
+        and target_branch != source.repository_branch
+    ):
+        raise _invalid_workflow_request(
+            f"payload.repository branch {target_branch!r} conflicts with workspace "
+            f"source branch {source.repository_branch!r}."
+        )
     connection_ref, anonymous = authored_repository_access(
         {"repository": repository_payload, "workspaceSpec": workspace}
     )
@@ -12011,7 +12034,19 @@ def _admit_workspace_source(
             "connectionRef; remove the connection or choose routed or explicit "
             "access."
         )
-    return workspace, repository or source.repository_ref
+    # Plan admission derives the mode from the reference, so an authored mode
+    # it would contradict must fail here instead of binding another account.
+    if access_mode == "explicit" and not connection_ref:
+        raise _invalid_workflow_request(
+            "explicit access requires a connectionRef; add one or choose routed "
+            "access."
+        )
+    if access_mode == "routed" and connection_ref:
+        raise _invalid_workflow_request(
+            f"routed access selects its connection by route, but connectionRef "
+            f"{connection_ref!r} was supplied; remove it or choose explicit access."
+        )
+    return workspace, repository or source.repository_ref, source.kind
 
 
 def _selected_repository_skill_names(
@@ -12281,6 +12316,19 @@ async def _create_execution_from_workflow_request(
     repository_payload, repository = _normalize_submitted_repository(
         payload.get("repository")
     )
+    workspace_spec, repository, workspace_source_kind = _admit_workspace_source(
+        payload.get("workspace"),
+        repository_payload=repository_payload,
+        repository=repository,
+        workflow_id=reserved_workflow_id,
+    )
+    if workspace_spec is not None:
+        # Run, its planner, and a recurring schedule's stored target read the
+        # admitted source and repository from these parameters, so a
+        # repository named only by the source is projected here too.
+        payload["workspaceSpec"] = workspace_spec
+        if repository_payload is None and repository:
+            repository_payload = repository
     if repository_payload is None:
         payload.pop("repository", None)
     else:
@@ -12298,12 +12346,6 @@ async def _create_execution_from_workflow_request(
         repository_payload=repository_payload,
         task_payload=task_payload,
         publish_payload=early_publish_payload,
-    )
-    workspace_spec, repository = _admit_workspace_source(
-        payload.get("workspace"),
-        repository_payload=repository_payload,
-        repository=repository,
-        workflow_id=reserved_workflow_id,
     )
 
     # --- Schedule routing ---
@@ -12469,6 +12511,17 @@ async def _create_execution_from_workflow_request(
         task_payload=task_payload,
         publish_payload=publish_payload,
     )
+    # Direct runtimes never reach Omnigent plan admission, so an anonymous
+    # read must not schedule work that would later need publication authority.
+    if (
+        workspace_spec is not None
+        and authored_repository_access({"workspaceSpec": workspace_spec})[1]
+        and str(publish_payload.get("mode") or "none").strip().lower() != "none"
+    ):
+        raise _invalid_workflow_request(
+            "anonymous workspace source cannot publish; set publish.mode to "
+            "'none' or choose routed or explicit access."
+        )
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
         field_name="payload.workflow.skills",
@@ -12678,6 +12731,15 @@ async def _create_execution_from_workflow_request(
                 "Must be one of: codex_cli, claude_code, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
+    if workspace_source_kind is not None:
+        try:
+            check_source_runtime_supported(
+                workspace_source_kind, canonical_target_runtime or "omnigent"
+            )
+        except WorkspaceSourceError as exc:
+            raise _invalid_workflow_request(
+                f"payload.workspace is invalid: {exc}"
+            ) from exc
 
     if (
         runtime_payload.get("executionConfiguration") is not None
