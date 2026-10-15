@@ -214,6 +214,24 @@ def test_relevant_diff_only_counts_when_it_addresses_a_named_gap() -> None:
     assert relevant.classification == "meaningful_progress"
 
 
+def test_new_report_reference_alone_does_not_reset_an_unchanged_blocker() -> None:
+    issue = {"requirementId": "AC-1", "status": "unresolved", "severity": "high"}
+    baseline = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=1,
+        issues=[issue],
+        authoritative_evidence_digest="sha256:old-report",
+    )
+    retry = build_remediation_progress_vector(
+        loop_id="loop-1",
+        attempt_ordinal=2,
+        issues=[issue],
+        prior=baseline,
+        authoritative_evidence_digest="sha256:new-report-same-blocker",
+    )
+    assert retry.classification == "no_progress"
+
+
 def test_third_attempt_requires_meaningful_progress() -> None:
     progress = build_remediation_progress_vector(
         loop_id="loop-1",

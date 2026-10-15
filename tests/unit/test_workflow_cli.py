@@ -85,7 +85,12 @@ def test_payload_keeps_server_owned_resolution() -> None:
     body = payload["payload"]
     assert body["idempotencyKey"] == "req-1"
     assert body["repository"] == "MoonLadderStudios/MoonMind"
-    assert body["agentProfile"] == {"profileId": "agent-a"}
+    # The Agent Profile carries the named Provider Profile, as the form does,
+    # so the server resolves the configuration against that account.
+    assert body["agentProfile"] == {
+        "profileId": "agent-a",
+        "providerProfileRef": "prov-b",
+    }
     assert "targetRuntime" not in body
     task = body["task"]
     assert task["instructions"] == "do work"
