@@ -3221,6 +3221,74 @@ async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
             assert json.loads(stored.read_text())["validatedRefs"]["acceptance"] == acceptance
 
 
+async def test_publisher_downgrades_blocker_outside_frozen_issue_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    report = workspace / "artifacts/verify.json"
+    report.parent.mkdir(parents=True)
+    scope = {
+        "sourceRef": "example/repo#2740",
+        "sourceDigest": "sha256:original-issue",
+        "complete": True,
+        "requirementIds": ["2740-runner", "2740-content"],
+    }
+    report.write_text(json.dumps({
+        "verdict": "BLOCKED",
+        "recommendedNextAction": "blocked",
+        "recoverableInCurrentRuntime": False,
+        "scope": scope,
+        "remainingWork": [{
+            "requirement": "unrelated-full-release-gpu",
+            "gapType": "environment",
+            "remainingWork": "Run an unrelated release test",
+        }],
+    }))
+    run_store = ManagedRunStore(tmp_path / "runs")
+    run_store.save(ManagedRunRecord(
+        runId="blocked-run", agentId="codex_cli", runtimeId="codex_cli",
+        status="completed", startedAt=datetime.now(timezone.utc),
+        workspacePath=workspace.as_posix(),
+    ))
+    monkeypatch.setattr(temporal_activity, "info", lambda: SimpleNamespace(
+        namespace="default", workflow_id="parent-wf:agent:verify", workflow_run_id="child-run",
+    ))
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    monkeypatch.setattr(run_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _ = await service.create(
+                principal="system:agent_runtime", content_type="application/json",
+            )
+            await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system:agent_runtime",
+                payload=json.dumps({"scope": scope}).encode(),
+                content_type="application/json",
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service, run_store=run_store,
+            )
+            monkeypatch.setattr(activities, "execution_notify_completion", AsyncMock(return_value={"status": "skipped"}))
+            result = await activities.agent_runtime_publish_artifacts(AgentRunResult(metadata={
+                "agentRunId": "blocked-run",
+                "verify_artifact_path": "artifacts/verify.json",
+                "acceptanceContract": "acceptance/v1",
+                "assessmentArtifactRef": artifact.artifact_id,
+            }))
+            assert any(
+                "mandatory requirement" in reason
+                for reason in result.metadata["moonSpecVerify"]["contractViolations"]
+            )
+            parent = run_module.MoonMindRunWorkflow()
+            parent._assessment_context = {"assessmentArtifactRef": artifact.artifact_id}
+            assert parent._moonspec_verify_gate_result(result.metadata).verdict == "NO_DETERMINATION"
+
+
 async def test_agent_runtime_publish_artifacts_publishes_remediation_attempt_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -132,6 +132,20 @@ def profile_has_native_inventory_route(
     )
 
 
+async def profile_route_runtime(session: Any, user: Any, provider: Any) -> str:
+    """Return the runtime a selected Profile implies when none is authored.
+
+    Every new-work surface (Create, schedules, preset expansion, CLI) asks this
+    one question so the same Profile never reaches a different Backend by
+    caller. An unready or pinned Omnigent configuration keeps the Omnigent
+    route rather than falling back direct.
+    """
+    configurations = await load_execution_configurations(session, user, [provider])
+    if profile_has_native_inventory_route(provider, configurations):
+        return provider.runtime_id
+    return "omnigent"
+
+
 def _is_managed_claude_fallback(
     row: Any, version: Any, builtin_profile_id: str
 ) -> bool:

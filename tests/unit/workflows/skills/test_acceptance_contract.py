@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import copy
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+from moonmind.workflows.skills.acceptance_contract import (
+    acceptance_evidence,
+    assessment_scope_violations,
+)
 from moonmind.workflows.skills.approval_policy import parse_step_gate_result
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -134,9 +137,9 @@ def test_reuse_invalidates_changed_subject_scope_or_required_proof(candidate, ch
     elif change == "freshness":
         current["freshnessPolicy"] = "current-deployment"
     elif change == "expired":
-        report["validatedRefs"]["acceptance"]["freshness"]["validUntil"] = (
-            "2000-01-01T00:00:00Z"
-        )
+        report["validatedRefs"]["acceptance"]["freshness"][
+            "validUntil"
+        ] = "2000-01-01T00:00:00Z"
     elif change == "missing_check":
         report["validatedRefs"]["acceptance"]["evidence"].pop()
     else:
@@ -242,9 +245,9 @@ def test_capture_cli_is_portable_without_moonspec_packet(candidate, tmp_path):
 
 def test_expired_evidence_cannot_advance_a_current_workflow(candidate):
     _, _, report = candidate
-    report["validatedRefs"]["acceptance"]["freshness"]["validUntil"] = (
-        "2000-01-01T00:00:00Z"
-    )
+    report["validatedRefs"]["acceptance"]["freshness"][
+        "validUntil"
+    ] = "2000-01-01T00:00:00Z"
     gate = parse_step_gate_result(
         report, require_acceptance=True, validation_time=datetime.now(timezone.utc)
     )
@@ -274,9 +277,9 @@ def test_criterion_outside_verifier_reach_passes_as_unverified(candidate):
     assert portable.reuse(report, current)["reusable"]
     evidence = acceptance_evidence(report)
     assert evidence is not None
-    assert [row.unverified.verifiable_by for row in evidence.evidence if row.unverified] == [
-        "GPU CI lane"
-    ]
+    assert [
+        row.unverified.verifiable_by for row in evidence.evidence if row.unverified
+    ] == ["GPU CI lane"]
     assert (
         parse_step_gate_result(report, require_acceptance=True).verdict
         == "FULLY_IMPLEMENTED"
@@ -295,4 +298,160 @@ def test_unverified_criterion_without_reason_or_owner_is_not_acceptance(
     assert (
         parse_step_gate_result(report, require_acceptance=True).verdict
         == "NO_DETERMINATION"
+    )
+
+
+def test_nonpassing_gate_cannot_reuse_an_old_candidate_or_scope(candidate):
+    _, current, _ = candidate
+    blocked = {
+        "verdict": "BLOCKED",
+        "recommendedNextAction": "blocked",
+        "recoverableInCurrentRuntime": False,
+        "subject": dict(current["subject"]),
+        "scope": copy.deepcopy(current["scope"]),
+        "remainingWork": [
+            {
+                "requirement": "AC-1",
+                "gapType": "environment",
+                "remainingWork": "Run the required check on its qualified CI route.",
+            }
+        ],
+    }
+    assert portable.validate_report(blocked, current)["valid"]
+
+    stale = copy.deepcopy(blocked)
+    stale["subject"]["contentDigest"] = "git-tree:old-candidate"
+    assert "candidate" in " ".join(portable.validate_report(stale, current)["errors"])
+
+    changed_scope = copy.deepcopy(blocked)
+    changed_scope["scope"]["sourceDigest"] = "sha256:old-issue"
+    assert "scope" in " ".join(
+        portable.validate_report(changed_scope, current)["errors"]
+    )
+
+
+def test_nonpassing_gate_cannot_import_optional_or_other_issue_work(candidate):
+    _, current, _ = candidate
+    blocked = {
+        "verdict": "BLOCKED",
+        "recommendedNextAction": "blocked",
+        "recoverableInCurrentRuntime": False,
+        "subject": dict(current["subject"]),
+        "scope": copy.deepcopy(current["scope"]),
+        "remainingWork": [
+            {
+                "requirement": "FULL-RELEASE-GPU",
+                "gapType": "environment",
+                "remainingWork": "Run an unrelated release certification.",
+            }
+        ],
+    }
+    assert "mandatory requirement" in " ".join(
+        portable.validate_report(blocked, current)["errors"]
+    )
+
+
+def test_partial_report_retains_only_same_candidate_verified_rows(candidate):
+    _, current, _ = candidate
+    checks = [
+        {"id": "AC-1", "executableChecks": ["python -m pytest tests/test_value.py"]},
+        {"id": "AC-2", "executableChecks": ["python -m pytest tests/test_callable.py"]},
+    ]
+    current["verificationMap"] = copy.deepcopy(checks)
+    partial = {
+        "verdict": "BLOCKED",
+        "subject": dict(current["subject"]),
+        "scope": copy.deepcopy(current["scope"]),
+        "verificationMap": copy.deepcopy(checks),
+        "requirementCoverage": [
+            {
+                "id": "AC-1",
+                "verificationStatus": "VERIFIED",
+                "testEvidenceRefs": ["artifact://passing-test"],
+            },
+            {
+                "id": "AC-2",
+                "verificationStatus": "PARTIAL",
+                "testEvidenceRefs": ["artifact://unproved"],
+            },
+            {
+                "id": "FULL-RELEASE-GPU",
+                "verificationStatus": "VERIFIED",
+                "testEvidenceRefs": ["artifact://other-scope"],
+            },
+        ],
+    }
+    retained = portable.reuse(partial, current)
+    assert not retained["reusable"] and not retained["completionEligible"]
+    assert retained["candidateRows"] == [
+        {"requirementId": "AC-1", "evidenceRefs": ["artifact://passing-test"]}
+    ]
+
+    changed = copy.deepcopy(current)
+    changed["subject"]["contentDigest"] = "git-tree:changed"
+    assert portable.reuse(partial, changed)["candidateRows"] == []
+
+    changed_check = copy.deepcopy(current)
+    changed_check["verificationMap"][0]["executableChecks"] = ["different check"]
+    assert portable.reuse(partial, changed_check)["candidateRows"] == []
+
+
+def test_assessment_checks_can_bind_only_the_original_scope(candidate):
+    _, current, _ = candidate
+
+    def check(requirement, filename):
+        return {
+            "id": requirement,
+            "sourceRef": current["scope"]["sourceRef"],
+            "sourceDigest": current["scope"]["sourceDigest"],
+            "sourceLocator": requirement,
+            "classification": "mandatory",
+            "requiredBehavior": "Preserve the source requirement",
+            "executableChecks": [f"python -m pytest tests/{filename}"],
+            "proofMethods": ["automated_test"],
+            "owner": "repository focused tests",
+        }
+
+    assessment = {
+        "scope": copy.deepcopy(current["scope"]),
+        "verificationMap": [
+            check("AC-1", "test_value.py"),
+            check("AC-2", "test_callable.py"),
+        ],
+    }
+    bound = portable.bind_verification_map(current, assessment)
+    assert [row["id"] for row in bound["verificationMap"]] == ["AC-1", "AC-2"]
+
+    invented = copy.deepcopy(assessment)
+    invented["verificationMap"].append(check("FULL-RELEASE-GPU", "test_all_maps.py"))
+    with pytest.raises(ValueError, match="original mandatory scope"):
+        portable.bind_verification_map(current, invented)
+
+
+def test_host_rejects_unrelated_blocker_and_shrunken_success_scope(candidate):
+    _, current, success = candidate
+    assessment = {"scope": copy.deepcopy(current["scope"])}
+    blocked = {
+        "verdict": "BLOCKED",
+        "scope": copy.deepcopy(current["scope"]),
+        "remainingWork": [
+            {
+                "requirement": "FULL-RELEASE-GPU",
+                "gapType": "environment",
+                "remainingWork": "Run release proof",
+            }
+        ],
+    }
+    assert "mandatory requirement" in " ".join(
+        assessment_scope_violations(blocked, assessment)
+    )
+    blocked["remainingWork"][0]["requirement"] = "AC-1"
+    assert assessment_scope_violations(blocked, assessment) == []
+
+    success["validatedRefs"]["acceptance"]["scope"]["requirementIds"] = ["AC-1"]
+    success["validatedRefs"]["acceptance"]["evidence"] = success["validatedRefs"][
+        "acceptance"
+    ]["evidence"][:1]
+    assert "original source scope" in " ".join(
+        assessment_scope_violations(success, assessment)
     )
