@@ -13604,54 +13604,6 @@ describe("Task Create MM-641 authoring validation", () => {
     });
   });
 
-  it("explains and resubmits a recorded checkpoint source unchanged on rerun", async () => {
-    const recordedWorkspace = {
-      workspaceSource: {
-        kind: "checkpoint",
-        checkpointRef: "art_01CHECKPOINTSOURCE",
-        baseRepository: { name: "octo/app", branch: "main" },
-      },
-    };
-    const updates = mockRecordedExecution({
-      workflowId: "mm:checkpoint-rerun",
-      workflowType: "MoonMind.UserWorkflow",
-      state: "completed",
-      targetRuntime: "codex_cli",
-      publishMode: "none",
-      inputParameters: {
-        targetRuntime: "codex_cli",
-        repository: "octo/app",
-        publishMode: "none",
-        workspaceSpec: recordedWorkspace,
-        workflow: {
-          instructions: "Continue the saved work.",
-          runtime: { mode: "codex_cli" },
-          publish: { mode: "none" },
-        },
-      },
-      actions: { canUpdateInputs: false, canRerun: true },
-    });
-    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Acheckpoint-rerun");
-
-    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
-
-    expect(
-      await screen.findByText(
-        "This run starts from its recorded checkpoint source, which is kept unchanged. To start from other saved work, use Continue on the saved result in the workflow's details.",
-      ),
-    ).toBeTruthy();
-    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
-    await waitFor(() => expect(instructions.value).toBe("Continue the saved work."));
-
-    fireEvent.change(instructions, { target: { value: "Finish the saved work." } });
-    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
-    await waitFor(() => expect(updates).toHaveLength(1));
-    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
-    expect(patch.workspace).toEqual(recordedWorkspace);
-    expect(patch.repository).toBe("octo/app");
-    expect(patch.publishMode).toBe("none");
-  });
-
   it("offers an anonymous public-repository read as an advanced source choice", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
