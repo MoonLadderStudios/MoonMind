@@ -17981,7 +17981,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or "Automated changes by MoonMind."
         )
         unverified = self._moonspec_unverified_body_section()
-        return f"{body.rstrip()}\n\n{unverified}" if unverified else body
+        return (
+            f"{body.rstrip()}\n\n<!-- moonmind:unverified:start -->\n"
+            f"{unverified}\n<!-- moonmind:unverified:end -->"
+            if unverified
+            else body
+        )
 
     async def _sync_pr_unverified_criteria(self, pull_request_url: str) -> None:
         if not self._patched_or_false_outside_workflow(

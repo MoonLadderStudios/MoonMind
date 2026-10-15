@@ -2256,26 +2256,18 @@ class GitHubService:
             if not isinstance(body, str):
                 raise TypeError("GitHub PR body is malformed")
             start, end = "<!-- moonmind:unverified:start -->", "<!-- moonmind:unverified:end -->"
-            original_section = section.strip()
             # Verifier prose cannot terminate its own managed region.
-            section = original_section.replace("<!--", "&lt;!--")
+            section = section.strip().replace("<!--", "&lt;!--")
             managed = f"{start}\n{section}\n{end}" if section else ""
             if start in body or end in body:
                 if body.count(start) != 1 or body.count(end) != 1 or body.index(end) < body.index(start):
                     raise ValueError("PR verification disclosure markers are ambiguous")
                 first, last = body.index(start), body.index(end) + len(end)
                 updated = body[:first] + managed + body[last:]
-            elif original_section and original_section in body:
-                # A newly created PR already contains this exact section. Adopt
-                # it intact, including multiline reasons with their own headings.
-                updated = body.replace(original_section, managed, 1)
+            elif managed:
+                updated = body.rstrip() + ("\n\n" if body.strip() else "") + managed
             else:
-                # A shared heading does not establish ownership of reviewer
-                # prose. Only explicit markers or the exact current section do.
-                if managed:
-                    updated = body.rstrip() + ("\n\n" if body.strip() else "") + managed
-                else:
-                    updated = body
+                updated = body
             if updated == body:
                 return False
             if response.headers.get("etag"):
