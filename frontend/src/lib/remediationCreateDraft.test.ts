@@ -47,7 +47,10 @@ describe('remediationCreateDraft', () => {
     expect(draft).toMatchObject({
       source: 'remediation',
       schemaVersion: 1,
-      repository: 'MoonLadderStudios/MoonMind',
+      // A target without a repository stays a scratch source: no dummy
+      // repository and no destination publication to fail at submit.
+      repository: '',
+      publishMode: 'none',
       target: {
         workflowId: 'mm:target',
         runId: 'run-target',
@@ -88,6 +91,32 @@ describe('remediationCreateDraft', () => {
       checkpointRef: 'artifact://checkpoint/failed-step',
     });
     expect(Date.parse(draft.createdAt)).not.toBeNaN();
+  });
+
+  it('reads the repository from the authored target and keeps it storable when blank', () => {
+    const connected = buildRemediationCreateDraft({
+      workflowId: 'mm:target',
+      runId: 'run-target',
+      inputParameters: {
+        repository: {
+          provider: 'git',
+          repository: { name: 'gitlab.example.com/group/project' },
+          branch: { name: 'develop' },
+        },
+      },
+    });
+    expect(connected).toMatchObject({
+      repository: 'gitlab.example.com/group/project',
+      branch: 'develop',
+      publishMode: 'pr',
+    });
+
+    const scratch = buildRemediationCreateDraft({
+      workflowId: 'mm:scratch',
+      runId: 'run-scratch',
+    });
+    const draftId = storeRemediationCreateDraft(scratch);
+    expect(readRemediationCreateDraft(draftId)?.repository).toBe('');
   });
 
   it('stores, reads, builds a href, and clears a short-lived draft', () => {

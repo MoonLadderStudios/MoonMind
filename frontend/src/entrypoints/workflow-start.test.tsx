@@ -5705,7 +5705,7 @@ describe.skip("Task Create Entrypoint", () => {
         "high",
       );
       expect(
-        (screen.getByLabelText(/GitHub Repo/) as HTMLInputElement).value,
+        (screen.getByLabelText(/^Repository$/) as HTMLInputElement).value,
       ).toBe("MoonLadderStudios/MoonMind");
       expect(
         (screen.getByLabelText("Branch") as HTMLInputElement).value,
@@ -7171,7 +7171,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run end-to-end regression flow." },
     });
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+    fireEvent.change(screen.getByLabelText(/^Repository$/), {
       target: { value: "MoonLadderStudios/MoonMind" },
     });
     fireEvent.change(
@@ -7236,7 +7236,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("offers repository options while preserving editable repository entry", async () => {
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
-    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    const repositoryInput = await screen.findByLabelText(/^Repository$/);
     expect(repositoryInput.getAttribute("list")).toBe("queue-repository-options");
 
     const datalist = document.querySelector<HTMLDataListElement>(
@@ -7260,7 +7260,7 @@ describe.skip("Task Create Entrypoint", () => {
       <WorkflowStartPage payload={withRepositoryOptions()} />,
     );
 
-    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    const repositoryInput = await screen.findByLabelText(/^Repository$/);
     fireEvent.change(repositoryInput, {
       target: { value: "Octo/Repo" },
     });
@@ -7270,7 +7270,7 @@ describe.skip("Task Create Entrypoint", () => {
     unmount();
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
-    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
+    expect((await screen.findByLabelText(/^Repository$/) as HTMLInputElement).value)
       .toBe("Octo/Repo");
   });
 
@@ -7282,7 +7282,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
-    const repositoryInput = await screen.findByLabelText(/GitHub Repo/);
+    const repositoryInput = await screen.findByLabelText(/^Repository$/);
     fireEvent.change(repositoryInput, {
       target: { value: "Custom/Repo" },
     });
@@ -7299,7 +7299,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     renderWithClient(<WorkflowStartPage payload={withRepositoryOptions()} />);
 
-    expect((await screen.findByLabelText(/GitHub Repo/) as HTMLInputElement).value)
+    expect((await screen.findByLabelText(/^Repository$/) as HTMLInputElement).value)
       .toBe("MoonLadderStudios/MoonMind");
   });
 
@@ -7313,7 +7313,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run repository dropdown regression." },
     });
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+    fireEvent.change(screen.getByLabelText(/^Repository$/), {
       target: { value: "Octo/Repo" },
     });
     fireEvent.change(
@@ -8749,7 +8749,7 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
       ).toBe("none");
     });
-    expect((screen.getByLabelText("GitHub Repo") as HTMLInputElement).disabled).toBe(
+    expect((screen.getByLabelText("Repository") as HTMLInputElement).disabled).toBe(
       false,
     );
     expect(
@@ -10093,7 +10093,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("adds hover tooltips to floating bar repository, branch, and publish controls", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const repoInput = await screen.findByLabelText("GitHub Repo");
+    const repoInput = await screen.findByLabelText("Repository");
     const branchInput = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
 
@@ -10946,7 +10946,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const addStepButton = screen.getByRole("button", { name: "Add Step" });
     const createButton = screen.getByRole("button", { name: "Start Workflow" });
-    const repoInput = screen.getByLabelText(/GitHub Repo/);
+    const repoInput = screen.getByLabelText(/^Repository$/);
     const branchSelect = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
     const reportToggle = screen.getByLabelText("Produce report artifact");
@@ -11049,8 +11049,8 @@ describe.skip("Task Create Entrypoint", () => {
     expect(floatingBar?.classList.contains("queue-floating-bar--liquid-glass")).toBe(
       true,
     );
-    expect(within(floatingBar as HTMLElement).getByLabelText("GitHub Repo")).toBe(
-      screen.getByLabelText("GitHub Repo"),
+    expect(within(floatingBar as HTMLElement).getByLabelText("Repository")).toBe(
+      screen.getByLabelText("Repository"),
     );
     expect(within(floatingBar as HTMLElement).getByLabelText("Branch")).toBe(
       screen.getByLabelText("Branch"),
@@ -11207,7 +11207,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(branchInput.value).toBe("");
 
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+    fireEvent.change(screen.getByLabelText(/^Repository$/), {
       target: { value: "MoonLadderStudios/OtherRepo" },
     });
 
@@ -11345,7 +11345,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(branchInput, {
       target: { value: "feature/create-page" },
     });
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+    fireEvent.change(screen.getByLabelText(/^Repository$/), {
       target: { value: "MoonLadderStudios/OtherRepo" },
     });
 
@@ -12975,7 +12975,14 @@ describe("Task Create MM-641 authoring validation", () => {
     ).toBe(false);
   });
 
-  it("blocks repository-backed submission when no default branch is available", async () => {
+  function expectBranchlessRepositorySubmission(): void {
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    // A bare repository name is the shared branchless form (the CLI sends the
+    // same): the backend clones the remote's default branch.
+    expect(payload.repository).toBe("MoonLadderStudios/MoonMind");
+  }
+
+  it("submits a repository source with an omitted branch when no default branch is discovered", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -12995,24 +13002,20 @@ describe("Task Create MM-641 authoring validation", () => {
       expect(branchInput.getAttribute("placeholder")).not.toBe("Loading branches...");
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
-      target: { value: "Do not launch without complete repository authority." },
+      target: { value: "Use the repository default branch." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
-    expect(
-      await screen.findByText(
-        "No repository default branch is available. Enter a branch before starting this workflow.",
-      ),
-    ).toBeTruthy();
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) =>
-          String(url) === "/api/executions" && init?.method === "POST",
-      ),
-    ).toBe(false);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expectBranchlessRepositorySubmission();
   });
 
-  it("blocks repository-backed submission while the default branch is loading", async () => {
+  it("submits a repository source without waiting for default-branch discovery", async () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -13029,24 +13032,20 @@ describe("Task Create MM-641 authoring validation", () => {
       expect(branchInput.getAttribute("placeholder")).toBe("Loading branches...");
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
-      target: { value: "Do not launch before repository authority is complete." },
+      target: { value: "Start before branch discovery settles." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
-    expect(
-      await screen.findByText(
-        "Wait for the repository default branch to load, or enter a branch before starting this workflow.",
-      ),
-    ).toBeTruthy();
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) =>
-          String(url) === "/api/executions" && init?.method === "POST",
-      ),
-    ).toBe(false);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expectBranchlessRepositorySubmission();
   });
 
-  it("blocks repository-backed submission after an authored branch is cleared", async () => {
+  it("submits an authored-then-cleared branch as omitted, never the prior value", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const branchInput = await screen.findByLabelText("Branch");
@@ -13056,21 +13055,73 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(branchInput, { target: { value: "feature/mm-641" } });
     fireEvent.change(branchInput, { target: { value: "" } });
     fireEvent.change(screen.getByLabelText("Instructions"), {
-      target: { value: "Keep repository authority explicit." },
+      target: { value: "Clear the authored branch." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
-    expect(
-      await screen.findByText(
-        "Choose a branch before starting this repository-backed workflow.",
-      ),
-    ).toBeTruthy();
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) =>
-          String(url) === "/api/executions" && init?.method === "POST",
-      ),
-    ).toBe(false);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expectBranchlessRepositorySubmission();
+  });
+
+  it("keeps authored branch text and a newly selected repository when a lookup resolves late", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    const pendingLookups: Array<() => void> = [];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches")) {
+        return new Promise<Response>((resolve) => {
+          pendingLookups.push(() =>
+            resolve({
+              ok: true,
+              json: async () => ({
+                items: [{ value: "late-default", label: "late-default" }],
+                defaultBranch: "late-default",
+                error: null,
+              }),
+            } as Response),
+          );
+        });
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branchInput = (await screen.findByLabelText("Branch")) as HTMLInputElement;
+    fireEvent.change(screen.getByLabelText("Repository"), {
+      target: { value: "octo/other-repo" },
+    });
+    fireEvent.change(branchInput, { target: { value: "feature/authored" } });
+    await act(async () => {
+      pendingLookups.splice(0).forEach((resolveLookup) => resolveLookup());
+    });
+
+    expect(branchInput.value).toBe("feature/authored");
+    expect((screen.getByLabelText("Repository") as HTMLInputElement).value).toBe(
+      "octo/other-repo",
+    );
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Keep authored source." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.repository).toEqual({
+      provider: "git",
+      repository: { name: "octo/other-repo" },
+      branch: { name: "feature/authored" },
+    });
   });
 
   it("renders repository branch and publish mode inside the floating Submit bar", async () => {
@@ -13087,7 +13138,7 @@ describe("Task Create MM-641 authoring validation", () => {
       '[data-canonical-create-section="Submit"]',
     );
     const createButton = screen.getByRole("button", { name: "Start Workflow" });
-    const repoInput = await screen.findByLabelText("GitHub Repo");
+    const repoInput = await screen.findByLabelText("Repository");
     const branchInput = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
     const floatingBar = createButton.closest(".queue-floating-bar");
@@ -13190,7 +13241,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run end-to-end regression flow." },
     });
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+    fireEvent.change(screen.getByLabelText(/^Repository$/), {
       target: { value: "MoonLadderStudios/MoonMind" },
     });
     fireEvent.change(
@@ -13238,7 +13289,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run without native retrieval." },
     });
-    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+    fireEvent.change(screen.getByLabelText(/^Repository$/), {
       target: { value: "MoonLadderStudios/MoonMind" },
     });
 
@@ -13369,7 +13420,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Implement MM-641 validation." },
     });
-    fireEvent.change(screen.getByLabelText("GitHub Repo"), {
+    fireEvent.change(screen.getByLabelText("Repository"), {
       target: { value: "invalid repo with spaces" },
     });
     fireEvent.change(screen.getByLabelText("Publish Mode"), {
@@ -13380,10 +13431,62 @@ describe("Task Create MM-641 authoring validation", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).",
+          "Repository must be a repository name or Git URL without spaces, embedded credentials, or local paths.",
         ),
       ).toBeTruthy();
     });
+    expect(document.activeElement).toBe(screen.getByLabelText("Repository"));
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("submits non-GitHub repository identities without GitHub shorthand validation", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Work in a nested Git group." },
+    });
+    fireEvent.change(screen.getByLabelText("Repository"), {
+      target: { value: "gitlab.example.com/platform/tools/deployer" },
+    });
+    fireEvent.change(screen.getByLabelText("Branch"), {
+      target: { value: "develop" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.repository).toEqual({
+      provider: "git",
+      repository: { name: "gitlab.example.com/platform/tools/deployer" },
+      branch: { name: "develop" },
+    });
+  });
+
+  it.each([
+    "https://user:token@github.com/octo/repo",
+    "/srv/checkouts/repo",
+    "file:///srv/checkouts/repo",
+  ])("rejects %s as a repository source before submission", async (value) => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Reject unsafe source." },
+    });
+    fireEvent.change(screen.getByLabelText("Repository"), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "Repository must be a repository name or Git URL without spaces, embedded credentials, or local paths.",
+      ),
+    ).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
     ).toBe(false);
@@ -13451,7 +13554,7 @@ describe("Task Create MM-641 authoring validation", () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const repoInput = (await screen.findByLabelText(
-      "GitHub Repo",
+      "Repository",
     )) as HTMLInputElement;
     const publishModeSelect = screen.getByLabelText(
       "Publish Mode",
@@ -13485,7 +13588,7 @@ describe("Task Create MM-641 authoring validation", () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const repoInput = (await screen.findByLabelText(
-      "GitHub Repo",
+      "Repository",
     )) as HTMLInputElement;
     const publishModeSelect = screen.getByLabelText(
       "Publish Mode",
@@ -13494,6 +13597,73 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(repoInput, { target: { value: "" } });
 
     expect(publishModeSelect.value).toBe("branch");
+  });
+
+  it("explains destination publishing for a blank source and recovers the choice when a repository returns", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repoInput = (await screen.findByLabelText(
+      "Repository",
+    )) as HTMLInputElement;
+    const publishModeSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    fireEvent.change(publishModeSelect, { target: { value: "pr" } });
+    fireEvent.change(repoInput, { target: { value: "" } });
+
+    // The explicit choice stays visible (never silently rewritten), but no
+    // destination mode is newly selectable without a repository.
+    expect(publishModeSelect.value).toBe("pr");
+    expect(
+      (screen.getByRole("option", { name: "Branch" }) as HTMLOptionElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("option", { name: "PR" }) as HTMLOptionElement).disabled,
+    ).toBe(true);
+    const explanation =
+      "PR publishing needs a repository. Add one, or choose None to keep results save-only.";
+    expect(screen.getByText(explanation)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Publish this work." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(repoInput);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+
+    fireEvent.change(repoInput, { target: { value: "octo/repo" } });
+    expect(publishModeSelect.value).toBe("pr");
+    const outcome = document.getElementById(
+      publishModeSelect.getAttribute("aria-describedby") || "",
+    );
+    expect(outcome?.textContent).toBe("Opens a pull request on octo/repo.");
+  });
+
+  it("shows the publication outcome for the selected mode", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const publishModeSelect = (await screen.findByLabelText(
+      "Publish Mode",
+    )) as HTMLSelectElement;
+    expect(
+      screen.getByText("Opens a pull request on MoonLadderStudios/MoonMind."),
+    ).toBeTruthy();
+    expect(publishModeSelect.getAttribute("aria-describedby")).toBeTruthy();
+
+    fireEvent.change(publishModeSelect, { target: { value: "none" } });
+    expect(
+      screen.getByText("Saves results on this workflow; nothing is published."),
+    ).toBeTruthy();
+
+    fireEvent.change(publishModeSelect, { target: { value: "branch" } });
+    expect(
+      screen.getByText("Pushes a branch to MoonLadderStudios/MoonMind."),
+    ).toBeTruthy();
   });
 
   it("derives Skill publication defaults from the backend contract", async () => {
@@ -13604,7 +13774,7 @@ describe("Task Create MM-641 authoring validation", () => {
     const submitSection = document.querySelector<HTMLElement>(
       '[data-canonical-create-section="Submit"]',
     );
-    const repoInput = await screen.findByLabelText("GitHub Repo");
+    const repoInput = await screen.findByLabelText("Repository");
     const branchInput = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
     expect(repoInput.closest('[data-canonical-create-section="Submit"]')).toBe(
@@ -17247,7 +17417,7 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(issueInput, {
       target: { value: "https://github.com/MoonLadderStudios/Tactics/issues/123" },
     });
-    expect((screen.getByLabelText("GitHub Repo") as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText("Repository") as HTMLInputElement).value).toBe(
       "MoonLadderStudios/Tactics",
     );
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -18238,7 +18408,7 @@ describe("Task Create governed Tool authoring", () => {
     } as Response;
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    fireEvent.change(await screen.findByLabelText(/GitHub Repo/), {
+    fireEvent.change(await screen.findByLabelText(/^Repository$/), {
       target: { value: "" },
     });
 
@@ -19297,6 +19467,88 @@ describe("Task Create runtime command previews", () => {
     ).toBeNull();
   });
 
+  it("keeps a remediation draft without a repository as a blank, save-only source", async () => {
+    const draft = {
+      source: "remediation",
+      schemaVersion: 1,
+      createdAt: new Date().toISOString(),
+      target: {
+        workflowId: "mm:remediation-target",
+        runId: "run-original",
+        title: "Failed workflow",
+        state: "failed",
+        stepSelectors: [
+          {
+            logicalStepId: "test",
+            checkpointRef: "artifact://checkpoint/test",
+          },
+        ],
+      },
+      repository: "",
+      branch: "main",
+      startingBranch: "main",
+      workBranch: "repair/mm-3623",
+      publishMode: "none",
+      executionProfileRef: "execution-profile:codex",
+      launchPolicyRef: "launch-policy:remediation",
+      contextRetrieval: {
+        initial: { collections: ["docs"], allowStale: false, required: true },
+        followUp: {
+          enabled: false,
+          required: false,
+          collections: [],
+          budgetPreset: "balanced",
+          topK: 8,
+          maxContextTokens: 8192,
+          maxQueries: 12,
+          latencyMs: 5000,
+          maxLifetimeSeconds: 900,
+          overlayPolicy: "include",
+          staleOverlayAllowed: false,
+          fallbackAllowed: false,
+        },
+      },
+      instructions: "Repair the failed workflow.",
+      runtime: { mode: "omnigent" },
+      remediation: {
+        target: {
+          workflowId: "mm:remediation-target",
+          runId: "run-original",
+          stepSelectors: [
+            {
+              logicalStepId: "test",
+              checkpointRef: "artifact://checkpoint/test",
+            },
+          ],
+        },
+        mode: "snapshot_then_follow",
+        authorityMode: "approval_gated",
+        actionPolicyRef: "admin_healer_default",
+        checkpointBranchPolicy: {
+          actionKind: "checkpoint_branch.create_from_remediation_context",
+          runtimeContextPolicy: "fresh_agent_run",
+          gitWorkBranch: "repair/mm-3623",
+        },
+        trigger: { type: "manual" },
+      },
+    };
+    window.sessionStorage.setItem(
+      "moonmind.remediation-create-draft.scratch",
+      JSON.stringify(draft),
+    );
+    window.history.pushState(
+      {},
+      "Task Create",
+      "/workflows/new?intent=remediate&draftId=scratch",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
+
+    expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    expect((screen.getByLabelText("Repository") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("none");
+  });
+
   it("reports a copied cross-tab remediation URL without importing content", async () => {
     window.localStorage.setItem(
       "moonmind.remediation-create-draft-presence.other-tab",
@@ -19409,7 +19661,7 @@ describe("Task Create runtime command previews", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "/review\nCheck this branch." },
     });
-    fireEvent.change(screen.getByLabelText("GitHub Repo"), {
+    fireEvent.change(screen.getByLabelText("Repository"), {
       target: { value: "MoonLadderStudios/MoonMind" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
