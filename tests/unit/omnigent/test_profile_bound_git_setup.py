@@ -40,8 +40,9 @@ SELECTED_TOKEN = "selectedTokenB"
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preparation", ["fresh", "retry", "existing", "checkpoint"])
 @pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("admitted", [False, True])
 async def test_profile_bound_workspace_can_commit_merge_and_push(
-    tmp_path, monkeypatch, preparation, configured
+    tmp_path, monkeypatch, preparation, configured, admitted
 ) -> None:
     """Resolver #2767 stopped before repair because this lane had no identity."""
     from moonmind.omnigent.git_identity import (
@@ -100,6 +101,12 @@ async def test_profile_bound_workspace_can_commit_merge_and_push(
         repository_source=str(source),
         starting_branch="feature",
     )
+    if admitted:
+        kwargs["publication_git_identity"] = {"name": name, "email": email}
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed default")
+        monkeypatch.setattr(
+            settings.workflow, "git_user_email", "changed@example.invalid"
+        )
     if preparation == "existing":
         git(source, "clone", "--branch", "feature", str(source), str(workspace))
         kwargs.pop("repository_source")

@@ -331,7 +331,10 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     topology = describe_configured_worker(temporal_settings=temporal_settings)
 
     assert topology.fleet == SANDBOX_FLEET
-    assert topology.task_queues == (settings.temporal.activity_sandbox_task_queue,)
+    assert topology.task_queues == (
+        settings.temporal.activity_sandbox_task_queue,
+        settings.temporal.activity_sandbox_task_queue + ".publication-v1",
+    )
     assert topology.concurrency_limit == 3
     assert topology.forbidden_capabilities == (
         "llm",
@@ -359,10 +362,14 @@ def test_workflow_topology_serves_merge_lane_with_its_own_budget():
         "mm.workflow.user.v2",
         "mm.workflow",
         "mm.workflow.merge_automation",
+        "mm.workflow.user.v2.publication-v1",
+        "mm.workflow.publication-v1",
+        "mm.workflow.merge_automation.publication-v1",
     )
     assert topology.concurrency_limit == 8
     assert topology.queue_concurrency_limits == {
         "mm.workflow.merge_automation": 2,
+        "mm.workflow.merge_automation.publication-v1": 2,
     }
 
 
@@ -377,7 +384,10 @@ def test_merge_queue_shared_with_start_queue_keeps_the_fleet_budget():
         )
     )
 
-    assert topology.task_queues == ("mm.workflow.user.v2", "mm.workflow")
+    assert topology.task_queues == (
+        "mm.workflow.user.v2", "mm.workflow",
+        "mm.workflow.user.v2.publication-v1", "mm.workflow.publication-v1",
+    )
     assert topology.queue_concurrency_limits == {}
 
 

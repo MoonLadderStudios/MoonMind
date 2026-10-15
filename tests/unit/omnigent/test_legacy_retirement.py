@@ -13,7 +13,6 @@ import pytest
 from moonmind.omnigent.legacy_retirement import (
     OBSOLETE_CONFIGURATION,
     RETIREMENT_INVENTORY,
-    TEMPORARY_ROLLOUT_FLAGS,
     LegacyAdmissionRejected,
     LegacyPathRecord,
     ObsoleteConfiguration,
@@ -24,7 +23,6 @@ from moonmind.omnigent.legacy_retirement import (
     assert_new_admission_allowed,
     assert_obsolete_configuration,
     assert_surface_admits_new_work,
-    assert_temporary_flags_have_retirement,
     evaluate_new_admission,
     get_retirement_record,
 )
@@ -61,13 +59,18 @@ def test_record_requires_admission_source_while_it_still_admits() -> None:
         _record(retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH)
 
 
-def test_record_rejects_the_retired_rollback_only_class() -> None:
-    # A row either admits new work or refuses it; there is no rollback-gated
-    # re-admission class.
+def test_a_class_either_admits_new_work_or_refuses_it() -> None:
+    # There is no rollback-only class: restoring a prior default for new work is
+    # the supervisor rollback control's job, not a per-row generation allowlist.
+    assert {member.value for member in RetirementClass} == {
+        "active_product_path",
+        "new_admission_disabled",
+    }
     with pytest.raises(ValueError):
-        _record(
-            retirementClass="rollback_only",
-            newAdmissionSource="moonmind.omnigent.execute:run_omnigent_execution",
+        _record(rollbackGenerations=frozenset({"gen-7"}))
+    with pytest.raises(TypeError):
+        evaluate_new_admission(  # type: ignore[call-arg]
+            _record(), rollback_generation="gen-7"
         )
 
 
@@ -218,19 +221,6 @@ def test_profile_bound_admission_follows_the_code_owned_class() -> None:
     assert decision.reason_code == "new_admission_disabled:new_admission_disabled"
 
 
-def test_admission_has_exactly_one_admitting_and_one_refusing_class() -> None:
-    assert {member.value for member in RetirementClass} == {
-        "active_product_path",
-        "new_admission_disabled",
-    }
-    admitting = _record(
-        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
-        newAdmissionSource="moonmind.omnigent.execute:run_omnigent_execution",
-    )
-    assert evaluate_new_admission(admitting).reason_code == "active_product_path"
-    assert evaluate_new_admission(_record()).allowed is False
-
-
 def test_assert_new_admission_raises_with_a_stable_reason_code() -> None:
     closed = (_record(pathId="omnigent.legacy.closed"),)
     with pytest.raises(LegacyAdmissionRejected) as excinfo:
@@ -351,42 +341,3 @@ def test_obsolete_configuration_cannot_skip_its_deprecation_window() -> None:
             replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
             removed=True,
         )
-
-
-# ------------------------------------------------------------ rollout flags
-
-
-def test_temporary_flags_all_have_retirement_trigger() -> None:
-    assert TEMPORARY_ROLLOUT_FLAGS
-    assert_temporary_flags_have_retirement()
-
-
-def test_temporary_flag_without_trigger_is_rejected() -> None:
-    with pytest.raises(RetirementGuardError):
-        assert_temporary_flags_have_retirement(
-            {"omnigent_session_supervisor_rollback_mode": ""}
-        )
-
-
-def test_temporary_flags_cover_supervisor_settings_fields() -> None:
-    # The supervisor rollout flags must be registered as temporary so they can
-    # never silently become a permanent alternate architecture.
-    from moonmind.config.settings import FeatureFlagsSettings
-
-    model_fields = set(FeatureFlagsSettings.model_fields)
-    for flag in TEMPORARY_ROLLOUT_FLAGS:
-        assert flag in model_fields
-
-
-def test_every_retained_supervisor_flag_declares_its_retirement() -> None:
-    # MoonLadderStudios/MoonMind#3935: a retained-lane flag that is not
-    # registered here has no exit condition and can outlive the lane.
-    from moonmind.config.settings import FeatureFlagsSettings
-
-    supervisor_flags = {
-        field
-        for field in FeatureFlagsSettings.model_fields
-        if field.startswith("omnigent_session_supervisor_")
-    }
-    assert supervisor_flags
-    assert supervisor_flags <= set(TEMPORARY_ROLLOUT_FLAGS)

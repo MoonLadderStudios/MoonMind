@@ -1065,6 +1065,7 @@ def test_journey_runs_repository_journey_inside_the_candidate(tmp_path):
     assert f"MOONMIND_TEST_POSTGRES_URL={driver.DATABASE_URL}" in command
     assert "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE=" + HOST_REF in command
     assert "--noconftest" in command
+    assert "-s" in command, "recovery progress must remain visible before pytest exits"
     assert (
         f"/test-driver/{driver.JOURNEY_TEST_FILE}::{driver.JOURNEY_TEST_NAME}"
         in command

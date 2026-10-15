@@ -2158,6 +2158,7 @@ class TemporalExecutionService:
         _workflow_id: str | None = None,
         _run_id: str | None = None,
         _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
+        _publication_identity_source: TemporalExecutionCanonicalRecord | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2306,6 +2307,18 @@ class TemporalExecutionService:
             )
 
         params = dict(initial_parameters or {})
+        publication_admission = None
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            from moonmind.omnigent.git_identity import admit_publication_git_identity
+
+            publication_admission = admit_publication_git_identity(
+                params,
+                source_memo=(
+                    (_publication_identity_source.memo or {})
+                    if _publication_identity_source is not None
+                    else None
+                ),
+            )
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
         task_params = dict(_workflow_payload(params))
@@ -2383,6 +2396,10 @@ class TemporalExecutionService:
             ),
             "titleRevision": 0,
         }
+        if publication_admission is not None:
+            from moonmind.omnigent.git_identity import PUBLICATION_GIT_IDENTITY_MEMO_KEY
+
+            memo[PUBLICATION_GIT_IDENTITY_MEMO_KEY] = publication_admission
         # Admitting-authority code revision (MoonLadderStudios/MoonMind#4224):
         # post-incident analysis can tell which revision admitted the run; the
         # executing worker stamps its own revision in AgentRun metadata.
@@ -3106,6 +3123,15 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Unsupported update name: {update_name}"
             )
+
+        if parameters_patch is not None:
+            # Attribution is server-admitted intent, not an editable input.
+            # Exclude it before Temporal dispatch and canonical-record merging.
+            parameters_patch = {
+                key: value
+                for key, value in parameters_patch.items()
+                if key not in {"_publicationGitIdentity", "publicationGitIdentityAdmission"}
+            }
 
         record = await self._require_source_execution(workflow_id)
         if expected_run_id is not None:
@@ -5255,6 +5281,7 @@ class TemporalExecutionService:
             ),
             _workflow_id=target.destination.workflow_id,
             _run_id=destination_run_id,
+            _publication_identity_source=record,
         )
         destination = await self._session.get(
             TemporalExecutionCanonicalRecord, created.workflow_id
@@ -5777,6 +5804,7 @@ class TemporalExecutionService:
                 else f"Recovered from failed step of {record.workflow_id}."
             ),
             _recovery_artifact_source=record,
+            _publication_identity_source=record,
         )
         return {
             "accepted": True,

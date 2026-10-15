@@ -2667,17 +2667,25 @@ class ManagedRuntimeLauncher:
                     continue
                 env_overrides[key] = value
 
-            from moonmind.omnigent.git_identity import resolve_git_identity
+            from moonmind.omnigent.git_identity import (
+                publication_git_identity_projection,
+                resolve_publication_git_identity,
+            )
 
             # Configured identity, else the documented default: a
             # commit-capable run never depends on an optional setting.
-            _git_name, _git_email = resolve_git_identity()
-            if _git_name:
-                env_overrides.setdefault("GIT_AUTHOR_NAME", _git_name)
-                env_overrides.setdefault("GIT_COMMITTER_NAME", _git_name)
-            if _git_email:
-                env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
-                env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
+            identity = await publication_git_identity_projection()
+            _git_name, _git_email = resolve_publication_git_identity(identity)
+            for key, value in {
+                "GIT_AUTHOR_NAME": _git_name,
+                "GIT_COMMITTER_NAME": _git_name,
+                "GIT_AUTHOR_EMAIL": _git_email,
+                "GIT_COMMITTER_EMAIL": _git_email,
+            }.items():
+                if identity is not None:
+                    env_overrides[key] = value
+                else:
+                    env_overrides.setdefault(key, value)
 
             # MM-861: expose the generic, project-agnostic workspace env vars to
             # every managed agent session. These are MoonMind-owned and set
