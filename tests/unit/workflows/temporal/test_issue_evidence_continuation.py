@@ -111,8 +111,10 @@ def admitted(owner):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("disclosure_enabled", [True, False])
+@pytest.mark.parametrize("unverified", [True, False])
 async def test_new_exact_head_bytes_resume_verifier_then_persist_acceptance(
-    admitted, monkeypatch
+    admitted, monkeypatch, disclosure_enabled, unverified
 ):
     from moonmind.workflows.skills.approval_policy import StepGateResult
     from moonmind.workflows.temporal.remediation_loop import RemediationLoopPhase
@@ -157,11 +159,46 @@ async def test_new_exact_head_bytes_resume_verifier_then_persist_acceptance(
     monkeypatch.setattr(
         owner, "_moonspec_verify_gate_result_ref", lambda _: "artifact://new-gate"
     )
-    monkeypatch.setattr(owner, "_record_moonspec_verify_gate", lambda **_: None)
+    from tests.unit.workflows.temporal.workflows.test_run_integration import (
+        unverified_publication_gate,
+    )
+
+    fresh_gate = unverified_publication_gate.__wrapped__()
+    fresh_gate["validatedRefs"]["acceptance"]["subject"] = subject
+    if not unverified:
+        row = fresh_gate["validatedRefs"]["acceptance"]["evidence"][1]
+        row.pop("unverified")
+        row["evidenceRefs"] = ["test:GPU"]
+
+    def record_gate(**_):
+        owner._publish_context["moonSpecGate"] = fresh_gate
+
+    monkeypatch.setattr(owner, "_record_moonspec_verify_gate", record_gate)
+    monkeypatch.setattr(
+        run_module.workflow, "patched",
+        lambda name: disclosure_enabled
+        if name == "run-issue-evidence-disclosure-refresh-v1" else True,
+    )
+    disclosed = []
+
+    async def publish_disclosure(name, payload, **_):
+        assert name == "repo.sync_pr_unverified_criteria"
+        # Disclosure must precede marking the refreshed candidate ready.
+        assert all(call.args[1].get("action") != "mark_ready" for call in reader.await_args_list)
+        disclosed.append(payload)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", publish_disclosure)
     await owner._resume_published_issue_evidence(
         parameters={"publishMode": "pr"}, ordered_nodes=nodes
     )
     verifier.assert_awaited_once()
+    assert len(disclosed) == int(disclosure_enabled)
+    if disclosure_enabled:
+        assert disclosed[0]["expectedHeadSha"] == subject["revision"]
+        assert bool(disclosed[0]["section"]) is unverified
+        if unverified:
+            assert "AC-2" in disclosed[0]["section"]
+            assert "GPU" in disclosed[0]["section"]
     assert reader.await_args_list[-1].args[1]["action"] == "mark_ready"
     assert reader.await_args_list[-1].args[1]["automationOwnedDraft"] is True
     assert owner._remediation_loop_state.phase == RemediationLoopPhase.ACCEPTED

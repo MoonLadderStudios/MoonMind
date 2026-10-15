@@ -65,6 +65,15 @@ def fixture(monkeypatch, *, files=None):
     def respond(request):
         requests.append(request)
         if state.get("enable_publication"):
+            if request.url.path.endswith("/issues/7/comments"):
+                comments = state.setdefault("comments", [])
+                if request.method == "GET":
+                    return httpx.Response(200, json=comments)
+                assert request.method == "POST"
+                assert not state.get("marked_ready")
+                comment = {"id": len(comments) + 1, **json.loads(request.content)}
+                comments.append(comment)
+                return httpx.Response(201, json=comment)
             if request.url.path.endswith("/pulls"):
                 if request.method == "GET":
                     return httpx.Response(200, json=[])
