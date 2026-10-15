@@ -160,6 +160,24 @@ describe('Providers & Secrets phone gutters', () => {
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + TOLERANCE_PX);
   });
 
+  it('moves focus to the profile editor from the single Edit action on a phone', async () => {
+    await page.viewport(360, 800);
+    await renderProvidersPage();
+    const profiles = document.querySelector<HTMLElement>('.provider-profiles')!;
+    const editActions = Array.from(profiles.querySelectorAll('table button')).filter((button) =>
+      button.textContent?.includes('Edit'),
+    );
+    expect(editActions.map((button) => button.textContent)).toEqual(['Edit']);
+
+    (editActions[0] as HTMLButtonElement).click();
+    const heading = await screen.findByRole('heading', { name: 'Edit Profile: codex_team_oauth' });
+    await vi.waitFor(() => expect(document.activeElement).toBe(heading));
+    const { top, bottom } = heading.getBoundingClientRect();
+    expect(top).toBeGreaterThanOrEqual(-TOLERANCE_PX);
+    expect(bottom).toBeLessThanOrEqual(window.innerHeight + TOLERANCE_PX);
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + TOLERANCE_PX);
+  });
+
   it('keeps the desktop card padding', async () => {
     await page.viewport(1280, 800);
     await renderProvidersPage();
