@@ -14,8 +14,8 @@ outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-polic
 It owns scope, mandatory versus optional evidence, reuse, and completion rules.
 Preserve the original scope and previously met requirements as regression constraints;
 prior reports are context, not current proof. Candidate success alone cannot close
-or transition an issue as already landed. Completion requires objective evidence
-on the intended completion target under that policy.
+or transition an issue as already landed. Completion follows the shared policy,
+including valid Unverified disclosures, on the intended completion target.
 
 
 # MoonSpec Assess
@@ -40,19 +40,21 @@ whole-issue completion. Missing optional enrichment is only a limitation.
 Write the initial assessment to `assessment_artifact_path` and the step result:
 `issue_provider`, `issue_ref`, `issue_url`, `verdict`, `branch`, `base_ref`, `mode`,
 `summary`, and `requirements` (stable `id`, original `description`, `status` of
-`met`, `partially_met`, `not_met`, or `unverifiable`, and evidence/reason).
+`met`, `partially_met`, `not_met`, `unverifiable`, or `needs_human`, and evidence/reason).
+`unverifiable` rows must include `unverified: {reason, verifiableBy}` with nonblank
+strings and a stable nonblank `id`; this is the issue-brief spelling of `UNVERIFIED`.
 Record candidate `subject`, original `scope`, and `completionTarget` identities
 from the shared policy. Keep comparison base and publication branch separate.
-For an unavailable mandatory check, name its owner, missing evidence, and resume
-check; complete independent safe inspection first.
+For an unavailable mandatory check, preserve its disclosure; complete independent
+safe inspection first.
 
 Use `FULLY_IMPLEMENTED` for apparently present implementation, `PARTIALLY_IMPLEMENTED`
 for some implementation with gaps, `NOT_IMPLEMENTED` for missing implementation,
-or `BLOCKED` when unavailable mandatory source prevents trustworthy assessment
-or only unavailable prerequisites remain. Preserve mixed executable work as a
-bounded backlog with its explicit prerequisite handoff. These are
+or `BLOCKED` when unavailable mandatory source prevents trustworthy assessment.
+Prerequisites outside the verifier's reach never make an assessment `BLOCKED`.
+Preserve mixed executable work as a bounded backlog. These are
 initial inspection verdicts, not objective acceptance or landing evidence. The
-verifier must check/reuse objective evidence before publication or completion.
+verifier must evaluate evidence or valid Unverified disclosures before publication or completion.
 Do not overwrite this artifact with a later verifier verdict.
 
 ## Verification map and feasibility
@@ -102,17 +104,28 @@ Allowed row statuses:
 - `CONFLICT`
 - `UNVERIFIED`
 - `OUT_OF_SCOPE`
+- `needs_human`: actual authority handoff, with the exact decision, owner, and action; excluded from executable backlog until authorized.
+
+`UNVERIFIED` rows use the same disclosure object and stable source ID as issue-brief
+`unverifiable` rows. Neither status asserts a pass.
 
 ## Bounded Backlog
 
-Produce `boundedBacklog` for every missing, partial, conflict, or required-unverified row. The backlog prioritizes remaining implementation for downstream planning, tasks, and implementation. Verification retains the complete original scope, including previously met requirements as regression constraints.
+Produce `boundedBacklog` for missing, partial, or conflicting implementation rows. Unverified criteria are disclosure-only: keep their reason and verifiableBy in the assessment, outside `boundedBacklog`. The backlog prioritizes remaining implementation for downstream planning, tasks, and implementation. Verification retains the complete original scope, including previously met requirements as regression constraints.
 
-Separate executable repository changes from required evidence or decisions owned
-outside the current runtime. Name the owner, missing evidence, and resume check
-for each unavailable prerequisite. A mixed backlog can proceed with independent
-repository work, but if only unavailable mandatory prerequisites remain, report
-`BLOCKED` with that handoff instead of starting another implementation pass.
-Optional deployment diagnostics are limitations, not blockers; explicitly required
-deployment acceptance cannot be silently excluded because access is unavailable.
+Separate executable repository changes from required evidence outside the current
+runtime. Name the criterion, missing evidence, reason and verifiableBy for each
+unavailable check. A mixed backlog can proceed with independent repository work.
+Checks outside the verifier's reach become Unverified criteria under the shared
+acceptance policy. Optional deployment diagnostics are limitations, not blockers.
 
-Do not choose `FULLY_IMPLEMENTED` for objective acceptance unless every mandatory source row is verified under the shared acceptance policy. A bounded initial assessment may identify apparently present implementation; it cannot replace objective verification or prove landing.
+Unverified does not grant permission. An actual missing authorization or operator
+decision needed to act on the selected operation remains a `needs_human` handoff;
+do not perform that action or report its authorized completion until supplied.
+Carry `needs_human` as the row status into planning and tasks, with the exact
+decision, owner, and action; do not convert it into missing implementation. Do not invent an
+authority gate from unavailable deployment evidence, physical testing, or test
+signoff: those remain Unverified disclosures when outside the verifier's reach.
+Separately scoped release approvals do not gate implementation completion.
+
+Do not choose `FULLY_IMPLEMENTED` for objective acceptance unless every mandatory source row is verified or Unverified under the shared acceptance policy. A bounded initial assessment may identify apparently present implementation; it cannot replace objective verification or prove landing.

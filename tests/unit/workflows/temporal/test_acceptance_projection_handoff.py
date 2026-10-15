@@ -9,19 +9,23 @@ import pytest
 from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
 from moonmind.workflows.temporal import agent_result_payloads as payloads
 from moonmind.workflows.temporal.workflows import run as run_module
-from tests.unit.workflows.skills.test_acceptance_source_binding import (
+from tests.unit.workflows.skills.test_acceptance_source_binding import (  # noqa: F401
+    _disclose_unverified,
     source_bound_report,
-)  # noqa: F401
+)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("unverified", [False, True])
 @pytest.mark.parametrize(
     "failure", [None, "unreadable", "bytes", "reference", "subject"]
 )
 async def test_large_projection_is_read_before_parent_acceptance(
-    source_bound_report, monkeypatch, failure
+    source_bound_report, monkeypatch, failure, unverified
 ):
     report = source_bound_report
+    if unverified:
+        _disclose_unverified(report)
     # Legitimate detailed source map exceeds the child metadata limit.
     plan = report["validatedRefs"]["acceptance"]["verificationMap"][0]
     plan["requiredBehavior"] = "Observe required behavior. " * 1200
@@ -72,6 +76,19 @@ async def test_large_projection_is_read_before_parent_acceptance(
         assert acceptance_evidence(hydrated["outputs"]["moonSpecVerify"]) is not None
         assert len(json.dumps(hydrated)) > 16384
         assert "acceptance" not in result["outputs"]["moonSpecVerify"]["validatedRefs"]
+        parent._record_moonspec_verify_gate(
+            node_id="verify", outputs=hydrated["outputs"]
+        )
+        assert parent._apply_blocking_moonspec_gate_to_publish() is False
+        body = parent._resolve_native_pr_body(
+            publish_payload={"prBody": "Implements live parity."}, task_payload={}
+        )
+        if unverified:
+            assert "## Unverified criteria" in body
+            assert "LIVE-1: The live provider credentials are unavailable." in body
+            assert "Verifiable by: existing qualified runner" in body
+        else:
+            assert "Unverified criteria" not in body
     activity.assert_awaited_once()
 
 
@@ -100,7 +117,7 @@ def test_initial_current_evidence_gap_can_enter_existing_draft_owner(
             }
         ],
     )
-    report["validatedRefs"]["acceptance"]["evidence"][0]["status"] = "UNVERIFIED"
+    report["validatedRefs"]["acceptance"]["evidence"][0]["status"] = "MISSING"
     report["validatedRefs"]["acceptance"]["evidence"][0]["evidenceRefs"] = []
     raw = json.dumps(report).encode()
     descriptor = payloads.build_acceptance_projection(

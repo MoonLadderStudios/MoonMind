@@ -146,21 +146,26 @@ Use this table shape:
 | -------------- | ---------------------- | --------------------------- | ---------------------------- | ------------------------ |
 | FR-001         | missing                | none found                  | add code and tests           | unit + integration       |
 | SCN-001        | implemented_unverified | `src/...`, no scenario test | add verification tests first, with implementation contingency if they fail | integration |
+| SC-002         | unverified             | reason: GPU unavailable; verifiableBy: GPU CI | disclosure only | none |
 | DESIGN-REQ-004 | implemented_verified   | `src/...`, `tests/...`      | no new implementation        | none beyond final verify |
 
 When a row originates from a stable source claim, include the claim ID in the `ID` cell or in the evidence text so `/moonspec.tasks` can map every implementation task back to stable claim provenance. If no stable source claim applies, write `No stable source claim applies: <reason>` in the evidence text.
 
 Allowed `Status` values:
 
+- `needs_human`: non-executable actual authority handoff; preserve the source ID and exact decision, owner, and action. It takes precedence over `unverified` and missing-work defaults; do not create executable or fallback tasks for the affected action. Continue independent authorized work, but do not claim the dependent operation complete.
 - `missing`: no adequate implementation evidence found
 - `partial`: some implementation exists, but the requirement is not fully satisfied
-- `implemented_unverified`: behavior appears present, but required proof is missing or insufficient
+- `unverified`: disclosure-only criterion whose check remains unavailable under the shared acceptance policy
+- `implemented_unverified`: behavior appears present and verification is feasible, but required proof is missing or insufficient
 - `implemented_verified`: behavior is already present and sufficiently covered by existing tests or other evidence
+
+Unverified criteria are disclosure-only. Normalize issue-brief `unverifiable` and source-matrix `UNVERIFIED` to `unverified`, retaining the source ID and nonblank `unverified.reason` and `unverified.verifiableBy` (reason and verifiableBy in the plan table). This status takes precedence over `implemented_unverified` when the check remains outside the verifier's capabilities, access, or time after reasonable attempts. It creates no test, verification, or fallback implementation tasks, even for required criteria. Do not infer missing implementation from unavailable evidence. Observed defects still require remediation; classify those separately as `missing`, `partial`, or conflicting implementation work. Actual permission needed to perform an action uses `needs_human`, never an Unverified evidence waiver.
 
 Rules:
 
 - Existing code changes planned work, not story scope.
-- Prefer `implemented_unverified` over `implemented_verified` unless current evidence is strong.
+- For feasible checks, prefer `implemented_unverified` over `implemented_verified` unless current evidence is strong; apply the `unverified` exception first.
 - Do not mark `implemented_verified` unless the current code and current tests together satisfy the requirement and its acceptance evidence.
 - When uncertain, do not use `implemented_verified`.
 
@@ -192,6 +197,8 @@ Research and resolve:
 
 For each in-scope item, inspect relevant code and tests, then classify it:
 
+- `needs_human` -> preserve the authority handoff without executable tasks
+- `unverified` -> disclosure only; preserve source ID, reason and verifiableBy without executable work
 - `missing` -> requires tests and implementation
 - `partial` -> requires tests and implementation changes
 - `implemented_unverified` -> requires tests or verification first, plus an explicit implementation contingency to execute if verification exposes a gap
@@ -231,11 +238,11 @@ Contract guidance:
 
 Quickstart guidance:
 
-- Include the intended unit test command.
-- Include the intended integration test command.
-- Include any service, fixture, environment, or migration setup needed for integration tests.
+- Include unit/integration commands and required setup only for executable checks; use N/A for disclosure-only rows.
 - Describe how to verify the single story end to end.
 - Reflect requirement status decisions:
+  - `needs_human`: authority handoff only; no action before permission
+  - `unverified`: disclosure only; no runnable check or implementation contingency
   - `missing` and `partial`: tests first, then implementation
   - `implemented_unverified`: verification tests first, then a planned implementation contingency if those tests fail
   - `implemented_verified`: final verification only unless the user asks for stronger coverage
@@ -276,7 +283,7 @@ Report:
 - Requirement status summary by ID and count
 - Which items need code changes
 - Which items need tests only
-- Which items are already verified
+- Which items are already verified or disclosure-only
 - Readiness for `/moonspec.tasks`
 
 ## Post-Plan Hooks
@@ -316,8 +323,8 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Identify unit and integration testing separately.
 - Use `plan` to decide whether work is code + tests, tests only, or no new implementation.
 - Existing code never removes a requirement from `spec.md`; it only changes the planned work.
-- Prefer verification tests before implementation when behavior appears to already exist, but include fallback implementation work for `implemented_unverified` items when verification fails.
+- Apply disclosure-only `unverified` status before executable planning. For feasible checks, prefer verification tests before implementation when behavior appears to already exist, with fallback implementation work for `implemented_unverified` items only if verification fails.
 - Resolve all planning clarifications through `research.md`.
 - Error on unjustified principle conflicts, multiple user stories, or unresolved clarifications.
 - Generate design artifacts only; leave task generation to `/moonspec.tasks`.
-- `tasks.md` should consume `## Requirement Status` when deciding whether to emit implementation tasks, verification-only tasks, or no new work for already-verified items.
+- `tasks.md` should consume `## Requirement Status` when deciding whether to emit implementation tasks, verification-only tasks, or disclosure-only `unverified` rows and no new work for already-verified items.

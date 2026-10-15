@@ -233,11 +233,10 @@ Before disabling a workflow-requested on-demand host path, drain or terminate ac
 Rolling back to a legacy runtime default changes **future admission only**. It
 never rewrites an active or historical execution, never substitutes a different
 profile, host mode, policy, or session for a request, and never releases Provider
-Profile capacity before credential consumers stop and cleanup completes. A
-legacy path whose retirement class is `new_admission_disabled` stays closed to
-new work; restoring it means changing its class in code, not supplying rollback
-evidence at admission. See `moonmind/omnigent/session_supervisor_rollback.py`
-and [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners).
+Profile capacity before credential consumers stop and cleanup completes. The
+supervisor rollback mode is the one control for restoring a prior default; a
+legacy path's retirement class only says whether it still admits new work. See
+`moonmind/omnigent/session_supervisor_rollback.py` and [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners).
 
 Legacy Compose profiles (`omnigent-host-codex`, `omnigent-host-claude`,
 `omnigent-host`) and the legacy image variables (`OMNIGENT_HOST_IMAGE_REF`,

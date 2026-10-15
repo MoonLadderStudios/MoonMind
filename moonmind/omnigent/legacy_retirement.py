@@ -22,10 +22,8 @@ The guard helpers here:
 Removing a component is ordinary engineering: delete the code, its row, and the
 tests that only existed for it, and keep the behavior tests of the surviving
 owner (#3932). There is no removal stage, criterion ledger, or drain census.
-
-The module also records temporary supervisor rollout flags with their exit
-condition so a rollout flag can never silently become a permanent alternate
-architecture.
+Restoring a prior default for new work belongs to the supervisor rollback
+control (:mod:`moonmind.omnigent.session_supervisor_rollback`), not to a row.
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ from moonmind.omnigent.retirement_surfaces import (
     surface_exists,
 )
 
-RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v2"
+RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v3"
 
 
 class RetirementClass(str, Enum):
@@ -383,8 +381,9 @@ class ObsoleteConfiguration(BaseModel):
 
 # Every legacy configuration identity that will produce an actionable startup
 # failure once its owning retirement row stops admitting new work. Nothing is
-# deprecated yet: each owning row is still an active product path, so the
-# aliases remain a supported way to pin a prior host image.
+# deprecated yet: the aliases below are still the supported way to pin a prior
+# image while the rollback window is open (#3833 has not promoted the qualified
+# generic rows).
 OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
     ObsoleteConfiguration(
         variable="OMNIGENT_HOST_IMAGE_REF",
@@ -602,8 +601,9 @@ def assert_new_admission_allowed(
 ) -> LegacyAdmissionDecision:
     """Fail fast when new work selects a path whose class no longer admits it."""
 
-    record = get_retirement_record(path_id, inventory=inventory)
-    decision = evaluate_new_admission(record)
+    decision = evaluate_new_admission(
+        get_retirement_record(path_id, inventory=inventory)
+    )
     if not decision.allowed:
         raise LegacyAdmissionRejected(
             f"legacy path {path_id!r} no longer admits new work "

@@ -10,7 +10,9 @@ usage() {
   cat <<USAGE
 Usage: $0 --check <tasks|diff> --mode <runtime|docs> [--base-ref <ref>]
 
-Validates minimum implementation scope for MoonSpec workflows.
+Reports legacy file-count diagnostics for MoonSpec workflows.
+Canonical status-based acceptance, not file counts, determines completion.
+Missing files/base refs and invalid arguments are errors; low file counts are advisory.
 USAGE
 }
 
@@ -114,13 +116,13 @@ validate_tasks_scope() {
   )"
 
   if (( runtime_count < 1 )); then
-    echo "Scope validation failed: tasks.md must include at least one production runtime file task." >&2
-    return 1
+    echo "Advisory scope diagnostic: no production runtime task found. Defer to canonical status-based acceptance."
+    return 0
   fi
 
   if (( validation_count < 1 )); then
-    echo "Scope validation failed: tasks.md must include at least one validation task." >&2
-    return 1
+    echo "Advisory scope diagnostic: no validation task found. Defer to canonical status-based acceptance."
+    return 0
   fi
 
   echo "Scope validation passed: tasks check (runtime tasks=${runtime_count}, validation tasks=${validation_count})."
@@ -151,8 +153,8 @@ validate_diff_scope() {
   )"
 
   if [[ -z "$all_files" ]]; then
-    echo "Scope validation failed: no changes detected against ${BASE_REF}." >&2
-    return 1
+    echo "Advisory scope diagnostic: no changes detected against ${BASE_REF}. Defer to canonical status-based acceptance."
+    return 0
   fi
 
   local runtime_count=0
@@ -168,13 +170,13 @@ validate_diff_scope() {
   done <<< "$all_files"
 
   if (( runtime_count < 1 )); then
-    echo "Scope validation failed: diff must include production runtime file changes." >&2
-    return 1
+    echo "Advisory scope diagnostic: no production runtime file changes found. Defer to canonical status-based acceptance."
+    return 0
   fi
 
   if (( validation_count < 1 )); then
-    echo "Scope validation failed: diff must include test file changes under tests/." >&2
-    return 1
+    echo "Advisory scope diagnostic: no test file changes found. Defer to canonical status-based acceptance."
+    return 0
   fi
 
   echo "Scope validation passed: diff check (runtime files=${runtime_count}, test files=${validation_count})."

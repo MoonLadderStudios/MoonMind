@@ -625,28 +625,53 @@ async def resume_published_issue_evidence(
                 )
                 await _persist(owner, record)
                 continue
-            ready = await _activity(
-                owner,
-                {
-                    **payload,
-                    "action": "mark_ready",
-                    # Only a draft this workflow created is its own to mark
-                    # ready; an adopted operator draft stays untouched.
-                    "automationOwnedDraft": (
-                        dict(context.get("moonSpecDraftPublication") or {}).get(
-                            "createdByWorkflow"
+            ready_request = {
+                **payload,
+                "action": "mark_ready",
+                # Only a draft this workflow created is its own to mark
+                # ready; an adopted operator draft stays untouched.
+                "automationOwnedDraft": (
+                    dict(context.get("moonSpecDraftPublication") or {}).get(
+                        "createdByWorkflow"
+                    )
+                    is True
+                ),
+                "userHold": owner._paused or owner._cancel_requested,
+                "gateResultRef": gate_ref,
+                "reportDigest": (
+                    dict(parsed.validated_refs or {}).get("acceptanceProjection")
+                    or {}
+                ).get("reportDigest"),
+                "evidenceSetDigest": observation.get("evidenceSetDigest"),
+            }
+            ready = await _activity(owner, ready_request)
+            observe_ready = workflow.patched("run-issue-evidence-ready-observation-v1")
+            if ready.get("reconciliationRequired") and observe_ready:
+                # Keep the accepted gate and original wall-clock budget. Only
+                # observation resumes here; neither verifier nor mutation repeats.
+                while (
+                    ready.get("reconciliationRequired")
+                    and ready.get("observedHeadSha", head) == head
+                    and not owner._cancel_requested
+                    and workflow.now() < deadline
+                ):
+                    await _persist(
+                        owner,
+                        {**record, "status": "waiting", "nextAction": "confirm-publication",
+                         "publicationObservation": ready},
+                    )
+                    try:
+                        await workflow.wait_condition(
+                            lambda: owner._cancel_requested,
+                            timeout=min(timedelta(seconds=60), deadline - workflow.now()),
                         )
-                        is True
-                    ),
-                    "userHold": owner._paused or owner._cancel_requested,
-                    "gateResultRef": gate_ref,
-                    "reportDigest": (
-                        dict(parsed.validated_refs or {}).get("acceptanceProjection")
-                        or {}
-                    ).get("reportDigest"),
-                    "evidenceSetDigest": observation.get("evidenceSetDigest"),
-                },
-            )
+                    except asyncio.TimeoutError:
+                        # The observation interval elapsed; re-read the same PR.
+                        pass
+                    await owner._wait_if_paused_at_safe_boundary()
+                    if owner._cancel_requested or workflow.now() >= deadline:
+                        break
+                    ready = await _activity(owner, {**ready_request, "observeOnly": True})
             if (
                 ready.get("status") != "ready"
                 or ready.get("headSha") != head
@@ -658,6 +683,7 @@ async def resume_published_issue_evidence(
                         **record,
                         "status": "blocked",
                         "nextAction": "confirm-publication",
+                        **({"publicationObservation": ready} if observe_ready else {}),
                     },
                 )
                 return
@@ -667,7 +693,9 @@ async def resume_published_issue_evidence(
             context.pop("publicationBlockedBy", None)
             context.pop("moonSpecDraftPublication", None)
             await _persist(
-                owner, {**record, "status": "accepted", "nextAction": "review"}
+                owner,
+                {**record, "status": "accepted", "nextAction": "review",
+                 **({"publicationObservation": ready} if observe_ready else {})},
             )
             return
         if not owner._cancel_requested:

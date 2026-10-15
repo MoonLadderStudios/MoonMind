@@ -486,15 +486,14 @@ ownership in flight.
 
 For that retained lane, plan-less admission is a distinct bounded Activity
 behind its own replay patch. It freezes the admitted feature generation and
-evaluates an operator mode of `enabled`, `canary`, or `disabled`. Canary
-selection uses an exact AgentRun owner allowlist, and an optional
-execution-profile allowlist can narrow either enabled mode. A configured
-generation mismatch fails closed. An already admitted child does not
-re-evaluate admission, so disabling new selection cannot disable replay, query,
-cancellation, cleanup, or historical reads for an admitted session. Remove the
-plan-less branch and its admission flags when no retained execution without a
-persisted plan can still be replayed or exactly rerun, and no stored Omnigent
-schedule lacks a plan.
+has no separate rollout selection. Fully bound plans, reference-only plans,
+and plan-less inputs all apply the operator's supervisor rollback control
+before new admission. Recorded decisions from the retired canary/allowlist
+modes still replay. An already admitted child does not re-evaluate admission, so blocking
+new admission cannot disable replay, query, cancellation, cleanup, or
+historical reads for an admitted session. Remove the plan-less branch when no
+retained execution without a persisted plan can still be replayed or exactly
+rerun, and no stored Omnigent schedule lacks a plan.
 
 ### 7.2 Why the identity stays external
 

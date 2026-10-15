@@ -2049,6 +2049,49 @@ class TestPushWorkspaceBranch:
             "moonmind/workflows/temporal/activity_runtime.py",
         ]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("publish", [False, True])
+    async def test_workspace_commit_uses_recorded_identity_after_settings_change(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, publish: bool,
+    ) -> None:
+        from tests.helpers.publication_identity import recorded_publication_identity
+
+        identity = {"name": "Admitted", "email": "admitted@example.invalid"}
+        recorded_publication_identity(monkeypatch, identity)
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed")
+        monkeypatch.setattr(settings.workflow, "git_user_email", "changed@example.invalid")
+        captured = []
+
+        async def spawn(*args, **kwargs):
+            captured.append(kwargs["env"])
+            proc = AsyncMock()
+            proc.returncode = 0
+            output = b"auto-branch\n" if "rev-parse" in args else b"1\n" if "rev-list" in args else b""
+            proc.communicate = AsyncMock(return_value=(output, b""))
+            return proc
+
+        activities = TemporalAgentRuntimeActivities(
+            run_store=_make_mock_store(workspace_path=str(tmp_path)),
+        )
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.activity_runtime._create_managed_agent_subprocess",
+            spawn,
+        )
+        if publish:
+            result = await activities._push_workspace_branch("run-1", github_token="selected-token")
+            assert result["push_status"] == "pushed"
+        else:
+            result = await activities._commit_workspace_changes_if_needed(
+                str(tmp_path), run_id="run-1",
+            )
+            assert result == {}
+        assert captured
+        for env in captured:
+            for key in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+                assert env[key] == identity["name"]
+            for key in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+                assert env[key] == identity["email"]
+
     def test_workspace_command_env_ignores_support_gitconfig_and_sets_identity(
         self,
         monkeypatch: pytest.MonkeyPatch,

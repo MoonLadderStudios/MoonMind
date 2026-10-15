@@ -602,6 +602,7 @@ def _request(
 
 async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and_result(
     session_factory,
+    production_transport_pool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -694,8 +695,6 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             plan,
         )
     finally:
-        # The builder's process-wide pool is bound to this test's event loop.
-        await production.close_omnigent_transport_pool()
         await running.runner.cleanup()
 
     # The launched host received exactly the durable Skill bytes.

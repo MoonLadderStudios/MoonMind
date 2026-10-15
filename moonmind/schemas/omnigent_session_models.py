@@ -318,8 +318,8 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
 
     admitted: bool
     # New decisions use only "enabled" and "realizer_managed_lifecycle". The
-    # retired rollout-setting codes and modes stay decodable because AgentRun
-    # replay validates decisions already recorded in history.
+    # retired plan-less rollout codes and modes stay readable so recorded
+    # decisions in retained histories still replay.
     reason_code: Literal[
         "enabled",
         "canary_selected",
