@@ -74,6 +74,9 @@ function readWorkflowStartDashboardConfig(payload: BootPayload): WorkflowStartDa
 
 // This cutoff is enforced on UTF-8 encoded request bytes, not JavaScript string length.
 const INLINE_TASK_INPUT_LIMIT_BYTES = 8_000;
+// Mirrors repository_contract.DEFAULT_GIT_CONNECTION_REF: the connection an
+// omitted Git connectionRef selects server-side.
+const DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default";
 const REMEDIATION_DRAFT_LOAD_MESSAGES: Record<
   Exclude<RemediationCreateDraftReadResult["status"], "valid">,
   string
@@ -1801,7 +1804,83 @@ export function buildEditParametersPatch({
   delete parametersPatch.followUpRetrieval;
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
+
+  // The form authors only a repository name and branch, so it cannot express
+  // the source run's provider or named connection. Keep that identity while
+  // the repository is unchanged. A cleared or different repository is a
+  // source change: drop the inherited binding and its branch so the edit
+  // runs against what was authored (scratch when blank).
+  const submittedName = repositoryTargetName(submittedPayload.repository);
+  const baseTarget = [
+    executionParameters.repository,
+    artifactBase.parameters.repository,
+    baseParameters.repository,
+  ].map(recordValue).find(
+    (target) =>
+      (target.provider === "git" || target.provider === "lore") &&
+      repositoryTargetName(target) === submittedName,
+  );
+  if (!submittedName) {
+    delete parametersPatch.repository;
+  } else if (baseTarget) {
+    parametersPatch.repository = carryRepositoryIdentity(
+      baseTarget,
+      submittedName,
+      repositoryTargetBranch(submittedPayload.repository),
+    );
+  }
+  if (submittedName !== repositoryTargetName(baseParameters.repository)) {
+    delete parametersPatch.branch;
+    const workflowGit = recordValue(mergedWorkflow.git);
+    delete workflowGit.branch;
+    delete workflowGit.repository;
+    if (Object.keys(workflowGit).length > 0) {
+      mergedWorkflow.git = workflowGit;
+    } else {
+      delete mergedWorkflow.git;
+    }
+  }
   return parametersPatch;
+}
+
+function repositoryTargetName(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  return String(recordValue(recordValue(value).repository).name ?? "").trim();
+}
+
+function repositoryTargetBranch(value: unknown): string {
+  return String(recordValue(recordValue(value).branch).name ?? "").trim();
+}
+
+function carryRepositoryIdentity(
+  baseTarget: Record<string, unknown>,
+  name: string,
+  authoredBranch: string,
+): string | Record<string, unknown> {
+  const connectionRef = String(baseTarget.connectionRef ?? "").trim();
+  const sourceBranch = repositoryTargetBranch(baseTarget);
+  const hasNamedIdentity =
+    baseTarget.provider === "lore" ||
+    Boolean(connectionRef && connectionRef !== DEFAULT_GIT_CONNECTION_REF);
+  // A structured target requires a branch. An omitted branch keeps the
+  // backend's default-branch semantics unless that would discard a named
+  // provider or connection; then the source run's branch is kept.
+  const branch = authoredBranch || (hasNamedIdentity ? sourceBranch : "");
+  if (!branch) {
+    return name;
+  }
+  return {
+    provider: baseTarget.provider,
+    ...(connectionRef ? { connectionRef } : {}),
+    repository: { name },
+    branch: { name: branch },
+    // A pinned revision belongs to the source branch only.
+    ...(baseTarget.revision && branch === sourceBranch
+      ? { revision: baseTarget.revision }
+      : {}),
+  };
 }
 
 function normalizeMoonMindApiPath(value: unknown): string | null {

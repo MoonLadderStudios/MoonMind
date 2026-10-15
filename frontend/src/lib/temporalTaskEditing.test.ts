@@ -299,6 +299,26 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     });
   });
 
+  it("reads repository and branch from a structured repository target", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:lore-edit",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        repository: {
+          provider: "lore",
+          connectionRef: "studio-lore",
+          repository: { name: "studio/game" },
+          branch: { name: "trunk" },
+        },
+        workflow: { instructions: "Rebuild the level lighting." },
+      },
+    });
+
+    expect(draft.repository).toBe("studio/game");
+    expect(draft.branch).toBe("trunk");
+  });
+
   it("preserves GitHub orchestration metadata from saved workflow steps", () => {
     const githubOrchestration = {
       task: {

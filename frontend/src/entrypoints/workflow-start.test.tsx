@@ -117,6 +117,171 @@ function renderWorkflowStartPage(payload: BootPayload) {
 }
 
 describe("buildEditParametersPatch", () => {
+  const loreTarget = {
+    provider: "lore",
+    connectionRef: "studio-lore",
+    repository: { name: "studio/game" },
+    branch: { name: "trunk" },
+    revision: { kind: "lore_revision", revisionSignature: "sig-1" },
+  };
+  const editWorkflow = { instructions: "Ship it.", runtime: { mode: "codex_cli" } };
+
+  it("keeps a Lore named-connection target when edit/rerun keeps its repository", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-lore",
+        repository: "studio/game",
+        inputParameters: { repository: loreTarget, workflow: editWorkflow },
+      },
+      submittedPayload: {
+        repository: {
+          provider: "git",
+          repository: { name: "studio/game" },
+          branch: { name: "trunk" },
+        },
+        task: editWorkflow,
+      },
+      submittedWorkflow: editWorkflow,
+    });
+
+    expect(patch.repository).toEqual(loreTarget);
+  });
+
+  it("keeps provider and connection but drops the pinned revision when only the branch changes", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-lore-branch",
+        inputParameters: { repository: loreTarget, workflow: editWorkflow },
+      },
+      submittedPayload: {
+        repository: {
+          provider: "git",
+          repository: { name: "studio/game" },
+          branch: { name: "feature/sky" },
+        },
+        task: editWorkflow,
+      },
+      submittedWorkflow: editWorkflow,
+    });
+
+    expect(patch.repository).toEqual({
+      provider: "lore",
+      connectionRef: "studio-lore",
+      repository: { name: "studio/game" },
+      branch: { name: "feature/sky" },
+    });
+  });
+
+  it("keeps a named Git connection when the branch is omitted, using the source branch", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-named-git",
+        inputParameters: {
+          repository: {
+            provider: "git",
+            connectionRef: "gitea-internal",
+            repository: { name: "team/service" },
+            branch: { name: "develop" },
+          },
+          workflow: editWorkflow,
+        },
+      },
+      submittedPayload: { repository: "team/service", task: editWorkflow },
+      submittedWorkflow: editWorkflow,
+    });
+
+    expect(patch.repository).toEqual({
+      provider: "git",
+      connectionRef: "gitea-internal",
+      repository: { name: "team/service" },
+      branch: { name: "develop" },
+    });
+  });
+
+  it("keeps omitted-branch semantics for a default-connection Git source", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-default-git",
+        inputParameters: {
+          repository: {
+            provider: "git",
+            connectionRef: "repository-connection:git-default",
+            repository: { name: "octo/repo" },
+            branch: { name: "main" },
+          },
+          workflow: editWorkflow,
+        },
+      },
+      submittedPayload: { repository: "octo/repo", task: editWorkflow },
+      submittedWorkflow: editWorkflow,
+    });
+
+    expect(patch.repository).toBe("octo/repo");
+  });
+
+  it("drops the old provider and connection when the repository changes", () => {
+    const submittedRepository = {
+      provider: "git",
+      repository: { name: "octo/other" },
+      branch: { name: "main" },
+    };
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-repo-change",
+        inputParameters: {
+          repository: loreTarget,
+          branch: "trunk",
+          workflow: { ...editWorkflow, git: { branch: "trunk" } },
+        },
+      },
+      submittedPayload: { repository: submittedRepository, task: editWorkflow },
+      submittedWorkflow: editWorkflow,
+    });
+
+    expect(patch.repository).toEqual(submittedRepository);
+    expect("branch" in patch).toBe(false);
+    expect(patch.workflow).not.toHaveProperty("git");
+    expect(patch.workflow).toMatchObject({ instructions: "Ship it." });
+  });
+
+  it("removes the inherited repository when edit/rerun clears the source to scratch", () => {
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:edit-to-scratch",
+        repository: "octo/repo",
+        inputParameters: {
+          repository: {
+            provider: "git",
+            connectionRef: "repository-connection:git-default",
+            repository: { name: "octo/repo" },
+            branch: { name: "main" },
+          },
+          branch: "main",
+          publishMode: "pr",
+          workflow: {
+            ...editWorkflow,
+            git: { branch: "main" },
+            publish: { mode: "pr" },
+          },
+        },
+      },
+      submittedPayload: {
+        publishMode: "none",
+        task: { ...editWorkflow, publish: { mode: "none" } },
+      },
+      submittedWorkflow: { ...editWorkflow, publish: { mode: "none" } },
+    });
+
+    expect("repository" in patch).toBe(false);
+    expect("branch" in patch).toBe(false);
+    expect(patch.publishMode).toBe("none");
+    expect(patch.workflow).not.toHaveProperty("git");
+    expect(patch.workflow).toMatchObject({
+      instructions: "Ship it.",
+      publish: { mode: "none" },
+    });
+  });
+
   it('#4636 keeps unchanged strict selection diagnostics separate from authored runtime', () => {
     const runtime = { mode: 'codex_cli', modelTier: 2, tierFallback: 'strict' };
     const patch = buildEditParametersPatch({ submittedPayload: { task: { instructions: 'Unrelated edit', runtime } }, submittedWorkflow: { instructions: 'Unrelated edit', runtime }, execution: { workflowId: 'issue-4636', workflowType: 'MoonMind.UserWorkflow', inputParameters: { workflow: { instructions: 'Work', runtime }, modelTier: 2, tierFallback: 'strict', model: 'tier-model', effort: 'high', requestedModel: null } } });
@@ -12875,6 +13040,48 @@ describe("Task Create MM-641 authoring validation", () => {
             }),
           } as Response);
         }
+        // Lore named-connection rerun source: edit/rerun must keep its
+        // provider and connection, or clear them on a source change.
+        if (url === "/api/executions/mm%3Alore-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:lore-rerun",
+              workflowType: "MoonMind.UserWorkflow",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              repository: "studio/game",
+              branch: "trunk",
+              publishMode: "none",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                repository: {
+                  provider: "lore",
+                  connectionRef: "studio-lore",
+                  repository: { name: "studio/game" },
+                  branch: { name: "trunk" },
+                },
+                publishMode: "none",
+                workflow: {
+                  instructions: "Rebuild the level lighting.",
+                  runtime: { mode: "codex_cli" },
+                  publish: { mode: "none" },
+                },
+              },
+              actions: { canUpdateInputs: false, canRerun: true },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Alore-rerun/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "continue_as_new",
+              execution: { workflowId: "mm:lore-rerun-created" },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Aretrieval-rerun/update") {
           return Promise.resolve({
             ok: true,
@@ -13361,6 +13568,86 @@ describe("Task Create MM-641 authoring validation", () => {
     // resubmitted.
     expect("rag" in request.parametersPatch).toBe(false);
     expect("followUpRetrieval" in request.parametersPatch).toBe(false);
+  });
+
+  async function submitLoreRerun(
+    edit: (repoInput: HTMLInputElement) => void,
+  ): Promise<Record<string, unknown>> {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/workflows/new?rerunExecutionId=mm%3Alore-rerun",
+    );
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Rebuild the level lighting.");
+    });
+    const repoInput = screen.getByLabelText("Repository") as HTMLInputElement;
+    expect(repoInput.value).toBe("studio/game");
+    edit(repoInput);
+    fireEvent.change(instructions, {
+      target: { value: "Rebuild the level lighting with baked GI." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Alore-rerun/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions/mm%3Alore-rerun/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body)) as {
+      updateName: string;
+      parametersPatch: Record<string, unknown>;
+    };
+    expect(request.updateName).toBe("RequestRerun");
+    return request.parametersPatch;
+  }
+
+  it("reruns a Lore named-connection source with its provider and connection", async () => {
+    const patch = await submitLoreRerun(() => {});
+
+    expect(patch.repository).toEqual({
+      provider: "lore",
+      connectionRef: "studio-lore",
+      repository: { name: "studio/game" },
+      branch: { name: "trunk" },
+    });
+    expect(patch.workflow).toMatchObject({
+      instructions: "Rebuild the level lighting with baked GI.",
+    });
+  });
+
+  it("reruns as scratch when the repository source is cleared", async () => {
+    const patch = await submitLoreRerun((repoInput) => {
+      fireEvent.change(repoInput, { target: { value: "" } });
+    });
+
+    expect("repository" in patch).toBe(false);
+    expect(patch.publishMode).toBe("none");
+    expect(patch.workflow).toMatchObject({
+      instructions: "Rebuild the level lighting with baked GI.",
+    });
+  });
+
+  it("drops the Lore connection when the rerun selects a different repository", async () => {
+    const patch = await submitLoreRerun((repoInput) => {
+      fireEvent.change(repoInput, { target: { value: "studio/tools" } });
+    });
+
+    const repository = patch.repository as Record<string, unknown> | string;
+    expect(JSON.stringify(repository)).not.toContain("studio-lore");
+    expect(JSON.stringify(repository)).not.toContain("lore");
+    expect(
+      typeof repository === "string"
+        ? repository
+        : (repository.repository as Record<string, unknown>).name,
+    ).toBe("studio/tools");
   });
 
   it("does not serialize the primary Skill onto blank added steps", async () => {
