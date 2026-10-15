@@ -13644,6 +13644,109 @@ describe("Task Create MM-641 authoring validation", () => {
     });
   });
 
+  it("keeps a non-Git provider in the source when the Branch is cleared", async () => {
+    const recordedLoreTarget = {
+      provider: "lore",
+      connectionRef: "repository-connection:lore-studio",
+      repository: { name: "studio/game" },
+      branch: { name: "main" },
+    };
+    const updates = mockRecordedExecution({
+      workflowId: "mm:lore-branchless-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedLoreTarget,
+        publishMode: "none",
+        workflow: {
+          instructions: "Build the level.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Alore-branchless-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branch = (await screen.findByLabelText("Branch")) as HTMLInputElement;
+    await waitFor(() => expect(branch.value).toBe("main"));
+    fireEvent.change(branch, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.workspace).toEqual({
+      provider: "lore",
+      workspaceSource: {
+        kind: "repository",
+        repository: "studio/game",
+        connectionRef: "repository-connection:lore-studio",
+      },
+    });
+  });
+
+  it("drops recorded repository aliases when rebuilding the workspace source", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:aliased-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/app",
+        publishMode: "none",
+        workspaceSpec: {
+          repository: "octo/app",
+          branch: "main",
+          repositoryTarget: {
+            provider: "git",
+            connectionRef: "repository-connection:team-gitlab",
+            repository: { name: "octo/app" },
+            branch: { name: "main" },
+          },
+          workspaceSource: {
+            kind: "repository",
+            repository: "octo/app",
+            branch: "main",
+            accessMode: "explicit",
+          },
+        },
+        workflow: {
+          instructions: "Review the app.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aaliased-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("octo/app"));
+    fireEvent.change(repository, { target: { value: "octo/other" } });
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    // Checkout reads the top-level target first, so the old one cannot stay.
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/other",
+        branch: "dev",
+        accessMode: "explicit",
+        connectionRef: "repository-connection:team-gitlab",
+      },
+    });
+  });
+
   it("rebuilds a recorded repository workspace from the edited repository and branch", async () => {
     const updates = mockRecordedExecution({
       workflowId: "mm:routed-rerun",
