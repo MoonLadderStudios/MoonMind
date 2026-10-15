@@ -22,10 +22,8 @@ The guard helpers here:
 Removing a component is ordinary engineering: delete the code, its row, and the
 tests that only existed for it, and keep the behavior tests of the surviving
 owner (#3932). There is no removal stage, criterion ledger, or drain census.
-
-The module also records temporary supervisor rollout flags with their exit
-condition so a rollout flag can never silently become a permanent alternate
-architecture.
+Restoring a prior default for new work belongs to the supervisor rollback
+control (:mod:`moonmind.omnigent.session_supervisor_rollback`), not to a row.
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ from moonmind.omnigent.retirement_surfaces import (
     surface_exists,
 )
 
-RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v2"
+RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v3"
 
 
 class RetirementClass(str, Enum):
@@ -512,18 +510,6 @@ def assert_architecture_exceptions_are_owned(
             )
 
 
-# Temporary rollout flags introduced by the supervisor migration. Each maps to
-# the exit condition that permits its removal, so a rollout flag cannot become
-# a permanent alternate architecture.
-LEGACY_RETIREMENT_COMPLETE = "legacy_retirement_complete"
-TEMPORARY_ROLLOUT_FLAGS: dict[str, str] = {
-    "omnigent_session_supervisor_admission_mode": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_canary_owner_ids": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_generation": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_allowed_execution_profile_refs": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_rollback_mode": LEGACY_RETIREMENT_COMPLETE,
-}
-
 _INVENTORY_BY_ID: dict[str, LegacyPathRecord] = {
     path.path_id: path for path in RETIREMENT_INVENTORY
 }
@@ -614,8 +600,9 @@ def assert_new_admission_allowed(
 ) -> LegacyAdmissionDecision:
     """Fail fast when new work selects a path whose class no longer admits it."""
 
-    record = get_retirement_record(path_id, inventory=inventory)
-    decision = evaluate_new_admission(record)
+    decision = evaluate_new_admission(
+        get_retirement_record(path_id, inventory=inventory)
+    )
     if not decision.allowed:
         raise LegacyAdmissionRejected(
             f"legacy path {path_id!r} no longer admits new work "
@@ -740,23 +727,9 @@ def enforce_obsolete_configuration_at_startup(
     return warnings
 
 
-def assert_temporary_flags_have_retirement(
-    flags: dict[str, str] = TEMPORARY_ROLLOUT_FLAGS,
-) -> None:
-    """Every temporary rollout flag must declare a non-empty retirement trigger."""
-
-    for flag, trigger in flags.items():
-        if not str(trigger or "").strip():
-            raise RetirementGuardError(
-                f"temporary rollout flag {flag!r} has no retirement trigger; it "
-                "must not become a permanent alternate architecture"
-            )
-
-
 __all__ = [
     "ARCHITECTURE_BOUNDARY_EXCEPTIONS",
     "ArchitectureBoundaryException",
-    "LEGACY_RETIREMENT_COMPLETE",
     "LegacyAdmissionDecision",
     "LegacyAdmissionRejected",
     "LegacyPathRecord",
@@ -767,13 +740,11 @@ __all__ = [
     "RETIREMENT_INVENTORY",
     "RetirementClass",
     "RetirementGuardError",
-    "TEMPORARY_ROLLOUT_FLAGS",
     "assert_architecture_exceptions_are_owned",
     "assert_inventory_is_complete",
     "assert_new_admission_allowed",
     "assert_obsolete_configuration",
     "assert_surface_admits_new_work",
-    "assert_temporary_flags_have_retirement",
     "enforce_obsolete_configuration_at_startup",
     "evaluate_new_admission",
     "get_retirement_record",

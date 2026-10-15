@@ -173,7 +173,10 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
                 artifact_gateway=gateway,
                 transport_pool=pool,
             ),
-            timeout=0.75 if stall else 5,
+            # The production remote-read deadline remains 0.05s, asserted by
+            # stalled/read_cancelled below. Artifact I/O and runner scheduling
+            # use the same harness watchdog as the non-stalled cases.
+            timeout=5,
         )
 
         assert result.failure_class == "integration_error"

@@ -913,19 +913,16 @@ def compile_execution_plan(
     # reading normally.
     from moonmind.omnigent.legacy_retirement import (
         LegacyAdmissionRejected,
-        assert_new_admission_allowed,
-        retirement_record_for_surface,
+        assert_surface_admits_new_work,
     )
 
-    retirement_row = retirement_record_for_surface(f"realizer:{realizer}")
-    if retirement_row is not None:
-        try:
-            assert_new_admission_allowed(retirement_row.path_id)
-        except LegacyAdmissionRejected as exc:
-            raise HarnessPlatformError(
-                str(exc),
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
-            ) from exc
+    try:
+        assert_surface_admits_new_work(f"realizer:{realizer}")
+    except LegacyAdmissionRejected as exc:
+        raise HarnessPlatformError(
+            str(exc),
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+        ) from exc
 
     required_caps_digest = compute_required_capabilities_digest(
         list(class_decision.requiredSatisfied)

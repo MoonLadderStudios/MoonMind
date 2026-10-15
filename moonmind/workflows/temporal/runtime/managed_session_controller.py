@@ -24,7 +24,11 @@ from urllib.parse import urlparse
 
 from moonmind.auth.github_credentials import GitHubCredentialSource
 from moonmind.config.settings import settings
-from moonmind.omnigent.git_identity import ensure_workspace_git_identity
+from moonmind.omnigent.git_identity import (
+    ensure_workspace_git_identity,
+    publication_git_identity_projection,
+    resolve_publication_git_identity,
+)
 from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionArtifactsPublication,
@@ -1769,8 +1773,10 @@ class DockerCodexManagedSessionController:
         )
 
     @classmethod
-    def _apply_workspace_git_identity(cls, workspace_path: Path) -> None:
-        """Give the prepared checkout the deployment's commit identity.
+    def _apply_workspace_git_identity(
+        cls, workspace_path: Path, *, identity: tuple[str, str] | None = None,
+    ) -> None:
+        """Give the prepared checkout its recorded or legacy commit identity.
 
         Retries and relaunches reuse the checkout, so clone-time setup never
         runs again, and the session's git config carries no identity of its
@@ -1785,6 +1791,7 @@ class DockerCodexManagedSessionController:
             workspace_path,
             runtime_uid=_MANAGED_SESSION_CONTAINER_UID if owned else None,
             runtime_gid=_MANAGED_SESSION_CONTAINER_GID if owned else None,
+            identity=identity,
         )
 
     async def _ensure_workspace_paths(
@@ -2688,6 +2695,12 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         self._validate_launch_request(request)
+        admission = await publication_git_identity_projection()
+        identity = (
+            resolve_publication_git_identity(admission)
+            if admission is not None
+            else None
+        )
         existing_record: CodexManagedSessionRecord | None = None
         if self._session_store is not None:
             existing_record = self._session_store.load(request.session_id)
@@ -2702,7 +2715,9 @@ class DockerCodexManagedSessionController:
                 )
             ):
                 # A session prepared by earlier code may predate the identity.
-                self._apply_workspace_git_identity(Path(request.workspace_path))
+                self._apply_workspace_git_identity(
+                    Path(request.workspace_path), identity=identity,
+                )
                 return CodexManagedSessionHandle(
                     runtimeFamily=request.runtime_family,
                     sessionState=existing_record.session_state(),
@@ -2713,9 +2728,16 @@ class DockerCodexManagedSessionController:
                     controlUrl=existing_record.control_url,
                 )
         await self._ensure_workspace_paths(request)
-        self._apply_workspace_git_identity(Path(request.workspace_path))
+        self._apply_workspace_git_identity(
+            Path(request.workspace_path), identity=identity,
+        )
         session_environment = dict(request.environment)
         session_environment.pop("GITHUB_TOKEN", None)
+        if identity is not None:
+            session_environment.update(
+                GIT_AUTHOR_NAME=identity[0], GIT_COMMITTER_NAME=identity[0],
+                GIT_AUTHOR_EMAIL=identity[1], GIT_COMMITTER_EMAIL=identity[1],
+            )
         # MM-861: expose the generic, project-agnostic workspace env vars to the
         # managed session container. These are MoonMind-owned and set
         # authoritatively (last-wins over caller/profile passthrough) so values

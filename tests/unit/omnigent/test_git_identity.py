@@ -12,8 +12,52 @@ from moonmind.omnigent.git_identity import (
     DEFAULT_GIT_USER_EMAIL,
     DEFAULT_GIT_USER_NAME,
     ensure_workspace_git_identity,
+    resolve_execution_git_identity,
     resolve_git_identity,
 )
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        "forged",
+        {},
+        {"name": "operator", "email": ""},
+        {"name": "operator\n[user]", "email": "operator@example.test"},
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_admitted_git_identity_fails_closed(snapshot, monkeypatch):
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    recorded_publication_identity(monkeypatch, snapshot)
+    with pytest.raises(ValueError, match="admitted publication Git identity"):
+        await resolve_execution_git_identity(
+            {
+                "publicationGitIdentityAdmission": {
+                    "schemaVersion": "v1",
+                    "identity": snapshot,
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "legacy",
+    [{"name": "Old authored", "email": "old@example.invalid"}, "malformed", {}],
+)
+@pytest.mark.asyncio
+async def test_old_arbitrary_identity_parameter_does_not_gain_runtime_authority(
+    monkeypatch, legacy
+):
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Current deployment")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "current@example.invalid")
+    assert await resolve_execution_git_identity(
+        {"_publicationGitIdentity": legacy}
+    ) == (
+        "Current deployment",
+        "current@example.invalid",
+    )
 
 
 def test_resolve_git_identity_prefers_configured_workflow_identity(
@@ -79,7 +123,9 @@ def test_repo_local_resolved_identity_commits_without_global_configuration(
     (repo / "file.txt").write_text("content\n", encoding="utf-8")
     assert _git(repo, "add", "file.txt", env=env).returncode == 0
 
-    uncommittable = _git(repo, "commit", "-m", "no identity", env=env)
+    uncommittable = _git(
+        repo, "-c", "user.useConfigOnly=true", "commit", "-m", "no identity", env=env
+    )
     assert uncommittable.returncode != 0, "git must refuse an unidentified commit"
 
     assert _git(repo, "config", "--local", "user.name", name, env=env).returncode == 0

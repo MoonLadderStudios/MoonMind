@@ -317,6 +317,9 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
     """Frozen replay authority for one new-session admission decision."""
 
     admitted: bool
+    # New decisions use only "enabled" and "realizer_managed_lifecycle". The
+    # retired plan-less rollout codes and modes stay readable so recorded
+    # decisions in retained histories still replay.
     reason_code: Literal[
         "enabled",
         "canary_selected",
