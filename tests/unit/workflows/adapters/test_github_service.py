@@ -64,20 +64,22 @@ async def test_sync_unverified_criteria_preserves_reused_pr_edits(monkeypatch, s
         "## Unverified criteria\n\n- AC-old: Stale.\n"
         "<!-- moonmind:unverified:end -->\n\n## Validation\n\nKeep these results."
     )
-    document = {"state": "open", "body": original}
-    writes = []
+    document = {"state": "open", "body": original, "head": {"sha": "a" * 40}}
+    comments = []
 
     def handle(request):
-        assert str(request.url) == "https://api.github.com/repos/o/r/pulls/42"
-        if request.method == "PATCH":
-            import json
+        if request.url.path.endswith("/comments"):
+            if request.method == "POST":
+                import json
 
-            payload = json.loads(request.content)
-            assert set(payload) == {"body"}
-            writes.append(payload)
-            document.update(payload)
-        else:
+                payload = json.loads(request.content)
+                assert set(payload) == {"body"}
+                comments.append({"id": 1, **payload})
+                return httpx.Response(201, json=comments[-1])
             assert request.method == "GET"
+            return httpx.Response(200, json=comments)
+        assert str(request.url) == "https://api.github.com/repos/o/r/pulls/42"
+        assert request.method == "GET"
         return httpx.Response(200, json=document)
 
     client_type = httpx.AsyncClient
@@ -87,22 +89,16 @@ async def test_sync_unverified_criteria_preserves_reused_pr_edits(monkeypatch, s
         side_effect=lambda **kwargs: client_type(transport=transport, **kwargs),
     ):
         service = GitHubService()
-        await service.sync_pull_request_unverified_criteria(
-            repo="o/r",
-            pr_url="https://github.com/o/r/pull/42",
-            section=section,
-        )
-        # Retrying a confirmed or uncertain update reconciles to a no-op.
-        await service.sync_pull_request_unverified_criteria(
-            repo="o/r",
-            pr_url="https://github.com/o/r/pull/42",
-            section=section,
-        )
-    assert len(writes) == 1
-    assert document["body"].startswith("Reviewer's introduction.\n\n")
-    assert document["body"].endswith("## Validation\n\nKeep these results.")
-    assert "AC-old" not in document["body"]
-    assert ("AC-2" in document["body"]) is bool(section)
+        for _ in range(2):
+            await service.sync_pull_request_unverified_criteria(
+                repo="o/r", pr_url="https://github.com/o/r/pull/42", section=section,
+            )
+    assert len(comments) == 1
+    assert document["body"] == original
+    assert "a" * 40 in comments[0]["body"]
+    assert ("AC-2" in comments[0]["body"]) is bool(section)
+    if not section:
+        assert "This verification report records no Unverified criteria" in comments[0]["body"]
 
 
 @pytest.mark.asyncio

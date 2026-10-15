@@ -62,10 +62,13 @@ qualification from implementation unless the selected scope explicitly owns them
 A criterion the verifier cannot check with the capabilities, access, and time it
 has is recorded as Unverified, with the reason and who can verify it. It is listed
 in the pull request instead of blocking publication, and is never reported as
-passed. New PRs mark MoonMind's disclosures at creation. Publication refreshes
-those blocks only while the PR head matches the verified candidate. Unmarked
-sections remain operator-owned even when their text matches the current report.
-Incomplete draft reports also list their Unverified criteria without
+passed. New native PR bodies label their initial verification snapshot. Reused
+PRs receive a commit-labelled MoonMind verification-disclosure comment, including
+an explicit statement when no Unverified criteria remain. The latest such comment
+for a revision is its current disclosure; prior snapshots are historical. Posting
+checks the candidate head first and never rewrites operator body text or comments.
+PR-creating agents leave disclosure to the parent workflow rather than writing a
+second unowned section. Incomplete draft reports also list their Unverified criteria without
 turning observed implementation gaps into success. Workflow history keeps bounded
 disclosure text and the full report reference. An AI visual judgment that does run must use the actual images and rubric
 through the repository's declared proof owner.

@@ -490,6 +490,17 @@ async def repo_create_pr_activity(payload: dict) -> dict:
         if pattern.search(validated.title) or pattern.search(validated.body):
             raise ValueError("PR title or body contains potential secret material. Request blocked.")
 
+    for field in ("title", "body"):
+        scan = scan_outbound_text(
+            getattr(validated, field),
+            location=f"repo.create_pr.{field}",
+            settings=settings,
+        )
+        if not scan.allowed:
+            raise ValueError(
+                "PR title or body contains blocked outbound content. Request blocked."
+            )
+
     from moonmind.workflows.adapters.github_service import GitHubService
 
     svc = GitHubService()

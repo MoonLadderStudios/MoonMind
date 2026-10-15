@@ -777,7 +777,7 @@ class GitHubService:
                     node_id = pr.get("node_id")
                     if not isinstance(node_id, str) or not node_id:
                         raise _ActionsEvidenceGap("pull_request_draft_identity_unavailable")
-                    await check_draft_history(node_id)
+                    await reconcile_read(lambda: check_draft_history(node_id))
                     ready = pr.get("draft") is False
                     return {**result, "ready": ready,
                         "status": "ready" if ready else "unavailable",
@@ -786,7 +786,7 @@ class GitHubService:
                     node_id = pr.get("node_id")
                     if pr.get("draft") is not True or not isinstance(node_id, str) or not node_id:
                         raise _ActionsEvidenceGap("pull_request_draft_identity_unavailable")
-                    await check_draft_history(node_id)
+                    await reconcile_read(lambda: check_draft_history(node_id))
                     mutation = "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
                     ready_attempted = True
                     try:
@@ -2211,7 +2211,13 @@ class GitHubService:
         expected_head_sha: str | None = None,
         admitted_workflow_id: str | None = None,
     ) -> bool:
-        """Reconcile verifier disclosure using the workflow's repository authority."""
+        """Append a revision-labelled disclosure without editing shared PR prose.
+
+        GitHub does not provide compare-and-swap for a PR body. An immutable
+        comment keeps concurrent human edits safe; exact content identifies a
+        confirmed or lost-acknowledgment attempt on retry. Concurrent publishers
+        can duplicate a comment, but cannot overwrite another actor's work.
+        """
         from moonmind.auth.github_app_wiring import github_api_base_for
 
         # Omitted heads are retained-history compatibility. New workflows bind
@@ -2238,48 +2244,85 @@ class GitHubService:
         if headers is None:
             raise ValueError(error or "Repository authority cannot update PR disclosure")
         api_url = f"{api_base}/repos/{repo}/pulls/{parsed[4]}"
+        comments_url = f"{api_base}/repos/{repo}/issues/{parsed[4]}/comments"
         async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
-            response = await client.get(api_url, headers=headers)
-            response.raise_for_status()
-            document = response.json()
-            if document.get("state") != "open":
-                raise ValueError(
-                    "Unverified criteria can only be synchronized on an open PR"
-                )
-            if expected_head_sha is not None:
+            async def read_head() -> str:
+                response = await client.get(api_url, headers=headers)
+                response.raise_for_status()
+                document = response.json()
+                if not isinstance(document, Mapping) or document.get("state") != "open":
+                    raise ValueError(
+                        "Unverified criteria can only be synchronized on an open PR"
+                    )
                 head = document.get("head")
-                if not isinstance(head, Mapping) or head.get("sha") != expected_head_sha:
+                revision = head.get("sha") if isinstance(head, Mapping) else None
+                if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+                    raise ValueError("PR head is unavailable for verification disclosure")
+                if expected_head_sha is not None and revision != expected_head_sha:
                     raise ValueError(
                         "PR head no longer matches the accepted verification candidate"
                     )
-            body = document.get("body") or ""
-            if not isinstance(body, str):
-                raise TypeError("GitHub PR body is malformed")
-            start, end = "<!-- moonmind:unverified:start -->", "<!-- moonmind:unverified:end -->"
-            # Verifier prose cannot terminate its own managed region.
+                return revision
+
+            revision = await read_head()
             section = section.strip().replace("<!--", "&lt;!--")
-            managed = f"{start}\n{section}\n{end}" if section else ""
-            if start in body or end in body:
-                if body.count(start) != 1 or body.count(end) != 1 or body.index(end) < body.index(start):
-                    raise ValueError("PR verification disclosure markers are ambiguous")
-                first, last = body.index(start), body.index(end) + len(end)
-                updated = body[:first] + managed + body[last:]
-            elif managed:
-                updated = body.rstrip() + ("\n\n" if body.strip() else "") + managed
-            else:
-                updated = body
-            if updated == body:
+            digest = hashlib.sha256(section.encode("utf-8")).hexdigest()
+            prefix = f"<!-- moonmind:unverified:head={revision}:sha256="
+            disclosure = (
+                f"{prefix}{digest} -->\n"
+                f"## MoonMind verification disclosure for commit `{revision}`\n\n"
+                "The latest MoonMind disclosure for this commit supersedes earlier "
+                "disclosures for the same commit; earlier comments and the initial "
+                "PR description remain historical.\n\n"
+                + (section or "This verification report records no Unverified criteria.")
+            )
+            async def read_comments(page: int) -> tuple[list[dict], httpx.Response]:
+                response = await client.get(
+                    comments_url, headers=headers, params={"per_page": 100, "page": page},
+                )
+                response.raise_for_status()
+                comments = response.json()
+                if (not isinstance(comments, list) or len(comments) > 100
+                    or any(not isinstance(comment, Mapping) or not isinstance(comment.get("body"), str)
+                        for comment in comments)):
+                    raise ValueError("GitHub PR comment history is malformed")
+                return comments, response
+
+            first, response = await read_comments(1)
+            last_url = response.links.get("last", {}).get("url")
+            page = 1
+            if last_url:
+                try:
+                    hints = httpx.URL(last_url).params.get_list("page")
+                except httpx.InvalidURL as exc:
+                    raise ValueError("GitHub PR comment pagination is malformed") from exc
+                if len(hints) != 1 or not re.fullmatch(r"[1-9][0-9]{0,8}", hints[0]):
+                    raise ValueError("GitHub PR comment pagination is malformed")
+                page = int(hints[0])
+            if response.links.get("next") and page == 1:
+                raise ValueError("GitHub PR comment pagination is missing its last page")
+            latest = None
+            # Only the numeric hint is used; credentials never follow Link URLs.
+            # Old disclosures outside the recent window may safely be reasserted.
+            for _ in range(5):
+                comments = first if page == 1 else (await read_comments(page))[0]
+                latest = next((comment["body"] for comment in reversed(comments)
+                    if comment["body"].startswith(prefix)), None)
+                if latest is not None or page == 1:
+                    break
+                page -= 1
+            # Pagination may take long enough for the accepted candidate to move.
+            if await read_head() != revision:
+                raise ValueError("PR head changed while reading verification disclosure")
+            if latest == disclosure:
                 return False
-            if response.headers.get("etag"):
-                headers = {**headers, "If-Match": response.headers["etag"]}
-            response = await client.patch(
-                api_url, headers=headers, json={"body": updated}
+            response = await client.post(
+                comments_url, headers=headers, json={"body": disclosure},
             )
             response.raise_for_status()
-            if response.json().get("body") != updated:
-                raise ValueError(
-                    "GitHub did not confirm the Unverified criteria body update"
-                )
+            comment = response.json()
+            if not isinstance(comment, Mapping) or comment.get("body") != disclosure:
+                raise ValueError("GitHub did not confirm the verification disclosure comment")
             return True
 
     async def reconcile_pull_request(

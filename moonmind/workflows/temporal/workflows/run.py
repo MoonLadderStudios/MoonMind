@@ -603,6 +603,7 @@ DEPENDENCY_WAIT_THROUGH_RERUN_PATCH = "dependency-wait-through-rerun-v1"
 NATIVE_PR_CREATE_PAYLOAD_PATCH = "native-pr-create-payload-v1"
 RUN_UNVERIFIED_PR_DISCLOSURE_PATCH = "run-unverified-pr-disclosure-v1"
 RUN_UNVERIFIED_PR_HEAD_BINDING_PATCH = "run-unverified-pr-head-binding-v1"
+RUN_UNVERIFIED_PR_COMMENT_PATCH = "run-unverified-pr-comment-disclosure-v1"
 NATIVE_PR_BRANCH_DEFAULTS_PATCH = "native-pr-branch-defaults-v1"
 NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
@@ -17981,6 +17982,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or "Automated changes by MoonMind."
         )
         unverified = self._moonspec_unverified_body_section()
+        if unverified and self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_COMMENT_PATCH):
+            gate = self._publish_context["moonSpecGate"]
+            revision = gate["validatedRefs"]["acceptance"]["subject"]["revision"]
+            unverified = (
+                f"Initial verification snapshot for revision {revision}. "
+                "The latest MoonMind verification-disclosure comment records "
+                "the current disclosure for its named revision.\n\n"
+                + unverified
+            )
         return (
             f"{body.rstrip()}\n\n<!-- moonmind:unverified:start -->\n"
             f"{unverified}\n<!-- moonmind:unverified:end -->"
