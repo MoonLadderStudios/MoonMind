@@ -718,6 +718,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByText('Omnigent authority')).toBeTruthy();
     expect(screen.getByText(planRef)).toBeTruthy();
     expect(screen.getByText(bindingRef)).toBeTruthy();
+    // The recorded Backend is shown; no Harness name is guessed for Omnigent.
+    expect(screen.getByText('Backend').closest('div')?.textContent).toBe('BackendOmnigent');
+    expect(screen.queryByText('Harness')).toBeNull();
     expect(
       screen.getByText(
         (_content, node) =>
@@ -2121,7 +2124,7 @@ describe('Workflow Detail Entrypoint', () => {
       : existingFetch(input, init));
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
     await screen.findByRole('option', { name: 'Team Profile' });
-    fireEvent.change(await screen.findByLabelText('Profile'), { target: { value: 'profile-oauth-2' } });
+    fireEvent.change(await screen.findByLabelText('Provider Profile'), { target: { value: 'profile-oauth-2' } });
     fireEvent.change(screen.getByLabelText('Execution profile / launch policy'), { target: { value: 'omnigent-isolated' } });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gpt-5.6-sol' } });
     fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'max' } });
@@ -6202,8 +6205,12 @@ describe('Workflow Detail Entrypoint', () => {
       );
       expect(screen.getByText('Lifecycle Intent').closest('div')?.textContent).toContain('snapshot-reuse');
       expect(screen.queryByText('FULL SKILL BODY SHOULD NOT LEAK')).toBeNull();
-      expect(screen.getByText('Anthropic')).toBeTruthy();
-      expect(screen.getByText('profile:claude-default')).toBeTruthy();
+      // Recorded Harness/Backend/Provider Profile/Provider stay distinct facts.
+      expect(screen.getByText('Harness').closest('div')?.textContent).toBe('HarnessClaude Code');
+      expect(screen.getByText('Backend').closest('div')?.textContent).toBe('BackendDirect');
+      expect(screen.getByText('Provider Profile').closest('div')?.textContent).toBe('Provider Profileprofile:claude-default');
+      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('Anthropic');
+      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('anthropic');
       expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
       expect(screen.getByText(/Created by schedule/)).toBeTruthy();

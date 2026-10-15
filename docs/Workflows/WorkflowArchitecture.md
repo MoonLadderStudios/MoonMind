@@ -33,7 +33,7 @@ Publication adds no second orchestrator: the existing compiler resolves one scop
 
 ### 3.1 Workflow-first control plane
 
-Users author workflow objectives and task-specific steps. Internal effect roles, activities, credentials, and worker placement are compiled concerns. Runtime selection stays under its existing simple Runtime/Profile surface.
+Users author workflow objectives and task-specific steps. Internal effect roles, activities, credentials, and worker placement are compiled concerns. Agent selection stays under the simple Harness/Provider Profile surface.
 
 ### 3.2 Artifact-first binary handling
 

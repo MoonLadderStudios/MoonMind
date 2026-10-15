@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation, useQuery } from '@tanstack/react-query';
 
 import type { components } from '../../generated/openapi';
-import { formatRuntimeLabel, formatStatusLabel } from '../../utils/formatters';
+import { formatHarnessLabel } from '../../runtime/runtimeTargets';
+import { formatStatusLabel } from '../../utils/formatters';
 import {
   buildProviderProfileTierPayload,
   FALLBACK_TIER_EFFORT_OPTIONS,
@@ -186,7 +187,7 @@ interface ProviderProfilesManagerProps {
   selectedRuntimeId?: string | undefined;
   /** Canonical runtime IDs offered beside the All-runtimes option. */
   runtimeFilterOptions?: string[];
-  /** Called with a canonical runtime_id, or undefined for All runtimes. */
+  /** Called with a canonical runtime_id, or undefined for All Harnesses. */
   onSelectRuntimeId?: ((runtimeId: string | undefined) => void) | undefined;
 }
 
@@ -2126,7 +2127,7 @@ export function ProviderProfilesManager({
   const [showResetPreview, setShowResetPreview] = useState(false);
 
   const activeRuntimeFilterValue = selectedRuntimeId ?? ALL_RUNTIMES_FILTER_VALUE;
-  // Canonical runtime IDs are the option values; the shared runtime formatter
+  // Canonical runtime IDs are the option values; the shared Harness formatter
   // supplies the display text so Settings never invents a second label source.
   // The active filter is always offered so the control stays consistent even if
   // its last profile is deleted.
@@ -2139,10 +2140,10 @@ export function ProviderProfilesManager({
       }
     }
     return [
-      { value: ALL_RUNTIMES_FILTER_VALUE, label: 'All runtimes' },
+      { value: ALL_RUNTIMES_FILTER_VALUE, label: 'All Harnesses' },
       ...runtimeIds.map((runtimeId) => ({
         value: runtimeId,
-        label: formatRuntimeLabel(runtimeId),
+        label: formatHarnessLabel(runtimeId),
       })),
     ] as ReadonlyArray<{ value: string; label: string }>;
   }, [runtimeFilterOptions, selectedRuntimeId]);
@@ -4153,7 +4154,7 @@ export function ProviderProfilesManager({
             className="font-medium text-slate-700 dark:text-slate-300"
             htmlFor={RUNTIME_FILTER_CONTROL_ID}
           >
-            Profile runtime filter
+            Harness filter
           </label>
           <select
             id={RUNTIME_FILTER_CONTROL_ID}
@@ -4192,12 +4193,12 @@ export function ProviderProfilesManager({
                 Profile
               </th>
               <th
-                id="provider-profile-header-runtime"
+                id="provider-profile-header-harness"
                 scope="col"
                 role="columnheader"
                 className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
               >
-                Runtime
+                Harness
               </th>
               <th
                 id="provider-profile-header-provider"
@@ -4246,7 +4247,7 @@ export function ProviderProfilesManager({
               <tr role="row">
                 <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7} role="cell">
                   {selectedRuntimeId
-                    ? `No provider profiles are configured for ${formatRuntimeLabel(selectedRuntimeId)}.`
+                    ? `No Provider Profiles are configured for ${formatHarnessLabel(selectedRuntimeId)}.`
                     : 'No provider profiles configured yet.'}
                 </td>
               </tr>
@@ -4368,11 +4369,12 @@ export function ProviderProfilesManager({
                   </td>
                   <td
                     className="px-3 py-4 text-slate-700 dark:text-slate-300"
-                    data-label="Runtime"
-                    headers="provider-profile-header-runtime"
+                    data-label="Harness"
+                    headers="provider-profile-header-harness"
                     role="cell"
+                    title={profile.runtime_id}
                   >
-                    {profile.runtime_id}
+                    {profile.runtime_id ? formatHarnessLabel(profile.runtime_id) : '—'}
                   </td>
                   <td
                     className="px-3 py-4"

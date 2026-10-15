@@ -5,9 +5,9 @@
  *
  * The server owns the versioned rollout policy and publishes the resolved
  * target catalog in `dashboardConfig.system.runtimeTargetCatalog`. This module
- * is the only place the dashboard derives runtime labels, recommended-vs-
- * compatibility grouping, and the offline default. No component reconstructs a
- * runtime default or a display-name map of its own.
+ * is the only place the dashboard derives runtime and Harness labels, Backend
+ * choices, and the offline default. No component reconstructs a runtime
+ * default or a display-name map of its own.
  */
 
 /** Documented offline fallback for `system.runtimeTargetCatalog.defaultRuntimeId`. */
@@ -111,54 +111,46 @@ export function formatRuntimeLabel(
   );
 }
 
-export interface RuntimeOption {
+/**
+ * Harness labels name the agent implementation behind a Provider Profile's
+ * canonical runtime id (Codex CLI, Claude Code, OpenCode). Unlike
+ * `formatRuntimeLabel`, a direct compatibility target never renames the
+ * Harness, because the same Harness may also run on Omnigent.
+ */
+export function formatHarnessLabel(runtimeId: string): string {
+  return RUNTIME_ID_LABELS[runtimeId] || titleCaseRuntimeId(runtimeId);
+}
+
+export interface BackendOption {
   runtimeId: string;
   label: string;
-  compatibilityPath: boolean;
-  available: boolean;
 }
 
-export interface RuntimeOptionGroups {
-  recommended: RuntimeOption[];
-  compatibility: RuntimeOption[];
-  unavailable: RuntimeOption[];
-}
-
-/** Group runtime families by direct compatibility and policy availability. */
-export function runtimeOptionGroups(
-  runtimeIds: readonly string[],
-  catalog?: RuntimeTargetCatalog | null,
-): RuntimeOptionGroups {
-  const groups: RuntimeOptionGroups = {
-    recommended: [],
-    compatibility: [],
-    unavailable: [],
-  };
-  runtimeIds.forEach((runtimeId) => {
-    if (!Object.prototype.hasOwnProperty.call(RUNTIME_ID_LABELS, runtimeId)) {
-      return;
-    }
-    const registered = targetsForRuntime(catalog, runtimeId);
-    const option: RuntimeOption = {
-      runtimeId,
-      label: formatRuntimeLabel(runtimeId, catalog),
-      compatibilityPath: registered.some(
-        (row) => row.pathClass === 'direct_compatibility',
-      ),
-      available: registered.length === 0 ||
-        registered.some((row) => row.explicitSelectionAllowed),
-    };
-    if (!option.available) {
-      groups.unavailable.push(option);
-      return;
-    }
-    if (option.compatibilityPath) {
-      groups.compatibility.push(option);
-      return;
-    }
-    groups.recommended.push(option);
-  });
-  return groups;
+/**
+ * Backend choices for one Harness. Omnigent is the normal backend whenever the
+ * Harness has an Omnigent route; a direct compatibility backend is offered only
+ * while the server catalog publishes an explicitly selectable target for the
+ * Harness's runtime id. Callers render a Backend selector only when more than
+ * one choice exists, so no frontend list keeps Direct alive on its own.
+ */
+export function backendOptionsForHarness(
+  harnessRuntimeId: string,
+  catalog: RuntimeTargetCatalog | null | undefined,
+  { omnigentRoute }: { omnigentRoute: boolean },
+): BackendOption[] {
+  const options: BackendOption[] = [];
+  if (omnigentRoute) {
+    options.push({ runtimeId: 'omnigent', label: formatRuntimeLabel('omnigent', catalog) });
+  }
+  const direct = targetsForRuntime(catalog, harnessRuntimeId).find(
+    (target) =>
+      target.pathClass === 'direct_compatibility' &&
+      target.explicitSelectionAllowed,
+  );
+  if (harnessRuntimeId && direct) {
+    options.push({ runtimeId: harnessRuntimeId, label: direct.label });
+  }
+  return options;
 }
 
 const ROLLOUT_STATE_LABELS: Record<RuntimeTargetRolloutState, string> = {

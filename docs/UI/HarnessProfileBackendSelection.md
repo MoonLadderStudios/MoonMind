@@ -68,7 +68,7 @@ Steps inherit workflow selection unless explicitly specialized through the exist
 
 ## Backend disclosure
 
-Omnigent is the normal backend policy for new agent authoring. Merely hiding the current Runtime dropdown and dropping its value is insufficient if that reactivates an old direct-path fallback. Resolve omitted and documented default-equivalent input at the existing shared admission boundary.
+Omnigent is the normal backend policy for new agent authoring. Removing the former Runtime dropdown and dropping its value is insufficient if that reactivates an old direct-path fallback. Resolve omitted and documented default-equivalent input at the existing shared admission boundary.
 
 Offer a Backend selector under Advanced only while the selected combination has a genuine supported alternative. An explicitly selected nondefault backend remains visible in the collapsed summary and workflow details. Opening or closing Advanced never changes its value. An explicitly configured alternative deployment default is also disclosed rather than presented as invisible Omnigent execution.
 
