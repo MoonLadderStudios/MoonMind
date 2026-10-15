@@ -97,6 +97,7 @@ class PrerequisiteLookup:
 
     states: dict[tuple[str, int], str] = field(default_factory=dict)
     epics: set[tuple[str, int]] = field(default_factory=set)
+    pull_requests: set[tuple[str, int]] = field(default_factory=set)
     requests: int = 0
     completion_dependencies: list[dict[str, Any]] = field(default_factory=list)
 
@@ -271,7 +272,8 @@ async def check_prerequisites(
     scopes = declared_dependencies(body, repository, parent_epic=parent_epic)
     # An epic's prose naming another epic describes a peer program, not a
     # child; open peers that name each other would otherwise block both
-    # forever. A tracking list still declares an epic child explicitly.
+    # forever. PR references in prose likewise describe implementation context,
+    # not child issues. Explicit declarations and tracking lists stay strict.
     prose_children = (
         set(scopes) - set(declared_dependencies(body, repository))
         if parent_epic
@@ -315,15 +317,27 @@ async def check_prerequisites(
                     not isinstance(payload, Mapping)
                     or payload.get("state") not in {"open", "closed"}
                     or payload.get("number") != number
-                    or not is_complete_open_issue(
+                    or not _is_complete_open_reference(
                         {**payload, "state": "open"}, dependency_repo
                     )
                 ):
-                    raise ValueError("GitHub prerequisite identity or state is invalid.")
+                    raise ValueError(
+                        "GitHub prerequisite identity or state is invalid."
+                    )
                 lookup.states[key] = payload["state"]
+                if "pull_request" in payload:
+                    lookup.pull_requests.add(key)
                 if is_parent_epic(payload):
                     lookup.epics.add(key)
                 prerequisite_state = payload["state"]
+            if key in lookup.pull_requests:
+                if (dependency_repo, number) not in prose_children:
+                    raise ValueError(
+                        "GitHub prerequisite identity or state is invalid: "
+                        f"{dependency_repo}#{number} is a pull request, not a child issue "
+                        f"of {repository}#{issue.get('number')}."
+                    )
+                continue
             if prerequisite_state != "open":
                 continue
             if (dependency_repo, number) in prose_children and key in lookup.epics:
@@ -354,16 +368,36 @@ def _prerequisite_blocker(
 def is_complete_open_issue(payload: Any, repository: str) -> bool:
     """Validate raw GitHub evidence before normalization can hide missing fields."""
 
-    if not isinstance(payload, Mapping) or "pull_request" in payload:
+    return (
+        isinstance(payload, Mapping)
+        and "pull_request" not in payload
+        and _is_complete_open_reference(payload, repository)
+    )
+
+
+def _is_complete_open_reference(payload: Any, repository: str) -> bool:
+    """Validate issue/PR identity before deciding whether epic prose owns it."""
+
+    if not isinstance(payload, Mapping):
         return False
     number = payload.get("number")
     labels = payload.get("labels")
+    route = "issues"
+    if "pull_request" in payload:
+        route = "pull"
+        pull_request = payload["pull_request"]
+        if (
+            not isinstance(pull_request, Mapping)
+            or str(pull_request.get("html_url")).casefold()
+            != f"https://github.com/{repository}/pull/{number}".casefold()
+        ):
+            return False
     return (
         type(number) is int
         and number > 0
         and payload.get("state") == "open"
         and str(payload.get("html_url")).casefold()
-        == f"https://github.com/{repository}/issues/{number}".casefold()
+        == f"https://github.com/{repository}/{route}/{number}".casefold()
         and isinstance(payload.get("title"), str)
         and bool(payload["title"].strip())
         and "body" in payload

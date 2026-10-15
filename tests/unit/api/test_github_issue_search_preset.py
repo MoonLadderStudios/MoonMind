@@ -1663,3 +1663,128 @@ def test_prose_checkboxes_outside_child_sections_declare_nothing():
         "- [ ] Representative CI runs complete within the new budgets.\n"
     )
     assert declared_prerequisites(body, REPOSITORY) == []
+
+
+def _pull_request_reference(number, *, state="closed", **overrides):
+    url = f"https://github.com/{REPOSITORY}/pull/{number}"
+    return issue(
+        number,
+        state=state,
+        html_url=url,
+        pull_request={"html_url": url},
+        **overrides,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["open", "closed"])
+async def test_epic_baseline_pull_requests_are_contextual(activity_boundary, state):
+    """Epic baseline prose must not turn landed PR evidence into child issues."""
+    epic = issue(
+        3925,
+        body="## Current baseline\n\nThe old scaffold is gone. #4795/#4821 removed it.\n",
+        labels=[{"name": "epic"}],
+    )
+    activity_boundary.pages[:] = [[epic]]
+    activity_boundary.detail.update(epic)
+    for number in (4795, 4821):
+        activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/{number}"] = (
+            _pull_request_reference(number, state=state)
+        )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["issue"]["number"] == 3925
+    preflight = await activity_boundary.execute(
+        "github.check_issue_blockers", {"repository": REPOSITORY, "issueNumber": 3925}
+    )
+    assert preflight.outputs["decision"] == "continue"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["open", "closed"])
+@pytest.mark.parametrize(
+    "body", ["Depends on #4795.", "## Child issues\n- [x] #4795\n"]
+)
+async def test_explicit_prerequisites_cannot_be_pull_requests(
+    activity_boundary, body, state
+):
+    activity_boundary.pages[:] = [[issue(body=body, labels=[{"name": "epic"}])]]
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/4795"] = (
+        _pull_request_reference(4795, state=state)
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "FAILED"
+    assert "prerequisite identity or state is invalid" in result.outputs["error"]
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"number": 4796},
+        {"html_url": "https://github.com/other/repository/pull/4795"},
+        {"pull_request": None},
+        {"pull_request": {"html_url": f"https://github.com/{REPOSITORY}/pull/4796"}},
+        {"state": "unknown"},
+    ],
+)
+async def test_epic_prose_rejects_invalid_pull_request_evidence(
+    activity_boundary, overrides
+):
+    activity_boundary.pages[:] = [
+        [issue(body="#4795 removed the old scaffold.", labels=[{"name": "epic"}])]
+    ]
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/4795"] = {
+        **_pull_request_reference(4795),
+        **overrides,
+    }
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "FAILED"
+    assert "prerequisite identity or state is invalid" in result.outputs["error"]
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+
+
+@pytest.mark.asyncio
+async def test_cached_prose_pull_request_cannot_satisfy_explicit_child(
+    activity_boundary,
+):
+    prose_epic = issue(
+        body="#4795 removed the old scaffold.", labels=[{"name": "epic"}]
+    )
+    child_epic = issue(
+        4026, body="## Child issues\n- [x] #4795\n", labels=[{"name": "epic"}]
+    )
+    activity_boundary.pages[:] = [[prose_epic, child_epic]]
+    # First candidate closes at confirmation, so the same scan checks the next epic.
+    activity_boundary.detail.update({**prose_epic, "state": "closed"})
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/4795"] = (
+        _pull_request_reference(4795)
+    )
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "FAILED"
+    assert "prerequisite identity or state is invalid" in result.outputs["error"]
+    assert all(request.method == "GET" for request in activity_boundary.requests)
+    assert (
+        sum(
+            request.url.path == f"/repos/{REPOSITORY}/issues/4795"
+            for request in activity_boundary.requests
+        )
+        == 1
+    )
+    assert any(
+        request.url.path == f"/repos/{REPOSITORY}/issues/{prose_epic['number']}"
+        for request in activity_boundary.requests
+    )
