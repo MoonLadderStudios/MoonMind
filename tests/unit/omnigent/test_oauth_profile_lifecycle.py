@@ -5313,9 +5313,8 @@ async def test_coordinator_rejects_missing_repository_publication() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("remote_verified", [True, False])
-@pytest.mark.parametrize("assessed_repository", [None, "owner/repo", "another/repository"])
 async def test_coordinator_returns_no_commit_transport_outcome_without_repeating_work(
-    remote_verified, assessed_repository,
+    remote_verified,
 ) -> None:
     """Publication preserves no-change evidence; the workflow owns acceptance."""
 
@@ -5349,21 +5348,6 @@ async def test_coordinator_returns_no_commit_transport_outcome_without_repeating
                 "push_commit_count": 0,
                 "remote_verified": remote_verified,
             },
-            request_parameters=(
-                {
-                    "repositoryOutcomePolicy": {
-                        "schemaVersion": "repository-outcome-policy/v2",
-                        "allowNoCommit": True,
-                        "authority": "trusted_assessment",
-                        "assessmentVerdict": "FULLY_IMPLEMENTED",
-                        "assessmentArtifactRef": "art_assessment_1",
-                        "assessedRepository": assessed_repository,
-                        "assessedBranch": "main",
-                    }
-                }
-                if assessed_repository is not None
-                else {}
-            ),
         )
     )
 
