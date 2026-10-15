@@ -615,7 +615,7 @@ class TestUpdateSchedule:
             workflow_input={"workflow_type": "MoonMind.UserWorkflow.v2"},
         )
 
-        adapter._get_task_queue.assert_called_once_with("MoonMind.UserWorkflow.v2")
+        adapter._get_task_queue.assert_called_once_with("MoonMind.UserWorkflow.v2", memo=None)
 
 class TestDescribeSchedule:
     """DOC-REQ-002: describe schedule."""

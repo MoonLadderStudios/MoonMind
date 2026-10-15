@@ -25,11 +25,30 @@ def _patch_workflow_context(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _attributes: None,
     )
 
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publication_memo_enabled", [False, True])
 async def test_parent_owned_merge_automation_awaits_child_success(
     monkeypatch: pytest.MonkeyPatch,
+    publication_memo_enabled: bool,
 ) -> None:
     _patch_workflow_context(monkeypatch)
+    memo = {
+        "publicationGitIdentityAdmission": {
+            "schemaVersion": "v1",
+            "identity": {"name": "Admitted", "email": "admitted@example.invalid"},
+        }
+    }
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: memo)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: (
+            publication_memo_enabled
+            if patch == "run-publication-git-identity-child-memo-v1"
+            else True
+        ),
+    )
     workflow = MoonMindRunWorkflow()
     workflow._repo = "MoonLadderStudios/MoonMind"
     workflow._publish_context["branch"] = "feature"
@@ -62,6 +81,9 @@ async def test_parent_owned_merge_automation_awaits_child_success(
         pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
     )
 
+    assert calls[0]["kwargs"].get("memo") == (
+        memo if publication_memo_enabled else None
+    )
     assert calls[0]["workflow_type"] == "MoonMind.MergeAutomation"
     assert calls[0]["payload"]["workflowType"] == "MoonMind.MergeAutomation"
     assert calls[0]["kwargs"]["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
@@ -70,6 +92,7 @@ async def test_parent_owned_merge_automation_awaits_child_success(
     assert workflow._publish_context["mergeAutomationWorkflowId"].startswith(
         "merge-automation:"
     )
+
 
 @pytest.mark.asyncio
 async def test_parent_owned_merge_automation_preserves_post_merge_jira_summary(

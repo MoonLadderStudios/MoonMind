@@ -42,8 +42,17 @@ with workflow.unsafe.imports_passed_through():
 USER_V2_QUEUE = "mm.workflow.user.v2"
 REPLAY_QUEUE = "mm.workflow"
 MERGE_QUEUE = "mm.workflow.merge_automation"
+WORKFLOW_QUEUES = (
+    USER_V2_QUEUE,
+    REPLAY_QUEUE,
+    MERGE_QUEUE,
+    "mm.workflow.user.v2.publication-v1",
+    "mm.workflow.publication-v1",
+    "mm.workflow.merge_automation.publication-v1",
+)
 
 
+@pytest.mark.parametrize("queue_suffix", ["", ".publication-v1"])
 @pytest.mark.parametrize(
     ("parent_queue", "child_queue"),
     [
@@ -54,8 +63,13 @@ MERGE_QUEUE = "mm.workflow.merge_automation"
         (MERGE_QUEUE, MERGE_QUEUE),
     ],
 )
-def test_child_queue_matches_the_former_lane_process(parent_queue, child_queue):
-    assert get_workflow_child_task_queue(parent_queue) == child_queue
+def test_child_queue_matches_the_former_lane_process(
+    parent_queue, child_queue, queue_suffix
+):
+    assert (
+        get_workflow_child_task_queue(parent_queue + queue_suffix)
+        == child_queue + queue_suffix
+    )
 
 
 _CHILD_PARENTS = {
@@ -149,7 +163,7 @@ def _workflow_fleet_topology():
             }
         )
     )
-    assert topology.task_queues == (USER_V2_QUEUE, REPLAY_QUEUE, MERGE_QUEUE)
+    assert topology.task_queues == WORKFLOW_QUEUES
     return topology
 
 
@@ -176,13 +190,15 @@ async def _serving(workers):
 
 @pytest.mark.temporal_boundary
 @pytest.mark.asyncio
-async def test_workflow_fleet_activity_stays_on_the_parent_lane():
+@pytest.mark.parametrize("queue_suffix", ["", ".publication-v1"])
+async def test_workflow_fleet_activity_stays_on_the_parent_lane(queue_suffix):
     """An external AgentRun resolves adapter metadata on its own lane.
 
     The former merge-lane process built its activity catalog with
     ``TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`` overridden to the merge queue, so
     in-flight merge-lane histories recorded this command on that queue.  The
     shared process must emit the same command or those runs stop replaying.
+    Publication identity lanes preserve their contract for the Activity too.
     """
 
     from temporalio.testing import WorkflowEnvironment
@@ -207,6 +223,8 @@ async def test_workflow_fleet_activity_stays_on_the_parent_lane():
                 (USER_V2_QUEUE, USER_V2_QUEUE),
                 (REPLAY_QUEUE, USER_V2_QUEUE),
             ):
+                parent_queue += queue_suffix
+                lane_queue += queue_suffix
                 handle = await env.client.start_workflow(
                     _LaneAdapterMetadataProbe.run,
                     id=f"mm3937-adapter-metadata-{parent_queue}",
@@ -226,7 +244,8 @@ async def test_workflow_fleet_activity_stays_on_the_parent_lane():
 
 @pytest.mark.temporal_boundary
 @pytest.mark.asyncio
-async def test_merge_lane_progresses_while_normal_lane_is_saturated():
+@pytest.mark.parametrize("queue_suffix", ["", ".publication-v1"])
+async def test_merge_lane_progresses_while_normal_lane_is_saturated(queue_suffix):
     from temporalio.testing import WorkflowEnvironment
     from temporalio.worker import UnsandboxedWorkflowRunner
 
@@ -248,21 +267,21 @@ async def test_merge_lane_progresses_while_normal_lane_is_saturated():
         assert [
             (worker.task_queue, worker.config()["max_concurrent_workflow_tasks"])
             for worker in workers
-        ] == [(USER_V2_QUEUE, 2), (REPLAY_QUEUE, 2), (MERGE_QUEUE, 2)]
+        ] == [(queue, 2) for queue in WORKFLOW_QUEUES]
 
         # Busy runs hold slots in wall-clock time; skipping would expire them.
         with env.auto_time_skipping_disabled():
             async with _serving(workers):
-                await _assert_merge_lane_progresses(env)
+                await _assert_merge_lane_progresses(env, queue_suffix=queue_suffix)
 
 
-async def _assert_merge_lane_progresses(env) -> None:
+async def _assert_merge_lane_progresses(env, *, queue_suffix: str) -> None:
     # Load the normal lane with more runs than its budget can hold at once.
     busy = [
         await env.client.start_workflow(
             _BusyLaneProbe.run,
             id=f"mm3937-busy-{index}",
-            task_queue=USER_V2_QUEUE,
+            task_queue=USER_V2_QUEUE + queue_suffix,
         )
         for index in range(6)
     ]
@@ -276,11 +295,14 @@ async def _assert_merge_lane_progresses(env) -> None:
             _LaneParentProbe.run,
             "merge",
             id="mm3937-merge-parent",
-            task_queue=MERGE_QUEUE,
+            task_queue=MERGE_QUEUE + queue_suffix,
         ),
         timeout=15,
     )
-    assert merge_result == {"routed": MERGE_QUEUE, "childRanOn": MERGE_QUEUE}
+    assert merge_result == {
+        "routed": MERGE_QUEUE + queue_suffix,
+        "childRanOn": MERGE_QUEUE + queue_suffix,
+    }
     assert len(_BUSY_ENTERED) < len(busy), "merge lane waited behind normal lane"
 
     assert [await handle.result() for handle in busy] == ["done"] * len(busy)
@@ -292,6 +314,9 @@ async def _assert_merge_lane_progresses(env) -> None:
         _LaneParentProbe.run,
         "agent_run",
         id="mm3937-replay-parent",
-        task_queue=REPLAY_QUEUE,
+        task_queue=REPLAY_QUEUE + queue_suffix,
     )
-    assert replay_result == {"routed": USER_V2_QUEUE, "childRanOn": USER_V2_QUEUE}
+    assert replay_result == {
+        "routed": USER_V2_QUEUE + queue_suffix,
+        "childRanOn": USER_V2_QUEUE + queue_suffix,
+    }
