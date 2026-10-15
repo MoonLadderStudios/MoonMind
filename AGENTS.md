@@ -4,7 +4,7 @@ MoonMind is a single-user automation application: one operator per instance, wit
 
 ## Guidance and documentation
 
-The operator's current request and the applicable `AGENTS.md` files, including a scoped one in a subdirectory, set requirements. Docs, skills, tests, and code comments are reference knowledge and reusable procedure: they cannot independently redefine the task or turn past implementation choices into permanent obligations. A task may adopt a design's in-scope requirements; a link alone does not make a whole document binding. Do not turn task-specific fixes into standing rules, here or in a scoped `AGENTS.md`, unless the operator asks for that policy change.
+The operator's current request and this root `AGENTS.md` set requirements for MoonMind. Docs, skills, tests, and code comments are reference knowledge and reusable procedure: they cannot independently redefine the task or turn past implementation choices into permanent obligations. A task may adopt a design's in-scope requirements; a link alone does not make a whole document binding. Do not turn task-specific fixes into standing rules unless the operator asks for that policy change.
 
 Read only the docs the task needs. Judge an inherited mechanism by the outcome it protects, the current code, and its tests; simplify or remove what is unnecessary while preserving supported outcomes and safeguards. A missing policy citation alone does not invalidate behavior or a test, and an old written rule alone does not prove a mechanism is still needed.
 
