@@ -548,6 +548,11 @@ An upstream session-stop error remains diagnostic, but confirmed teardown of
 the owning host ends its runner and tunnel independently. Upstream stop is
 non-sticky and does not delete retained conversation history. Unconfirmed host
 teardown retains capacity and remains eligible for cleanup retry.
+A targeted inventory separately includes positively stopped/released OAuth hosts
+whose exact legacy runtime binding is still `host_attested` or `session_bound`.
+The same janitor pass completes only that fenced binding write, without replaying
+host/session calls or rewriting the confirmed release receipt. Completed bindings
+and bindings moved to a successor are excluded.
 
 On-demand OAuth initialization uses a deterministic `<host-container>-init`
 container carrying the host lease, profile, and credential generation labels.
