@@ -1291,7 +1291,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         monkeypatch.setattr(
             TemporalClientAdapter,
             "_get_task_queue",
-            lambda _adapter, _workflow_type=None, *, task_queue=None: (
+            lambda _adapter, _workflow_type=None, *, task_queue=None, memo=None: (
                 task_queue or owner_queue
             ),
         )

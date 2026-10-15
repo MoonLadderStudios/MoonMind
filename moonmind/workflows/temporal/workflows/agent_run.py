@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from temporalio import workflow, activity
@@ -101,6 +102,8 @@ with workflow.unsafe.imports_passed_through():
         WORKFLOW_TASK_QUEUE,
         build_default_activity_catalog,
         get_workflow_child_task_queue,
+        get_activity_task_queue,
+        PUBLICATION_GIT_IDENTITY_FLEETS,
     )
     from moonmind.config.settings import settings
     from moonmind.schemas.agent_run_progress import (
@@ -1412,6 +1415,16 @@ class MoonMindAgentRun:
             task_queue = get_workflow_child_task_queue(
                 workflow.info().task_queue, settings.temporal
             )
+        current_queue = ""
+        if route.fleet in PUBLICATION_GIT_IDENTITY_FLEETS:
+            try:
+                current_queue = workflow.info().task_queue
+            except Exception as exc:
+                if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                    raise
+        task_queue = get_activity_task_queue(
+            replace(route, task_queue=task_queue), current_queue,
+        )
         kwargs: dict[str, Any] = {
             "task_queue": task_queue,
             "start_to_close_timeout": timedelta(

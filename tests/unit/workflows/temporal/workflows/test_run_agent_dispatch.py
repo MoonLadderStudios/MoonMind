@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 pytest.importorskip("temporalio")
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_skill_models import (
     AgentSkillProvenance,
@@ -591,6 +592,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             skills=[],
         )
         info = SimpleNamespace(
+            task_queue=settings.temporal.user_workflow_v2_task_queue,
             namespace="default",
             workflow_id="mm:717ea339-77ab-4e72-bd46-969b009b5508",
             run_id="019fd32f-cbfd-7846-bee9-79c87ebae5f8",
@@ -818,6 +820,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             run_id="merge-run-1",
         )
         info = SimpleNamespace(
+            task_queue=settings.temporal.user_workflow_v2_task_queue,
             namespace="default",
             workflow_id="resolver:pr:2189",
             run_id="resolver-run-1",
@@ -909,6 +912,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             ],
         )
         info = SimpleNamespace(
+            task_queue=settings.temporal.user_workflow_v2_task_queue,
             namespace="default",
             workflow_id="batch:dependabot",
             run_id="batch-run-1",

@@ -718,7 +718,7 @@ async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Pat
             assert decoded["owner_user_id"] == legacy_owner
 
             # The real mismatch detector accepts the current action and
-            # rejects drifted workflow type/input (duplicate/loss guard).
+            # rejects drifted workflow types or legacy queues (duplicate/loss guard).
             from moonmind.workflows.temporal.client import _build_typed_search_attributes
             metadata = await service._workflow_start_metadata(
                 definition_id=created.id, owner_user_id=None, workflow_input=workflow_input
@@ -727,7 +727,7 @@ async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Pat
                 workflow=workflow_type,
                 id=make_scheduled_workflow_id_base(created.id),
                 args=[workflow_input],
-                task_queue="mm.workflow.user.v2",
+                task_queue="mm.workflow.user.v2.publication-v1",
                 memo=metadata["memo"],
                 typed_search_attributes=_build_typed_search_attributes(
                     {key: [value] for key, value in metadata["search_attributes"].items()}
@@ -742,21 +742,20 @@ async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Pat
                 )
                 is False
             )
-            drifted = SimpleNamespace(
-                workflow="MoonMind.OtherWorkflow",
-                id=make_scheduled_workflow_id_base(created.id),
-                args=[workflow_input],
-                task_queue="mm.workflow.user.v2",
-            )
-            assert (
-                service._schedule_action_mismatch(
-                    action=drifted,
-                    definition_id=created.id,
-                    workflow_type=workflow_type,
-                    workflow_input=workflow_input,
+            for drift in (
+                {"workflow": "MoonMind.OtherWorkflow"},
+                {"task_queue": "mm.workflow.user.v2"},
+            ):
+                drifted = SimpleNamespace(**{**vars(action), **drift})
+                assert (
+                    service._schedule_action_mismatch(
+                        action=drifted,
+                        definition_id=created.id,
+                        workflow_type=workflow_type,
+                        workflow_input=workflow_input,
+                    )
+                    is True
                 )
-                is True
-            )
 
 
 @pytest.mark.asyncio
@@ -1026,7 +1025,7 @@ async def test_r4b_schedule_reconcile_no_duplicate_or_loss(tmp_path: Path):
                             workflow=workflow_type,
                             id=expected_id,
                             args=[workflow_input],
-                            task_queue="mm.workflow.user.v2",
+                            task_queue="mm.workflow.user.v2.publication-v1",
                             memo=metadata["memo"],
                             typed_search_attributes=_build_typed_search_attributes(
                                 {key: [value] for key, value in metadata["search_attributes"].items()}
