@@ -2119,6 +2119,8 @@ export function ProviderProfilesManager({
   const [customModelEntryTiers, setCustomModelEntryTiers] = useState<Set<string>>(new Set());
   const tierEffortOptions = tierCapabilities === null ? FALLBACK_TIER_EFFORT_OPTIONS : tierCapabilities.effort?.options ?? [];
   const tierSectionRef = useRef<HTMLElement | null>(null);
+  const editorHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const [editorFocusRequest, setEditorFocusRequest] = useState(0);
   const tierLiveRef = useRef<HTMLDivElement | null>(null);
   const focusedTierClientIdRef = useRef<string | null>(null);
   const [showResetPreview, setShowResetPreview] = useState(false);
@@ -2677,14 +2679,16 @@ export function ProviderProfilesManager({
     onNotice(null);
   };
 
-  const handleEditTiers = (profile: ProviderProfile) => {
+  // The editor sits below the collection, so Edit moves keyboard focus (and the
+  // viewport) to the editor heading once it names the selected profile.
+  const handleEditProfile = (profile: ProviderProfile) => {
     beginEditingProfile(profile);
-    window.setTimeout(() => {
-      tierSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      const first = tierSectionRef.current?.querySelector<HTMLElement>('input, select, button');
-      first?.focus();
-    }, 0);
+    setEditorFocusRequest((current) => current + 1);
   };
+
+  useEffect(() => {
+    if (editorFocusRequest > 0) editorHeadingRef.current?.focus();
+  }, [editorFocusRequest]);
 
   const tierDraftsChanged = useMemo(() => {
     if (!tierBaseline) return tierDrafts.length > 0;
@@ -4710,19 +4714,9 @@ export function ProviderProfilesManager({
                           <button
                             type="button"
                             className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-                            onClick={() => {
-                              beginEditingProfile(profile);
-                            }}
+                            onClick={() => handleEditProfile(profile)}
                           >
                             Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
-                            onClick={() => handleEditTiers(profile)}
-                            aria-label={`Edit tiers ${profile.profile_id}`}
-                          >
-                            Edit tiers
                           </button>
                           <button
                             type="button"
@@ -5123,7 +5117,7 @@ export function ProviderProfilesManager({
       <div className="mt-8 border-t border-slate-200 dark:border-slate-700 pt-8">
         <div className="flex flex-col gap-1 mb-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <h3 ref={editorHeadingRef} tabIndex={-1} className="text-lg font-semibold text-slate-900 dark:text-white outline-hidden">
               {isEditing ? `Edit Profile: ${editingProfileId}` : 'Create Profile'}
             </h3>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
