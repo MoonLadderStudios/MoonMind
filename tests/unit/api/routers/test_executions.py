@@ -10442,19 +10442,6 @@ _NO_PUBLISH_TASK = {"instructions": "Summarize.", "publish": {"mode": "none"}}
             "Moon/Mind",
             ("", True),
         ),
-        (
-            {
-                "workspace": {
-                    "workspaceSource": {
-                        "kind": "artifact",
-                        "artifactRef": "artifact://saved-output",
-                        "artifactDigest": "sha256:" + "a" * 64,
-                    }
-                }
-            },
-            None,
-            ("", False),
-        ),
     ],
 )
 def test_create_execution_hands_authored_workspace_source_to_run_parameters(
@@ -10487,6 +10474,8 @@ def test_create_execution_hands_authored_workspace_source_to_run_parameters(
     create_kwargs = service.create_execution.await_args.kwargs
     parameters = create_kwargs["initial_parameters"]
     assert create_kwargs["repository"] == expected_repository
+    # Run and its planner read the repository a source names only here.
+    assert parameters.get("repository") == expected_repository
     if "workspace" in submitted:
         assert parameters["workspaceSpec"] == submitted["workspace"]
     else:
@@ -10594,6 +10583,44 @@ def test_input_snapshot_records_admitted_workspace_source() -> None:
             "digest",
         ),
         ({"workspace": {"workspacePath": "/tmp/elsewhere"}}, "workspacePath"),
+        (
+            {
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "Moon/Mind",
+                        "accessMode": "explicit",
+                    }
+                }
+            },
+            "explicit access requires a connectionRef",
+        ),
+        (
+            {
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "Moon/Mind",
+                        "accessMode": "routed",
+                        "connectionRef": "repository-connection:work",
+                    }
+                }
+            },
+            "routed access",
+        ),
+        (
+            {
+                "repository": {
+                    "provider": "git",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workspace": {
+                    "workspaceSource": {"kind": "repository", "branch": "feature"}
+                },
+            },
+            "branch",
+        ),
         ({"workspace": "scratch"}, "payload.workspace"),
     ],
 )
@@ -10620,6 +10647,147 @@ def test_create_execution_rejects_invalid_workspace_source_before_scheduling(
     assert response.status_code == 422, response.json()
     assert message in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_rejects_publication_from_anonymous_source(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex",
+                "repository": "Moon/Mind",
+                "task": {"instructions": "Fix it.", "publish": {"mode": "pr"}},
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "accessMode": "anonymous",
+                    }
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.json()
+    assert "anonymous" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_checks_workspace_source_against_selected_runtime(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex",
+                "task": dict(_NO_PUBLISH_TASK),
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "artifact",
+                        "artifactRef": "artifact://saved-output",
+                        "artifactDigest": "sha256:" + "a" * 64,
+                    }
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.json()
+    assert "codex_cli" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_admits_issue_authority_from_workspace_repository(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    "publish": {"mode": "none"},
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                },
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "MoonLadderStudios/Tactics",
+                    }
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["repository"] == "MoonLadderStudios/Tactics"
+
+
+def test_recurring_schedule_target_carries_admitted_workspace_source(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    workspace = {
+        "workspaceSource": {
+            "kind": "repository",
+            "repository": "Moon/Mind",
+            "accessMode": "anonymous",
+        }
+    }
+
+    with patch(
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Nightly read",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "targetRuntime": "codex",
+                    "schedule": {"mode": "recurring", "cron": "0 * * * *"},
+                    "task": dict(_NO_PUBLISH_TASK),
+                    "workspace": copy.deepcopy(workspace),
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    stored = service.create_definition.await_args.kwargs["target"]["initialParameters"]
+    assert stored["workspaceSpec"] == workspace
+    assert stored["repository"] == "Moon/Mind"
 
 
 @pytest.mark.parametrize(
