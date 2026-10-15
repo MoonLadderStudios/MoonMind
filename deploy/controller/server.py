@@ -662,7 +662,7 @@ def build_app(
                     reattachable = any(
                         (op.get("desired") or {}).get("image") == desired_image
                         for op in store.list_open(stack=stack)
-                    ) or store.find_completed(stack=stack, desired_image=desired_image)
+                    )
                     if target is None and target_resolver is not None and not reattachable:
                         try:
                             target = target_resolver(stack)
