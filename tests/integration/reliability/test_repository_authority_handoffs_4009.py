@@ -206,21 +206,33 @@ async def test_selected_snapshot_rejects_revoked_or_stale_connection_at_consumer
         )
 
 
-async def test_anonymous_source_and_scratch_never_acquire_repository_credentials(
-    authority_context, monkeypatch
-):
-    anonymous = await _compile(
-        monkeypatch,
-        authority_context,
-        workspace={
-            "workspaceSource": {
-                "kind": "repository",
-                "repository": _REPO,
-                "branch": "main",
-                "accessMode": "anonymous",
+@pytest.mark.parametrize(
+    "authored",
+    [
+        {
+            "workspace": {
+                "workspaceSource": {
+                    "kind": "repository",
+                    "repository": _REPO,
+                    "branch": "main",
+                    "accessMode": "anonymous",
+                }
             }
         },
-    )
+        # Run parameters POST /api/executions records for an anonymous read
+        # with an omitted branch (MoonLadderStudios/MoonMind#2615).
+        {
+            "repository": _REPO,
+            "workspaceSpec": {
+                "workspaceSource": {"kind": "repository", "accessMode": "anonymous"}
+            },
+        },
+    ],
+)
+async def test_anonymous_source_and_scratch_never_acquire_repository_credentials(
+    authority_context, monkeypatch, authored
+):
+    anonymous = await _compile(monkeypatch, authority_context, **authored)
     plan = await reader._load_verified_execution_plan(anonymous.binding)
     assert set(plan.payload.credentialBindings) == {"primary-model"}
     assert plan.payload.resolvedTools["repositoryAccess"]["source"][
