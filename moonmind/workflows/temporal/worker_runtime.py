@@ -23,15 +23,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.stdlib import ProcessorFormatter
 from temporalio.client import Client
-from temporalio.common import VersioningBehavior
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
-from temporalio.worker import (
-    UnsandboxedWorkflowRunner,
-    Worker,
-    WorkerDeploymentConfig,
-    WorkerDeploymentVersion,
-)
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
@@ -3281,8 +3275,6 @@ async def main_async() -> None:
         )
     else:
         runtime_resources, activities = await _build_runtime_activities(topology)
-        from moonmind.workflows.temporal.workflows.release_canary import inspect_release_activity
-        activities = (*activities, inspect_release_activity)
 
     try:
         spec = build_worker_spec(
@@ -3297,15 +3289,6 @@ async def main_async() -> None:
         }
         from moonmind.workflows.temporal.worker_lifecycle import WORKER_DRAIN_TIMEOUT, serve_workers
         worker_kwargs["graceful_shutdown_timeout"] = WORKER_DRAIN_TIMEOUT
-        if spec.versioning_enabled:
-            worker_kwargs["deployment_config"] = WorkerDeploymentConfig(
-                version=WorkerDeploymentVersion(
-                    deployment_name=spec.deployment_id,
-                    build_id=spec.build_id,
-                ),
-                use_worker_versioning=True,
-                default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
-            )
         workers = _build_queue_workers(client, topology, worker_kwargs)
         health_state.workers_constructed = True
         health_state.readiness_metadata = spec.readiness_payload()
@@ -3342,28 +3325,12 @@ async def main_async() -> None:
             "Temporal executable worker specification: %s",
             json.dumps(spec.readiness_payload(), sort_keys=True),
         )
-        routing_task = None
 
+        # Workers poll ordinary task queues: no Worker Deployment version,
+        # routing bootstrap or promotion runs at startup. The deployment
+        # controller owns the one-time cutover of older versioned
+        # installations (moonmind/workflows/temporal/unversioned_cutover.py).
         async def mark_ready():
-            nonlocal routing_task
-            from moonmind.workflows.temporal.release_routing import (
-                bootstrap_version_routing,
-                reconcile_parked_routing,
-            )
-            routing = await bootstrap_version_routing(client, spec)
-            health_state.readiness_metadata["releaseRouting"] = routing
-            if routing.get("status") == "awaiting_promotion":
-                # The outgoing fleet can drain for longer than the route-death
-                # wait, so readiness must not depend on it disappearing. Keep
-                # a bounded reconciler instead of leaving routing parked on a
-                # version that is going away; nothing else retries now that
-                # the availability supervisor is gone.
-                routing_task = asyncio.create_task(
-                    reconcile_parked_routing(
-                        client, spec, health_state.readiness_metadata
-                    ),
-                    name="release-routing-reconcile",
-                )
             health_state.pollers_started = True
             logger.info(
                 "Worker ready, polling task queues: %s",
@@ -3373,16 +3340,11 @@ async def main_async() -> None:
         # Recreate-in-place serves one fleet at one version, so there is no
         # retained cohort to relaunch and no route to restore. A fleet that is
         # down is started by Compose, not by a background supervisor.
-        try:
-            await serve_workers(
-                workers,
-                ready=mark_ready,
-                stopping=lambda: setattr(health_state, "pollers_started", False),
-            )
-        finally:
-            if routing_task is not None:
-                routing_task.cancel()
-                await asyncio.gather(routing_task, return_exceptions=True)
+        await serve_workers(
+            workers,
+            ready=mark_ready,
+            stopping=lambda: setattr(health_state, "pollers_started", False),
+        )
     except Exception as exc:
         health_state.startup_error = exc.__class__.__name__
         raise

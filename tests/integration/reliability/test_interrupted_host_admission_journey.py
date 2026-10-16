@@ -54,7 +54,7 @@ from tests.integration.services.temporal.workflows.test_agent_run import (
 from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_admission import (
     _admission,
 )
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.support.isolated_postgres import isolated_postgres
 from tests.unit.omnigent.test_capacity_readmission_turn import install_credential_ledger
 from tests.unit.omnigent.test_generic_platform_production_services import (

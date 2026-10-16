@@ -15,7 +15,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
 from moonmind.workflows.temporal.workflows.run import DEFAULT_ACTIVITY_RETRY_POLICY
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
 

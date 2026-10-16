@@ -134,7 +134,7 @@ from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
     _host_server_url,
     _network_ref,
 )
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.integration.services.temporal.workflows.test_agent_run import (
     MockProviderProfileManager,
 )

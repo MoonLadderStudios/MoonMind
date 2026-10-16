@@ -67,9 +67,9 @@
       "invariant": "both imported and __main__ entrypoints launch the canonical module and reconcile lost acknowledgements"
     },
     {
-      "failure": "promotion strands independently routed activities or in-flight release owners",
-      "test": "tests/integration/reliability/test_release_routing_journey.py",
-      "invariant": "all queues qualify before CAS promotion; pinned and upgradeable histories preserve their server-authorized routing"
+      "failure": "removing Worker Versioning strands versioned in-flight or queued work",
+      "test": "tests/integration/reliability/test_unversioned_cutover_journey.py",
+      "invariant": "one recoverable cutover moves routing to ordinary workers only after they poll every queue; AUTO_UPGRADE and queued work continue, release canaries retire, other pins are preserved"
     },
     {
       "failure": "release completes without proving the operator route, or repeats admission after verified primary success",

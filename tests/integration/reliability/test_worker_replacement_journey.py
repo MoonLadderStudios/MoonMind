@@ -22,7 +22,7 @@ from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingState,
 )
 from moonmind.schemas.agent_runtime_models import AgentRunResult
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.support.isolated_postgres import isolated_postgres
 from tests.unit.omnigent.test_generic_platform_production_services import (
     _PUSHED_PUBLICATION,

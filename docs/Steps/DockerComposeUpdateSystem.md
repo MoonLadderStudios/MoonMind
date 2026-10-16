@@ -5,11 +5,9 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-10-04
+**Last Updated:** 2026-10-16
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
-
-This document describes the deployment update design. Some code from the earlier candidate/retained fleet design still exists, for example deployment maintenance recognizes leftover `mm-candidate-`/`mm-retained-` cohort resources (`moonmind/workflows/skills/deployment_maintenance.py`). Those paths are not the default update path, and removing them preserves saved work, histories, deployment settings, and the supported recovery path.
 
 ## 1. Purpose
 
@@ -29,7 +27,7 @@ The steady state is one installed Compose fleet per instance, not blue/green can
 
 One portable controller implements updates for the host entrypoint and the Settings Operations action. The host path stays usable when the API, Temporal workers, provider manager, or application artifact service is unhealthy, because those are the components an update may need to repair.
 
-The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery, using Docker/Compose and local job files. Temporal and the UI may request or observe an update, but neither is required for progress or runs a second update algorithm. There is no parallel supervisor, promotion state machine, or mandatory approval workflow.
+The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery, using Docker/Compose and local job files. Temporal and the UI may request or observe an update, but neither is required for progress or runs a second update algorithm. There is no parallel supervisor or mandatory approval workflow.
 
 ## 3. Terminology
 
@@ -131,7 +129,7 @@ Host image-selection failures retain redacted Docker diagnostics and stop before
 
 ### 10.5 Persist desired image
 
-The selected deployment intent is persisted before recreation (section 9), with no candidate qualification or routing-promotion prerequisite.
+The selected deployment intent is persisted before recreation (section 9).
 
 ### 10.6 Recreate services
 
@@ -202,7 +200,7 @@ The host entrypoint derives the endpoint port from the controller's identity. Th
 
 **Repair after failure.** An advertised method cannot prove a controller will apply a release whose controller fixes a defect. After a failed operation, a default host or deployment-control submission gives the requested release's controller one attempt: `bootstrap.py ensure --prefer-requested` refreshes to the requested image under the same lock and open-operation refusal. Only a confirmed change (`refreshed: true`) earns a Retry of the same operation; otherwise the original failure stands beside the refresh diagnostic. The API cannot run bootstrap, so a failed Settings Operations submission recovers through the host command or a workflow-submitted update.
 
-An older installed API/controller may reach a newer target's `--omnigent-select` callback. The callback requires the owning controller's `active-journal-transition` method before touching release state, so an older owner is refused before any mutation and pointed to `./tools/update-moonmind.sh`, which bootstraps and retries the release.
+An older installed API/controller may reach a newer target's `--omnigent-select` callback. The callback requires the owning controller's `active-journal-transition` and `unversioned-routing-cutover` methods before touching release state, so an older owner is refused before any mutation and pointed to `./tools/update-moonmind.sh`, which bootstraps and retries the release.
 
 ### 11.3 Runner image policy
 
@@ -210,11 +208,13 @@ The controller runs trusted deployment-owned code from a verified artifact. The 
 
 ### 11.4 Execution availability and automatic recovery
 
-The default has one installed fleet recreated in place, without parallel candidate/retained fleets, promotion canaries, application-owned worker-version routing gates, or a retained-cohort restoration supervisor.
+Workers poll ordinary task queues: no Worker Versioning, promotion canary, startup routing repair, or cohort restoration supervisor.
 
-Ordinary process restart belongs to Docker/Compose, and an interrupted update reconciles its local record and Docker state through the same controller; unknown state is neither success nor permission to destroy something that may still own work. Replay-sensitive changes need compatible replay or a controlled migration, because removing versioning does not make old histories safe to replay on new code.
+An installation still routed by a Temporal Worker Deployment crosses once: after `up`, before confirming the operation, the selected image's cutover one-off retires identified release canaries, preserves other pinned executions, and makes ordinary workers current once every routed queue has a live ordinary poller. Unavailable Temporal or a missing poller is retried briefly within the operation, because a terminal operation is not resumed; older-image workers or a persistent failure leave it pending and the operation `partially_verified`. Each run rereads routing, so a lost controller resumes the same operation. After a `completed` receipt, routing never changes again. Once routing is cleared (`completed`, or `attention` with pinned work left to report), images whose versioned workers would re-promote themselves are refused.
 
-Leftover legacy updater jobs and cohort resources keep their evidence and any active-work recovery path. An old image-owned controller is not relaunched, because it would recreate the removed architecture, and an unidentified or still-serving cohort is not deleted automatically. An unresolved ownership or data risk stays visible for operator action.
+Ordinary process restart belongs to Docker/Compose. Replay-sensitive changes need compatible replay or a controlled migration, because removing versioning does not make old histories safe to replay on new code.
+
+Leftover legacy updater jobs and `mm-candidate-`/`mm-retained-` cohort resources (`deployment_maintenance.py`) keep their evidence and any active-work recovery path. An old image-owned controller is not relaunched, because it would recreate the removed architecture, and an unidentified or still-serving cohort is not deleted automatically. An unresolved ownership or data risk stays visible for operator action.
 
 A provider-manager fault is diagnosed as its own fault and does not block installing its fix. Maintenance can expose incomplete operations but does not promote images, overwrite target intent, or restart retired controllers.
 

@@ -27,10 +27,12 @@ required only while older histories that already recorded that child type remain
 within the replay/support window; its presence must not be used to route new
 resolver work. Readiness still requires the expected task queues, immutable build
 identity, and registry fingerprint.
-Production mode fails startup unless `MOONMIND_BUILD_SHA` or
-`MOONMIND_IMAGE_DIGEST` is set and Temporal worker deployment versioning is
-enabled. Deploy immutable images, promote a controlled worker version, drain old
-workers from the queue, and run:
+Production mode fails startup unless the installed release manifest,
+`MOONMIND_BUILD_SHA` or `MOONMIND_IMAGE_DIGEST` supplies build identity. Workers
+poll ordinary task queues without Worker Versioning, so a deployment recreates
+the installed fleet in place through the
+[update path](../Steps/DockerComposeUpdateSystem.md) with no version promotion
+or queue drain. After the update verifies, run:
 
 ```bash
 python tools/run_pr_resolver_deployment_canary.py

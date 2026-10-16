@@ -745,6 +745,8 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
                 attempts += 1
                 if attempts == 1:
                     return {"exit": 1, "output": "only writer recreated"}
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}  # No Temporal workers to cut over.
             if "ps" in args:
                 return {"exit": 0, "output": json.dumps([
                     {"Service": name, "State": "running"} for name in services])}
@@ -1009,7 +1011,8 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert payload["target"] == target
                 assert payload["moonmindImage"] == op["desired"]["image"]
                 assert payload["controllerCapabilities"] == [
-                    "active-journal-transition", "request-identity"
+                    "active-journal-transition", "request-identity",
+                    "unversioned-routing-cutover",
                 ]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase

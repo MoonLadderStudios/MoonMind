@@ -12,7 +12,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal import worker_healthcheck as health
 from moonmind.workflows.temporal.worker_code_identity import WorkerCodeIdentity
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 
 pytestmark = [
     pytest.mark.asyncio,

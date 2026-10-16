@@ -65,8 +65,14 @@ HOST_REPAIR_COMMAND = "./tools/update-moonmind.sh"
 CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 # The controller behavior a submission relies on, advertised by its healthz.
 # A controller without request identity answers a new update to `latest` with
-# an earlier success, so its 202 would not mean this request was applied.
-REQUIRED_CONTROLLER_CAPABILITIES = ("active-journal-transition", "request-identity")
+# an earlier success, so its 202 would not mean this request was applied. One
+# without the routing cutover would install unversioned workers while Temporal
+# still routes to the old Worker Deployment version.
+REQUIRED_CONTROLLER_CAPABILITIES = (
+    "active-journal-transition",
+    "request-identity",
+    "unversioned-routing-cutover",
+)
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 

@@ -1107,7 +1107,7 @@ silently create a fresh checkout or switch source authority.
 
 ### 16.2 Workflow replay
 
-Changes that add, remove, or reorder workflow commands use Temporal patch/version markers or Worker Versioning so in-flight histories replay to the recorded command path.
+Changes that add, remove, or reorder workflow commands use Temporal patch/version markers so in-flight histories replay to the recorded command path.
 
 Temporal resets preserve dynamic remediation child identities from the run
 identity recorded by the policy-compilation Activity. A new reset execution ID

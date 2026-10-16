@@ -39,7 +39,7 @@ from moonmind.workflows.temporal.story_output_tools import (
     register_story_output_tool_handlers,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.support.isolated_postgres import isolated_postgres
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
