@@ -456,13 +456,16 @@ Baseline policy:
 
 ## 9.3 Service and worker access
 
-Workers use service identity with least privilege.
+A worker's service identity names the caller; it is not a read grant. Under every authenticated mode a bare `service:` or runtime principal reads only artifacts it owns. Readers of execution inputs pass the admitted execution as `admitted_principal=workflow:<id>`, and the service then requires the artifact to be owned by or linked to that execution. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only, so admission never releases protected content.
 
-Representative examples:
+Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
-* artifact workers may read/write artifact storage broadly within policy
-* integration workers may write provider snapshots and read linked execution artifacts
-* managed runtime workers may write stdout/stderr/diagnostics artifacts for runs they are handling
+* Omnigent admission verifies the persisted execution plan and links its artifact inputs to the Step Execution, including the Skill bodies named by the admitted resolved Skill manifest. Snapshots produced by another execution or left unlinked by the operator become readable this way without copying bytes, rewriting owners or backfilling history.
+* `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Generic-host and Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, and `read_repository_access_snapshot` is limited to repository snapshots.
+* Workspace checkpoint, restore-input and attachment projection and managed-runtime Skill loading carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope.
+* Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.
+
+Missing or mismatched authority fails with the service's authorization error. Readers do not fall back to a local path, another identity or disabled-mode behavior. Only disabled local mode skips these checks.
 
 ## 9.4 Auditing
 

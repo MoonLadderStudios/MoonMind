@@ -1341,13 +1341,23 @@ async def test_codex_dispatch_preserves_admitted_plan_and_checkpoint_authority(
     realizer, delivered, store = _codex_authority_realizer(durable_artifact_storage)
     registry = OmnigentExecutionRealizerRegistry()
     registry.register(realizer)
+    admitted = []
+
+    class _AdmissionGateway:
+        async def admit_execution_plan_inputs(self, *, request, plan):
+            admitted.append((request, plan))
 
     result = await _try_generic_realizer_dispatch(
-        request, plan_store=plans, realizer_registry=registry
+        request,
+        plan_store=plans,
+        realizer_registry=registry,
+        artifact_gateway=_AdmissionGateway(),
     )
 
     assert result.failure_class is None
     assert result.summary == "Codex session completed"
+    # A typed plan binding delegates its verified inputs before the realizer.
+    assert admitted == ([] if authority == "legacy_flat" else [(request, plan)])
     assert len(delivered) == 1
     assert delivered[0].execution_profile_ref == request.execution_profile_ref
     assert delivered[0].step_execution == request.step_execution

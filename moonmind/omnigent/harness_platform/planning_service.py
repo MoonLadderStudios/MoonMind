@@ -116,7 +116,9 @@ class ArtifactPlanningSkillResolver:
         existing_ref = str(request.resolved_skillset_ref or "").strip()
         if existing_ref:
             try:
-                body = await self._artifacts.read_bytes(existing_ref)
+                body = await self._artifacts.read_requested_skill_snapshot(
+                    existing_ref, request=request
+                )
                 manifest = json.loads(body)
             except Exception as exc:
                 raise HarnessPlatformError(

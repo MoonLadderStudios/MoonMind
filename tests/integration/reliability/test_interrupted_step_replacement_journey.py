@@ -549,10 +549,10 @@ class _NoSkills:
             "accessMode": "read-only",
         }
 
-    async def anticipated_attachment(self, _resolved, *, owner_ref):
+    async def anticipated_attachment(self, _resolved, *, owner_ref, request):
         return dict(self._attachment)
 
-    async def materialize(self, _resolved, *, owner_ref):
+    async def materialize(self, _resolved, *, owner_ref, request):
         return dict(self._attachment)
 
     async def cleanup(self, _attachment):
