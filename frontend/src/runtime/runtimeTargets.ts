@@ -131,7 +131,8 @@ export interface BackendOption {
  * Harness has an Omnigent route; a direct compatibility backend is offered only
  * while the server catalog publishes an explicitly selectable target for the
  * Harness's runtime id. Callers render a Backend selector only when more than
- * one choice exists, so no frontend list keeps Direct alive on its own.
+ * one choice exists or the current Backend matches none of them (so it can be
+ * repaired); no frontend list keeps Direct alive on its own.
  */
 export function backendOptionsForHarness(
   harnessRuntimeId: string,

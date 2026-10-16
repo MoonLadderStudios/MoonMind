@@ -551,7 +551,7 @@ def provider_profile_creation_capabilities(
     diagnostics: list[str] = []
     if not methods:
         diagnostics.append(
-            "No validated creation preset exists for this runtime and provider."
+            "No validated creation preset exists for this Harness and provider."
         )
 
     return {
