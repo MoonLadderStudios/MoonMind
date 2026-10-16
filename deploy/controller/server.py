@@ -37,8 +37,13 @@ OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # Behavior submitters require before trusting an answer. ``request-identity``:
 # a completed operation answers only its own identity, so a new request for a
 # mutable tag such as ``latest`` applies again instead of returning an earlier
-# success.
-CONTROLLER_CAPABILITIES = ("active-journal-transition", "request-identity")
+# success. ``unversioned-routing-cutover``: an installation that still routes
+# through a Temporal Worker Deployment is moved to ordinary workers once.
+CONTROLLER_CAPABILITIES = (
+    "active-journal-transition",
+    "request-identity",
+    "unversioned-routing-cutover",
+)
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
 # complete stdout, never its bounded diagnostic tail.
@@ -51,6 +56,24 @@ JOURNAL_CONSUMER_INSPECT_FORMAT = (
     '"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}}},'
     '"Env":[{{json $fleet}}]}}'
 )
+# Temporal workers by the fleet variable every worker service sets, with the
+# image they actually run. Environment values are never projected.
+TEMPORAL_WORKER_INSPECT_FORMAT = (
+    '{{$worker := false}}{{range .Config.Env}}'
+    '{{if eq (index (split . "=") 0) "TEMPORAL_WORKER_FLEET"}}{{$worker = true}}{{end}}{{end}}'
+    '{"Image":{{json .Image}},"Worker":{{json $worker}},'
+    '"Service":{{json (index .Config.Labels "com.docker.compose.service")}},'
+    '"OneOff":{{json (index .Config.Labels "com.docker.compose.oneoff")}}}'
+)
+ROUTING_CUTOVER_CHECK = "temporal-unversioned-cutover"
+# One-offs whose release helper may predate the step: the selected image
+# answers ``unsupported`` instead of failing when it lacks the function.
+CAPABILITY_STEPS = {
+    "journal-prepare": ("controller_journal_cli", "journal-prepare"),
+    "journal-quiesce": ("controller_journal_cli", "journal-quiesce"),
+    "routing-cutover-probe": ("controller_routing_cutover_cli", "probe"),
+    "routing-cutover-apply": ("controller_routing_cutover_cli", "apply"),
+}
 # The deployment checkout bootstrap mounts read-only at its host path.
 TARGET_REPO_ENV = "MOONMIND_CONTROLLER_TARGET_REPO"
 # The MoonMind Compose project bootstrap recorded in the controller identity
@@ -1033,21 +1056,22 @@ def run_omnigent_step(
         "-m", "moonmind.workflows.skills.deployment_release",
         f"--omnigent-{phase}", json.dumps(request, sort_keys=True),
     )
-    if phase in ("journal-prepare", "journal-quiesce"):
+    if phase in CAPABILITY_STEPS:
         # The installed source is retained for rollback to a target predating
         # this helper. Capability absence is distinct from an execution error;
         # only absence permits falling back to the staged target.
+        function, argument = CAPABILITY_STEPS[phase]
         command = (
             "-c",
             (
                 "import asyncio,importlib.util,json,sys; "
                 "r=__import__('moonmind.workflows.skills.deployment_release', "
-                "fromlist=['controller_journal_cli']) if importlib.util.find_spec('moonmind') else None; "
-                "f=getattr(r,'controller_journal_cli',None); "
+                f"fromlist=['{function}']) if importlib.util.find_spec('moonmind') else None; "
+                f"f=getattr(r,'{function}',None); "
                 "sys.exit(asyncio.run(f(sys.argv[1],json.loads(sys.argv[2]))) "
                 "if f else (print('MOONMIND_OMNIGENT_RESULT='+json.dumps({'status':'unsupported'})) or 0))"
             ),
-            phase, json.dumps(request, sort_keys=True),
+            argument, json.dumps(request, sort_keys=True),
         )
     store.record_omnigent_step(operation_id, phase)
     try:
@@ -1165,6 +1189,146 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
     raise ValueError("No installed or staged image can prepare the active recovery journals")
 
 
+def _temporal_worker_images(runner, project: str, image: str) -> tuple[list, list]:
+    """Running Temporal worker services on ``image`` and on any other image."""
+    listed = engine.run_command(runner, (
+        "docker", "ps", "--quiet", "--filter",
+        f"label=com.docker.compose.project={project}",
+    ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)
+    identifiers = engine.command_stdout(listed).split()
+    if not identifiers:
+        return [], []
+    inspected = engine.run_command(runner, (
+        "docker", "inspect", "--format", TEMPORAL_WORKER_INSPECT_FORMAT, *identifiers,
+    ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)
+    rows = [json.loads(line) for line in engine.command_stdout(inspected).splitlines() if line.strip()]
+    if len(rows) != len(identifiers):
+        raise ValueError("Temporal worker inventory is incomplete")
+    selected = engine.command_stdout(engine.run_command(runner, (
+        "docker", "image", "inspect", "--format", "{{.Id}}", image,
+    ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)).strip()
+    current, other = [], []
+    for row in rows:
+        if row.get("Worker") is not True or str(row.get("OneOff")).lower() == "true":
+            continue
+        (current if row.get("Image") == selected else other).append(str(row.get("Service")))
+    return sorted(set(current)), sorted(set(other))
+
+
+def require_routing_floor(store, operation, *, runner, overlay) -> None:
+    """After the cutover, refuse an image that would revive versioned routing.
+
+    Older images start versioned workers whose startup promotes their own
+    Worker Deployment version, silently undoing the cutover. The staged image
+    proves it is not one of them before any container changes.
+    """
+    completed = store.completed_routing_cutover(stack=operation.get("stack"))
+    if completed is None:
+        return
+    try:
+        receipt = run_omnigent_step(
+            store, operation, runner=runner, overlay=overlay,
+            phase="routing-cutover-probe",
+        )
+    except Exception as exc:
+        raise engine.ApplyError(
+            "routing-floor", 1, redact_text(f"{exc} {getattr(exc, 'output', '')}")
+        ) from exc
+    if receipt.get("status") != "supported":
+        raise engine.ApplyError(
+            "routing-floor", 1,
+            f"operation {completed['operationId']} moved Temporal routing to "
+            "ordinary unversioned workers; the selected image still runs "
+            "Worker Deployment routing writers and cannot be installed",
+        )
+
+
+def converge_routing_cutover(store, operation, *, runner, overlay) -> dict | None:
+    """Move an installation off Worker Deployment routing exactly once.
+
+    Runs after the selected release's workers are polling and before the
+    operation is confirmed, so a lost controller resumes the same operation
+    and the step rereads actual routing. Returns the verification check, or
+    ``None`` when this operation installed no ordinary workers to route to.
+    Temporal problems never fail the container apply; they leave the
+    cutover pending and the operation partially verified.
+    """
+    operation_id = operation["operationId"]
+    completed = store.completed_routing_cutover(stack=operation.get("stack"))
+    if completed is not None:
+        return {
+            "name": ROUTING_CUTOVER_CHECK,
+            "status": "passed",
+            "detail": (
+                f"completed by operation {completed['operationId']}; "
+                "routing is not changed again"
+            ),
+        }
+    target = operation.get("target") or {}
+    try:
+        current, other = _temporal_worker_images(
+            runner, target.get("project", operation.get("stack")),
+            operation["desired"]["image"],
+        )
+    except Exception as exc:  # noqa: BLE001 - recorded as an unverified outcome
+        state = {"status": "pending", "outcome": "writers_unobserved",
+                 "detail": f"Temporal worker containers could not be observed: {exc}"}
+    else:
+        if not current:
+            return None
+        if other:
+            # A worker left on an older image can still promote its own
+            # version and undo the transition.
+            state = {"status": "pending", "outcome": "legacy_writers",
+                     "detail": "workers still run an older image: " + ", ".join(other)}
+        else:
+            try:
+                state = run_omnigent_step(
+                    store, operation, runner=runner, overlay=overlay,
+                    phase="routing-cutover-apply",
+                )
+            except Exception as exc:  # noqa: BLE001 - recorded as an unverified outcome
+                state = {"status": "pending", "outcome": "step_failed",
+                         "detail": f"{exc} {getattr(exc, 'output', '')}".strip()}
+            if state.get("status") == "unsupported":
+                # The selected release still runs versioned workers itself.
+                return None
+    state = dict(state)
+    state["detail"] = redact_text(str(state.get("detail") or ""))[-2000:]
+    store.record_routing_cutover(operation_id, state)
+    return {"name": ROUTING_CUTOVER_CHECK, **_routing_cutover_check(state)}
+
+
+def _routing_cutover_check(state: dict) -> dict:
+    status = state.get("status")
+    outcome = state.get("outcome", "")
+    if status == "completed":
+        retired = state.get("retiredCanariesCount", len(state.get("retiredCanaries") or ()))
+        return {"status": "passed",
+                "detail": f"{outcome}; ordinary workers are current"
+                + (f"; retired {retired} release canaries" if retired else "")}
+    if status == "attention":
+        pinned = [item.get("workflowId") for item in state.get("preservedPinned") or ()]
+        unknown = [item.get("workflowId") for item in state.get("unknownExecutions") or ()]
+        detail = "ordinary workers are current"
+        if pinned:
+            detail += (
+                f"; {state.get('preservedPinnedCount', len(pinned))} pinned executions "
+                f"preserved on their old version ({', '.join(pinned)}); move each "
+                "with `temporal workflow update-options --versioning-override-behavior "
+                "auto_upgrade` or let it finish, then update again"
+            )
+        if unknown:
+            detail += (
+                f"; {state.get('unknownExecutionsCount', len(unknown))} executions "
+                f"could not be observed ({', '.join(unknown)})"
+            )
+        return {"status": "failed", "detail": detail}
+    unavailable = outcome in ("observation_unavailable", "writers_unobserved", "step_failed")
+    return {"status": "unavailable" if unavailable else "failed",
+            "detail": f"cutover pending ({outcome}): {state.get('detail', '')}"}
+
+
 def production_apply(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1231,6 +1395,7 @@ def production_apply(
     env_files = _env_files_for_apply(target, overlay)
 
     def before_compose():
+        require_routing_floor(store, operation, runner=runner, overlay=overlay)
         try:
             return prepare_controller_journals(
                 store, operation, runner=runner, overlay=overlay
@@ -1277,6 +1442,9 @@ def production_apply(
                         ),
                     )
         raise
+    routing_cutover = converge_routing_cutover(
+        store, operation, runner=runner, overlay=overlay
+    )
     store.confirm_installed(
         operation["operationId"], image=operation["desired"]["image"]
     )
@@ -1288,6 +1456,7 @@ def production_apply(
         env_files=env_files,
         dispatch_probe=dispatch_probe,
         omnigent_migrator=omnigent_migrator,
+        extra_checks=[routing_cutover] if routing_cutover else [],
     )
     if verification["complete"]:
         return {"status": "succeeded", "outcome": outcome, "verification": verification}
@@ -1307,6 +1476,7 @@ def _verify_applied_release(
     env_files: list,
     dispatch_probe: Callable[[], bool | None] | None = None,
     omnigent_migrator: Callable[[dict], Any] | None = None,
+    extra_checks: list | None = None,
 ) -> dict:
     """Run post-apply verification and record every check before returning.
 
@@ -1370,6 +1540,7 @@ def _verify_applied_release(
         # application handle; the limitation is noted in the outcome instead
         # of failing every update with an unavailable mandatory check.
         recorded = [c for c in recorded if c["name"] != "dispatch"]
+    recorded.extend(extra_checks or ())
     for check in recorded:
         store.record_verification(
             operation_id,

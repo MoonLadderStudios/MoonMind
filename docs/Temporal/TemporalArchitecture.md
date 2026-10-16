@@ -569,31 +569,19 @@ reconfiguration are distinguished in summaries and projections.
 ## 18. Replay-safe evolution and deployment
 
 Temporal workflow history is durable, so workflow changes are replay-safe.
-Immutable production releases use Temporal Worker Deployment routing. The
-installed release manifest supplies the worker Build ID; Temporal owns the
-effective current/ramping route, so starting a different worker image does not
-by itself promote that route. The image-owned controller qualifies a
-candidate, promotes it with compare-and-set, verifies ordinary installed
-traffic, and keeps previous pollers only as bounded transitional drainage while
-Temporal still requires them for open executions; the steady state is one
-installed fleet recreated in place. The
+Workers poll ordinary task queues without Temporal Worker Versioning. The
+installed release manifest supplies build identity as provenance, not a route:
+one installed fleet is recreated in place, and no startup promotion, canary or
+routing repair runs. An installation that previously routed through a Worker
+Deployment crosses once through the deployment controller, as the
 [deployment update documentation](../Steps/DockerComposeUpdateSystem.md)
-describes promotion, drainage, rollback, and recovery.
+describes; that cutover moves AUTO_UPGRADE work to ordinary workers and
+preserves other pinned executions until an operator moves them.
 
-Versioning preserves availability as well as identity. Process liveness and
-candidate registration cannot prove that ordinary work reaches a worker, so
-product readiness requires fresh server routing/poller evidence and observed
-unpinned execution. An unavailable route is a recoverable infrastructure
-condition with a durable owner, not a healthy-looking deployment or a
-user-input failure, and the trusted release recovery owner stays reachable when
-application workflow dispatch is broken.
-
-Build identity does not establish history compatibility. AUTO_UPGRADE
-executions need compatible workflow code and payload readers; pinned
-executions keep exact compatible workers until drainage is confirmed. Identity
-canaries, replay tests, and ordinary post-promotion journeys establish
-different facts, and a test that invokes promotion directly does not prove
-autonomous recovery.
+Build identity does not establish history compatibility. Workers that replace
+a running fleet need compatible workflow code and payload readers for every
+open history. Replay tests and ordinary journeys establish that compatibility;
+process liveness alone does not prove that ordinary work reaches a worker.
 
 Handlers referenced by open histories are not removed or renamed without a
 compatibility plan; incompatible Activity contract changes get new Activity

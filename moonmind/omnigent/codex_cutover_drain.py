@@ -154,9 +154,9 @@ BRANCH_RUNTIME_BINDINGS: dict[str, str] = {
     # Persisted sessions/provenance/journal/artifacts/checkpoints stay
     # readable without a live worker through the control-plane repositories.
     "historical_read_model": "moonmind.omnigent.control_plane.repositories",
-    # Supported reset/replay operations route by worker deployment version.
+    # Reset/replay of pre-cutover histories observes worker deployment routing.
     "supported_worker_routing": (
-        "moonmind.workflows.temporal.release_routing:current_version"
+        "moonmind.workflows.temporal.unversioned_cutover:current_version"
     ),
 }
 

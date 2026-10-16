@@ -255,6 +255,51 @@ async def controller_journal_cli(phase, payload):
     return 0
 
 
+async def controller_routing_cutover_cli(phase, payload):
+    """Operation-scoped one-off for the one-time unversioned routing cutover.
+
+    ``probe`` only proves this image runs ordinary unversioned workers, which
+    is the rollback floor once the cutover completed. ``apply`` converges
+    the installation's Temporal routing and reports what it observed.
+    """
+    import sys
+
+    if phase == "probe":
+        receipt = {"status": "supported"}
+    elif phase == "apply":
+        from moonmind.config.settings import settings
+        from moonmind.workflows.temporal.client import get_temporal_client
+        from moonmind.workflows.temporal.unversioned_cutover import (
+            DEFAULT_DEPLOYMENT_NAME,
+            compact_receipt,
+            run_cutover,
+        )
+
+        # Older installations may name their Worker Deployment in .env.
+        deployment = (
+            os.environ.get("TEMPORAL_WORKER_DEPLOYMENT_NAME") or DEFAULT_DEPLOYMENT_NAME
+        ).strip()
+        try:
+            client = await get_temporal_client(
+                settings.temporal.address, settings.temporal.namespace
+            )
+        except Exception as exc:  # noqa: BLE001 - reported as an unverified outcome
+            receipt = {
+                "status": "pending",
+                "outcome": "observation_unavailable",
+                "detail": bounded_diagnosis(f"Temporal is unavailable: {exc}"),
+            }
+        else:
+            receipt = compact_receipt(
+                await run_cutover(client, deployment=deployment)
+            )
+    else:
+        raise ValueError("Unknown controller routing cutover phase")
+    print("MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
+          file=sys.stderr, flush=True)
+    return 0
+
+
 def _activity_schedule_anchor():
     """Wall clock instant the supervising Activity was scheduled.
 
@@ -312,12 +357,6 @@ async def require_coherent_images(runner, image):
             raise ValueError(
                 f"Release requires {service} to use the selected immutable image"
             )
-        if str(
-            configured.get("environment", {}).get(
-                "TEMPORAL_WORKER_VERSIONING_ENABLED", "auto"
-            )
-        ).lower() not in {"auto", "true", "1"}:
-            raise ValueError(f"Release requires versioned routing on {service}")
     return services
 
 
@@ -346,14 +385,6 @@ async def container_health(name):
 
 def readiness_matches(state, digest):
     if state.get("ready") is not True:
-        return False
-    # A worker can be ready while routing still targets the outgoing version:
-    # startup parks rather than displacing a live route, and only a background
-    # task retries the promotion. Treating that as verified issued a success
-    # receipt while ordinary work still routed elsewhere, with no proof the
-    # handoff ever completed. Verification fails closed until routing moves.
-    routing = state.get("releaseRouting")
-    if isinstance(routing, dict) and routing.get("status") == "awaiting_promotion":
         return False
     if "children" in state:
         children = state["children"]
@@ -406,173 +437,6 @@ async def launch_updater(runner, directory, request):
         raise ValueError("Updater container image differs from the pinned release")
     await docker("update", "--restart=no", name)
     return observed
-
-
-def retained_release_records(root, deployment, *, errors=None):
-    """Yield image authority recorded by a release or its availability owner."""
-    for path in sorted(root.glob("*/retained.json")):
-        directory = path.parent
-        request_file = directory / "request.json"
-        routing_file = directory / "routing.json"
-        try:
-            retained = json.loads(path.read_text())
-            if (
-                not isinstance(retained.get("owner"), str)
-                or not retained["owner"]
-                or not isinstance(retained.get("version"), str)
-                or not retained["version"].startswith(deployment + ".")
-                or not isinstance(retained.get("image"), str)
-                or not retained["image"].startswith("sha256:")
-            ):
-                raise ValueError("Retained release receipt authority differs")
-            # The availability owner records the exact serving image before
-            # loss, including plain Compose installations with no update job.
-            # Its deterministic directory and owner bind that durable receipt;
-            # mutable observation/retry records are not image authority.
-            availability_owner = f"release-availability:{retained['version']}"
-            availability_key = hashlib.sha256(
-                retained["version"].encode()
-            ).hexdigest()[:32]
-            if retained["owner"] == availability_owner:
-                if directory.name != availability_key:
-                    raise ValueError("Retained availability receipt owner differs")
-            else:
-                if not request_file.exists() or not routing_file.exists():
-                    continue
-                routing = json.loads(routing_file.read_text())
-                if routing.get("deployment") != deployment:
-                    continue
-                request = json.loads(request_file.read_text())
-                if (
-                    retained["owner"] != request["authored"]["owner"]
-                    or retained["version"] != routing.get("previous")
-                ):
-                    raise ValueError("Retained release receipt authority differs")
-        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            if errors is not None and len(errors) < 20:
-                errors.append(
-                    {"record": directory.name, "errorCode": type(exc).__name__}
-                )
-            # Invalid evidence grants no image authority. Its failure must not
-            # suppress valid current or retained cohorts from another job.
-            continue
-        yield directory, retained
-
-
-async def successful_release_image(root, version):
-    """Recover image authority from an exact successful immutable release.
-
-    A local image, a newer request, or a failed promotion grants no authority.
-    Validate the image's own manifest before reconstructing any worker cohort.
-    """
-    for path in sorted(root.glob("*/routing.json")):
-        try:
-            routing = json.loads(path.read_text())
-            if f"{routing.get('deployment')}.{routing.get('candidate')}" != version:
-                continue
-        except (OSError, ValueError, TypeError, AttributeError):
-            # Malformed unrelated jobs cannot revoke a valid release receipt.
-            continue
-        directory = path.parent
-        try:
-            receipt_file = directory / "deployment-result.json"
-            request_file = directory / "request.json"
-            if not receipt_file.exists() or not request_file.exists():
-                continue
-            receipt = json.loads(receipt_file.read_text())
-            request = json.loads(request_file.read_text())
-            if receipt.get("owner") != request["authored"]["owner"]:
-                raise ValueError("Successful release receipt owner differs")
-            if receipt.get("result", {}).get("status") != "COMPLETED":
-                continue
-            digest = request["image"].partition("@")[2] or request["image"]
-            outputs = receipt["result"].get("outputs", {})
-            if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
-                raise ValueError("Successful release receipt image differs")
-            expected_source = request["authored"]["inputs"].get("sourceRevision")
-            if "sourceRevision" in outputs and outputs.get("sourceRevision") != expected_source:
-                raise ValueError("Successful release receipt source differs")
-            # Receipts predating the bound source stamp carry no sourceRevision
-            # output; their source authority still binds through the live image
-            # manifest check below, so absence alone is not rejection evidence.
-            image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
-            if request["imageId"] not in image_ids:
-                await docker("pull", request["image"])
-            image = json.loads(await docker("image", "inspect", request["imageId"]))[0]
-            if image["Id"] != request["imageId"]:
-                raise ValueError("Successful release image identity differs")
-            manifest = json.loads(
-                await docker(
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--entrypoint",
-                    "python",
-                    request["imageId"],
-                    "-c",
-                    "import json; from moonmind.release_identity import installed_release; "
-                    "print(json.dumps(installed_release()))",
-                )
-            )
-            if (
-                not manifest
-                or manifest.get("digest") != routing["candidate"]
-                or (
-                    manifest.get("sourceRevision")
-                    != request["authored"]["inputs"].get("sourceRevision")
-                )
-            ):
-                raise ValueError(
-                    "Successful release manifest differs from its source authority"
-                )
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            # Invalid evidence grants no image authority. Its failure must not
-            # suppress valid current or retained cohorts from another job.
-            # In particular, receipts authored before sourceRevision existed
-            # cannot prove source identity and are skipped, not fatal.
-            continue
-        else:
-            return {
-                "image": request["imageId"],
-                "sourceReceipt": directory.name,
-                "sourceRevision": manifest["sourceRevision"],
-            }
-    # An initial Compose installation may never have produced its own release
-    # receipt. Its availability owner or first updater records the proven image.
-    deployment, _, expected_digest = version.partition(".sha256:")
-    if expected_digest:
-        for directory, retained in retained_release_records(root, deployment):
-            if retained["version"] != version:
-                continue
-            image_id = retained["image"]
-            if not image_id.startswith("sha256:"):
-                raise ValueError("Retained release image is not content addressed")
-            image = json.loads(await docker("image", "inspect", image_id))[0]
-            if image["Id"] != image_id:
-                raise ValueError("Retained release image identity differs")
-            manifest = json.loads(
-                await docker(
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--entrypoint",
-                    "python",
-                    image_id,
-                    "-c",
-                    "import json; from moonmind.release_identity import installed_release; "
-                    "print(json.dumps(installed_release()))",
-                )
-            )
-            if not manifest or manifest.get("digest") != "sha256:" + expected_digest:
-                raise ValueError("Retained release manifest differs from its version")
-            return {
-                "image": image_id,
-                "sourceReceipt": directory.name,
-                "sourceRevision": manifest["sourceRevision"],
-            }
-    return None
 
 
 async def docker_logs_tail(name, tail_lines=30, timeout_seconds=60):
@@ -939,14 +803,24 @@ async def run_controller_omnigent_step(phase, payload):
     if phase not in ("select", "migrate"):
         raise ValueError("Unknown controller Omnigent release step")
     capabilities = payload.get("controllerCapabilities")
-    if not isinstance(capabilities, (list, tuple)) or "active-journal-transition" not in capabilities:
-        # An old installed owner reaches this selected-image callback before
-        # any updated API or host client necessarily runs. It cannot retain
-        # source helper provenance or prepare a later rollback, and this
-        # one-off must neither replace its controller nor launch an updater.
+    # An old installed owner reaches this selected-image callback before any
+    # updated API or host client necessarily runs. Without journal transition
+    # it cannot prepare a later rollback; without the routing cutover it would
+    # install workers that Temporal still does not route to. Selection runs
+    # before any container changes, so refusing here fails the operation
+    # safely and lets the submitter retry with the requested release's
+    # controller. This one-off neither replaces its controller nor launches
+    # an updater.
+    required = ("active-journal-transition",) + (
+        ("unversioned-routing-cutover",) if phase == "select" else ()
+    )
+    if not isinstance(capabilities, (list, tuple)):
+        capabilities = ()
+    missing = [name for name in required if name not in capabilities]
+    if missing:
         raise RuntimeError(
             f"Refusing Omnigent {phase}: the installed controller does not provide "
-            "active-journal-transition. This helper has not changed release state. "
+            f"{', '.join(missing)}. This helper has not changed release state. "
             "Run ./tools/update-moonmind.sh from the updated MoonMind checkout "
             "to bootstrap the deployment controller, then retry this release."
         )

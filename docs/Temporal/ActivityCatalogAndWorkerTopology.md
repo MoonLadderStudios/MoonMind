@@ -43,8 +43,8 @@ cannot drift from what the worker actually registered.
 remains unavailable until configuration and the executable specification are
 built, the Temporal client is connected, workers are constructed, and pollers
 have started. Its bounded response includes task queues, registered workflow and
-activity types, build/deployment identity, registry fingerprint, versioning
-state, and resolver-core identity. `MoonMind.PRResolver` may appear only when
+activity types, build identity, registry fingerprint, and resolver-core
+identity. `MoonMind.PRResolver` may appear only when
 that exact workflow class was supplied to the SDK worker. Its registration is
 replay support for previously recorded histories, not an active host-selection
 surface for new `pr-resolver` runs.
@@ -68,31 +68,19 @@ bounded cached evidence. Unknown or stale evidence makes readiness unavailable;
 it does not block liveness or Temporal progress. Supervisors reuse each child's
 single readiness response, including diagnostics returned with HTTP 503.
 
-During startup routing convergence, transient Temporal overload, unavailable,
-and deadline errors use the existing bounded startup retry loop while pollers
-remain running. Each retry observes server state before another handoff; if a
-previous handoff applied but its confirmation failed, ordinary workflow traffic
-still has to pass verification before readiness is reported. Exhausted retries and
-non-retryable errors retain their original diagnostics and fail startup.
-The workflow group's Compose health check allows a three-minute startup grace
-period for the old-poller expiry window and transient recovery. It continues to
+Readiness depends on real pollers, not Temporal routing: workers run without
+Worker Versioning, and startup neither promotes a version nor starts a routing
+reconciler. The deployment controller owns the one-time cutover of older
+versioned installations. The workflow group's Compose health check allows a
+three-minute startup grace period for transient recovery. It continues to
 probe `/readyz`, accepts successful readiness immediately, and retains the same
 steady-state interval and failure threshold.
 
-`release.inspect` is registered on every affected worker queue and verifies the
-installed content digest. Startup promotion waits for Temporal to register all
-candidate queues. Then, before routing moves, it admits a pinned cross-queue
-canary on every Activity queue the target registered, re-reading the
-registrations after each canary so a fleet that registers during the check is
-also covered. After promotion, ordinary verification checks each workflow queue against its own worker only. Work that
-was waiting now reaches the target fleets. That includes a deployment update's
-own supervising Activity on the single-slot deployment-control fleet, which
-waits for this readiness, so a later probe of that queue could never start.
 `release.reconcile` runs on the existing deployment-control fleet from scheduled
 storage maintenance. It resumes durable updater owners and retires temporary
 cohorts only after verifying their authority and server drainage evidence. Other
-storage maintenance failures cannot starve this owner. Full promotion and
-retention semantics are described in [Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
+storage maintenance failures cannot starve this owner. Update and retention
+semantics are described in [Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
 
 ---
 
@@ -276,7 +264,6 @@ see the generated routing table in
 [`WorkflowTypeCatalogGenerated.md`](./WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing)
 for the current-lane versus historical-only split):
 
-- immutable-release identity probe from `workflows/release_canary.py`: `release.inspect` reads the installed release manifest without credentials or external mutation.
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
 - checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — registered for replay/in-flight compatibility of older histories; no new calls route there.
 
@@ -345,7 +332,6 @@ Capability inventory (workflow fleet, from source inspection):
 
 | Handler | Needs database | Needs provider/Docker/artifact-storage I/O |
 |---|---|---|
-| `release.inspect` | no | no (installed release manifest read only) |
 | `integration.resolve_adapter_metadata` | no | no (registry + settings read only) |
 | `integration.get_activity_route` | no | no (catalog read only) |
 | `integration.resolve_external_adapter` | no | no (registry read only) |
@@ -701,8 +687,8 @@ The session-oriented activity surface is runtime-neutral in shape, but the live 
 `agent_runtime.prepare_turn_instructions` is replay-visible when scheduled by
 `MoonMind.AgentRun`. Moving it before or after session launch/status activities,
 or before or after `agent_runtime.send_turn`, changes Temporal command order.
-Such changes are guarded by Temporal patch/version markers or Worker
-Versioning so in-flight histories keep their recorded order while new histories
+Such changes are guarded by Temporal patch/version markers so in-flight
+histories keep their recorded order while new histories
 use the current order, because activity retry cannot repair a workflow-task
 nondeterminism caused by an unguarded order change.
 
