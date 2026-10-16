@@ -23,14 +23,17 @@ from tests.unit.services.test_omnigent_execution_plan_service import (
 )
 
 
-@pytest_asyncio.fixture
-async def admitted_codex_plan(monkeypatch, request):
-    policy = getattr(request, "param", "codex-on-demand@16")
+async def _admit_codex_plan(
+    monkeypatch,
+    policy,
+    *,
+    shared_host="ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    server=None,
+):
     _configure_ready_host_image_pair(monkeypatch)
-    monkeypatch.setenv(
-        "OMNIGENT_SHARED_HOST_IMAGE_REF",
-        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
-    )
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", shared_host)
+    if server is not None:
+        monkeypatch.setenv("OMNIGENT_IMAGE_REF", server)
     snapshot = _policy_snapshot(harness="codex-native", policy=policy)
     monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
     monkeypatch.setattr(
@@ -94,6 +97,64 @@ async def admitted_codex_plan(monkeypatch, request):
         ]
     )
     return coordinator, execution_request, admitted.envelope, snapshot, launch
+
+
+@pytest_asyncio.fixture
+async def admitted_codex_plan(monkeypatch, request):
+    return await _admit_codex_plan(
+        monkeypatch, getattr(request, "param", "codex-on-demand@16")
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_launches_the_images_admission_bound_from_an_older_policy(
+    monkeypatch,
+):
+    """The policy version predates the installed images; dispatch needs no cut.
+
+    Admission bound the installed host and server to the plan. Recompiling the
+    unchanged policy snapshot names the policy's images, and binding them to
+    the plan's host and the installed server reproduces the admitted launch.
+    """
+    from moonmind.omnigent.profile_bound_execution import (
+        _compile_persisted_effective_launch,
+        compile_follow_up_retrieval_policy,
+    )
+
+    installed_host = "ghcr.io/example/omnigent-host@sha256:" + "8" * 64
+    installed_server = "ghcr.io/example/omnigent-server@sha256:" + "9" * 64
+    coordinator, request, plan, snapshot, launch = await _admit_codex_plan(
+        monkeypatch,
+        "codex-on-demand@16",
+        shared_host=installed_host,
+        server=installed_server,
+    )
+    assert plan.payload.hostImageRef == installed_host
+    coordinator._require_recorded_plan_request(request)
+    recompiled = _compile_persisted_effective_launch(
+        snapshot,
+        provider_profile_id="codex",
+        follow_up_retrieval=compile_follow_up_retrieval_policy(),
+    )
+    assert recompiled["hostImageRef"] != installed_host
+
+    bound = coordinator._require_recorded_launch(
+        policy_snapshot=snapshot, effective_launch=recompiled
+    )
+
+    assert bound == launch
+    assert bound["hostImageRef"] == installed_host
+    assert bound["serverImageRef"] == installed_server
+
+    # A server installed after admission is not the plan's server: the
+    # admitted attempt keeps its binding and reports drift instead.
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF", "ghcr.io/example/omnigent-server@sha256:" + "7" * 64
+    )
+    with pytest.raises(HarnessPlatformError, match="launch authority has drifted"):
+        coordinator._require_recorded_launch(
+            policy_snapshot=snapshot, effective_launch=recompiled
+        )
 
 
 @pytest.mark.asyncio

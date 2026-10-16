@@ -17,7 +17,8 @@
   "architecture": "arm64",
   "eventScript": [
     "bootstrap resolves mutable deployment image inputs",
-    "bootstrap creates a new immutable policy version and selects it as default",
+    "bootstrap keeps the recorded policy version for a same-repository digest move",
+    "admission binds the installed server and host digests to the attempt",
     "runtime resolves the live container image id and repository digests",
     "runtime accepts only the repository digest authorized by the selected policy"
   ],

@@ -1126,8 +1126,8 @@ async def refresh_schedule_deployment_snapshot(
 ) -> dict[str, Any]:
     """Advance deployment bindings only when the scheduled semantics are equal.
 
-    Image qualification can move catalog and policy versions independently of
-    a long-lived schedule. Verify durable profile/usage lineage and compare
+    Catalog and policy versions can move independently of a long-lived
+    schedule. Verify durable profile/usage lineage and compare
     every execution boundary before resolving a replacement snapshot. Existing
     executions keep their original authority.
 

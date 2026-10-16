@@ -4472,6 +4472,89 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_idle_binding_update_refuses_a_profile_with_an_active_lease(
+    tmp_path,
+) -> None:
+    """The idle check and launch replacement share one binding-row transaction.
+
+    Lease creation serializes on the same binding row, so a lease acquired on
+    the old launch can never be left behind by a replacement that observed the
+    profile idle before that lease committed.
+    """
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/hosts.db")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    max_parallel_runs=1,
+                    credential_generation=3,
+                    enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                )
+            )
+            await session.commit()
+        repository = OmnigentOAuthHostRepository(factory)
+
+        def launch(name: str) -> dict:
+            return {"snapshotRef": f"omnigent-launch:sha256:{name}"}
+
+        await repository.create_or_update_static_binding(
+            profile_id="codex",
+            endpoint_ref="default",
+            host_launch_profile_ref="codex-on-demand@16",
+            execution_profile_ref="omnigent-codex@1",
+            launch_policy_ref="codex-on-demand@16",
+            effective_launch_snapshot=launch("old"),
+        )
+        installed = await repository.create_or_update_static_binding(
+            profile_id="codex",
+            endpoint_ref="default",
+            host_launch_profile_ref="codex-on-demand@16",
+            execution_profile_ref="omnigent-codex@1",
+            launch_policy_ref="codex-on-demand@16",
+            effective_launch_snapshot=launch("installed"),
+            require_idle=True,
+        )
+        assert installed.effective_launch_snapshot == launch("installed")
+        await repository.create_or_get_host_lease(
+            binding=installed,
+            provider_lease_id="provider-lease-1",
+            holder_workflow_id="workflow-1",
+            agent_run_id="step-1",
+            idempotency_key="idem-1",
+        )
+
+        with pytest.raises(OmnigentOAuthHostError) as leased:
+            await repository.create_or_update_static_binding(
+                profile_id="codex",
+                endpoint_ref="default",
+                host_launch_profile_ref="codex-on-demand@16",
+                execution_profile_ref="omnigent-codex@1",
+                launch_policy_ref="codex-on-demand@16",
+                effective_launch_snapshot=launch("newer"),
+                require_idle=True,
+            )
+        assert leased.value.code == "OMNIGENT_HOST_BINDING_LEASED"
+        kept = await repository.get_binding_for_profile("codex")
+        assert kept is not None
+        assert kept.effective_launch_snapshot == launch("installed")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_unconfirmed_host_stop_fences_successor_until_janitor_confirms(
     tmp_path,
 ) -> None:

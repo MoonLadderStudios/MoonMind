@@ -152,16 +152,18 @@ snapshot-only definition the same way, after advancing a managed-bootstrap
 snapshot to the active launch policy; one whose snapshot does not match its
 durable usage is named in the refresh failures and is not changed.
 
-For generic Omnigent schedules, every occurrence resolves the current promoted default —
-Agent Profile snapshot, launch-policy version, and execution plan — exactly like ad-hoc
-work. There is no pinned runtime-provider target on a schedule: the schedule carries no
-launch-policy version or image of its own, so deployment maintenance never has to reconcile
-a schedule-pinned digest against the current Host Class. The occurrence verifies the
-previous durable profile usage and the normal compiler qualifies the resolved combination
-under the publication fence before dispatch; already-started occurrences retain their
-immutable inputs. Provider selection, model, effort, authored overrides (including nulls),
-and task inputs remain authoritative per occurrence. A change to those authored inputs
-requires an explicit schedule revision.
+An Omnigent schedule stores the Agent Profile snapshot, launch policy, and execution plan
+admitted when it was last planned; an image release does not rewrite them. Each
+schedule-started occurrence is a fresh attempt: before planning, it compiles those frozen
+inputs (task input, Agent Profile snapshot, Provider Profile, model, and Skills) against the
+installed same-repository server and host images, and Continue-As-New and interrupted-step
+successors keep that admitted plan. An explicitly requested Host Class stays exact. When the
+compile is refused (for example a foreign host family), the occurrence launches its stored
+plan under the normal launch-time checks and logs why. Deployment maintenance therefore never
+reconciles a schedule-pinned digest against the current Host Class, and already-started
+occurrences retain their immutable inputs. Provider selection, model, effort, authored
+overrides (including nulls), and task inputs remain authoritative per occurrence. A change to
+those authored inputs requires an explicit schedule revision.
 
 #### Authored policy and Auto
 

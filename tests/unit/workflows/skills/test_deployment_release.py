@@ -1042,8 +1042,8 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
     calls = []
 
-    async def select(runner, owner, image, *, actor="release"):
-        calls.append(("select", owner, image, actor))
+    async def select(runner, owner, image):
+        calls.append(("select", owner, image))
         assert runner.project_name == "moonmind-test-custom"
         assert runner.project_dir == "/host/installed-project"
         assert runner.local_project_dir == str(repo)
@@ -1051,8 +1051,8 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
         assert runner.override_files == (str(repo / "docker-compose.override.yaml"),)
         return {"status": "advanced", "revision": 7}
 
-    async def migrate(runner, owner, image, *, actor="release", selected_revision=None):
-        calls.append(("migrate", owner, image, actor, selected_revision))
+    async def migrate(runner, owner, image, *, selected_revision=None):
+        calls.append(("migrate", owner, image, selected_revision))
         return {"status": "converged", "revision": selected_revision}
 
     monkeypatch.setattr(release, "select_omnigent", select)
@@ -1154,7 +1154,7 @@ async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
     calls = []
 
-    async def select(runner, owner, image, *, actor="release"):
+    async def select(runner, owner, image):
         calls.append(owner)
         recorded = OmnigentRelease(
             revision=len(calls),

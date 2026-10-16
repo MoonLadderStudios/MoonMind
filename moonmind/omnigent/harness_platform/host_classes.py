@@ -7,7 +7,6 @@ synthetic Host Classes at import time.
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -40,8 +39,7 @@ def _persisted_image_ref(key: str) -> str:
     unset on the canonical Compose path and read the same persisted resolved
     state, so consulting it here is what keeps an advertised target launchable
     on the worker that actually runs it. The value is still validated as a
-    digest-pinned ref below, and an operator-supplied environment value always
-    wins.
+    digest-pinned ref below.
     """
 
     try:
@@ -155,12 +153,22 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
     return raw
 
 
+def _installed_environment() -> dict[str, str]:
+    """Return this process's environment with the installed images applied."""
+
+    from moonmind.omnigent.bootstrap.store import with_installed_image_refs
+
+    return with_installed_image_refs()
+
+
 def get_opencode_host_image_ref() -> str:
-    return _require_image_ref(os.environ, OMNIGENT_OPENCODE_HOST_IMAGE_ENV)
+    return _require_image_ref(
+        _installed_environment(), OMNIGENT_OPENCODE_HOST_IMAGE_ENV
+    )
 
 
 def get_pi_host_image_ref() -> str:
-    return _require_image_ref(os.environ, OMNIGENT_PI_HOST_IMAGE_ENV)
+    return _require_image_ref(_installed_environment(), OMNIGENT_PI_HOST_IMAGE_ENV)
 
 
 def get_shared_host_image_ref() -> str:
@@ -180,7 +188,7 @@ def resolve_shared_host_image_ref(
     """Resolve the shared host's deployment-owned immutable image ref."""
 
     return _require_image_ref(
-        os.environ if environment is None else environment,
+        _installed_environment() if environment is None else environment,
         OMNIGENT_SHARED_HOST_IMAGE_ENV,
     )
 
@@ -337,7 +345,9 @@ class OmnigentHostClassSelector:
         environment: Mapping[str, str] | None = None,
     ) -> None:
         self._templates = templates
-        self._environment = environment if environment is not None else os.environ
+        # None follows the installed images on every selection, so a
+        # long-lived selector never pins the refs current at construction.
+        self._environment = environment
 
     def select(
         self,
@@ -366,6 +376,11 @@ class OmnigentHostClassSelector:
                 "execution plan lacks exact host image and build authority",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
+        environment = (
+            self._environment
+            if self._environment is not None
+            else _installed_environment()
+        )
         candidates: list[HostClass] = []
         reasons: list[str] = []
         for template in sorted(self._templates, key=lambda item: item.ref):
@@ -377,7 +392,7 @@ class OmnigentHostClassSelector:
                 image_ref = (
                     host_image_ref
                     if recorded_host
-                    else _require_image_ref(self._environment, template.image_env)
+                    else _require_image_ref(environment, template.image_env)
                 )
             except HarnessPlatformError as exc:
                 # Image validation also checks release compatibility and
@@ -455,7 +470,7 @@ class OmnigentHostClassSelector:
                     )
                     continue
                 host_build_pin = str(
-                    self._environment.get("OMNIGENT_BUILD_DIGEST") or ""
+                    environment.get("OMNIGENT_BUILD_DIGEST") or ""
                 ).strip()
                 if host_build_pin and host_build_pin != host_build_digest:
                     reasons.append(

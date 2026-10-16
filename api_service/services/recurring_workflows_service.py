@@ -999,8 +999,9 @@ class RecurringWorkflowsService:
         the stored one; this digest decides currency instead. It covers the
         authored target (task, model, Skills, refreshed Agent Profile
         snapshot), the original task input, the Provider Profile identity that
-        selects the credential materializer, the selected launch policy's
-        runtime snapshot, and the exact deployed Omnigent server build.
+        selects the credential materializer, and the selected launch policy's
+        runtime snapshot. Installed images are not an input: each occurrence
+        binds them at its own admission (``admit_occurrence_execution_plan``).
         """
 
         from api_service.services.omnigent_execution_plan_service import (
@@ -1011,18 +1012,13 @@ class RecurringWorkflowsService:
             PolicyConflict,
             PolicyNotFound,
         )
-        from moonmind.omnigent.deployment_identity import (
-            resolve_deployed_server_build_digest,
-        )
-        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
         snapshot = initial_parameters.get("agentProfileSnapshot") or {}
         try:
             policy_snapshot = await OmnigentPolicyService(
                 self._session
             ).resolve_runtime_snapshot(str(snapshot.get("launchPolicyRef") or ""))
-            server_build = resolve_deployed_server_build_digest()
-        except (PolicyConflict, PolicyNotFound, HarnessPlatformError):
+        except (PolicyConflict, PolicyNotFound):
             # Compilation reports why this authority is not ready.
             return None
         return json_artifact_digest(
@@ -1040,9 +1036,169 @@ class RecurringWorkflowsService:
                     "providerId": getattr(provider_profile, "provider_id", None),
                 },
                 "policySnapshotDigest": json_artifact_digest(policy_snapshot),
-                "serverBuildDigest": server_build,
             }
         )
+
+    async def _scheduled_task_principal(self, binding: Any) -> str:
+        """Return the principal that admitted a schedule's original task input.
+
+        The original task input survives every plan compile. Its creator
+        records the admitted principal even when a service compiles the plan or
+        a legacy schedule owner no longer exists.
+        """
+
+        task_artifact = await self._session.get(
+            TemporalArtifact,
+            binding.task_input_snapshot_ref.removeprefix("artifact://").removeprefix(
+                "artifact:"
+            ),
+        )
+        principal = str(
+            getattr(task_artifact, "created_by_principal", None) or ""
+        ).strip()
+        if not principal or getattr(
+            task_artifact, "sha256", None
+        ) != binding.task_input_snapshot_digest.removeprefix("sha256:"):
+            raise RecurringWorkflowValidationError(
+                "scheduled original task-input principal authority is unavailable "
+                "or does not match the frozen snapshot"
+            )
+        return principal
+
+    async def _compile_scheduled_plan(
+        self,
+        *,
+        workflow_id: str,
+        principal: str,
+        snapshot: Mapping[str, Any],
+        provider_profile: Any,
+        initial_parameters: Mapping[str, Any],
+        binding: Any,
+    ) -> Any:
+        """Compile a schedule's frozen inputs through the plan owner."""
+
+        from api_service.services.omnigent_execution_plan_service import (
+            compile_and_persist_execution_plan,
+        )
+        from moonmind.omnigent.harness_platform.stores import (
+            SessionExecutionPlanStore,
+        )
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        artifact_service = self._artifact_service or TemporalArtifactService(
+            TemporalArtifactRepository(self._session)
+        )
+        compilation_parameters = dict(initial_parameters)
+        compilation_parameters.pop("omnigentExecutionPlan", None)
+        compilation_parameters.pop("resolvedSkillsetRef", None)
+        return await compile_and_persist_execution_plan(
+            session_factory=None,
+            execution_plan_store=SessionExecutionPlanStore(self._session),
+            artifact_service=artifact_service,
+            principal=principal,
+            workflow_id=workflow_id,
+            agent_profile_snapshot=dict(snapshot),
+            provider_profile=provider_profile,
+            initial_parameters=compilation_parameters,
+            authored_request_ref=binding.task_input_snapshot_ref,
+            authored_request_digest=binding.task_input_snapshot_digest,
+            task_input_snapshot_ref=binding.task_input_snapshot_ref,
+            task_input_snapshot_digest=binding.task_input_snapshot_digest,
+            db_session=self._session,
+        )
+
+    async def admit_occurrence_execution_plan(
+        self,
+        *,
+        workflow_id: str,
+        initial_parameters: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Admit one scheduled occurrence against the installed runtime.
+
+        Temporal starts occurrences directly from the schedule action, whose
+        stored plan records the images installed when the schedule was last
+        planned. A fresh occurrence compiles the same frozen inputs (task
+        input, Agent Profile snapshot, Provider Profile, model and Skills)
+        through the plan owner, which binds the installed same-repository host
+        and server; an explicitly requested Host Class stays exact and a
+        foreign host family fails closed. The schedule definition and its
+        action are not rewritten, and attempts that already started keep the
+        plan they recorded.
+
+        Returns ``disposition`` ``admitted`` with the occurrence's new plan
+        binding and Skill snapshot, or ``recorded`` with the reason when its
+        frozen authority cannot be compiled now; the stored plan then launches
+        under its own launch-time checks, as before this admission existed.
+        """
+
+        from api_service.services.omnigent_policies import (
+            PolicyConflict,
+            PolicyNotFound,
+        )
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+        from moonmind.schemas.agent_runtime_models import (
+            OmnigentExecutionPlanBinding,
+        )
+
+        def recorded(reason: str) -> dict[str, Any]:
+            from moonmind.utils.logging import redact_sensitive_text
+
+            logger.warning(
+                "Scheduled occurrence %s keeps its recorded execution plan: %s",
+                workflow_id,
+                reason,
+            )
+            return {
+                "disposition": "recorded",
+                "reason": redact_sensitive_text(reason)[:500],
+            }
+
+        try:
+            binding = OmnigentExecutionPlanBinding.model_validate(
+                initial_parameters.get("omnigentExecutionPlan")
+            )
+        except Exception as exc:
+            raise RecurringWorkflowValidationError(
+                "scheduled Omnigent execution-plan authority is invalid"
+            ) from exc
+        snapshot = initial_parameters.get("agentProfileSnapshot")
+        if not isinstance(snapshot, Mapping):
+            return recorded("the occurrence has no Agent Profile snapshot")
+        provider_profile = await self._session.get(
+            ManagedAgentProviderProfile,
+            str(snapshot.get("providerProfileRef") or "").strip(),
+        )
+        if provider_profile is None:
+            return recorded("the scheduled Provider Profile is unavailable")
+        try:
+            principal = await self._scheduled_task_principal(binding)
+            persisted_plan = await self._compile_scheduled_plan(
+                workflow_id=workflow_id,
+                principal=principal,
+                snapshot=snapshot,
+                provider_profile=provider_profile,
+                initial_parameters=initial_parameters,
+                binding=binding,
+            )
+        except (
+            HarnessPlatformError,
+            PolicyConflict,
+            PolicyNotFound,
+            ValueError,
+        ) as exc:
+            await self._session.rollback()
+            return recorded(f"{type(exc).__name__}: {exc}")
+        await self._session.commit()
+        return {
+            "disposition": "admitted",
+            "omnigentExecutionPlan": persisted_plan.binding.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+            "resolvedSkillsetRef": persisted_plan.resolved_skillset_ref,
+        }
 
     async def _refresh_omnigent_execution_plan_target(
         self,
@@ -1056,18 +1212,8 @@ class RecurringWorkflowsService:
         previous_version = definition.version
         previous_target = definition.target
 
-        from api_service.services.omnigent_execution_plan_service import (
-            compile_and_persist_execution_plan,
-        )
-        from moonmind.omnigent.harness_platform.stores import (
-            SessionExecutionPlanStore,
-        )
         from moonmind.schemas.agent_runtime_models import (
             OmnigentExecutionPlanBinding,
-        )
-        from moonmind.workflows.temporal.artifacts import (
-            TemporalArtifactRepository,
-            TemporalArtifactService,
         )
 
         try:
@@ -1099,25 +1245,7 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 "scheduled Agent Profile snapshot identities conflict"
             )
-        # The original task input survives every plan refresh. Its creator
-        # records the admitted principal even when the deployment refresh is
-        # run by a service or a legacy schedule owner no longer exists.
-        task_artifact = await self._session.get(
-            TemporalArtifact,
-            current_binding.task_input_snapshot_ref.removeprefix(
-                "artifact://"
-            ).removeprefix("artifact:"),
-        )
-        principal = str(
-            getattr(task_artifact, "created_by_principal", None) or ""
-        ).strip()
-        if not principal or getattr(
-            task_artifact, "sha256", None
-        ) != current_binding.task_input_snapshot_digest.removeprefix("sha256:"):
-            raise RecurringWorkflowValidationError(
-                "scheduled original task-input principal authority is unavailable "
-                "or does not match the frozen snapshot"
-            )
+        principal = await self._scheduled_task_principal(current_binding)
         initial_parameters = await refresh_schedule_deployment_snapshot(
             self._session,
             parameters=initial_parameters,
@@ -1135,31 +1263,14 @@ class RecurringWorkflowsService:
             str(definition.id)
         ) == (current_binding.plan_ref, inputs_digest):
             return False
-        artifact_service = self._artifact_service or TemporalArtifactService(
-            TemporalArtifactRepository(self._session)
-        )
-        compilation_parameters = dict(initial_parameters)
-        compilation_parameters.pop("omnigentExecutionPlan", None)
-        compilation_parameters.pop("resolvedSkillsetRef", None)
         try:
-            persisted_plan = await compile_and_persist_execution_plan(
-                session_factory=None,
-                execution_plan_store=SessionExecutionPlanStore(self._session),
-                artifact_service=artifact_service,
-                principal=principal,
+            persisted_plan = await self._compile_scheduled_plan(
                 workflow_id=f"mm-schedule:{definition.id}",
-                agent_profile_snapshot=dict(snapshot),
+                principal=principal,
+                snapshot=snapshot,
                 provider_profile=provider_profile,
-                initial_parameters=compilation_parameters,
-                authored_request_ref=current_binding.task_input_snapshot_ref,
-                authored_request_digest=(
-                    current_binding.task_input_snapshot_digest
-                ),
-                task_input_snapshot_ref=current_binding.task_input_snapshot_ref,
-                task_input_snapshot_digest=(
-                    current_binding.task_input_snapshot_digest
-                ),
-                db_session=self._session,
+                initial_parameters=initial_parameters,
+                binding=current_binding,
             )
         except Exception as exc:
             raise RecurringWorkflowValidationError(
