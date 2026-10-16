@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -101,6 +102,7 @@ elif command[:1] == ["logs"]:
     print("cleanup sk-startup_test_secret ghp_startup_test_secret github_pat_startup_test_secret key=startup_test_secret")
 else:
     print("external Docker observation")
+time.sleep(config.get("cleanup_sleep", 0) if command[:1] in (["logs"], ["ps"], ["down"]) else 0)
 """
 
 API_COUNTERPART = r"""
@@ -273,6 +275,20 @@ def test_failed_startup_retains_early_redacted_receipts_and_original_status(
     )
     assert "startup-line-00000" not in result.stdout
     assert "startup-line-00079" in result.stdout
+
+
+def test_stuck_cleanup_is_bounded_and_keeps_the_original_failure(
+    journey: Journey,
+) -> None:
+    journey.env["MOONMIND_TEST_CLEANUP_TIMEOUT"] = "1"
+    started = time.monotonic()
+
+    result = journey.run(candidate_statuses=[7], cleanup_sleep=120)
+
+    assert result.returncode == 1
+    assert time.monotonic() - started < 25
+    assert "Error: compose up failed" in result.stderr
+    journey.assert_cleaned()
 
 
 @pytest.mark.parametrize("line_count", [40, 5005, 5100])

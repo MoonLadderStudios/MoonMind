@@ -10483,7 +10483,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     <code className="text-xs break-all">{historicalProfileId}</code>
                   </Fact>
                 ) : null}
-                {historicalProfileId && recordedProviderSummary(execution, historicalProfileId) ? (
+                {recordedProviderSummary(execution, historicalProfileId) ? (
                   <Fact label="Provider">
                     {recordedProviderSummary(execution, historicalProfileId)}
                   </Fact>

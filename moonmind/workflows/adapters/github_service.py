@@ -2461,6 +2461,86 @@ class GitHubService:
             state="absent", summary="no pull request exists for this head and base"
         )
 
+    async def open_pull_request_heads(
+        self,
+        *,
+        repo: str,
+        github_token: str,
+        endpoint: str = "https://github.com",
+    ) -> dict[str, str]:
+        """Read a complete inventory of same-repository open PR branch tips.
+
+        Absence can authorize new publication, so malformed or incomplete reads
+        raise instead of returning an empty inventory. The caller revalidates
+        each associated branch against its exact publication policy.
+        """
+        from moonmind.auth.github_app_wiring import github_api_base_for
+
+        api_base = github_api_base_for(endpoint)
+        headers, resolution_error = await self._operation_headers(
+            github_token,
+            repo=repo,
+            operation="read",
+            admitted_workflow_id=None,
+            action="reconcile a candidate's existing PR",
+            api_base=api_base,
+        )
+        if headers is None:
+            raise ValueError(resolution_error)
+        root = f"{api_base}/repos/{repo}/pulls"
+        origin = urlsplit(root)
+        url = root + "?state=open&per_page=100"
+        seen, heads = set(), {}
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            while url:
+                target = urlsplit(url)
+                query = httpx.QueryParams(target.query)
+                if (
+                    (target.scheme, target.netloc, target.path)
+                    != (origin.scheme, origin.netloc, origin.path)
+                    or target.fragment
+                    or url in seen
+                    or query.get("state") != "open"
+                    or query.get("per_page") != "100"
+                    or any(key not in {"state", "per_page", "page"} for key in query)
+                ):
+                    raise ValueError("Invalid PR inventory pagination")
+                seen.add(url)
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, list):
+                    raise ValueError("Invalid PR inventory")
+                for item in data:
+                    if not isinstance(item, Mapping):
+                        raise ValueError("Invalid PR inventory record")
+                    if item.get("state") == "closed":
+                        continue
+                    head = item.get("head")
+                    if item.get("state") != "open" or not isinstance(head, Mapping):
+                        raise ValueError("Invalid PR inventory identity")
+                    head_repo = head.get("repo")
+                    if not isinstance(head_repo, Mapping) or not isinstance(
+                        head_repo.get("full_name"), str
+                    ):
+                        raise ValueError("Invalid PR inventory repository")
+                    if head_repo["full_name"].lower() != repo.lower():
+                        continue
+                    branch = head.get("ref")
+                    sha = head.get("sha")
+                    if (
+                        not isinstance(branch, str)
+                        or not branch.strip()
+                        or not isinstance(sha, str)
+                        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) is None
+                        or branch in heads
+                        and heads[branch] != sha
+                    ):
+                        raise ValueError("Invalid PR inventory branch head")
+                    heads[branch] = sha
+                url = response.links.get("next", {}).get("url")
+        return heads
+
     async def resolve_pull_request_selector(
         self,
         *,
@@ -2567,21 +2647,25 @@ class GitHubService:
                 )
 
         data = response.json()
+        if not isinstance(data, list):
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="github_response_invalid",
+                summary="GitHub PR lookup returned an invalid pull-request inventory.",
+            )
         matches = []
-        if isinstance(data, list):
-            for item in data:
-                if not isinstance(item, Mapping):
-                    continue
-                head = item.get("head")
-                head = head if isinstance(head, Mapping) else {}
-                head_repo = head.get("repo")
-                head_repo = head_repo if isinstance(head_repo, Mapping) else {}
-                if (
-                    str(head.get("ref") or "") == candidate
-                    and str(head_repo.get("full_name") or "").lower()
-                    == repository.lower()
-                ):
-                    matches.append(item)
+        for item in data:
+            if not isinstance(item, Mapping):
+                continue
+            head = item.get("head")
+            head = head if isinstance(head, Mapping) else {}
+            head_repo = head.get("repo")
+            head_repo = head_repo if isinstance(head_repo, Mapping) else {}
+            if (
+                str(head.get("ref") or "") == candidate
+                and str(head_repo.get("full_name") or "").lower() == repository.lower()
+            ):
+                matches.append(item)
 
         if not matches:
             return PullRequestSelectorResult(

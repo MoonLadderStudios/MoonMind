@@ -20,7 +20,7 @@ from moonmind.workflows.skills.deployment_controller import (
     controller_action_status,
     controller_not_installed_error,
     controller_refresh_required_error,
-    controller_supports_journal_transition,
+    controller_has_required_capabilities,
     list_controller_operations,
     resolve_controller_endpoint,
     retry_controller_operation,
@@ -350,7 +350,7 @@ class DeploymentOperationsService:
             else f"ui-{uuid4().hex}"
         )
         if not await asyncio.to_thread(
-            controller_supports_journal_transition,
+            controller_has_required_capabilities,
             endpoint,
             operation_id=operation_id,
         ):

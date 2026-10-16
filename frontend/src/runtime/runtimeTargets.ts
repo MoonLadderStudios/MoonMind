@@ -174,17 +174,48 @@ export function formatRolloutStateLabel(
 }
 
 /**
+ * Omnigent targets the catalog publishes for one Harness (`codex-native`).
+ * Empty when no Harness is known or the catalog does not list it, so server
+ * admission stays the authority for that combination.
+ */
+function omnigentTargetsForHarness(
+  catalog: RuntimeTargetCatalog | null | undefined,
+  harnessId: string | null | undefined,
+): RuntimeTarget[] {
+  if (!harnessId) return [];
+  return targetsForRuntime(catalog, 'omnigent').filter(
+    (target) => target.harnessId === harnessId,
+  );
+}
+
+/** Whether new work may select Omnigent for this Harness. */
+export function omnigentAllowedForHarness(
+  catalog: RuntimeTargetCatalog | null | undefined,
+  harnessId: string | null | undefined,
+): boolean {
+  const targets = omnigentTargetsForHarness(catalog, harnessId);
+  return targets.length === 0 || targets.some((target) => target.explicitSelectionAllowed);
+}
+
+/**
  * Return the exact reason a runtime id cannot be selected, or `null` when it
  * can. The caller shows this instead of quietly choosing another runtime.
+ * For Omnigent, `harnessId` narrows the check to that Harness's own targets,
+ * because one Harness can be allowed through Omnigent while another is not.
  */
 export function runtimeUnavailableReason(
   runtimeId: string,
   catalog?: RuntimeTargetCatalog | null,
+  harnessId?: string | null,
 ): string | null {
   if (!Object.prototype.hasOwnProperty.call(RUNTIME_ID_LABELS, runtimeId)) {
     return `Unsupported Harness ${runtimeId}. Explicitly choose a supported replacement; your draft content is preserved.`;
   }
-  const registered = targetsForRuntime(catalog, runtimeId);
+  const harnessTargets =
+    runtimeId === 'omnigent' ? omnigentTargetsForHarness(catalog, harnessId) : [];
+  const registered = harnessTargets.length > 0
+    ? harnessTargets
+    : targetsForRuntime(catalog, runtimeId);
   if (registered.length === 0) {
     return null;
   }

@@ -52,6 +52,7 @@ import {
   formatRuntimeLabel as formatRuntimeTargetLabel,
   backendOptionsForHarness,
   formatHarnessLabel,
+  omnigentAllowedForHarness,
   resolveDefaultRuntimeId,
   runtimeUnavailableReason,
 } from "../runtime/runtimeTargets";
@@ -961,10 +962,15 @@ function profileHasOmnigentRoute(
   profile: ProviderProfile | undefined,
   inventory: ProviderProfile[],
   harnessRuntimeId: string,
+  catalog: RuntimeTargetCatalog | null | undefined,
 ): boolean {
-  if (profile) return Boolean(profile.execution_selection);
+  // An execution configuration routes through Omnigent only while the catalog
+  // still allows its own Harness there.
+  const routes = (candidate: ProviderProfile) => Boolean(candidate.execution_selection) &&
+    omnigentAllowedForHarness(catalog, candidate.execution_selection?.harnessId);
+  if (profile) return routes(profile);
   return inventory.some(
-    (candidate) => candidate.runtime_id === harnessRuntimeId && Boolean(candidate.execution_selection),
+    (candidate) => candidate.runtime_id === harnessRuntimeId && routes(candidate),
   );
 }
 
@@ -2081,7 +2087,7 @@ function deriveRuntimeCommandPreview({
       messageSeverity: "warning",
       label: `Unsupported runtime command: /${command}`,
       description:
-        "This Harness does not pass through slash commands. Choose a slash-command capable Harness or escape the slash for literal text." +
+        "The selected Harness and Backend do not pass through slash commands. Choose a slash-command capable route or escape the slash for literal text." +
         warningSuffix,
       source,
     };
@@ -5965,6 +5971,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   // Set only by a deliberate Harness change. Otherwise the selected Provider
   // Profile establishes the Harness.
   const [harnessChoice, setHarnessChoice] = useState("");
+  // Direct Backends the operator chose, per Harness, so a Harness round trip
+  // restores the explicit choice instead of the Profile's default route.
+  const authoredBackendByHarness = useRef<Record<string, string>>({});
   // True once the operator picks a Provider Profile or one is restored from
   // saved authority. Only an unauthored default follows a Harness change.
   const [providerProfileAuthored, setProviderProfileAuthored] = useState(false);
@@ -6336,10 +6345,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
   });
 
-  const selectedRuntimeUnavailableReason = useMemo(
-    () => runtimeUnavailableReason(runtime, runtimeTargetCatalog),
-    [runtime, runtimeTargetCatalog],
-  );
   const selectedOmnigentExecutionProfile = omnigentProfiles.find(
     (profile) => profile.ref === omnigentExecutionTargetRef,
   );
@@ -6410,6 +6415,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const selectedHarnessId = pageMode.mode === "create" && !remediationDraft
     ? selectedConfiguration?.harnessId
     : typeof recordedHarness === "string" ? recordedHarness : recordedHarness?.id;
+  const selectedRuntimeUnavailableReason = useMemo(
+    () => runtimeUnavailableReason(runtime, runtimeTargetCatalog, selectedHarnessId),
+    [runtime, runtimeTargetCatalog, selectedHarnessId],
+  );
   const configurationDetailsUnavailable = runtime === "omnigent" && pageMode.mode === "create" && !remediationDraft &&
     Boolean(selectedConfiguration) && !selectedOmnigentAgentProfileVersion;
   const selectedProfileIsGenericV2 =
@@ -7527,13 +7536,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     : providerOptions;
   const backendOptions = harness
     ? backendOptionsForHarness(harness, runtimeTargetCatalog, {
-        omnigentRoute: runtime === "omnigent" ||
+        omnigentRoute: (runtime === "omnigent" && !selectedRuntimeUnavailableReason) ||
           profileHasOmnigentRoute(
             selectedConfiguredProfile?.runtime_id && selectedConfiguredProfile.runtime_id !== harness
               ? undefined
               : selectedConfiguredProfile,
             activeProviderProfiles,
             harness,
+            runtimeTargetCatalog,
           ),
       })
     : [];
@@ -7541,8 +7551,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   // catalog no longer allows) stays repairable even with one replacement.
   const backendSelectable = backendOptions.some((option) => option.runtimeId !== runtime);
   const selectHarness = (nextHarness: string) => {
+    if (harness) {
+      authoredBackendByHarness.current[harness] = runtimeAuthored && runtime === harness ? runtime : "";
+    }
     setHarnessChoice(nextHarness);
     if (!providerProfileAuthored) setProviderProfile("");
+    const rememberedBackend = authoredBackendByHarness.current[nextHarness];
+    if (rememberedBackend) {
+      setRuntime(rememberedBackend);
+      setRuntimeAuthored(true);
+      return;
+    }
     // A direct Backend belongs to one Harness. Another Harness returns to the
     // shared normal route; the kept Provider Profile still decides the account.
     if (runtime !== "omnigent" && runtime !== nextHarness) {
@@ -11878,7 +11897,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               const stepHarness = stepPreviewProfile?.runtime_id || harness;
               const stepBackendOptions = stepHarness
                 ? backendOptionsForHarness(stepHarness, runtimeTargetCatalog, {
-                    omnigentRoute: profileHasOmnigentRoute(stepPreviewProfile, activeProviderProfiles, stepHarness),
+                    omnigentRoute: profileHasOmnigentRoute(stepPreviewProfile, activeProviderProfiles, stepHarness, runtimeTargetCatalog),
                   })
                 : [];
               const stepInheritsUnservedBackend = !step.runtimeMode && stepBackendOptions.length > 0 &&

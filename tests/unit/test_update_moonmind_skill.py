@@ -79,7 +79,7 @@ def test_update_installs_latest_image_and_preserves_checkout(
         if request.method == "GET" and url.endswith("/v1/healthz"):
             assert request.get_header("Authorization") == "Bearer test-secret"
             return FakeResponse(
-                200, {"status": "ok", "capabilities": ["active-journal-transition"]}
+                200, {"status": "ok", "capabilities": list(update._REQUIRED_CONTROLLER_CAPABILITIES)}
             )
         if request.method == "POST" and url.endswith("/v1/operations"):
             payload = json.loads(request.data.decode("utf-8"))
@@ -296,7 +296,7 @@ def test_bare_invocation_without_running_controller_installs_it_from_the_release
         assert request.full_url.startswith("http://127.0.0.1:8533/")
         if request.full_url.endswith("/v1/healthz"):
             return _FakeControllerResponse(
-                200, {"status": "ok", "capabilities": ["active-journal-transition"]}
+                200, {"status": "ok", "capabilities": list(update._REQUIRED_CONTROLLER_CAPABILITIES)}
             )
         if request.method == "POST":
             posted.append(json.loads(request.data.decode("utf-8")))
@@ -551,7 +551,7 @@ def _stub_controller_success(monkeypatch, image):
     def fake_urlopen(request, timeout=None):
         if request.full_url.endswith("/v1/healthz"):
             return FakeResponse(
-                200, {"status": "ok", "capabilities": ["active-journal-transition"]}
+                200, {"status": "ok", "capabilities": list(update._REQUIRED_CONTROLLER_CAPABILITIES)}
             )
         if request.method == "POST":
             posted.append(json.loads(request.data.decode("utf-8")))
@@ -986,7 +986,7 @@ def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
     def fake_urlopen(request, timeout=None):
         if request.full_url.endswith("/v1/healthz"):
             return FakeResponse(
-                200, {"status": "ok", "capabilities": ["active-journal-transition"]}
+                200, {"status": "ok", "capabilities": list(update._REQUIRED_CONTROLLER_CAPABILITIES)}
             )
         if request.method == "POST":
             return FakeResponse(202, {"operationId": "op-1", "status": "pending"})

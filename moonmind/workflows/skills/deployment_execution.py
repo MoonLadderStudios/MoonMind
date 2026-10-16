@@ -27,7 +27,7 @@ from .deployment_controller import (
     ControllerTransportError,
     DeploymentOperationError,
     controller_action_status,
-    ensure_controller_journal_transition,
+    ensure_controller_capabilities,
     observe_controller_operation,
     refresh_controller_to_requested,
     resolve_controller_endpoint,
@@ -3811,7 +3811,7 @@ async def _execute_through_controller(
     refresh: ControllerRefresh | None = None
     try:
         await asyncio.to_thread(
-            ensure_controller_journal_transition, endpoint,
+            ensure_controller_capabilities, endpoint,
             stack=parsed["stack"], desired_image=requested_image,
         )
         operation = await asyncio.to_thread(
