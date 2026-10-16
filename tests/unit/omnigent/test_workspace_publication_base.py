@@ -146,13 +146,29 @@ async def test_failed_git_command_reports_remote_outage_as_transient(
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_restore_preserves_accepted_pr_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("accepted", "observation"),
+    [
+        (True, "matched"),
+        (False, "matched"),
+        (False, "other_local_branch"),
+        (False, "absent"),
+        (False, "ambiguous"),
+        (False, "moved"),
+        (False, "unavailable"),
+        (False, "malformed"),
+        (False, "wrong_base"),
+        (False, "draft"),
+    ],
+)
+async def test_checkpoint_restore_reconciles_existing_pr_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, accepted: bool, observation: str
 ) -> None:
-    """Replay capture -> restore -> exact remote PR discovery, including retry."""
+    """A PR created before the managed boundary must not get a duplicate branch/PR."""
     replay = json.loads(
-        (Path(__file__).parent / "fixtures/checkpoint-executable-publication.json")
-        .read_text()
+        (
+            Path(__file__).parent / "fixtures/checkpoint-executable-publication.json"
+        ).read_text()
     )
     monkeypatch.setattr(settings.security, "high_security_mode", False)
     for prefix in ("AUTHOR", "COMMITTER"):
@@ -181,9 +197,9 @@ async def test_checkpoint_restore_preserves_accepted_pr_publication(
     git("commit", "-am", "candidate", cwd=source)
     head_sha = git("rev-parse", "HEAD", cwd=source)
     git("push", "origin", candidate, cwd=source)
-    archive, _ = TemporalSandboxActivities(workspace_root=tmp_path)._build_worktree_archive(
-        source
-    )
+    archive, _ = TemporalSandboxActivities(
+        workspace_root=tmp_path
+    )._build_worktree_archive(source)
 
     class Artifacts:
         async def get_metadata(self, **_kwargs):
@@ -203,8 +219,12 @@ async def test_checkpoint_restore_preserves_accepted_pr_publication(
     payload = replay["request"]
     payload.update(correlationId=workflow_id, idempotencyKey=step_id)
     payload["parameters"]["acceptedPublishedHead"]["headSha"] = head_sha
+    if not accepted:
+        payload["parameters"].pop("acceptedPublishedHead")
     payload["workspaceSpec"]["workspaceLocator"] = {
-        "kind": "sandbox", "workspaceId": workspace_id, "relativePath": "repo"
+        "kind": "sandbox",
+        "workspaceId": workspace_id,
+        "relativePath": "repo",
     }
     request = AgentExecutionRequest.model_validate(payload)
     materializer = OmnigentWorkspaceMaterializer(
@@ -216,22 +236,57 @@ async def test_checkpoint_restore_preserves_accepted_pr_publication(
         request, runtime_uid=os.getuid(), runtime_gid=os.getgid()
     )
     assert git("status", "--porcelain", cwd=workspace) == ""
-    assert subprocess.run(
-        [str(workspace / "run.sh")], check=True, capture_output=True, text=True
-    ).stdout == "candidate works\n"
+    assert (
+        subprocess.run(
+            [str(workspace / "run.sh")], check=True, capture_output=True, text=True
+        ).stdout
+        == "candidate works\n"
+    )
     assert not (workspace / "work.txt").stat().st_mode & 0o111
+    if observation == "other_local_branch":
+        git("checkout", "-b", "local-workspace", cwd=workspace)
+    if observation == "ambiguous":
+        git("push", "origin", "HEAD:refs/heads/duplicate-candidate", cwd=source)
 
     # The agent created this PR before the trusted publisher inspected the
     # restored workspace. Exercise the real selector against its HTTP contract.
     pull_request = replay["pullRequest"]
     pull_request["head"]["sha"] = head_sha
+    if observation == "wrong_base":
+        pull_request["base"]["ref"] = "release"
+    if observation == "draft":
+        pull_request["draft"] = True
     lookups = []
 
     def github(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/repos/MoonLadderStudios/MoonMind/pulls"
         lookups.append(request.url.params["head"])
-        return httpx.Response(200, json=[pull_request])
+        if observation == "unavailable":
+            return httpx.Response(503, json={"message": "temporarily unavailable"})
+        if observation == "malformed":
+            return httpx.Response(200, json={"message": "missing PR inventory"})
+        if observation == "moved":
+            (source / "concurrent.txt").write_text("concurrent update\n")
+            git("add", ".", cwd=source)
+            git("commit", "-m", "concurrent update", cwd=source)
+            git("push", "origin", candidate, cwd=source)
+        if observation == "ambiguous":
+            branch = request.url.params["head"].split(":", 1)[1]
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        **pull_request,
+                        "number": 4086 if branch == "duplicate-candidate" else 4085,
+                        "html_url": f"https://github.com/MoonLadderStudios/MoonMind/pull/{4086 if branch == 'duplicate-candidate' else 4085}",
+                        "head": {**pull_request["head"], "ref": branch},
+                    }
+                ],
+            )
+        return httpx.Response(
+            200, json=[] if observation == "absent" else [pull_request]
+        )
 
     client = httpx.AsyncClient
     monkeypatch.setattr(
@@ -239,23 +294,53 @@ async def test_checkpoint_restore_preserves_accepted_pr_publication(
         lambda **kwargs: client(transport=httpx.MockTransport(github), **kwargs),
     )
     publisher = OmnigentWorkspacePublicationService(tmp_path)
+    if observation in {
+        "moved",
+        "unavailable",
+        "malformed",
+        "wrong_base",
+        "draft",
+        "ambiguous",
+    }:
+        with pytest.raises(HarnessPlatformError):
+            await publisher.publish_request_workspace(
+                request=request,
+                current_workflow_id=workflow_id,
+                current_step_execution_id=step_id,
+            )
+        assert git("rev-parse", "HEAD", cwd=workspace) == head_sha
+        assert git("status", "--porcelain", cwd=workspace) == ""
+        expected_branches = ["main", candidate]
+        if observation == "ambiguous":
+            expected_branches.insert(0, "duplicate-candidate")
+        assert (
+            git("branch", "--format=%(refname:short)", cwd=origin).splitlines()
+            == expected_branches
+        )
+        return
     for _attempt in range(2):
         evidence = await publisher.publish_request_workspace(
             request=request,
             current_workflow_id=workflow_id,
             current_step_execution_id=step_id,
         )
-        assert evidence["pull_request_url"] == pull_request["html_url"]
-        assert evidence["push_branch"] == candidate
+        if observation == "absent":
+            assert "pull_request_url" not in evidence
+            assert evidence["push_branch"].startswith("moonmind-job-")
+        else:
+            assert evidence["pull_request_url"] == pull_request["html_url"]
+            assert evidence["push_branch"] == candidate
         assert evidence["push_head_sha"] == head_sha
         assert evidence["push_commit_count"] == 1
         assert evidence["remote_verified"] is True
         assert git("status", "--porcelain", cwd=workspace) == ""
         assert git("rev-parse", "HEAD", cwd=workspace) == head_sha
-    assert lookups == [f"MoonLadderStudios:{candidate}"] * 2
-    assert git("branch", "--format=%(refname:short)", cwd=origin).splitlines() == [
-        "main", candidate
-    ]
+    if observation != "absent":
+        assert lookups == [f"MoonLadderStudios:{candidate}"] * 2
+        assert git("branch", "--format=%(refname:short)", cwd=origin).splitlines() == [
+            "main",
+            candidate,
+        ]
 
 
 @pytest.mark.asyncio
