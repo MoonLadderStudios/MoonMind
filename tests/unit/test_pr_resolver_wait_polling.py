@@ -284,6 +284,35 @@ def test_cli_reconciles_cancelled_run_only_for_the_same_check_identity(resolver_
     assert not snapshot["ci"]["supersededChecks"]
 
 
+def test_cli_accepts_passing_same_sha_checks_without_superseding_unknown_pr_runs(
+    resolver_cli,
+):
+    state, run = resolver_cli
+    state["checks"] = [
+        _actions_check(1, 10, "success"),
+        _actions_check(2, 20, "success"),
+    ]
+    state["runs"] = [_workflow(10, 1), _workflow(20, 2)]
+    state["runs"][1]["head_branch"] = "duplicate-candidate"
+    for workflow in state["runs"]:
+        workflow["pull_requests"] = []
+
+    result, snapshot, _ = run()
+
+    assert result["status"] == "review_clean"
+    assert snapshot["ci"]["signalQuality"] == "ok"
+    assert not snapshot["ci"]["supersededChecks"]
+    assert not snapshot["ci"]["unresolvedChecks"]
+
+    # A green twin can never clear a failure whose PR context is unproven.
+    state["checks"][0]["conclusion"] = "failure"
+    state["runs"][0]["conclusion"] = "failure"
+    result, snapshot, _ = run()
+    assert result["status"] != "review_clean"
+    assert not snapshot["ci"]["supersededChecks"]
+    assert snapshot["ci"]["unresolvedChecks"]
+
+
 @pytest.mark.parametrize("extra_degraded", [False, True])
 def test_cli_reports_stranded_jobs_in_terminal_workflow_instead_of_waiting(
     resolver_cli,

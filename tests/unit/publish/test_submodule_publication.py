@@ -179,6 +179,10 @@ async def test_omnigent_publication_keeps_dependency_git_out_of_source(
     before_index = _git(workspace, "ls-files", "--stage").stdout
     before_modules = _git(workspace, "config", "--get-regexp", r"^submodule\.").stdout
     monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.GitHubService.open_pull_request_heads",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
         "moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector",
         AsyncMock(
             return_value=SimpleNamespace(
