@@ -419,6 +419,35 @@ async def test_manual_review_without_verdict_facts_keeps_legacy_summary(
     assert harness.remediation_ids == []
 
 
+@pytest.mark.asyncio
+async def test_local_commit_failure_stops_as_failed_without_rerunning_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _Harness(
+        monkeypatch,
+        readiness=[_ready(HEAD_1)],
+        child_results=[
+            {
+                "status": "success",
+                "mergeAutomationDisposition": "failed",
+                "headSha": HEAD_1,
+                "prResolverStatus": "blocked",
+                "final_reason": "local_commit_failed",
+                "next_step": "provide_commit_identity",
+            }
+        ],
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(_payload())
+
+    assert result["status"] == "failed"
+    assert "local_commit_failed" in result["summary"]
+    assert "next_step=provide_commit_identity" in result["summary"]
+    assert "manual review" not in result["summary"]
+    assert [blocker["kind"] for blocker in result["blockers"]] == ["failed"]
+    assert harness.remediation_ids == []
+    assert len(harness.resolver_ids) == 1
+
+
 def test_run_workflow_projects_pr_resolver_verdict_for_owning_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

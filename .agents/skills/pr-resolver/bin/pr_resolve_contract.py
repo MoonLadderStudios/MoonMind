@@ -41,6 +41,20 @@ NON_RETRYABLE_REASONS = {
     "pr_not_found",
     "publish_unavailable",
     "already_merged",
+    "local_commit_failed",
+}
+
+# Git refused to create a remediation commit in the local workspace. Nothing was
+# published, so this is neither ``publish_unavailable`` (remote authentication
+# or authorization denied) nor a request for human review: the next step names
+# the local condition, and once its owner corrects it the Skill resumes at the
+# commit without repeating the completed remediation.
+LOCAL_COMMIT_FAILED_REASON = "local_commit_failed"
+LOCAL_COMMIT_MAX_ATTEMPTS = 3
+_LOCAL_COMMIT_NEXT_STEPS = {
+    "identity_missing": "provide_commit_identity",
+    "signing_failed": "provide_commit_signing",
+    "hook_rejected": "address_commit_hook_failure",
 }
 
 EXIT_CODE_MERGED = 0
@@ -279,7 +293,14 @@ def remediation_next_step(reason: str) -> str:
         return "inspect_mergeability_state"
     if normalized == "publish_unavailable":
         return "manual_review"
+    if normalized == LOCAL_COMMIT_FAILED_REASON:
+        return local_commit_next_step("")
     return "manual_review"
+
+def local_commit_next_step(kind: str) -> str:
+    return _LOCAL_COMMIT_NEXT_STEPS.get(
+        normalize_text(kind), "inspect_local_commit_failure"
+    )
 
 def merge_automation_disposition_for_result(
     *,
@@ -309,6 +330,10 @@ def merge_automation_disposition_for_result(
         if normalized_reason == "already_merged":
             return MERGE_AUTOMATION_DISPOSITION_ALREADY_MERGED
         return MERGE_AUTOMATION_DISPOSITION_MERGED
-    if normalized_status == "failed" or normalized_outcome == "failed":
+    if (
+        normalized_status == "failed"
+        or normalized_outcome == "failed"
+        or normalized_reason == LOCAL_COMMIT_FAILED_REASON
+    ):
         return MERGE_AUTOMATION_DISPOSITION_FAILED
     return MERGE_AUTOMATION_DISPOSITION_MANUAL_REVIEW

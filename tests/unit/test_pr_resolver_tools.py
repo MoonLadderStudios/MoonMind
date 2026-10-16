@@ -2685,3 +2685,310 @@ def test_branch_wrapper_forwards_thread_inventory_flag(
 
     payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     assert payload["thread_inventory_complete"] is False
+
+
+# --- Local commit failures (pr_resolve_commit.py) ---------------------------
+
+PR_RESOLVE_COMMIT = (
+    REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "bin" / "pr_resolve_commit.py"
+)
+
+
+@pytest.fixture
+def commit_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A real repository with staged remediation edits and no commit identity."""
+
+    import subprocess
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "step:commit")
+    for name in (
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "EMAIL",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    git = ["git", "-C", str(repo)]
+    subprocess.run(
+        [*git, "-c", "user.name=Base", "-c", "user.email=base@example.test",
+         "commit", "-q", "--allow-empty", "-m", "base"],
+        check=True,
+    )
+    # Never guess an identity from the host name or passwd entry.
+    subprocess.run([*git, "config", "user.useConfigOnly", "true"], check=True)
+    (repo / "fix.py").write_text("print('addressed')\n", encoding="utf-8")
+    subprocess.run([*git, "add", "fix.py"], check=True)
+    (repo / "unstaged.txt").write_text("keep me\n", encoding="utf-8")
+    # The resolver's finalize receipt for the PR candidate the remediation is for.
+    result = repo / "var" / "pr_resolver" / "result.json"
+    result.parent.mkdir(parents=True)
+    result.write_text(
+        json.dumps(
+            {
+                "pr_number": 4486,
+                "pr_url": "https://github.com/o/r/pull/4486",
+                "status": "blocked",
+                "reason": "actionable_comments",
+                "next_step": "run_full_remediation",
+                "attempt_history": [{"stage": "finalize", "attempt": 1}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / ".git" / "info" / "exclude").write_text("var/\n", encoding="utf-8")
+    return repo
+
+
+def _run_commit_helper(repo: Path, *args: str) -> tuple[int, dict[str, Any]]:
+    import subprocess
+    import sys
+
+    completed = subprocess.run(
+        [sys.executable, str(PR_RESOLVE_COMMIT), "-m", "Address PR feedback", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed.returncode, json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def _git_out(repo: Path, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def _resolver_result(repo: Path) -> dict[str, Any]:
+    return json.loads(
+        (repo / "var" / "pr_resolver" / "result.json").read_text(encoding="utf-8")
+    )
+
+
+def test_local_commit_identity_failure_is_not_publication_or_manual_review(
+    commit_repo: Path, pr_resolve_contract_module: dict[str, Any]
+) -> None:
+    head = _git_out(commit_repo, "rev-parse", "HEAD")
+
+    code, outcome = _run_commit_helper(commit_repo)
+
+    assert code == pr_resolve_contract_module["EXIT_CODE_FAILED"]
+    assert outcome == {"kind": "identity_missing", "status": "failed"}
+    result = _resolver_result(commit_repo)
+    assert result["reason"] == result["final_reason"] == "local_commit_failed"
+    assert result["status"] == "blocked"
+    assert result["next_step"] == "provide_commit_identity"
+    assert result["mergeAutomationDisposition"] == "failed"
+    assert "publish" not in result["next_step"]
+    # The candidate's identity and accepted history survive the local failure.
+    assert result["pr_number"] == 4486
+    assert result["pr_url"] == "https://github.com/o/r/pull/4486"
+    assert result["headSha"] == head
+    assert result["attempt_history"] == [{"stage": "finalize", "attempt": 1}]
+    receipt = result["localCommit"]
+    assert receipt["phase"] == "commit"
+    assert receipt["missingIdentityRoles"] == ["author", "committer"]
+    assert receipt["headBefore"] == receipt["headAfter"] == head
+    assert "no email was given" in receipt["gitError"]
+    assert receipt["attempts"] == 1
+    # Nothing was committed, discarded or attributed to an invented author.
+    assert _git_out(commit_repo, "rev-parse", "HEAD") == head
+    assert _git_out(commit_repo, "diff", "--cached", "--name-only") == "fix.py"
+    assert (commit_repo / "unstaged.txt").read_text(encoding="utf-8") == "keep me\n"
+    assert _git_out(commit_repo, "config", "--get-all", "user.useConfigOnly") == "true"
+    import subprocess
+
+    unset = subprocess.run(["git", "-C", str(commit_repo), "config", "--get", "user.name"])
+    assert unset.returncode == 1
+
+
+def test_admitted_identity_repair_resumes_only_the_commit(
+    commit_repo: Path,
+) -> None:
+    from moonmind.omnigent.git_identity import ensure_workspace_git_identity
+
+    head = _git_out(commit_repo, "rev-parse", "HEAD")
+    _run_commit_helper(commit_repo, "--pr", "4486")
+    staged_tree = _resolver_result(commit_repo)["localCommit"]["stagedTree"]
+
+    # The existing workspace identity owner reapplies the admitted identity.
+    assert ensure_workspace_git_identity(
+        commit_repo,
+        runtime_uid=None,
+        runtime_gid=None,
+        identity=("MoonMind Worker", "moonmind-worker@users.noreply.github.com"),
+    )
+    code, outcome = _run_commit_helper(commit_repo, "--pr", "4486")
+
+    assert code == 0
+    assert outcome["status"] == "committed"
+    assert _git_out(commit_repo, "rev-parse", "HEAD^") == head
+    assert _git_out(commit_repo, "rev-parse", "HEAD^{tree}") == staged_tree
+    assert _git_out(commit_repo, "log", "-1", "--format=%an <%ae>|%cn") == (
+        "MoonMind Worker <moonmind-worker@users.noreply.github.com>|MoonMind Worker"
+    )
+    assert (commit_repo / "fix.py").read_text(encoding="utf-8") == "print('addressed')\n"
+    assert (commit_repo / "unstaged.txt").read_text(encoding="utf-8") == "keep me\n"
+
+    # A resumed or repeated finalization reconciles instead of committing again.
+    code, outcome = _run_commit_helper(commit_repo, "--pr", "4486")
+    assert (code, outcome["status"]) == (0, "reconciled")
+    assert _git_out(commit_repo, "rev-list", "--count", f"{head}..HEAD") == "1"
+
+
+def test_commit_that_landed_despite_failure_is_reconciled(
+    commit_repo: Path,
+) -> None:
+    import subprocess
+
+    _run_commit_helper(commit_repo)
+    receipt = _resolver_result(commit_repo)["localCommit"]
+    # An interrupted earlier attempt actually created the commit.
+    subprocess.run(
+        ["git", "-C", str(commit_repo), "-c", "user.name=Op",
+         "-c", "user.email=op@example.test", "commit", "-q", "-m", "landed"],
+        check=True,
+    )
+    landed = _git_out(commit_repo, "rev-parse", "HEAD")
+
+    code, outcome = _run_commit_helper(commit_repo)
+
+    assert (code, outcome) == (0, {"head": landed, "status": "reconciled"})
+    assert _git_out(commit_repo, "rev-parse", "HEAD^") == receipt["headBefore"]
+
+    # Newly staged work is a new commit, never hidden by the old receipt.
+    (commit_repo / "more.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(commit_repo), "add", "more.py"], check=True)
+    code, outcome = _run_commit_helper(commit_repo)
+    assert (code, outcome["kind"]) == (4, "identity_missing")
+
+
+def test_signing_failure_is_reported_without_disabling_signing(
+    commit_repo: Path,
+) -> None:
+    import subprocess
+
+    git = ["git", "-C", str(commit_repo), "config"]
+    subprocess.run([*git, "user.name", "Explicit Owner"], check=True)
+    subprocess.run([*git, "user.email", "owner@example.test"], check=True)
+    subprocess.run([*git, "commit.gpgsign", "true"], check=True)
+    subprocess.run([*git, "gpg.program", "false"], check=True)
+    head = _git_out(commit_repo, "rev-parse", "HEAD")
+
+    code, outcome = _run_commit_helper(commit_repo)
+
+    assert (code, outcome["kind"]) == (4, "signing_failed")
+    result = _resolver_result(commit_repo)
+    assert result["next_step"] == "provide_commit_signing"
+    assert result["mergeAutomationDisposition"] == "failed"
+    assert "failed to sign" in result["localCommit"]["gitError"]
+    assert result["localCommit"]["signingRequired"] is True
+    assert _git_out(commit_repo, "config", "--get", "commit.gpgsign") == "true"
+    assert _git_out(commit_repo, "config", "--get", "user.name") == "Explicit Owner"
+    assert _git_out(commit_repo, "rev-parse", "HEAD") == head
+
+
+def test_hook_rejection_is_bounded_and_never_bypassed(
+    commit_repo: Path,
+) -> None:
+    import subprocess
+
+    git = ["git", "-C", str(commit_repo), "config"]
+    subprocess.run([*git, "user.name", "Explicit Owner"], check=True)
+    subprocess.run([*git, "user.email", "owner@example.test"], check=True)
+    runs = commit_repo.parent / "hook-runs"
+    hook = commit_repo / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(
+        f"#!/bin/sh\necho run >> '{runs}'\necho 'lint: E501 too long' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+    for attempt in (1, 2, 3):
+        code, outcome = _run_commit_helper(commit_repo)
+        assert (code, outcome["kind"]) == (4, "hook_rejected")
+        assert _resolver_result(commit_repo)["localCommit"]["attempts"] == attempt
+    # Exhaustion keeps the readable original error and runs no fourth commit.
+    code, outcome = _run_commit_helper(commit_repo)
+
+    assert (code, outcome["exhausted"]) == (4, True)
+    result = _resolver_result(commit_repo)
+    assert result["next_step"] == "address_commit_hook_failure"
+    assert result["localCommit"]["exhausted"] is True
+    assert result["localCommit"]["commitHooks"] == ["pre-commit"]
+    assert "lint: E501 too long" in result["localCommit"]["gitError"]
+    assert runs.read_text(encoding="utf-8").count("run") == 3
+    assert _git_out(commit_repo, "diff", "--cached", "--name-only") == "fix.py"
+
+
+def test_unrelated_local_commit_failure_is_not_labeled_identity(
+    commit_repo: Path,
+) -> None:
+    import subprocess
+
+    git = ["git", "-C", str(commit_repo), "config"]
+    subprocess.run([*git, "user.name", "Explicit Owner"], check=True)
+    subprocess.run([*git, "user.email", "owner@example.test"], check=True)
+    (commit_repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+
+    code, outcome = _run_commit_helper(commit_repo)
+
+    assert (code, outcome["kind"]) == (4, "other")
+    result = _resolver_result(commit_repo)
+    assert result["next_step"] == "inspect_local_commit_failure"
+    assert result["localCommit"]["missingIdentityRoles"] == []
+    assert "index.lock" in result["localCommit"]["gitError"]
+    # The concurrent writer's lock is never removed on its behalf.
+    assert (commit_repo / ".git" / "index.lock").exists()
+
+
+def test_nothing_staged_is_not_a_commit_failure(commit_repo: Path) -> None:
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(commit_repo), "reset", "-q", "--", "fix.py"], check=True
+    )
+    before = (commit_repo / "var" / "pr_resolver" / "result.json").read_bytes()
+
+    code, outcome = _run_commit_helper(commit_repo)
+
+    assert (code, outcome["status"]) == (1, "nothing_to_commit")
+    assert (commit_repo / "var" / "pr_resolver" / "result.json").read_bytes() == before
+
+
+def test_local_commit_failure_contract_keeps_publication_denial_distinct(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    disposition = pr_resolve_contract_module["merge_automation_disposition_for_result"]
+    next_step = pr_resolve_contract_module["remediation_next_step"]
+    retry = pr_resolve_contract_module["classify_retry_action"]
+
+    assert disposition(
+        status="blocked",
+        merge_outcome="blocked",
+        final_reason="local_commit_failed",
+        next_step="provide_commit_identity",
+    ) == "failed"
+    assert next_step("local_commit_failed") == "inspect_local_commit_failure"
+    assert retry("local_commit_failed", merge_not_ready_grace_remaining=3) == "stop"
+    # Actual publication denial keeps its recorded meaning and owner.
+    assert next_step("publish_unavailable") == "manual_review"
+    assert disposition(
+        status="blocked",
+        merge_outcome="blocked",
+        final_reason="publish_unavailable",
+        next_step="manual_review",
+    ) == "manual_review"
