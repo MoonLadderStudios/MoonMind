@@ -5499,9 +5499,12 @@ async def test_skill_attachment_mounts_the_deployment_volume_subpath(
         "skills": [],
     }
 
+    admitted_request = object()
+
     class Gateway:
-        async def read_bytes(self, artifact_id: str) -> bytes:
+        async def read_admitted_input(self, artifact_id: str, *, request) -> bytes:
             assert artifact_id == "art_skillset"
+            assert request is admitted_request
             return json.dumps(resolved_skillset).encode("utf-8")
 
     service = OmnigentSkillDeliveryService(
@@ -5517,6 +5520,7 @@ async def test_skill_attachment_mounts_the_deployment_volume_subpath(
             "skillDeliveryRef": "skill-delivery:1",
         },
         owner_ref="idem-1",
+        request=admitted_request,
     )
 
     assert attachment["kind"] == "volume"

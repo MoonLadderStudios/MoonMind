@@ -1195,7 +1195,9 @@ async def _load_verified_execution_plan(
         raise ValueError(
             "execution plan binding conflicts with task-input snapshot authority"
         )
-    if persisted.payload.resolvedTools.get("repositoryAccess") and workflow_id:
+    if workflow_id:
+        # Every artifact-backed plan input, including the Skill closure, is
+        # delegated to the concrete execution before any reader consumes it.
         # Trusted native Activities have a real workflow/run identity without
         # an AgentRun. Agent consumers derive that identity from their Step.
         execution_run_id = run_id
