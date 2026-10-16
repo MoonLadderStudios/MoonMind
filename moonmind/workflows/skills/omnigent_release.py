@@ -321,6 +321,9 @@ class OmnigentReleaseDrivers:
     verify_live_container: Callable[[str], Awaitable[str | None]] = field(
         default=None, repr=False
     )
+    publish_resolution: Callable[[dict[str, str]], Awaitable[None]] = field(
+        default=None, repr=False
+    )
 
 
 async def _default_deployment_inputs(
@@ -428,48 +431,65 @@ def _record_env(record_refs: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+async def _resolve_record(
+    record_refs: Mapping[str, str],
+) -> tuple[Any | None, dict[str, str], str]:
+    """Resolve the recorded images once; return the state only when it matches."""
+    from moonmind.omnigent.bootstrap.image_resolution import resolve_omnigent_images
+
+    state = await resolve_omnigent_images(_record_env(record_refs))
+    details = state.details if isinstance(state.details, dict) else {}
+    compat = details.get("opencodeHostCompatibility")
+    observed = {
+        "server": str(state.server_image_ref or "").strip(),
+        "opencode": str(state.opencode_host_image_ref or "").strip(),
+        "shared": str(state.shared_host_image_ref or "").strip(),
+        "pi": str(state.pi_host_image_ref or "").strip(),
+    }
+    wanted = {k: v for k, v in record_refs.items() if v and k != "codex"}
+    refs_match = all(observed.get(k) == v for k, v in wanted.items())
+    # The opencode readiness verdict only gates deployments that run the
+    # opencode host family; codex-only deployments match on refs alone.
+    compat_ok = not wanted.get("opencode") or (
+        isinstance(compat, dict) and compat.get("status") == "ready"
+    )
+    observed = {k: v for k, v in observed.items() if v}
+    if refs_match and compat_ok:
+        return state, observed, ""
+    return (
+        None,
+        observed,
+        f"status={compat.get('status') if isinstance(compat, dict) else '?'} "
+        "failureCode="
+        f"{compat.get('failureCode') if isinstance(compat, dict) else '?'}",
+    )
+
+
 async def _default_await_resolution(
     record_refs: Mapping[str, str], *, attempts: int = 20, delay_seconds: float = 15.0
 ) -> dict[str, str]:
-    from moonmind.omnigent.bootstrap.image_resolution import resolve_omnigent_images
-    from moonmind.omnigent.bootstrap.store import save_resolved_state
-
     # Digest-pinned inputs resolve by local inspection only: no registry pull,
     # so each attempt is cheap and the loop just waits for the restarted
-    # container to become observable.
-    env = _record_env(record_refs)
+    # container to become observable. Nothing is persisted here: fresh
+    # admission binds the resolved state, so it is published only after the
+    # live check verifies the installation.
     last_error = "resolution never became ready"
     for _ in range(max(1, attempts)):
-        state = await resolve_omnigent_images(dict(env))
-        details = state.details if isinstance(state.details, dict) else {}
-        compat = (
-            details.get("opencodeHostCompatibility")
-            if isinstance(details, dict)
-            else None
-        )
-        observed = {
-            "server": str(state.server_image_ref or "").strip(),
-            "opencode": str(state.opencode_host_image_ref or "").strip(),
-            "shared": str(state.shared_host_image_ref or "").strip(),
-            "pi": str(state.pi_host_image_ref or "").strip(),
-        }
-        wanted = {k: v for k, v in record_refs.items() if v and k != "codex"}
-        refs_match = all(observed.get(k) == v for k, v in wanted.items())
-        # The opencode readiness verdict only gates deployments that run the
-        # opencode host family; codex-only deployments match on refs alone.
-        compat_ok = not wanted.get("opencode") or (
-            isinstance(compat, dict) and compat.get("status") == "ready"
-        )
-        if refs_match and compat_ok:
-            save_resolved_state(state)
-            return {k: v for k, v in observed.items() if v}
-        last_error = (
-            f"status={compat.get('status') if isinstance(compat, dict) else '?'} "
-            "failureCode="
-            f"{compat.get('failureCode') if isinstance(compat, dict) else '?'}"
-        )
+        state, observed, error = await _resolve_record(record_refs)
+        if state is not None:
+            return observed
+        last_error = error
         await asyncio.sleep(delay_seconds)
     raise OmnigentReleaseError("await-resolution", last_error)
+
+
+async def _default_publish_resolution(record_refs: Mapping[str, str]) -> None:
+    from moonmind.omnigent.bootstrap.store import save_resolved_state
+
+    state, _observed, error = await _resolve_record(record_refs)
+    if state is None:
+        raise OmnigentReleaseError("publish-resolution", error)
+    save_resolved_state(state)
 
 
 async def _default_verify_live_container(server_ref: str) -> str | None:
@@ -488,6 +508,7 @@ def _default_drivers() -> OmnigentReleaseDrivers:
         restart_server=None,
         await_resolution=_default_await_resolution,
         verify_live_container=_default_verify_live_container,
+        publish_resolution=_default_publish_resolution,
     )
 
 
@@ -542,7 +563,7 @@ def production_drivers(
         # The release record is already persisted to `.env.deploy` when this
         # runs. The API and workers are not recreated: their image resolution
         # and Host Class selection read the installed record and the resolved
-        # state that await_resolution persists, not the refs their process
+        # state published after live verification, not the refs their process
         # environment inherited.
         await _up_services(("omnigent",), "restart-server")
         if target.get("shared"):
@@ -582,6 +603,7 @@ def production_drivers(
         restart_server=restart_server,
         await_resolution=base.await_resolution,
         verify_live_container=base.verify_live_container,
+        publish_resolution=base.publish_resolution,
     )
 
 
@@ -774,9 +796,10 @@ async def _verify_installed_release(
     """Verify the running Omnigent installation carries the recorded release.
 
     Resolution waits for the recorded images to be observable (and the
-    OpenCode pair to be qualified when that family is installed) and persists
-    them as the resolved state fresh admission binds; the live check then
-    requires the running server container to carry the recorded digest.
+    OpenCode pair to be qualified when that family is installed), and the
+    live check requires the running server container to carry the recorded
+    digest. Only then is the resolved state that fresh admission binds
+    published, so a failed verification never becomes the installed release.
     """
     resolved = await run.await_resolution(dict(target))
     live_digest = await run.verify_live_container(str(target.get("server") or ""))
@@ -791,6 +814,7 @@ async def _verify_installed_release(
         raise OmnigentReleaseError(
             "verify", "could not observe the running server image"
         )
+    await run.publish_resolution(dict(target))
     return resolved
 
 

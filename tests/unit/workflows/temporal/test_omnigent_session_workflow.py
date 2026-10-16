@@ -31,6 +31,7 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentExecutionPlanBinding,
 )
 from moonmind.omnigent.harness_platform.execution_plan import AdmissionAuthority
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
 )
@@ -2505,11 +2506,14 @@ class _HostBindings:
         self.active_leases = list(active_leases)
         self.updates: list[dict] = []
 
-    async def list_active_host_leases_for_profile(self, profile_id):
-        assert profile_id == "codex"
-        return self.active_leases
-
     async def create_or_update_static_binding(self, **kwargs):
+        assert kwargs["profile_id"] == "codex"
+        # The repository checks and updates under one binding-row lock.
+        if kwargs.get("require_idle") and self.active_leases:
+            raise OmnigentOAuthHostError(
+                "host binding is leased and keeps its launch",
+                code="OMNIGENT_HOST_BINDING_LEASED",
+            )
         self.updates.append(kwargs)
         return SimpleNamespace(
             binding_ref="omnigent-oauth:codex",
@@ -2548,6 +2552,7 @@ async def test_admitted_plan_replaces_an_idle_binding_launch() -> None:
     assert binding.effective_launch_snapshot == planned
     assert hosts.updates[0]["launch_policy_ref"] == "codex-on-demand@16"
     assert hosts.updates[0]["host_launch_profile_ref"] == "codex-on-demand@16"
+    assert hosts.updates[0]["require_idle"] is True
 
 
 @pytest.mark.asyncio

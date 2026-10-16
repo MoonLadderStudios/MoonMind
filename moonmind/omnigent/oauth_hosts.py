@@ -243,7 +243,15 @@ class OmnigentOAuthHostRepository:
         execution_profile_ref: str | None = None,
         launch_policy_ref: str | None = None,
         effective_launch_snapshot: dict[str, Any] | None = None,
+        require_idle: bool = False,
     ) -> OmnigentOAuthHostBinding:
+        """Create or update a profile's binding.
+
+        ``require_idle`` refuses the update while the profile holds an active
+        host lease. The check runs under the binding-row lock that lease
+        creation also takes, so no lease can be acquired on the old launch
+        between the check and the update.
+        """
         if static_host_id and host_launch_profile_ref:
             raise ValueError(
                 "static_host_id and host_launch_profile_ref are mutually exclusive"
@@ -255,11 +263,28 @@ class OmnigentOAuthHostRepository:
             mount = self._mount_from_profile(profile)
             harness = self._harness_for_mount(mount)
             result = await session.execute(
-                select(OmnigentOAuthHostBindingRecord).where(
-                    OmnigentOAuthHostBindingRecord.provider_profile_id == profile_id
-                )
+                select(OmnigentOAuthHostBindingRecord)
+                .where(OmnigentOAuthHostBindingRecord.provider_profile_id == profile_id)
+                .with_for_update()
             )
             record = result.scalar_one_or_none()
+            if require_idle:
+                active = (
+                    await session.execute(
+                        select(OmnigentOAuthHostLeaseRecord.lease_id)
+                        .where(
+                            OmnigentOAuthHostLeaseRecord.provider_profile_id
+                            == profile_id,
+                            OmnigentOAuthHostLeaseRecord.status.in_(ACTIVE_HOST_STATES),
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                if active is not None:
+                    raise OmnigentOAuthHostError(
+                        "host binding is leased and keeps its launch",
+                        code="OMNIGENT_HOST_BINDING_LEASED",
+                    )
             if record is None:
                 record = OmnigentOAuthHostBindingRecord(
                     binding_ref=f"omnigent-oauth:{profile_id}",

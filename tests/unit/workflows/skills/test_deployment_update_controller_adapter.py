@@ -372,6 +372,9 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     async def running_server(expected):
         return live["server"]
 
+    async def publish_resolution(selected):
+        return None
+
     def drivers(**kwargs):
         assert kwargs["runner"].project_name == target["project"]
         assert kwargs["moonmind_image"] == IMAGE
@@ -382,6 +385,7 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
             restart_server=restart,
             await_resolution=await_resolution,
             verify_live_container=running_server,
+            publish_resolution=publish_resolution,
         )
 
     monkeypatch.setattr(omnigent_release, "production_drivers", drivers)
