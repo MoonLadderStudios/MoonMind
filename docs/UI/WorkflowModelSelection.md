@@ -167,7 +167,7 @@ Tier availability means configured profile tier entries, not a newly invented la
 
 While profile tier data loads, preserve the draft. Do not render guessed numbers or reset the form. Distinguish loading, failed fetch, and a malformed empty tier policy. Limit disabled controls to those that genuinely need missing information.
 
-Reuse existing profile data, capabilities, preview queries, and backend validation. Advisory model-catalog or preview failure must not erase input, clear Custom, or create a new whole-form admission gate. Actual profile/provider/runtime constraints remain authoritative.
+Reuse existing profile data, capabilities, preview queries, and backend validation. A current profile catalog warns when a custom ID is absent and shows related observed IDs. Stale, draft, or empty catalogs cannot establish that mismatch. Advisory feedback never erases input, clears Custom, or creates a whole-form admission gate. Actual profile/provider/runtime constraints remain authoritative.
 
 Ignore delayed responses for an old profile or selection. A tier preview that started before the user typed must not later restore tier mode or overwrite Custom values. Refresh failure leaves current values visible with a scoped warning.
 
