@@ -11505,7 +11505,7 @@ describe.skip("Task Create Entrypoint", () => {
       ),
     ).toBe(true);
     expect(
-      screen.queryByText("Branch lookup requires a valid GitHub repository value."),
+      screen.queryByText("Branch lookup is available for GitHub repositories; enter the branch name."),
     ).toBeNull();
   });
 
@@ -13566,6 +13566,53 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(patch.workspace).toBeNull();
   });
 
+  it("drops the recorded branch when a rerun changes the repository", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:object-move",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedGitLabTarget,
+        publishMode: "none",
+        workflow: {
+          instructions: "Deploy the release.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aobject-move");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
+    const branch = screen.getByLabelText("Branch") as HTMLInputElement;
+    await waitFor(() => expect(branch.value).toBe("develop"));
+
+    fireEvent.change(repository, { target: { value: "gitlab.example.com/platform/tools" } });
+    await waitFor(() => expect(branch.value).toBe(""));
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    expect((updates[0]?.parametersPatch as Record<string, unknown>).repository).toBe(
+      "gitlab.example.com/platform/tools",
+    );
+
+    // A branch authored for the new repository is kept.
+    fireEvent.change(branch, { target: { value: "release" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(2));
+    expect((updates[1]?.parametersPatch as Record<string, unknown>).repository).toEqual({
+      provider: "git",
+      repository: { name: "gitlab.example.com/platform/tools" },
+      branch: { name: "release" },
+    });
+  });
+
   it("reruns as scratch when the recorded repository is cleared", async () => {
     const updates = mockRecordedExecution({
       workflowId: "mm:object-clear",
@@ -14160,6 +14207,32 @@ describe("Task Create MM-641 authoring validation", () => {
     ).toBe(false);
   });
 
+  it("disables branch lookup once a defaulted repository is cleared", async () => {
+    renderWithClient(
+      <WorkflowStartPage
+        payload={withDefaultRepository("MoonLadderStudios/MoonMind")}
+      />,
+    );
+
+    const repoInput = (await screen.findByLabelText(
+      "Repository",
+    )) as HTMLInputElement;
+    await waitFor(() => expect(repoInput.value).toBe("MoonLadderStudios/MoonMind"));
+    const branchInput = screen.getByLabelText("Branch") as HTMLInputElement;
+    await waitFor(() => expect(branchInput.disabled).toBe(false));
+    const lookupsBeforeClear = fetchSpy.mock.calls.length;
+
+    fireEvent.change(repoInput, { target: { value: "" } });
+
+    // A blank Repository is scratch work, so the default is not looked up.
+    await waitFor(() => expect(branchInput.disabled).toBe(true));
+    expect(
+      fetchSpy.mock.calls
+        .slice(lookupsBeforeClear)
+        .some(([url]) => String(url).startsWith("/api/github/branches")),
+    ).toBe(false);
+  });
+
   it("submits non-GitHub repository identities without GitHub shorthand validation", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
@@ -14169,7 +14242,10 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(screen.getByLabelText("Repository"), {
       target: { value: "gitlab.example.com/platform/tools/deployer" },
     });
-    fireEvent.change(screen.getByLabelText("Branch"), {
+    // Advisory lookup is GitHub-only; manual branch entry stays available.
+    const branchInput = screen.getByLabelText("Branch") as HTMLInputElement;
+    await waitFor(() => expect(branchInput.disabled).toBe(false));
+    fireEvent.change(branchInput, {
       target: { value: "develop" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -14190,6 +14266,8 @@ describe("Task Create MM-641 authoring validation", () => {
 
   it.each([
     "https://user:token@github.com/octo/repo",
+    "https://github.com",
+    "https://github.com/",
     "/srv/checkouts/repo",
     "file:///srv/checkouts/repo",
   ])("rejects %s as a repository source before submission", async (value) => {
@@ -15476,6 +15554,98 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(request.payload.task.appliedStepTemplates?.[0]).not.toHaveProperty(
       "workflowPublish",
     );
+  });
+
+  it("explains a submit-time preset publish policy that needs the cleared repository", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "open-pr",
+                scope: "global",
+                title: "Open PR",
+                description: "Implement and open a pull request.",
+                presetDigest: "digest-open-pr",
+                inputs: [],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets/open-pr?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "open-pr",
+            scope: "global",
+            title: "Open PR",
+            description: "Implement and open a pull request.",
+            presetDigest: "digest-open-pr",
+            inputs: [],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets/open-pr:expand?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:open-pr:01",
+                title: "Implement",
+                instructions: "Implement the change.",
+              },
+            ],
+            publish: { mode: "pr" },
+            appliedTemplate: {
+              slug: "open-pr",
+              presetDigest: "digest-open-pr",
+              inputs: {},
+              stepIds: ["tpl:open-pr:01"],
+            },
+            capabilities: ["git"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(presetSelect.options).some(
+          (option) => option.value === "global::::open-pr",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, { target: { value: "global::::open-pr" } });
+    const repoInput = screen.getByLabelText("Repository") as HTMLInputElement;
+    fireEvent.change(repoInput, { target: { value: "" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    expect(
+      await screen.findByText(
+        "PR publishing needs a repository. Add one, or choose None to keep results save-only.",
+      ),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(repoInput);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
   });
 
   it("keeps an edited publish mode over a submit-time preset publish policy", async () => {

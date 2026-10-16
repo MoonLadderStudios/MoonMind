@@ -191,6 +191,22 @@ def _merge_parameters_patch(
     return merged
 
 
+def _sync_repository_search_attribute(
+    record: TemporalExecutionCanonicalRecord, parameters_patch: Mapping[str, Any]
+) -> None:
+    """Keep repository-filtered lists in step with an edited source."""
+
+    if "repository" not in parameters_patch:
+        return
+    attrs = dict(record.search_attributes or {})
+    repository = repository_name_from_value(parameters_patch["repository"])
+    if repository:
+        attrs["mm_repo"] = repository
+    else:
+        attrs.pop("mm_repo", None)
+    record.search_attributes = attrs
+
+
 def _mapping_payload(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -4738,6 +4754,7 @@ class TemporalExecutionService:
             record.parameters = _merge_parameters_patch(
                 record.parameters, parameters_patch
             )
+            _sync_repository_search_attribute(record, parameters_patch)
             updated = True
             if parameters_patch.get("request_continue_as_new") is True:
                 major_reconfiguration = True
@@ -4886,6 +4903,7 @@ class TemporalExecutionService:
                     refs.append(ref)
             record.artifact_refs = refs
         if parameters_patch:
+            _sync_repository_search_attribute(record, parameters_patch)
             record.parameters = self._full_rerun_parameters(
                 _merge_parameters_patch(record.parameters, parameters_patch),
                 recovery_provenance=self._full_retry_recovery_from_patch(
