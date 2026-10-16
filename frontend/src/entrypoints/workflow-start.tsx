@@ -1838,7 +1838,35 @@ export function buildEditParametersPatch({
   delete parametersPatch.followUpRetrieval;
   delete parametersPatch.startingBranch;
   delete parametersPatch.targetBranch;
+
+  // Submission keeps the recorded provider and connection while the
+  // repository is unchanged. A cleared or different repository is a source
+  // change: drop the inherited repository and branch so the edit runs against
+  // what was authored (scratch when blank). The backend merges the patch over
+  // the stored parameters, so a drop is an explicit null.
+  const submittedName = repositoryTargetName(submittedPayload.repository);
+  if (!submittedName) {
+    parametersPatch.repository = null;
+  }
+  if (submittedName !== repositoryTargetName(baseParameters.repository)) {
+    parametersPatch.branch = null;
+    const workflowGit = recordValue(mergedWorkflow.git);
+    delete workflowGit.branch;
+    delete workflowGit.repository;
+    if (Object.keys(workflowGit).length > 0) {
+      mergedWorkflow.git = workflowGit;
+    } else {
+      delete mergedWorkflow.git;
+    }
+  }
   return parametersPatch;
+}
+
+function repositoryTargetName(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  return String(recordValue(recordValue(value).repository).name ?? "").trim();
 }
 
 function normalizeMoonMindApiPath(value: unknown): string | null {
@@ -2982,7 +3010,12 @@ function isValidRepositoryInput(value: string): boolean {
   if (candidate.includes("://")) {
     try {
       const parsed = new URL(candidate);
-      return Boolean(parsed.hostname) && !parsed.username && !parsed.password;
+      return (
+        Boolean(parsed.hostname) &&
+        parsed.pathname.replace(/\/+$/, "") !== "" &&
+        !parsed.username &&
+        !parsed.password
+      );
     } catch {
       return false;
     }
@@ -7754,9 +7787,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const branchMetadataEndpoint = normalizeMoonMindApiPath(
     dashboardConfig.sources?.github?.branchMetadata,
   );
-  const submittedRepository = repository.trim();
-  const selectedRepositoryForBranchLookup =
-    submittedRepository || defaultRepository;
+  const selectedRepositoryForBranchLookup = repository.trim();
   const branchLookupRepository = canLookupRepositoryBranches(
     selectedRepositoryForBranchLookup,
   )
@@ -7924,10 +7955,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     return "inconclusive";
   })();
+  // Advisory lookup is GitHub-only; other identities keep manual entry.
   const branchControlDisabled =
     !selectedRepositoryForBranchLookup.trim() ||
-    !effectiveBranchMetadataEndpoint ||
-    !branchLookupRepository;
+    !effectiveBranchMetadataEndpoint;
   const branchStatusMessage = (() => {
     if (!selectedRepositoryForBranchLookup.trim()) {
       return "Select a repository to load branches.";
@@ -7936,7 +7967,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return "Branch lookup is not configured.";
     }
     if (!branchLookupRepository) {
-      return "Branch lookup requires a valid GitHub repository value.";
+      return "Branch lookup is available for GitHub repositories; enter the branch name.";
     }
     if (branchMetadataQuery.isLoading) {
       return "";
@@ -7953,6 +7984,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const handleRepositoryChange = (value: string) => {
     setRepository(value);
     setRepositoryTouched(true);
+    // A hydrated branch belongs to the recorded repository; one the operator
+    // authored is kept for the new target.
+    if (!branchTouchedRef.current && branchDraftRef.current.trim()) {
+      syncBranchDraft("", false);
+    }
     const selectedOption = repositoryOptionValue(repositoryOptions, value);
     writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
     // Metadata reloads via its repository-scoped query key.
@@ -9814,7 +9850,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       !normalizedRepository &&
       (effectivePublishMode === "branch" || effectivePublishMode === "pr")
     ) {
-      setSubmitMessage(blankSourcePublishNotice(sourcePublishMode));
+      setSubmitMessage(
+        blankSourcePublishNotice(sourcePublishMode) ||
+          blankSourcePublishNotice(effectivePublishMode),
+      );
       repositoryInputRef.current?.focus();
       clearSubmitBusy();
       return;
@@ -11176,7 +11215,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ? "Loading the repository default branch..."
     : branchControlDisabled
       ? branchStatusMessage ||
-        "Choose a valid GitHub repository before selecting a branch"
+        "Choose a repository before selecting a branch"
       : "Select the branch to check out before the workflow starts";
   const recordedSavedSourceNotice = recordedSavedSource
       ? `This run starts from its recorded ${recordedSourceKind.replace("_", " ")} source, which is kept unchanged. To start from other saved work, use Continue on the saved result in the workflow's details.`
