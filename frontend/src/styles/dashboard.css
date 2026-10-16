@@ -1064,8 +1064,8 @@ h1 {
 .evidence-collection__header p { margin: 0.25rem 0 0; }
 .evidence-collection__filter { display: grid; gap: 0.35rem; max-width: 28rem; }
 .evidence-collection__table-wrap { overflow-x: auto; }
-.evidence-collection table { border-collapse: collapse; min-width: 52rem; width: 100%; }
-.evidence-collection th, .evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; }
+.evidence-collection table { border-collapse: collapse; width: 100%; }
+.evidence-collection th, .evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .evidence-collection td small { display: block; margin-top: 0.25rem; }
 .evidence-collection td a + a { margin-left: 0.75rem; }
 .evidence-collection__pagination > div { display: flex; gap: 0.5rem; }
@@ -3110,18 +3110,18 @@ tbody tr:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .provider-profiles-table-wrap {
+  .stacked-records-wrap {
     overflow: visible;
   }
 
-  .provider-profiles-table {
+  .stacked-records {
     display: block;
     min-width: 0;
     border: 0;
     background: transparent;
   }
 
-  .provider-profiles-table thead {
+  .stacked-records thead {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -3134,12 +3134,12 @@ tbody tr:hover {
     white-space: nowrap;
   }
 
-  .provider-profiles-table tbody {
+  .stacked-records tbody {
     display: grid;
     gap: 0.75rem;
   }
 
-  .provider-profiles-table tbody tr {
+  .stacked-records tbody tr {
     display: grid;
     gap: 0;
     border: 1px solid rgb(var(--mm-border) / 0.8);
@@ -3149,12 +3149,12 @@ tbody tr:hover {
     overflow: hidden;
   }
 
-  .provider-profiles-table tbody tr:nth-child(2n),
-  .provider-profiles-table tbody tr:hover {
+  .stacked-records tbody tr:nth-child(2n),
+  .stacked-records tbody tr:hover {
     background: rgb(var(--mm-panel) / 0.78);
   }
 
-  .provider-profiles-table td {
+  .stacked-records td {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 0.2rem;
@@ -3166,10 +3166,12 @@ tbody tr:hover {
     overflow-wrap: anywhere;
   }
 
-  /* MoonMind#4559: the record label sits above its value so Status, profile
+  /* MoonMind#4559: comparison tables marked .stacked-records (saved Provider
+   * Profiles, Managed Secrets, evidence collections, worker shard health)
+   * become stacked records on phones. Each cell's data-label sits above its value so status,
    * metadata, and actions use the full record width instead of competing
-   * with a wide label column. */
-  .provider-profiles-table td::before {
+   * with a label column or needing sideways scrolling. */
+  .stacked-records td::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 0.3rem;
@@ -3185,39 +3187,38 @@ tbody tr:hover {
   /* MoonMind#4559: actions use the full record width instead of competing
    * with a label column. Buttons wrap at word boundaries with touch-sized
    * targets rather than compressing into tall pills. */
-  .provider-profiles-table td[data-label="Actions"] {
+  .stacked-records td[data-label="Actions"] {
     gap: 0.5rem;
   }
 
-  .provider-profiles-table td[data-label="Actions"] > * {
+  .stacked-records td[data-label="Actions"] > * {
     min-width: 0;
     max-width: 100%;
   }
 
-  .provider-profiles-table td .flex.flex-wrap,
-  .provider-profiles-table td [class*="flex"] {
+  .stacked-records td .flex.flex-wrap,
+  .stacked-records td [class*="flex"] {
     flex-wrap: wrap;
     min-width: 0;
     max-width: 100%;
   }
 
-  .provider-profiles-table td button {
+  .stacked-records td button {
     white-space: normal;
     overflow-wrap: anywhere;
-    min-height: 2.75rem;
     max-width: 100%;
   }
 
-  .provider-profiles-table td:last-child {
+  .stacked-records td:last-child {
     border-bottom: 0;
   }
 
-  .provider-profiles-table td[colspan] {
+  .stacked-records td[colspan] {
     display: block;
     text-align: center;
   }
 
-  .provider-profiles-table td[colspan]::before {
+  .stacked-records td[colspan]::before {
     content: none;
   }
 }
@@ -10246,7 +10247,10 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 @media (max-width: 720px) {
+  /* Stacked cards grow with their content; the desktop slab's bounded
+   * height would let tall cards spill over the content that follows. */
   .data-table-slab[data-responsive="on"] {
+    max-height: none;
     overflow: visible;
     border: 0;
     background: transparent;
@@ -10509,9 +10513,9 @@ button.workflow-workspace-sidebar-row:active {
    * single-column grids (the production direction) with no automatic minimum
    * so the inline label cannot carry the select's atomic intrinsic width
    * upward; the legend text span wraps instead of sizing the legend.
-   * DIAG2 (webkit leg) proved width:100% alone is not enough: the select's
-   * ~412px option min-content still sized the label's grid track and spilled
-   * 412->424->428->440->444px up the chain. contain:inline-size zeroes the
+   * In WebKit width:100% alone is not enough: the select's long-option
+   * min-content still sizes the label's grid track and spills up the
+   * fieldset chain. contain:inline-size zeroes the
    * select's intrinsic inline contribution at the source without changing its
    * rendered size (width stays a definite 100%, block axis untouched, native
    * popup unaffected); engines without support keep today's behavior. */
@@ -10943,6 +10947,12 @@ button.workflow-workspace-sidebar-row:active {
 
   .provider-profile-actions > button {
     flex: 1 1 100%;
+  }
+
+  /* 44px ordinary activation areas on phones. Radios and checkboxes keep
+   * their native size inside a full-width label, and links inside prose stay
+   * inline (min-height does not apply to inline boxes). */
+  :is(.omnigent-inventory, .settings-page, .evidence-workspace) :is(a[href], button, select, summary, input:not([type="checkbox"]):not([type="radio"])) {
     min-height: 2.75rem;
   }
 

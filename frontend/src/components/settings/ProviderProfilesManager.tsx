@@ -3,6 +3,7 @@ import { QueryClient, useMutation, useQuery } from '@tanstack/react-query';
 
 import type { components } from '../../generated/openapi';
 import { formatHarnessLabel } from '../../runtime/runtimeTargets';
+import { trapTabWithin } from '../../lib/focusTrap';
 import { formatStatusLabel } from '../../utils/formatters';
 import {
   buildProviderProfileTierPayload,
@@ -1192,6 +1193,17 @@ function normalizeReadinessMetadata(value: unknown): ClaudeReadinessMetadata | n
   return Object.values(readiness).some((field) => field !== undefined) ? readiness : null;
 }
 
+function activeHtmlElement(): HTMLElement | null {
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+}
+
+/** Focuses (once) the element an overlay was opened from, if it still exists. */
+function returnFocusFrom(ref: { current: HTMLElement | null }): void {
+  const trigger = ref.current;
+  ref.current = null;
+  if (trigger?.isConnected) trigger.focus();
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -1938,6 +1950,7 @@ export function ProviderProfilesManager({
   const [claudeEnrollment, setClaudeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
   const claudeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
   const claudeEnrollmentProfileIdRef = useRef<string | null>(null);
+  const claudeEnrollmentReturnFocusRef = useRef<HTMLElement | null>(null);
   const claudeEnrollmentAbortRef = useRef<AbortController | null>(null);
   const [creationCapabilities, setCreationCapabilities] =
     useState<ProviderProfileCreationCapabilities | null>(null);
@@ -2114,6 +2127,9 @@ export function ProviderProfilesManager({
   const [tierUndo, setTierUndo] = useState<{ tier: ProviderProfileTierDraft; index: number; wasDefault: boolean } | null>(null);
   const [tierRemoveDialog, setTierRemoveDialog] = useState<{ index: number; tier: ProviderProfileTierDraft; isDefault: boolean; isMiddle: boolean } | null>(null);
   const [tierRemoveReplacementId, setTierRemoveReplacementId] = useState<string | null>(null);
+  const tierRemovePanelRef = useRef<HTMLDivElement | null>(null);
+  const tierRemoveReturnFocusRef = useRef<HTMLElement | null>(null);
+  const tierRemoveDialogOpen = tierRemoveDialog !== null;
   const [tierCapabilities, setTierCapabilities] = useState<ProviderProfileTierCapabilities | null>(null);
   const [tierCapabilitiesError, setTierCapabilitiesError] = useState<string | null>(null);
   const [tierCapabilitiesLoading, setTierCapabilitiesLoading] = useState(false);
@@ -2876,6 +2892,7 @@ export function ProviderProfilesManager({
       setTierLiveMessage(`Tier ${index + 1} removed`);
       return;
     }
+    tierRemoveReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setTierRemoveDialog({ index, tier, isDefault, isMiddle });
     if (isDefault) {
       const survivors = tierDrafts.filter((_, i) => i !== index);
@@ -2885,6 +2902,18 @@ export function ProviderProfilesManager({
       setTierRemoveReplacementId(null);
     }
   };
+
+  // The confirmation takes focus on open and hands it back to the Remove
+  // action when dismissed; after a confirmed removal that action is gone.
+  useEffect(() => {
+    if (!tierRemoveDialogOpen) return;
+    tierRemovePanelRef.current?.querySelector<HTMLElement>('button')?.focus();
+    return () => {
+      const trigger = tierRemoveReturnFocusRef.current;
+      tierRemoveReturnFocusRef.current = null;
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [tierRemoveDialogOpen]);
 
   const confirmRemoveTier = () => {
     if (!tierRemoveDialog) return;
@@ -2928,6 +2957,7 @@ export function ProviderProfilesManager({
 
   const openClaudeEnrollment = (profile: ProviderProfile) => {
     const authModel = providerAuthModel(profile);
+    if (!claudeEnrollment) claudeEnrollmentReturnFocusRef.current = activeHtmlElement();
     claudeEnrollmentProfileIdRef.current = profile.profile_id;
     setClaudeEnrollment({
       profile,
@@ -3081,6 +3111,14 @@ export function ProviderProfilesManager({
     claudeEnrollmentDrawerRef.current?.focus();
   }, [claudeEnrollment?.profile.profile_id]);
 
+  // Closing the drawer (Escape, Cancel, or completion) hands focus back to
+  // the action that opened it, like the tier-removal confirmation.
+  const claudeEnrollmentOpen = claudeEnrollment !== null;
+  useEffect(() => {
+    if (!claudeEnrollmentOpen) return;
+    return () => returnFocusFrom(claudeEnrollmentReturnFocusRef);
+  }, [claudeEnrollmentOpen]);
+
   useEffect(() => {
     if (!claudeEnrollment) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -3098,6 +3136,7 @@ export function ProviderProfilesManager({
   const [opencodeEnrollment, setOpencodeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
   const opencodeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
   const opencodeEnrollmentProfileIdRef = useRef<string | null>(null);
+  const opencodeEnrollmentReturnFocusRef = useRef<HTMLElement | null>(null);
   const opencodeEnrollmentAbortRef = useRef<AbortController | null>(null);
 
   const updateOpencodeEnrollmentForProfile = (
@@ -3119,6 +3158,7 @@ export function ProviderProfilesManager({
 
   const openOpencodeEnrollment = (profile: ProviderProfile) => {
     const authModel = providerAuthModel(profile);
+    if (!opencodeEnrollment) opencodeEnrollmentReturnFocusRef.current = activeHtmlElement();
     opencodeEnrollmentProfileIdRef.current = profile.profile_id;
     setOpencodeEnrollment({
       profile,
@@ -3381,6 +3421,12 @@ export function ProviderProfilesManager({
     if (!opencodeEnrollment) return;
     opencodeEnrollmentDrawerRef.current?.focus();
   }, [opencodeEnrollment?.profile.profile_id]);
+
+  const opencodeEnrollmentOpen = opencodeEnrollment !== null;
+  useEffect(() => {
+    if (!opencodeEnrollmentOpen) return;
+    return () => returnFocusFrom(opencodeEnrollmentReturnFocusRef);
+  }, [opencodeEnrollmentOpen]);
 
   useEffect(() => {
     opencodeEnrollmentProfileIdRef.current = opencodeEnrollment?.profile.profile_id ?? null;
@@ -4177,9 +4223,9 @@ export function ProviderProfilesManager({
         </div>
       ) : null}
 
-      <div className="provider-profiles-table-wrap mt-6 overflow-x-auto">
+      <div className="provider-profiles-table-wrap stacked-records-wrap mt-6 overflow-x-auto">
         <table
-          className="provider-profiles-table min-w-full md:divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm"
+          className="provider-profiles-table stacked-records min-w-full md:divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm"
           role="table"
         >
           <thead className="bg-slate-50 dark:bg-slate-800/50" role="rowgroup">
@@ -5571,8 +5617,8 @@ export function ProviderProfilesManager({
               </button>
             ) : null}
             {tierRemoveDialog ? (
-              <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }}>
-                <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
+              <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setTierRemoveDialog(null); } else { trapTabWithin(tierRemovePanelRef.current, e); } }}>
+                <div ref={tierRemovePanelRef} className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-2xl">
                   <h4 id="tier-remove-title" className="text-sm font-semibold text-slate-900 dark:text-white">Remove Tier {tierRemoveDialog.index + 1}?</h4>
                   {tierRemoveDialog.isMiddle ? (
                     <div className="mt-3 text-sm text-slate-600 dark:text-slate-400">
