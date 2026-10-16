@@ -906,10 +906,17 @@ jobs:
           cache-from: type=gha,scope=integration-ci-test-runtime
           cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
       - name: Run hermetic integration CI suite
+        # Healthy runs take about 4-5.5 minutes. The wrapper's 10-minute
+        # cooperative budget lets pytest write its report, then bounded
+        # diagnostics and teardown finish inside the native step bound.
+        # Ordinary runs stop at the first failure; schedules keep collecting.
         if: matrix.suite == 'hermetic'
+        timeout-minutes: 18
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
           MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
+          MOONMIND_INTEGRATION_FAIL_FAST: ${{ github.event_name != 'schedule' && '1' || '0' }}
+          MOONMIND_INTEGRATION_TIMEOUT: "600"
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
@@ -943,6 +950,7 @@ jobs:
         # The journeys open the dashboard compiled into the candidate image
         # from the job host, so Playwright belongs here and not in the image.
         if: endsWith(matrix.suite, '-journey')
+        timeout-minutes: 5
         run: |
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
@@ -955,6 +963,7 @@ jobs:
         # cancellation, and read-back. Any failed or unobserved step fails the job.
         # MOONMIND_IMAGE pins the candidate build above.
         if: matrix.suite == 'fresh-journey'
+        timeout-minutes: 10
         env:
           MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
@@ -967,6 +976,7 @@ jobs:
         # candidate, the conversion must classify it as one eligible operator,
         # and the upgraded instance must accept new work.
         if: matrix.suite == 'upgrade-journey'
+        timeout-minutes: 15
         env:
           MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
@@ -981,6 +991,7 @@ jobs:
         # controller has no Docker daemon, so it fails at image staging and
         # mutates nothing. MOONMIND_IMAGE pins the candidate build above.
         if: matrix.suite == 'controller-journey'
+        timeout-minutes: 10
         env:
           MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
@@ -1007,6 +1018,7 @@ jobs:
             tests/integration/host_update/test_controller_refresh.py -q
       - name: Upload redacted journey startup timings and resource footprints
         if: always() && endsWith(matrix.suite, '-journey')
+        timeout-minutes: 2
         uses: actions/upload-artifact@v7
         with:
           name: journey-startup-${{ matrix.suite }}
@@ -1014,41 +1026,46 @@ jobs:
             var/artifacts/first-run-3938/*/compose-startup-*.log
             var/artifacts/first-run-3938/*/resource-footprint-*.log
           if-no-files-found: warn
-      - name: Capture docker compose diagnostics
-        if: failure()
+      - name: Collect row-owned integration report and diagnostics
+        # Each row collects only what its own owner wrote before teardown:
+        # the hermetic wrapper's JUnit report, streamed log and project
+        # diagnostics on every run, or a failed journey's log tree. Text is
+        # redacted before upload, failing closed. A hard job kill or runner
+        # loss can still prevent collection and upload.
+        if: always() && (matrix.suite == 'hermetic' || failure() || cancelled())
+        timeout-minutes: 2
         run: |
           set -uo pipefail
-          mkdir -p /tmp/pytest-integration-ci
-          printf 'Collecting docker compose diagnostics\n' > /tmp/pytest-integration-ci/diagnostics-status.txt
-          if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-            COMPOSE_CMD=(docker compose)
-          elif command -v docker-compose >/dev/null 2>&1; then
-            COMPOSE_CMD=(docker-compose)
+          out=/tmp/pytest-integration-ci
+          mkdir -p "$out"
+          echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
+          if [[ "${{ matrix.suite }}" == "hermetic" ]]; then
+            source_dir=artifacts/integration-ci
+            if [[ ! -f "$source_dir/pytest-integration-ci.xml" ]]; then
+              echo "missing $source_dir/pytest-integration-ci.xml (interrupted before pytest wrote it; not zero tests)" >> "$out/collection-status.txt"
+            fi
           else
-            COMPOSE_CMD=()
-            printf 'docker compose CLI is unavailable\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            source_dir=var/artifacts/first-run-3938
           fi
-          if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
-            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml config > /tmp/pytest-integration-ci/docker-compose-config.txt 2>&1; then
-              printf 'docker compose config failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
-            fi
-            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml ps -a > /tmp/pytest-integration-ci/docker-compose-ps.txt 2>&1; then
-              printf 'docker compose ps -a failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
-            fi
-            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml logs --no-color > /tmp/pytest-integration-ci/docker-compose-logs.txt 2>&1; then
-              printf 'docker compose logs failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
-            fi
+          if [[ -d "$source_dir" ]]; then
+            timeout 60s cp -R "$source_dir" "$out/" \
+              || echo "copy $source_dir failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+          else
+            echo "missing $source_dir (the row stopped before writing it)" >> "$out/collection-status.txt"
           fi
-          if [[ -d var/artifacts ]]; then
-            cp -R var/artifacts /tmp/pytest-integration-ci/var-artifacts || printf 'copying var/artifacts failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          if ! python3 tools/ci/redact_diagnostics.py --diagnostics-dir "$out" --status-file "$out/collection-status.txt"; then
+            find "$out" -type f ! -name collection-status.txt -delete 2>/dev/null || true
+            echo "redaction failed; unredacted diagnostics removed before upload" >> "$out/collection-status.txt"
           fi
-      - name: Upload integration diagnostics
-        if: failure()
+      - name: Upload row-owned integration report and diagnostics
+        if: always() && (matrix.suite == 'hermetic' || failure() || cancelled())
+        timeout-minutes: 2
         uses: actions/upload-artifact@v7
         with:
-          name: pytest-integration-ci-diagnostics-${{ matrix.suite }}
+          name: integration-ci-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
           path: /tmp/pytest-integration-ci
           if-no-files-found: error
+          retention-days: 7
 
   omnigent-exact-artifact:
     # Tier 1 (MoonLadderStudios/MoonMind#3710): the required, per-PR,

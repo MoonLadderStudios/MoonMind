@@ -86,31 +86,60 @@ def test_required_integration_job_uses_submodule_free_checkout() -> None:
     assert int(checkout["with"]["fetch-depth"]) == 1
 
 
-def test_required_integration_job_uploads_failure_diagnostics() -> None:
+def test_integration_rows_retain_row_owned_redacted_reports() -> None:
     workflow = _load_workflow()
     job = workflow["jobs"]["integration-ci"]
 
     assert job["runs-on"] == "ubuntu-latest"
+    steps = {step["name"]: step for step in job["steps"]}
+    assert all(name != "Verify docker compose availability" for name in steps)
 
-    steps = job["steps"]
-    run_steps = [step for step in steps if "run" in step]
-    uses_steps = [step for step in steps if "uses" in step]
+    # Each row collects only what its own owner wrote: the hermetic wrapper's
+    # report, log and project diagnostics, or the journey's own log tree. No
+    # shared step queries a Compose project the row did not create.
+    collect = steps["Collect row-owned integration report and diagnostics"]
+    assert collect["if"] == (
+        "always() && (matrix.suite == 'hermetic' || failure() || cancelled())"
+    )
+    assert "artifacts/integration-ci" in collect["run"]
+    assert "var/artifacts/first-run-3938" in collect["run"]
+    assert "docker-compose.test.yaml" not in collect["run"]
+    assert "tools/ci/redact_diagnostics.py" in collect["run"]
+    assert "not zero tests" in collect["run"]
+    assert int(collect["timeout-minutes"]) <= 3
 
-    assert any("./tools/test_integration.sh" in step["run"] for step in run_steps)
-    assert any(
-        "diagnostics-status.txt" in step["run"]
-        and "docker-compose" in step["run"]
-        and "logs --no-color" in step["run"]
-        for step in run_steps
+    upload = steps["Upload row-owned integration report and diagnostics"]
+    assert upload["uses"].startswith("actions/upload-artifact@")
+    assert upload["if"] == collect["if"]
+    assert "${{ matrix.suite }}" in upload["with"]["name"]
+    assert "${{ github.run_attempt }}" in upload["with"]["name"]
+    assert upload["with"]["path"] == "/tmp/pytest-integration-ci"
+    assert int(upload["timeout-minutes"]) <= 3
+
+
+def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
+    steps = {
+        step["name"]: step
+        for step in _load_workflow()["jobs"]["integration-ci"]["steps"]
+    }
+    hermetic = steps["Run hermetic integration CI suite"]
+    assert hermetic["env"]["MOONMIND_INTEGRATION_FAIL_FAST"] == (
+        "${{ github.event_name != 'schedule' && '1' || '0' }}"
     )
-    assert all(step["name"] != "Verify docker compose availability" for step in steps)
-    assert any(step.get("if") == "failure()" for step in run_steps)
-    assert any(
-        step["uses"].startswith("actions/upload-artifact@")
-        and step.get("if") == "failure()"
-        and "${{ matrix.suite }}" in step["with"]["name"]
-        for step in uses_steps
-    )
+    # The wrapper's cooperative execution budget and bounded teardown must
+    # finish inside the native step bound, which stays inside the job bound.
+    budget_seconds = int(hermetic["env"]["MOONMIND_INTEGRATION_TIMEOUT"])
+    assert budget_seconds + 30 + 3 * 120 < int(hermetic["timeout-minutes"]) * 60
+    for name in (
+        "Install the journey browser's Playwright runtime",
+        "Run hermetic integration CI suite",
+        "Run disposable default first-run journey",
+        "Run eligible-upgrade journey",
+        "Run Settings Operations controller journey",
+        "Qualify active journal transition and host controller refresh",
+        "Upload redacted journey startup timings and resource footprints",
+    ):
+        assert 0 < int(steps[name]["timeout-minutes"]) < 30, name
 
 
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
