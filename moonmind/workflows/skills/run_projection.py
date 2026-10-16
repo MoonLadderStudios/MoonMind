@@ -75,9 +75,24 @@ def _strip_legacy_skill_version_fields(data: Any) -> Any:
     return normalized
 
 
+def step_execution_read_principal(request: Any) -> str | None:
+    """Return the admitted Step Execution scope for runtime input reads.
+
+    The identity comes from the workflow-built launch envelope, never from
+    agent-authored owner strings, and the artifact service still requires the
+    read artifact to be owned by or linked to that execution.
+    """
+
+    identity = getattr(request, "step_execution", None)
+    workflow_id = str(getattr(identity, "workflow_id", "") or "").strip()
+    return f"workflow:{workflow_id}" if workflow_id else None
+
+
 async def load_resolved_skillset(
     artifact_service: Any,
     skillset_ref: str,
+    *,
+    admitted_principal: str | None = None,
 ) -> ResolvedSkillSet:
     """Read and validate a :class:`ResolvedSkillSet` from artifact storage."""
 
@@ -90,6 +105,9 @@ async def load_resolved_skillset(
         _artifact, payload = await artifact_service.read(
             artifact_id=skillset_ref,
             principal="agent_runtime",
+            **(
+                {"admitted_principal": admitted_principal} if admitted_principal else {}
+            ),
             allow_restricted_raw=True,
         )
         data = json.loads(payload.decode("utf-8"))
@@ -118,6 +136,7 @@ async def materialize_run_skill_snapshot(
     projection_owner_uid: int | None = None,
     projection_owner_gid: int | None = None,
     project_adapter_aliases: bool = True,
+    admitted_principal: str | None = None,
 ) -> dict[str, Any]:
     """Materialize a resolved snapshot for one run and return its metadata.
 
@@ -151,6 +170,7 @@ async def materialize_run_skill_snapshot(
         projection_owner_uid=projection_owner_uid,
         projection_owner_gid=projection_owner_gid,
         project_adapter_aliases=project_adapter_aliases,
+        admitted_principal=admitted_principal,
     )
     try:
         materialization = await materializer.materialize(
@@ -474,6 +494,7 @@ __all__ = [
     "append_remediation_attempt_context",
     "build_skill_activation_summary",
     "load_resolved_skillset",
+    "step_execution_read_principal",
     "materialize_run_skill_snapshot",
     "prepend_skill_activation_summary",
     "verify_skill_projection",

@@ -63,6 +63,16 @@ CONTROLLER_RECENT_LIMIT = 10
 HOST_REPAIR_COMMAND = "./tools/update-moonmind.sh"
 # Receipt line printed by the controller's `bootstrap.py ensure --prefer-requested`.
 CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
+# The controller behavior a submission relies on, advertised by its healthz.
+# A controller without request identity answers a new update to `latest` with
+# an earlier success, so its 202 would not mean this request was applied. One
+# without the routing cutover would install unversioned workers while Temporal
+# still routes to the old Worker Deployment version.
+REQUIRED_CONTROLLER_CAPABILITIES = (
+    "active-journal-transition",
+    "request-identity",
+    "unversioned-routing-cutover",
+)
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 
@@ -307,8 +317,8 @@ def controller_not_installed_error() -> DeploymentOperationError:
 def controller_refresh_required_error() -> DeploymentOperationError:
     return DeploymentOperationError(
         "deployment_controller_refresh_required",
-        "The installed deployment controller predates journal-transition "
-        "support, so no update was submitted. Run the host update command "
+        "The installed deployment controller predates behavior this release "
+        "requires, so no update was submitted. Run the host update command "
         f"({HOST_REPAIR_COMMAND}); it refreshes the controller outside any "
         "open operation and updates through it.",
         status_code=503,
@@ -412,7 +422,7 @@ def submit_controller_update(
     raise unavailable_controller_error(last_error, operation_id=operation_id)
 
 
-def controller_supports_journal_transition(
+def controller_has_required_capabilities(
     endpoint: ControllerEndpoint,
     *,
     operation_id: str | None = None,
@@ -432,10 +442,11 @@ def controller_supports_journal_transition(
         ) from None
     if status != 200:
         raise _controller_refusal(status, result, operation_id=operation_id)
-    return "active-journal-transition" in (result.get("capabilities") or ())
+    advertised = set(result.get("capabilities") or ())
+    return advertised.issuperset(REQUIRED_CONTROLLER_CAPABILITIES)
 
 
-def ensure_controller_journal_transition(
+def ensure_controller_capabilities(
     endpoint: ControllerEndpoint,
     *,
     stack: str,
@@ -448,12 +459,12 @@ def ensure_controller_journal_transition(
     owns an open deployment operation. The API never runs it: it returns the
     host repair route instead.
     """
-    if controller_supports_journal_transition(endpoint):
+    if controller_has_required_capabilities(endpoint):
         return
     result = _run_controller_bootstrap(
         endpoint, stack=stack, desired_image=desired_image
     )
-    if result.returncode or not controller_supports_journal_transition(endpoint):
+    if result.returncode or not controller_has_required_capabilities(endpoint):
         raise DeploymentOperationError(
             "deployment_controller_prerequisite_failed",
             "The deployment controller prerequisite could not finish. Its existing "

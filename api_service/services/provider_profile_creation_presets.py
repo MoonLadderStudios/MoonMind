@@ -684,7 +684,7 @@ def get_provider_profile_creation_preset(
                 code="no_safe_standard_creation_preset",
                 severity="error",
                 message=(
-                    "No validated standard creation preset exists for this runtime, "
+                    "No validated standard creation preset exists for this Harness, "
                     "provider, and authentication method. Use the authorized manual "
                     "profile path and supply every required launch field."
                 ),

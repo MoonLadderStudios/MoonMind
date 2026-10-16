@@ -169,251 +169,6 @@ async def test_foreign_container_is_never_adopted(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_retained_only_receipt_requires_exact_owner_and_manifest(
-    tmp_path, monkeypatch
-):
-    from unittest.mock import AsyncMock
-
-    deployment = "existing-install"
-    digest = "sha256:" + "a" * 64
-    image = "sha256:" + "b" * 64
-    version = deployment + "." + digest
-    directory = tmp_path / "upgrade"
-    directory.mkdir()
-    release.write_record(directory / "request.json", {"authored": {"owner": "upgrade"}})
-    release.write_record(
-        directory / "routing.json",
-        {"deployment": deployment, "candidate": "new", "previous": version},
-    )
-    release.write_record(
-        directory / "retained.json",
-        {"owner": "upgrade", "version": version, "image": image},
-    )
-    docker = AsyncMock(
-        side_effect=[
-            json.dumps([{"Id": image}]),
-            json.dumps({"digest": "wrong", "sourceRevision": "source"}),
-        ]
-    )
-    monkeypatch.setattr(release, "docker", docker)
-    with pytest.raises(ValueError, match="manifest differs"):
-        await release.successful_release_image(tmp_path, version)
-    release.write_record(
-        directory / "retained.json",
-        {"owner": "foreign", "version": version, "image": image},
-    )
-    errors = []
-    assert (
-        list(release.retained_release_records(tmp_path, deployment, errors=errors))
-        == []
-    )
-    assert errors == [{"record": "upgrade", "errorCode": "ValueError"}]
-    assert await release.successful_release_image(tmp_path, version) is None
-    release.write_record(
-        directory / "retained.json",
-        {"owner": "upgrade", "version": "foreign", "image": image},
-    )
-    assert list(release.retained_release_records(tmp_path, deployment)) == []
-    assert docker.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_serving_receipt_survives_observation_loss_without_an_update_job(
-    tmp_path, monkeypatch
-):
-    import hashlib
-    from unittest.mock import AsyncMock
-
-    deployment = "compose-install"
-    digest = "sha256:" + "a" * 64
-    image = "sha256:" + "b" * 64
-    version = deployment + "." + digest
-    key = hashlib.sha256(version.encode()).hexdigest()[:32]
-    directory = tmp_path / key
-    directory.mkdir()
-    receipt = {
-        "owner": f"release-availability:{version}",
-        "version": version,
-        "image": image,
-    }
-    release.write_record(directory / "retained.json", receipt)
-    # Observation is mutable and may be lost or exhausted. It cannot revoke
-    # the image receipt needed to recover the same current or pinned version.
-    release.write_record(directory / "availability.json", {"phase": "exhausted"})
-    docker = AsyncMock(side_effect=[
-        json.dumps([{"Id": image}]),
-        json.dumps({"digest": digest, "sourceRevision": "source"}),
-    ])
-    monkeypatch.setattr(release, "docker", docker)
-    assert list(release.retained_release_records(tmp_path, deployment)) == [
-        (directory, receipt)
-    ]
-    assert await release.successful_release_image(tmp_path, version) == {
-        "image": image, "sourceReceipt": key, "sourceRevision": "source",
-    }
-    # A copied receipt cannot claim a different availability owner's directory.
-    directory.rename(tmp_path / "foreign")
-    assert list(release.retained_release_records(tmp_path, deployment)) == []
-    assert await release.successful_release_image(tmp_path, version) is None
-    assert docker.await_count == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("receipt_source", ["rev-1", "rev-2", None])
-async def test_terminal_receipt_source_revision_binds_image_authority(
-    tmp_path, monkeypatch, receipt_source
-):
-    from unittest.mock import AsyncMock
-
-    deployment = "release-test"
-    digest = "sha256:" + "c" * 64
-    image_id = "sha256:" + "d" * 64
-    version = deployment + "." + digest
-    directory = tmp_path / "job1"
-    directory.mkdir()
-    release.write_record(
-        directory / "routing.json",
-        {"deployment": deployment, "candidate": digest},
-    )
-    release.write_record(
-        directory / "request.json",
-        {
-            "authored": {
-                "owner": "owner",
-                "inputs": {"sourceRevision": "rev-1"},
-            },
-            "image": "example/image@" + digest,
-            "imageId": image_id,
-        },
-    )
-    outputs = {
-        "resolvedDigest": digest,
-        "releaseReadinessArtifactRef": "artifact://readiness",
-    }
-    if receipt_source is not None:
-        outputs["sourceRevision"] = receipt_source
-    release.write_record(
-        directory / "deployment-result.json",
-        {"owner": "owner", "result": {"status": "COMPLETED", "outputs": outputs}},
-    )
-    docker = AsyncMock(
-        side_effect=[
-            image_id,
-            json.dumps([{"Id": image_id}]),
-            json.dumps({"digest": digest, "sourceRevision": "rev-1"}),
-        ]
-    )
-    monkeypatch.setattr(release, "docker", docker)
-    if receipt_source == "rev-2":
-        # A mismatched source stamp denies authority from that receipt but is
-        # skipped, never fatal to the scan.
-        assert await release.successful_release_image(tmp_path, version) is None
-        docker.assert_not_awaited()
-        return
-    # A matching stamp grants authority; a pre-stamp legacy receipt without
-    # the key still recovers through the live manifest source binding.
-    assert await release.successful_release_image(tmp_path, version) == {
-        "image": image_id,
-        "sourceReceipt": "job1",
-        "sourceRevision": "rev-1",
-    }
-    assert docker.await_count == 3
-
-
-@pytest.mark.asyncio
-async def test_legacy_receipt_without_source_revision_cannot_block_promotion_scan(
-    tmp_path, monkeypatch
-):
-    """A pre-sourceRevision receipt is skipped, never fatal to the scan.
-
-    Regression: one legacy-format COMPLETED receipt (authored before
-    sourceRevision existed) crashed successful_release_image with
-    KeyError, blocking every promotion including outage recovery.
-    """
-    from unittest.mock import AsyncMock
-
-    deployment = "legacy-install"
-    digest = "sha256:" + "c" * 64
-    version = deployment + "." + digest
-
-    legacy = tmp_path / "legacy-job"
-    legacy.mkdir()
-    release.write_record(
-        legacy / "routing.json",
-        {"deployment": deployment, "candidate": digest, "previous": "other"},
-    )
-    release.write_record(
-        legacy / "request.json",
-        {
-            "authored": {
-                "owner": "legacy-owner",
-                "inputs": {
-                    "stack": "moonmind",
-                    "image": {"repository": "example/moonmind", "reference": "latest"},
-                },
-            },
-            "image": f"example/moonmind@{digest}",
-            "imageId": "sha256:" + "d" * 64,
-        },
-    )
-    release.write_record(
-        legacy / "deployment-result.json",
-        {
-            "owner": "legacy-owner",
-            "result": {"status": "COMPLETED", "outputs": {"resolvedDigest": digest}},
-        },
-    )
-
-    valid = tmp_path / "valid-job"
-    valid.mkdir()
-    release.write_record(
-        valid / "routing.json",
-        {"deployment": deployment, "candidate": digest, "previous": "other"},
-    )
-    release.write_record(
-        valid / "request.json",
-        {
-            "authored": {
-                "owner": "valid-owner",
-                "inputs": {
-                    "stack": "moonmind",
-                    "image": {"repository": "example/moonmind", "reference": "candidate"},
-                    "sourceRevision": "rev",
-                },
-            },
-            "image": f"example/moonmind@{digest}",
-            "imageId": "sha256:" + "e" * 64,
-        },
-    )
-    release.write_record(
-        valid / "deployment-result.json",
-        {
-            "owner": "valid-owner",
-            "result": {"status": "COMPLETED", "outputs": {"resolvedDigest": digest}},
-        },
-    )
-
-    docker = AsyncMock(
-        side_effect=[
-            "sha256:" + "d" * 64,
-            json.dumps([{"Id": "sha256:" + "d" * 64}]),
-            json.dumps({"digest": digest, "sourceRevision": "rev"}),
-            "sha256:" + "e" * 64,
-            json.dumps([{"Id": "sha256:" + "e" * 64}]),
-            json.dumps({"digest": digest, "sourceRevision": "rev"}),
-        ]
-    )
-    monkeypatch.setattr(release, "docker", docker)
-    # "legacy-job" sorts first: it must be skipped, and the valid receipt
-    # for the same version must still be returned.
-    assert await release.successful_release_image(tmp_path, version) == {
-        "image": "sha256:" + "e" * 64,
-        "sourceReceipt": "valid-job",
-        "sourceRevision": "rev",
-    }
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("log_failure", [None, TimeoutError("timed out")])
 async def test_exhausted_deliveries_surface_updater_evidence_and_recovery_hint(
     tmp_path, monkeypatch, log_failure
@@ -1042,8 +797,8 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
     calls = []
 
-    async def select(runner, owner, image, *, actor="release"):
-        calls.append(("select", owner, image, actor))
+    async def select(runner, owner, image):
+        calls.append(("select", owner, image))
         assert runner.project_name == "moonmind-test-custom"
         assert runner.project_dir == "/host/installed-project"
         assert runner.local_project_dir == str(repo)
@@ -1051,15 +806,17 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
         assert runner.override_files == (str(repo / "docker-compose.override.yaml"),)
         return {"status": "advanced", "revision": 7}
 
-    async def migrate(runner, owner, image, *, actor="release", selected_revision=None):
-        calls.append(("migrate", owner, image, actor, selected_revision))
+    async def migrate(runner, owner, image, *, selected_revision=None):
+        calls.append(("migrate", owner, image, selected_revision))
         return {"status": "converged", "revision": selected_revision}
 
     monkeypatch.setattr(release, "select_omnigent", select)
     monkeypatch.setattr(release, "migrate_omnigent", migrate)
     payload = {
         "operationId": "controller-operation",
-        "controllerCapabilities": ["active-journal-transition"],
+        "controllerCapabilities": [
+            "active-journal-transition", "unversioned-routing-cutover",
+        ],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
             "project": "moonmind-test-custom",
@@ -1117,7 +874,9 @@ async def test_controller_omnigent_failure_preserves_selection_for_retry(
     monkeypatch.setattr(release, "migrate_omnigent", migrate)
     payload = {
         "operationId": "retry-omnigent",
-        "controllerCapabilities": ["active-journal-transition"],
+        "controllerCapabilities": [
+            "active-journal-transition", "unversioned-routing-cutover",
+        ],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
             "project": "moonmind-test",
@@ -1154,7 +913,7 @@ async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
     monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
     calls = []
 
-    async def select(runner, owner, image, *, actor="release"):
+    async def select(runner, owner, image):
         calls.append(owner)
         recorded = OmnigentRelease(
             revision=len(calls),
@@ -1187,7 +946,9 @@ async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
     monkeypatch.setattr(release, "write_record", lose_receipt)
     payload = {
         "operationId": "lost-selection-receipt",
-        "controllerCapabilities": ["active-journal-transition"],
+        "controllerCapabilities": [
+            "active-journal-transition", "unversioned-routing-cutover",
+        ],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
             "project": "moonmind-test",
@@ -1221,3 +982,31 @@ async def test_old_controller_callback_refuses_before_release_state_access(monke
         await release.run_controller_omnigent_step(phase, old_request)
     assert "./tools/update-moonmind.sh" in str(failure.value)
     assert "active-journal-transition" in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_controller_without_routing_cutover_is_refused_before_selection(
+    monkeypatch,
+):
+    """Installing unversioned workers needs the owner that moves routing.
+
+    An older controller would recreate them while Temporal still routes to
+    the old Worker Deployment version. Refusing at selection fails the
+    operation before any container changes, so the submitter retries with
+    the requested release's controller.
+    """
+
+    def mutable_release_store():
+        pytest.fail("An owner without the routing cutover reached release state")
+
+    monkeypatch.setattr(release, "_omnigent_release_store", mutable_release_store)
+    request = {
+        "operationId": "journal-capable-old-controller",
+        "controllerCapabilities": ["active-journal-transition", "request-identity"],
+        "moonmindImage": "example/moonmind@sha256:new",
+        "target": {"project": "moonmind-test", "projectDir": "/installed/repo",
+                   "composeFiles": ["docker-compose.yaml"]},
+    }
+    with pytest.raises(RuntimeError, match="unversioned-routing-cutover") as failure:
+        await release.run_controller_omnigent_step("select", request)
+    assert "active-journal-transition" not in str(failure.value)

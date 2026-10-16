@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_RUNTIME_ID_FALLBACK,
+  backendOptionsForHarness,
+  formatHarnessLabel,
   formatRolloutStateLabel,
   formatRuntimeLabel,
+  omnigentAllowedForHarness,
   resolveDefaultRuntimeId,
-  runtimeOptionGroups,
   runtimeUnavailableReason,
 } from './runtimeTargets';
 import type { RuntimeTarget, RuntimeTargetCatalog } from './runtimeTargets';
@@ -97,66 +99,49 @@ describe('resolveDefaultRuntimeId', () => {
   });
 });
 
-describe('runtimeOptionGroups', () => {
+describe('backendOptionsForHarness', () => {
   it('keeps the supported legacy Jules identity available for restored drafts', () => {
-    const groups = runtimeOptionGroups(['jules_api']);
-    expect(groups.recommended).toEqual([
-      {
-        runtimeId: 'jules_api',
-        label: 'Jules',
-        compatibilityPath: false,
-        available: true,
-      },
-    ]);
+    expect(backendOptionsForHarness('jules_api', undefined, { omnigentRoute: false })).toEqual([]);
     expect(runtimeUnavailableReason('jules_api')).toBeNull();
     expect(formatRuntimeLabel('jules_api')).toBe('Jules');
+    expect(formatHarnessLabel('jules_api')).toBe('Jules');
   });
 
-  it('labels direct paths as compatibility options rather than equal defaults', () => {
-    const groups = runtimeOptionGroups(
-      ['omnigent', 'codex_cli', 'claude_code'],
-      promotedCatalog,
-    );
-    expect(groups.recommended.map((option) => option.runtimeId)).toEqual([
-      'omnigent',
+  it('offers a direct Backend only beside Omnigent for its own Harness', () => {
+    expect(
+      backendOptionsForHarness('codex_cli', promotedCatalog, { omnigentRoute: true }),
+    ).toEqual([
+      { runtimeId: 'omnigent', label: 'Omnigent' },
+      { runtimeId: 'codex_cli', label: 'Direct Codex compatibility' },
     ]);
-    expect(groups.compatibility.map((option) => option.runtimeId)).toEqual([
-      'codex_cli',
-      'claude_code',
-    ]);
-    expect(groups.compatibility.every((option) => option.compatibilityPath)).toBe(
-      true,
-    );
-    expect(groups.unavailable).toEqual([]);
+    expect(
+      backendOptionsForHarness('opencode', promotedCatalog, { omnigentRoute: true }),
+    ).toEqual([{ runtimeId: 'omnigent', label: 'Omnigent' }]);
   });
 
-  it('moves a runtime with no selectable target into unavailable', () => {
+  it('omits a direct Backend the catalog does not publish as selectable', () => {
     const rolledBack: RuntimeTargetCatalog = {
-      targets: [
-        target({
-          rolloutState: 'disabled',
-          defaultEligible: false,
-          explicitSelectionAllowed: false,
-        }),
-      ],
+      targets: (promotedCatalog.targets || []).map((row) =>
+        row.pathClass === 'direct_compatibility'
+          ? { ...row, explicitSelectionAllowed: false }
+          : row,
+      ),
     };
-    const groups = runtimeOptionGroups(['omnigent', 'codex_cli'], rolledBack);
-    expect(groups.unavailable.map((option) => option.runtimeId)).toEqual([
-      'omnigent',
-    ]);
-    // An unregistered runtime id stays authorable; promotion is policy-owned.
-    expect(groups.recommended.map((option) => option.runtimeId)).toEqual([
-      'codex_cli',
-    ]);
+    expect(
+      backendOptionsForHarness('codex_cli', rolledBack, { omnigentRoute: true }),
+    ).toEqual([{ runtimeId: 'omnigent', label: 'Omnigent' }]);
+    expect(
+      backendOptionsForHarness('codex_cli', undefined, { omnigentRoute: true }),
+    ).toEqual([{ runtimeId: 'omnigent', label: 'Omnigent' }]);
   });
+});
 
-  it('keeps every runtime available when no catalog is published', () => {
-    const groups = runtimeOptionGroups(['omnigent', 'codex_cli'], undefined);
-    expect(groups.recommended.map((option) => option.runtimeId)).toEqual([
-      'omnigent',
-      'codex_cli',
-    ]);
-    expect(groups.unavailable).toEqual([]);
+describe('formatHarnessLabel', () => {
+  it('names the Harness without a direct target relabeling it', () => {
+    expect(formatHarnessLabel('codex_cli')).toBe('Codex CLI');
+    expect(formatHarnessLabel('claude_code')).toBe('Claude Code');
+    expect(formatHarnessLabel('opencode')).toBe('OpenCode');
+    expect(formatHarnessLabel('future_harness')).toBe('Future Harness');
   });
 });
 
@@ -215,12 +200,25 @@ describe('runtimeUnavailableReason', () => {
     const reason = runtimeUnavailableReason('omnigent', rolledBack);
     expect(reason).toContain('No qualified target is available');
     expect(reason).toContain('Unavailable');
-    expect(reason).toContain('Review runtime availability and the Profile configuration in Settings.');
+    expect(reason).toContain('Review Harness availability and the Profile configuration in Settings.');
   });
 
   it('returns null while a selectable target exists', () => {
     expect(runtimeUnavailableReason('omnigent', promotedCatalog)).toBeNull();
     expect(runtimeUnavailableReason('omnigent', undefined)).toBeNull();
+  });
+
+  it("judges Omnigent by the selected Harness's own target", () => {
+    // Codex via Omnigent is allowed, Claude via Omnigent is disabled.
+    expect(runtimeUnavailableReason('omnigent', promotedCatalog, 'codex-native')).toBeNull();
+    expect(runtimeUnavailableReason('omnigent', promotedCatalog, 'claude-native')).toContain(
+      'No qualified target is available',
+    );
+    // A Harness the catalog does not list is left to server admission.
+    expect(runtimeUnavailableReason('omnigent', promotedCatalog, 'opencode-native')).toBeNull();
+    expect(omnigentAllowedForHarness(promotedCatalog, 'codex-native')).toBe(true);
+    expect(omnigentAllowedForHarness(promotedCatalog, 'claude-native')).toBe(false);
+    expect(omnigentAllowedForHarness(promotedCatalog, undefined)).toBe(true);
   });
 });
 
@@ -236,23 +234,22 @@ describe('formatRolloutStateLabel', () => {
   });
 });
 
- it('does not classify Omnigent as compatibility when legacy Codex sorts first', () => {
+ it('does not label Omnigent as compatibility when legacy Codex sorts first', () => {
    const catalog = { targets: [
      target({ targetId: 'codex.legacy-profile-bound-omnigent', pathClass: 'legacy_profile_bound_omnigent', compatibilityPath: true }),
      target({ targetId: 'opencode.generic-omnigent', harnessId: 'opencode-native' }),
    ] };
    for (const targets of [catalog.targets, [...catalog.targets].reverse()]) {
-     const groups = runtimeOptionGroups(['omnigent'], { targets });
-     expect(groups.recommended[0]?.label).toBe('Omnigent');
-     expect(groups.compatibility).toEqual([]);
+     expect(backendOptionsForHarness('codex_cli', { targets }, { omnigentRoute: true })).toEqual([
+       { runtimeId: 'omnigent', label: 'Omnigent' },
+     ]);
    }
  });
 
 
 describe('removed and unknown authoring targets (#4644)', () => {
   it.each([undefined, promotedCatalog, { targets: [target({ runtimeId: 'codex_cloud' })] }])('never offers Cloud from an old boot catalog or fallback', (catalog) => {
-    const groups = runtimeOptionGroups(['codex_cloud', 'codex_cli', 'omnigent'], catalog);
-    expect([...groups.recommended, ...groups.compatibility, ...groups.unavailable].some((row) => row.runtimeId === 'codex_cloud')).toBe(false);
-    expect(runtimeUnavailableReason('codex_cloud', catalog)).toMatch(/unsupported.*explicit|explicit.*supported/i);
+    expect(backendOptionsForHarness('codex_cloud', catalog, { omnigentRoute: false })).toEqual([]);
+    expect(runtimeUnavailableReason('codex_cloud', catalog)).toMatch(/^Unsupported Harness codex_cloud\. Explicitly choose a supported replacement/);
   });
 });

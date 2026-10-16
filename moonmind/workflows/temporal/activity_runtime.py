@@ -258,6 +258,7 @@ from moonmind.workflows.skills.approval_policy import (
 from moonmind.workflows.skills.run_projection import (
     append_remediation_attempt_context,
     prepend_skill_activation_summary,
+    step_execution_read_principal,
 )
 from moonmind.workflows.skills.tool_plan_contracts import (
     REVIEW_VERDICTS,
@@ -1225,6 +1226,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "omnigent.prepare_child_execution_plan": (
         "agent_runtime",
         "omnigent_prepare_child_execution_plan",
+    ),
+    "omnigent.admit_scheduled_occurrence_plan": (
+        "agent_runtime",
+        "omnigent_admit_scheduled_occurrence_plan",
     ),
     "omnigent.ensure_provider_profile_lease": (
         "agent_runtime",
@@ -5159,7 +5164,6 @@ class TemporalIntegrationActivities:
             "buildId": build_ids[0] if len(build_ids) == 1 else None,
             "buildSha": _single_value("buildSha"),
             "imageDigest": _single_value("imageDigest"),
-            "deploymentId": _single_value("deploymentId"),
             "resolverCore": (
                 dict(children[0].get("resolverCore") or {})
                 if len(children) == 1
@@ -7769,6 +7773,20 @@ class TemporalAgentRuntimeActivities:
         )
         return await omnigent_prepare_child_execution_plan_activity(payload)
 
+    async def omnigent_admit_scheduled_occurrence_plan(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_admit_scheduled_occurrence_plan_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="omnigent.admit_scheduled_occurrence_plan",
+            kwargs=kwargs,
+        )
+        return await omnigent_admit_scheduled_occurrence_plan_activity(payload)
+
     async def omnigent_ensure_host(
         self, request: Any = None, /, **kwargs: Any
     ) -> dict[str, Any]:
@@ -9140,6 +9158,23 @@ class TemporalAgentRuntimeActivities:
                 },
             }
 
+        async def _link_verifier_artifact_to_parent(artifact_id: str) -> None:
+            # Both the raw report and its remediation wrapper can control the
+            # next step. Child linkage alone does not grant the parent access.
+            parent_workflow_id = str(metadata.get("parentWorkflowId") or "").strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            if parent_workflow_id and parent_run_id and info is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.moonspec_verify_handoff",
+                    ),
+                )
+
         async def _publish_moonspec_remediation_verification_artifact(
             gate_payload: Mapping[str, Any],
             *,
@@ -9211,6 +9246,7 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
+            await _link_verifier_artifact_to_parent(ref.artifact_id)
             return ref
 
         async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
@@ -9420,22 +9456,7 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
-            # The owning workflow must reread the complete report before
-            # interpreting its projection. Child-only linkage does not admit
-            # the parent's execution-scoped artifact reader.
-            parent_workflow_id = str(metadata.get("parentWorkflowId") or "").strip()
-            parent_run_id = str(metadata.get("parentRunId") or "").strip()
-            if parent_workflow_id and parent_run_id and info is not None:
-                await self._artifact_service.link_artifact(
-                    artifact_id=verify_ref.artifact_id,
-                    principal="system:agent_runtime",
-                    execution_ref=ExecutionRef(
-                        namespace=info.namespace,
-                        workflow_id=parent_workflow_id,
-                        run_id=parent_run_id,
-                        link_type="input.moonspec_verify_handoff",
-                    ),
-                )
+            await _link_verifier_artifact_to_parent(verify_ref.artifact_id)
             gate_payload["gateResultRef"] = verify_ref.artifact_id
             if remaining_work_declared and isinstance(remaining_work, list):
                 # The publisher owns the durable reference to the verifier's
@@ -10720,7 +10741,10 @@ class TemporalAgentRuntimeActivities:
             )
 
         try:
-            resolved_skillset = await self._load_resolved_skillset(skillset_ref)
+            admitted_principal = step_execution_read_principal(request)
+            resolved_skillset = await self._load_resolved_skillset(
+                skillset_ref, admitted_principal=admitted_principal
+            )
             resolved_names = {entry.skill_name for entry in resolved_skillset.skills}
             if selected_skill not in resolved_names:
                 raise TemporalActivityRuntimeError(
@@ -10755,6 +10779,7 @@ class TemporalAgentRuntimeActivities:
                 projection_owner_uid=_MANAGED_AGENT_UID,
                 projection_owner_gid=_MANAGED_AGENT_GID,
                 project_adapter_aliases=project_adapter_aliases,
+                admitted_principal=admitted_principal,
             )
             materialization = await materializer.materialize(
                 resolved_skillset=resolved_skillset,
@@ -10905,7 +10930,9 @@ class TemporalAgentRuntimeActivities:
                     f"local skill source for '{entry.skill_name}' is disabled by skill source policy"
                 )
 
-    async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
+    async def _load_resolved_skillset(
+        self, skillset_ref: str, *, admitted_principal: str | None = None
+    ) -> ResolvedSkillSet:
         if self._artifact_service is None:
             raise TemporalActivityRuntimeError(
                 "selected skill materialization failed before runtime launch: "
@@ -10915,6 +10942,11 @@ class TemporalAgentRuntimeActivities:
             _artifact, payload = await self._artifact_service.read(
                 artifact_id=skillset_ref,
                 principal="agent_runtime",
+                **(
+                    {"admitted_principal": admitted_principal}
+                    if admitted_principal
+                    else {}
+                ),
                 allow_restricted_raw=True,
             )
             data = json.loads(payload.decode("utf-8"))

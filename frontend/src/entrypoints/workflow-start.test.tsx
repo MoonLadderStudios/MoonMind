@@ -117,107 +117,7 @@ function renderWorkflowStartPage(payload: BootPayload) {
 }
 
 describe("buildEditParametersPatch", () => {
-  const loreTarget = {
-    provider: "lore",
-    connectionRef: "studio-lore",
-    repository: { name: "studio/game" },
-    branch: { name: "trunk" },
-    revision: { kind: "lore_revision", revisionSignature: "sig-1" },
-  };
   const editWorkflow = { instructions: "Ship it.", runtime: { mode: "codex_cli" } };
-
-  it("keeps a Lore named-connection target when edit/rerun keeps its repository", () => {
-    const patch = buildEditParametersPatch({
-      execution: {
-        workflowId: "mm:edit-lore",
-        repository: "studio/game",
-        inputParameters: { repository: loreTarget, workflow: editWorkflow },
-      },
-      submittedPayload: {
-        repository: {
-          provider: "git",
-          repository: { name: "studio/game" },
-          branch: { name: "trunk" },
-        },
-        task: editWorkflow,
-      },
-      submittedWorkflow: editWorkflow,
-    });
-
-    expect(patch.repository).toEqual(loreTarget);
-  });
-
-  it("keeps provider and connection but drops the pinned revision when only the branch changes", () => {
-    const patch = buildEditParametersPatch({
-      execution: {
-        workflowId: "mm:edit-lore-branch",
-        inputParameters: { repository: loreTarget, workflow: editWorkflow },
-      },
-      submittedPayload: {
-        repository: {
-          provider: "git",
-          repository: { name: "studio/game" },
-          branch: { name: "feature/sky" },
-        },
-        task: editWorkflow,
-      },
-      submittedWorkflow: editWorkflow,
-    });
-
-    expect(patch.repository).toEqual({
-      provider: "lore",
-      connectionRef: "studio-lore",
-      repository: { name: "studio/game" },
-      branch: { name: "feature/sky" },
-    });
-  });
-
-  it("keeps a named Git connection when the branch is omitted, using the source branch", () => {
-    const patch = buildEditParametersPatch({
-      execution: {
-        workflowId: "mm:edit-named-git",
-        inputParameters: {
-          repository: {
-            provider: "git",
-            connectionRef: "gitea-internal",
-            repository: { name: "team/service" },
-            branch: { name: "develop" },
-          },
-          workflow: editWorkflow,
-        },
-      },
-      submittedPayload: { repository: "team/service", task: editWorkflow },
-      submittedWorkflow: editWorkflow,
-    });
-
-    expect(patch.repository).toEqual({
-      provider: "git",
-      connectionRef: "gitea-internal",
-      repository: { name: "team/service" },
-      branch: { name: "develop" },
-    });
-  });
-
-  it("keeps omitted-branch semantics for a default-connection Git source", () => {
-    const patch = buildEditParametersPatch({
-      execution: {
-        workflowId: "mm:edit-default-git",
-        inputParameters: {
-          repository: {
-            provider: "git",
-            connectionRef: "repository-connection:git-default",
-            repository: { name: "octo/repo" },
-            branch: { name: "main" },
-          },
-          workflow: editWorkflow,
-        },
-      },
-      submittedPayload: { repository: "octo/repo", task: editWorkflow },
-      submittedWorkflow: editWorkflow,
-    });
-
-    expect(patch.repository).toBe("octo/repo");
-  });
 
   it("drops the old provider and connection when the repository changes", () => {
     const submittedRepository = {
@@ -229,7 +129,12 @@ describe("buildEditParametersPatch", () => {
       execution: {
         workflowId: "mm:edit-repo-change",
         inputParameters: {
-          repository: loreTarget,
+          repository: {
+            provider: "lore",
+            connectionRef: "studio-lore",
+            repository: { name: "studio/game" },
+            branch: { name: "trunk" },
+          },
           branch: "trunk",
           workflow: { ...editWorkflow, git: { branch: "trunk" } },
         },
@@ -437,6 +342,70 @@ describe("buildEditParametersPatch", () => {
     expect(patch.workflow).not.toHaveProperty("propose_tasks");
     expect(patch.workflow).not.toHaveProperty("proposalPolicy");
     expect(patch.workflow).not.toHaveProperty("proposal_policy");
+  });
+});
+
+describe("MoonLadderStudios/MoonMind#2619 buildEditParametersPatch source intent", () => {
+  const recordedMergeAutomation = {
+    workflowId: "mm:merge-off",
+    inputParameters: {
+      publishMode: "pr",
+      mergeAutomation: { enabled: true },
+      workflow: {
+        instructions: "Ship it.",
+        mergeAutomation: { enabled: true },
+        publish: { mode: "pr", mergeAutomation: { enabled: true } },
+      },
+    },
+  };
+
+  it("states a turned-off merge automation instead of inheriting the recorded switch", () => {
+    const submittedWorkflow = { instructions: "Ship it.", publish: { mode: "pr" } };
+    const patch = buildEditParametersPatch({
+      execution: recordedMergeAutomation,
+      submittedPayload: { publishMode: "pr", task: submittedWorkflow },
+      submittedWorkflow,
+    });
+
+    expect(patch.mergeAutomation).toEqual({ enabled: false });
+    const workflow = patch.workflow as Record<string, unknown>;
+    expect(workflow).not.toHaveProperty("mergeAutomation");
+    expect(workflow.publish).toEqual({ mode: "pr" });
+  });
+
+  it("keeps merge automation the edit still requests", () => {
+    const submittedWorkflow = { instructions: "Ship it.", publish: { mode: "pr" } };
+    const patch = buildEditParametersPatch({
+      execution: recordedMergeAutomation,
+      submittedPayload: {
+        publishMode: "pr",
+        mergeAutomation: { enabled: true },
+        task: submittedWorkflow,
+      },
+      submittedWorkflow,
+    });
+
+    expect(patch.mergeAutomation).toEqual({ enabled: true });
+  });
+
+  it("restates the workspace source for re-admission instead of the recorded spec", () => {
+    const submittedWorkflow = { instructions: "Read it." };
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:anonymous-off",
+        inputParameters: {
+          repository: "octo/public",
+          workspace: { workspaceSource: { kind: "repository", accessMode: "anonymous" } },
+          workspaceSpec: { workspaceSource: { kind: "repository", accessMode: "anonymous" } },
+          workflow: submittedWorkflow,
+        },
+      },
+      submittedPayload: { repository: "octo/public", workspace: null, task: submittedWorkflow },
+      submittedWorkflow,
+    });
+
+    expect(patch.workspace).toBeNull();
+    expect(patch).not.toHaveProperty("workspaceSpec");
   });
 });
 
@@ -870,6 +839,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           system: {
             ...mockDashboardConfig.system,
             supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code", "jules"],
+            defaultAgentRuntime: "omnigent",
             omnigentExecutionCatalog: {
               profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1", providerRuntime: "codex_cli" }],
               policies: [{ ref: "on-demand-v1", displayName: "On-demand v1", hostMode: "on_demand_docker" }],
@@ -972,11 +942,13 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
     });
     const { queryClient } = renderWorkflowStartPage(payload);
-    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
     await waitFor(() => expect(profile.value).toBe("opencode-go"));
-    const runtime = screen.getByLabelText("Runtime") as HTMLSelectElement;
-    expect(runtime.selectedOptions[0]?.textContent).toBe("Omnigent");
-    expect(within(profile).getByRole("group", { name: "OpenCode" })).toBeTruthy();
+    const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
+    expect(harness.selectedOptions[0]?.textContent).toBe("OpenCode");
+    expect(screen.queryByLabelText("Runtime")).toBeNull();
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+    expect(within(profile).queryByRole("option", { name: /Codex Personal/ })).toBeNull();
     expect(await screen.findByText("Uses OpenCode through Omnigent.")).toBeTruthy();
     expect(screen.queryByLabelText("Target")).toBeNull();
     expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
@@ -984,15 +956,24 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     await act(async () => { finishConfigurations({ ok: true, json: async () => [readyAgentProfiles[0], profileFirstFixture.configuration] } as Response); });
     await waitFor(() => expect(screen.queryByText(/Loading execution configuration for this Profile/)).toBeNull());
     if (explicit) {
-      fireEvent.change(runtime, { target: { value: "omnigent" } });
+      // A deliberate Harness change keeps the incompatible Profile recoverable
+      // instead of choosing another account, and switching back restores it.
+      // The defaulted Profile is unconfigured, so the Harness's sole Profile
+      // follows. An explicitly chosen Profile stays recoverable instead.
+      fireEvent.change(harness, { target: { value: "codex_cli" } });
+      await waitFor(() => expect(profile.value).toBe("codex-personal"));
+      expect(within(profile).queryByRole("option", { name: /OpenCode Go/ })).toBeNull();
       fireEvent.change(profile, { target: { value: "codex-personal" } });
       expect(await screen.findByText("Uses Codex through Omnigent.")).toBeTruthy();
-      fireEvent.change(runtime, { target: { value: "claude_code" } });
-      fireEvent.change(profile, { target: { value: "opencode-go" } });
-      expect(runtime.value).toBe("claude_code");
-      expect(profile.value).toBe("opencode-go");
+      fireEvent.change(harness, { target: { value: "opencode" } });
+      expect(profile.value).toBe("");
+      expect(screen.getByText(/Choose a OpenCode Provider Profile\. The previous Provider Profile returns/)).toBeTruthy();
       expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
-      fireEvent.change(runtime, { target: { value: "omnigent" } });
+      fireEvent.change(harness, { target: { value: "codex_cli" } });
+      expect(profile.value).toBe("codex-personal");
+      fireEvent.change(harness, { target: { value: "opencode" } });
+      fireEvent.change(profile, { target: { value: "opencode-go" } });
+      expect(harness.value).toBe("opencode");
     }
     // A delayed discovery response carries a newer version and Codex rollout
     // metadata. It must not advance or relabel the Profile's pinned selection.
@@ -1150,9 +1131,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), {
-      target: { value: "omnigent" },
-    });
 
     expect((await screen.findAllByText(/endpoint is starting/)).length).toBeGreaterThan(0);
     await waitFor(
@@ -1180,12 +1158,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     renderWorkflowStartPage(omnigentPayload());
 
     const option = await screen.findByRole("option", {
-      name: "Omnigent",
+      name: "Codex CLI",
     });
     expect((option as HTMLOptionElement).disabled).toBe(false);
-    fireEvent.change(screen.getByLabelText("Runtime"), {
-      target: { value: "omnigent" },
-    });
     expect(await screen.findByText(/Connect and validate a Codex OAuth Provider Profile/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh readiness" }));
@@ -1222,9 +1197,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), {
-      target: { value: "omnigent" },
-    });
 
     expect(await screen.findByRole("option", { name: "OpenCode Zen (Default)" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "OpenCode Go" })).toBeTruthy();
@@ -1291,8 +1263,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(payload);
-    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), { target: { value: "oauth-1" } });
 
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Queue behind the running Codex workflow." } });
 
@@ -1338,33 +1309,17 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    const runtime = await screen.findByLabelText("Runtime");
-    // MoonLadderStudios/MoonMind#3833: the direct runtimes are explicitly
-    // labeled compatibility paths and grouped away from the promoted target.
-    expect(
-      within(runtime).getByRole("option", {
-        name: "Direct Codex compatibility",
-      }),
-    ).toBeTruthy();
-    expect(
-      within(runtime).getByRole("option", {
-        name: "Direct Claude compatibility",
-      }),
-    ).toBeTruthy();
-    expect(
-      within(runtime).getByRole("group", { name: "Compatibility paths" }),
-    ).toBeTruthy();
-    expect(
-      within(runtime).getByRole("option", {
-        name: "Omnigent",
-      }),
-    ).toBeTruthy();
-    expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
-    runtime.focus();
-    expect(document.activeElement).toBe(runtime);
-    fireEvent.change(runtime, { target: { value: "omnigent" } });
-    expect((runtime as HTMLSelectElement).value).toBe("omnigent");
-    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    const harness = await screen.findByLabelText("Harness") as HTMLSelectElement;
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), { target: { value: "oauth-1" } });
+    await waitFor(() => expect(harness.value).toBe("codex_cli"));
+    // Ordinary authoring shows Harness and Provider Profile only. Backend is
+    // implicit Omnigent, never a combined primary option.
+    expect(screen.queryByLabelText("Runtime")).toBeNull();
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+    expect(within(harness).queryByRole("option", { name: /Omnigent|Direct/ })).toBeNull();
+    expect(document.querySelector("[data-backend-summary]")).toBeNull();
+    harness.focus();
+    expect(document.activeElement).toBe(harness);
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Exercise the Omnigent submit boundary." } });
 
     {
@@ -1378,6 +1333,11 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     }
     expect(screen.queryByLabelText("Execution target")).toBeNull();
     expect(screen.getByLabelText("Host policy")).toBeTruthy();
+    // The catalog publishes a genuine direct alternative for this Harness, so
+    // Advanced offers Backend; opening Advanced does not change it.
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(backend.value).toBe("omnigent");
+    expect(Array.from(backend.options).map((option) => option.textContent)).toEqual(["Omnigent", "Direct Codex compatibility"]);
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-created?source=temporal"));
@@ -1495,10 +1455,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), {
-      target: { value: "omnigent" },
-    });
-    fireEvent.change(await screen.findByLabelText("Profile"), {
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), {
       target: { value: "opencode-1" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -1598,9 +1555,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), {
-      target: { value: "omnigent" },
-    });
 
     expect(await screen.findByText(
       "No Profiles are configured for Omnigent. Configure one in Settings before starting this workflow.",
@@ -1700,21 +1654,18 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(payload);
-    fireEvent.change(await screen.findByLabelText("Runtime"), {
-      target: { value: "omnigent" },
-    });
     {
       const advancedToggle = await screen.findByLabelText("Advanced mode") as HTMLInputElement;
       if (!advancedToggle.checked) fireEvent.click(advancedToggle);
     }
     await waitFor(() => {
-      expect((screen.getByLabelText("Profile") as HTMLSelectElement).value)
+      expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value)
         .toBe("oauth-1");
       expect((screen.getByLabelText("Host policy") as HTMLSelectElement).value)
         .toBe("on-demand-v1");
     });
 
-    fireEvent.change(screen.getByLabelText("Profile"), {
+    fireEvent.change(screen.getByLabelText("Provider Profile"), {
       target: { value: "claude-1" },
     });
 
@@ -1932,8 +1883,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), { target: { value: "oauth-1" } });
     {
       const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
       if (!advancedToggle.checked) fireEvent.click(advancedToggle);
@@ -1993,8 +1943,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), { target: { value: "oauth-1" } });
     {
       const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
       if (!advancedToggle.checked) fireEvent.click(advancedToggle);
@@ -2235,8 +2184,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(payload);
-    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    const profileSelect = await screen.findByLabelText("Profile");
+    const profileSelect = await screen.findByLabelText("Provider Profile");
     await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("codex-oauth"));
     expect(within(profileSelect).queryByRole("option", { name: /Anthropic subscription/ })).toBeTruthy();
     {
@@ -2245,9 +2193,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     }
 
     expect(screen.queryByLabelText("Execution target")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Runtime"), {
-      target: { value: "claude_code" },
-    });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     await waitFor(() => expect((profileSelect as HTMLSelectElement).value).toBe("codex-oauth"));
     expect(within(profileSelect).queryByRole("option", { name: /OpenAI subscription/ })).toBeTruthy();
@@ -2281,8 +2227,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: `Exercise ${mode} scheduling.` } });
     fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: mode } });
     fireEvent.change(screen.getByLabelText(fieldLabel), { target: { value: fieldValue } });
@@ -2321,14 +2266,13 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), { target: { value: "omnigent" } });
-    fireEvent.change(await screen.findByLabelText("Profile"), { target: { value: "oauth-1" } });
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), { target: { value: "oauth-1" } });
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not launch stale authority." } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(await screen.findByText("Omnigent deployment became unavailable.")).toBeTruthy();
     expect(fetchSpy.mock.calls.some(([url, options]) => String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST")).toBe(false);
-    expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe("oauth-1");
+    expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("oauth-1");
     const readinessCalls = fetchSpy.mock.calls.filter(
       ([url]) => String(url) === "/api/omnigent/codex-catalog-readiness",
     );
@@ -2380,10 +2324,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     });
 
     renderWorkflowStartPage(omnigentPayload());
-    fireEvent.change(await screen.findByLabelText("Runtime"), {
-      target: { value: "omnigent" },
-    });
-    fireEvent.change(await screen.findByLabelText("Profile"), {
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), {
       target: { value: "oauth-1" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -4954,7 +4895,7 @@ describe.skip("Task Create Entrypoint", () => {
     const createButton = await screen.findByRole("button", { name: "Start Workflow" });
     expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Add Step" })).toBeTruthy();
-    expect(screen.getByLabelText("Runtime")).toBeTruthy();
+    expect(screen.getByLabelText("Harness")).toBeTruthy();
     expect(screen.getByLabelText("Publish Mode")).toBeTruthy();
     expect(canonicalCreateSections()).toEqual(
       expect.arrayContaining(["Steps", "Dependencies"]),
@@ -5857,11 +5798,15 @@ describe.skip("Task Create Entrypoint", () => {
       expect(
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
       ).toBe("Rebuild the Temporal task draft.");
-      expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(
+      expect((screen.getByLabelText("Harness") as HTMLSelectElement).value).toBe(
         "claude_code",
       );
+      // The recorded direct Backend stays visible while Advanced is collapsed.
+      expect(document.querySelector("[data-backend-summary]")?.textContent).toBe(
+        "Backend: Direct Claude compatibility",
+      );
       expect(
-        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Provider Profile") as HTMLSelectElement).value,
       ).toBe("profile:claude-default");
       expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
         "claude-sonnet-test",
@@ -6017,7 +5962,7 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText("Instructions") as HTMLTextAreaElement).value,
       ).toBe("Rerun from artifact-backed instructions.");
       expect(
-        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Provider Profile") as HTMLSelectElement).value,
       ).toBe("profile:codex-secondary");
     });
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -6250,11 +6195,14 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByRole("heading", { name: "Compare Workflow" })).toBeTruthy();
     expect(
       await screen.findByText(
-        "You are starting a comparison run. Choose a different runtime or model to compare results with the source run.",
+        "You are starting a comparison run. Choose a different Harness, Provider Profile, or model to compare results with the source run.",
       ),
     ).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Runtime"), {
+    fireEvent.change(screen.getByLabelText("Harness"), {
       target: { value: "claude_code" },
+    });
+    fireEvent.change(screen.getByLabelText("Provider Profile"), {
+      target: { value: "profile:claude-default" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Comparison Run" }));
 
@@ -6851,18 +6799,22 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
     await waitFor(() => {
       expect(
-        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
+        (screen.getByLabelText("Provider Profile") as HTMLSelectElement).value,
       ).toBe("profile:claude-default");
     });
 
-    fireEvent.change(screen.getByLabelText("Runtime"), {
+    // A saved Provider Profile is never swapped silently on a Harness change.
+    fireEvent.change(screen.getByLabelText("Harness"), {
       target: { value: "codex_cli" },
     });
-
-    await waitFor(() => {
-      expect(
-        (screen.getByLabelText("Profile") as HTMLSelectElement).value,
-      ).toBe("profile:codex-default");
+    expect(
+      (screen.getByLabelText("Provider Profile") as HTMLSelectElement).value,
+    ).toBe("");
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.change(screen.getByLabelText("Provider Profile"), {
+      target: { value: "profile:codex-default" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -10081,7 +10033,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(await screen.findByPlaceholderText("owner/repo")).not.toBeNull();
-    expect(await screen.findByLabelText("Profile")).not.toBeNull();
+    expect(await screen.findByLabelText("Provider Profile")).not.toBeNull();
     expect(
       await screen.findByLabelText("Instructions"),
     ).not.toBeNull();
@@ -11596,7 +11548,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("updates provider-profile options when the selected runtime changes", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const providerSelect = await screen.findByLabelText("Profile");
+    const providerSelect = await screen.findByLabelText("Provider Profile");
     await waitFor(() => {
       const labels = Array.from(
         (providerSelect as HTMLSelectElement).options,
@@ -11610,7 +11562,8 @@ describe.skip("Task Create Entrypoint", () => {
       );
     });
 
-    fireEvent.change(screen.getByLabelText("Runtime"), {
+    // The defaulted (unauthored) Profile follows a Harness change.
+    fireEvent.change(screen.getByLabelText("Harness"), {
       target: { value: "claude_code" },
     });
 
@@ -13040,48 +12993,6 @@ describe("Task Create MM-641 authoring validation", () => {
             }),
           } as Response);
         }
-        // Lore named-connection rerun source: edit/rerun must keep its
-        // provider and connection, or clear them on a source change.
-        if (url === "/api/executions/mm%3Alore-rerun?source=temporal") {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              workflowId: "mm:lore-rerun",
-              workflowType: "MoonMind.UserWorkflow",
-              state: "completed",
-              targetRuntime: "codex_cli",
-              repository: "studio/game",
-              branch: "trunk",
-              publishMode: "none",
-              inputParameters: {
-                targetRuntime: "codex_cli",
-                repository: {
-                  provider: "lore",
-                  connectionRef: "studio-lore",
-                  repository: { name: "studio/game" },
-                  branch: { name: "trunk" },
-                },
-                publishMode: "none",
-                workflow: {
-                  instructions: "Rebuild the level lighting.",
-                  runtime: { mode: "codex_cli" },
-                  publish: { mode: "none" },
-                },
-              },
-              actions: { canUpdateInputs: false, canRerun: true },
-            }),
-          } as Response);
-        }
-        if (url === "/api/executions/mm%3Alore-rerun/update") {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              accepted: true,
-              applied: "continue_as_new",
-              execution: { workflowId: "mm:lore-rerun-created" },
-            }),
-          } as Response);
-        }
         if (url === "/api/executions/mm%3Aretrieval-rerun/update") {
           return Promise.resolve({
             ok: true,
@@ -13570,85 +13481,605 @@ describe("Task Create MM-641 authoring validation", () => {
     expect("followUpRetrieval" in request.parametersPatch).toBe(false);
   });
 
-  async function submitLoreRerun(
-    edit: (repoInput: HTMLInputElement) => void,
-  ): Promise<Record<string, unknown>> {
+  // MoonLadderStudios/MoonMind#2619: edit and rerun keep recorded intent.
+  function mockRecordedExecution(
+    execution: Record<string, unknown>,
+    updateResponse: () => Response = () =>
+      ({
+        ok: true,
+        json: async () => ({
+          accepted: true,
+          applied: "continue_as_new",
+          message: "Rerun requested.",
+          execution: { workflowId: "mm:recorded-next" },
+        }),
+      }) as Response,
+  ): Array<Record<string, unknown>> {
+    const workflowId = encodeURIComponent(String(execution.workflowId));
+    const updates: Array<Record<string, unknown>> = [];
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/executions/${workflowId}?source=temporal`) {
+        return Promise.resolve({ ok: true, json: async () => execution } as Response);
+      }
+      if (url === `/api/executions/${workflowId}/update`) {
+        updates.push(JSON.parse(String(init?.body || "{}")) as Record<string, unknown>);
+        return Promise.resolve(updateResponse());
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+    return updates;
+  }
+
+  const recordedGitLabTarget = {
+    provider: "git",
+    connectionRef: "repository-connection:team-gitlab",
+    repository: { name: "gitlab.example.com/platform/deployer" },
+    branch: { name: "develop" },
+  };
+
+  it("reruns an object-form repository and keeps its connection on a branch-only change", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:object-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "branch",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedGitLabTarget,
+        publishMode: "branch",
+        workflow: {
+          instructions: "Deploy the release.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "branch" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aobject-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
+    const branch = screen.getByLabelText("Branch") as HTMLInputElement;
+    await waitFor(() => expect(branch.value).toBe("develop"));
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("branch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    // An unchanged rerun resubmits the recorded target as-is (or not at all).
+    const unchanged = updates[0]?.parametersPatch as Record<string, unknown> | null;
+    expect(unchanged?.repository ?? recordedGitLabTarget).toEqual(recordedGitLabTarget);
+
+    fireEvent.change(branch, { target: { value: "release" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(2));
+    const patch = updates[1]?.parametersPatch as Record<string, unknown>;
+    expect(patch.repository).toEqual({
+      ...recordedGitLabTarget,
+      branch: { name: "release" },
+    });
+    expect(patch.publishMode).toBe("branch");
+    expect(patch.workspace).toBeNull();
+  });
+
+  it("reruns as scratch when the recorded repository is cleared", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:object-clear",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedGitLabTarget,
+        branch: "develop",
+        publishMode: "none",
+        workflow: {
+          instructions: "Deploy the release.",
+          runtime: { mode: "codex_cli" },
+          git: { branch: "develop" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aobject-clear");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
+    fireEvent.change(repository, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    // The server merges the patch over the recorded parameters, so the cleared
+    // source must be stated as null rather than omitted.
+    expect(patch.repository).toBeNull();
+    expect(patch.branch).toBeNull();
+    expect(patch.workspace).toBeNull();
+    expect(patch.workflow).not.toHaveProperty("git");
+  });
+
+  it("keeps a recorded publish mode when the Skill's default loads later", async () => {
+    mockPublishContractCatalogs();
+    mockRecordedExecution({
+      workflowId: "mm:recorded-publish",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "MoonLadderStudios/MoonMind",
+        publishMode: "none",
+        workflow: {
+          instructions: "Run the self-publishing skill without publishing.",
+          runtime: { mode: "codex_cli" },
+          tool: { type: "skill", name: "custom-self-publisher" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Arecorded-publish");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const publish = (await screen.findByLabelText("Publish Mode")) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/api/workflows/skills")),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect((screen.getByLabelText("Repository") as HTMLInputElement).value).toBe(
+        "MoonLadderStudios/MoonMind",
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(publish.value).toBe("none");
+  });
+
+  it("asks a comparison run to change the Harness, Provider Profile, or model", async () => {
+    mockRecordedExecution({
+      workflowId: "mm:compare-copy",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "MoonLadderStudios/MoonMind",
+        workflow: {
+          instructions: "Compare this run.",
+          runtime: { mode: "codex_cli" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
     window.history.pushState(
       {},
-      "Task Rerun",
-      "/workflows/new?rerunExecutionId=mm%3Alore-rerun",
+      "Task Comparison",
+      "/workflows/new?rerunExecutionId=mm%3Acompare-copy&mode=compare",
     );
+
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
-    const instructions = (await screen.findByLabelText(
-      "Instructions",
-    )) as HTMLTextAreaElement;
-    await waitFor(() => {
-      expect(instructions.value).toBe("Rebuild the level lighting.");
+
+    expect(
+      await screen.findByText(
+        "You are starting a comparison run. Choose a different Harness, Provider Profile, or model to compare results with the source run.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("round-trips an anonymous public-repository read through rerun", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:anonymous-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/public",
+        publishMode: "none",
+        workspaceSpec: {
+          workspaceSource: { kind: "repository", repository: "octo/public", accessMode: "anonymous" },
+        },
+        workflow: {
+          instructions: "Summarize the public repository.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
     });
-    const repoInput = screen.getByLabelText("Repository") as HTMLInputElement;
-    expect(repoInput.value).toBe("studio/game");
-    edit(repoInput);
-    fireEvent.change(instructions, {
-      target: { value: "Rebuild the level lighting with baked GI." },
-    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aanonymous-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const anonymous = (await screen.findByLabelText(
+      "Read without credentials (public repository)",
+    )) as HTMLInputElement;
+    expect(anonymous.checked).toBe(true);
+    expect(screen.getByText(
+      "Reads octo/public without credentials and saves results on this workflow; nothing is published.",
+    )).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "docs" } });
     fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.repository).toBe("octo/public");
+    expect(patch.publishMode).toBe("none");
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/public",
+        branch: "docs",
+        accessMode: "anonymous",
+      },
+    });
+  });
+
+  it("keeps the recorded connection when the Branch is cleared", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:branchless-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedGitLabTarget,
+        publishMode: "none",
+        workflow: {
+          instructions: "Deploy the release.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Abranchless-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branch = (await screen.findByLabelText("Branch")) as HTMLInputElement;
+    await waitFor(() => expect(branch.value).toBe("develop"));
+    fireEvent.change(branch, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    // A target object needs a branch, so the connection travels in the source.
+    expect(patch.repository).toBe("gitlab.example.com/platform/deployer");
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "gitlab.example.com/platform/deployer",
+        connectionRef: "repository-connection:team-gitlab",
+      },
+    });
+  });
+
+  it("keeps a non-Git provider in the source when the Branch is cleared", async () => {
+    const recordedLoreTarget = {
+      provider: "lore",
+      connectionRef: "repository-connection:lore-studio",
+      repository: { name: "studio/game" },
+      branch: { name: "main" },
+    };
+    const updates = mockRecordedExecution({
+      workflowId: "mm:lore-branchless-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedLoreTarget,
+        publishMode: "none",
+        workflow: {
+          instructions: "Build the level.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Alore-branchless-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branch = (await screen.findByLabelText("Branch")) as HTMLInputElement;
+    await waitFor(() => expect(branch.value).toBe("main"));
+    fireEvent.change(branch, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.workspace).toEqual({
+      provider: "lore",
+      workspaceSource: {
+        kind: "repository",
+        repository: "studio/game",
+        connectionRef: "repository-connection:lore-studio",
+      },
+    });
+  });
+
+  it("drops recorded repository aliases when rebuilding the workspace source", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:aliased-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/app",
+        publishMode: "none",
+        workspaceSpec: {
+          repository: "octo/app",
+          branch: "main",
+          repositoryTarget: {
+            provider: "git",
+            connectionRef: "repository-connection:team-gitlab",
+            repository: { name: "octo/app" },
+            branch: { name: "main" },
+          },
+          workspaceSource: {
+            kind: "repository",
+            repository: "octo/app",
+            branch: "main",
+            accessMode: "explicit",
+          },
+        },
+        workflow: {
+          instructions: "Review the app.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aaliased-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("octo/app"));
+    fireEvent.change(repository, { target: { value: "octo/other" } });
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    // Checkout reads the top-level target first, so the old one cannot stay.
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/other",
+        branch: "dev",
+        accessMode: "explicit",
+        connectionRef: "repository-connection:team-gitlab",
+      },
+    });
+  });
+
+  it("rebuilds a recorded repository workspace from the edited repository and branch", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:routed-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/app",
+        publishMode: "none",
+        workspaceSpec: {
+          workspaceSource: {
+            kind: "repository",
+            repository: "octo/app",
+            branch: "main",
+            accessMode: "routed",
+          },
+        },
+        workflow: {
+          instructions: "Review the app.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Arouted-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("octo/app"));
+    fireEvent.change(repository, { target: { value: "octo/other" } });
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.repository).toBe("octo/other");
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/other",
+        branch: "dev",
+        accessMode: "routed",
+      },
+    });
+  });
+
+  it("explains and resubmits a recorded checkpoint source unchanged on rerun", async () => {
+    const recordedWorkspace = {
+      workspaceSource: {
+        kind: "checkpoint",
+        checkpointRef: "art_01CHECKPOINTSOURCE",
+        baseRepository: { name: "octo/app", branch: "main" },
+      },
+    };
+    const updates = mockRecordedExecution({
+      workflowId: "mm:checkpoint-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/app",
+        publishMode: "none",
+        workspaceSpec: recordedWorkspace,
+        workflow: {
+          instructions: "Continue the saved work.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Acheckpoint-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    expect(
+      await screen.findByText(
+        "This run starts from its recorded checkpoint source, which is kept unchanged. To start from other saved work, use Continue on the saved result in the workflow's details.",
+      ),
+    ).toBeTruthy();
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    await waitFor(() => expect(instructions.value).toBe("Continue the saved work."));
+    // A saved-work source is never replaced by a fresh anonymous read.
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(
+      screen.queryByLabelText("Read without credentials (public repository)"),
+    ).toBeNull();
+
+    fireEvent.change(instructions, { target: { value: "Finish the saved work." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.workspace).toEqual(recordedWorkspace);
+    expect(patch.repository).toBe("octo/app");
+    expect(patch.publishMode).toBe("none");
+  });
+
+  it("defaults an anonymous read to None even when the Skill publishes itself", async () => {
+    mockPublishContractCatalogs();
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
+    const skillSelect = within(primaryStep as HTMLElement).getByRole("combobox", {
+      name: /skill/i,
+    });
+    const publish = screen.getByLabelText("Publish Mode") as HTMLSelectElement;
+    fireEvent.change(skillSelect, { target: { value: "custom-self-publisher" } });
+    fireEvent.change(screen.getByLabelText("Repository"), {
+      target: { value: "octo/public" },
+    });
+    await waitFor(() => expect(publish.value).toBe("auto"));
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText("Read without credentials (public repository)"));
+    await waitFor(() => expect(publish.value).toBe("none"));
+  });
+
+  it("offers an anonymous public-repository read as an advanced source choice", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Summarize the public repository." },
+    });
+    fireEvent.change(screen.getByLabelText("Repository"), {
+      target: { value: "octo/public" },
+    });
+    const anonymousLabel = "Read without credentials (public repository)";
+    // Ordinary work keeps the default connection and shows no extra choice.
+    expect(screen.queryByLabelText(anonymousLabel)).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText(anonymousLabel));
+    const publish = screen.getByLabelText("Publish Mode") as HTMLSelectElement;
+    await waitFor(() => expect(publish.value).toBe("none"));
+    expect(within(publish).getByRole("option", { name: "PR" })).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/executions/mm%3Alore-rerun/update",
+        "/api/executions",
         expect.objectContaining({ method: "POST" }),
       );
     });
-    const updateCall = fetchSpy.mock.calls
-      .filter(([url]) => String(url) === "/api/executions/mm%3Alore-rerun/update")
-      .at(-1);
-    const request = JSON.parse(String(updateCall?.[1]?.body)) as {
-      updateName: string;
-      parametersPatch: Record<string, unknown>;
-    };
-    expect(request.updateName).toBe("RequestRerun");
-    return request.parametersPatch;
-  }
-
-  it("reruns a Lore named-connection source with its provider and connection", async () => {
-    const patch = await submitLoreRerun(() => {});
-
-    expect(patch.repository).toEqual({
-      provider: "lore",
-      connectionRef: "studio-lore",
-      repository: { name: "studio/game" },
-      branch: { name: "trunk" },
-    });
-    expect(patch.workflow).toMatchObject({
-      instructions: "Rebuild the level lighting with baked GI.",
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.repository).toBe("octo/public");
+    expect(payload.publishMode).toBe("none");
+    expect(payload.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/public",
+        branch: "docs",
+        accessMode: "anonymous",
+      },
     });
   });
 
-  it("reruns as scratch when the repository source is cleared", async () => {
-    const patch = await submitLoreRerun((repoInput) => {
-      fireEvent.change(repoInput, { target: { value: "" } });
-    });
+  it("keeps the edit draft and focuses the reason when the server rejects it", async () => {
+    const rejection = "payload.workspace is invalid: the recorded checkpoint expired.";
+    const updates = mockRecordedExecution(
+      {
+        workflowId: "mm:rejected-edit",
+        workflowType: "MoonMind.UserWorkflow",
+        state: "executing",
+        targetRuntime: "codex_cli",
+        publishMode: "none",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          publishMode: "none",
+          workflow: {
+            instructions: "Draft the summary.",
+            runtime: { mode: "codex_cli" },
+            publish: { mode: "none" },
+          },
+        },
+        actions: { canUpdateInputs: true, canRerun: false },
+      },
+      () =>
+        ({
+          ok: false,
+          status: 422,
+          headers: new Headers({ "Content-Type": "application/json" }),
+          json: async () => ({ detail: { code: "invalid_execution_request", message: rejection } }),
+          text: async () =>
+            JSON.stringify({ detail: { code: "invalid_execution_request", message: rejection } }),
+          clone() {
+            return this;
+          },
+        }) as unknown as Response,
+    );
+    window.history.pushState({}, "Task Edit", "/workflows/new?editExecutionId=mm%3Arejected-edit");
 
-    expect(patch.repository).toBeNull();
-    expect(patch.branch).toBeNull();
-    expect(patch.publishMode).toBe("none");
-    expect(patch.workflow).toMatchObject({
-      instructions: "Rebuild the level lighting with baked GI.",
-    });
-  });
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
-  it("drops the Lore connection when the rerun selects a different repository", async () => {
-    const patch = await submitLoreRerun((repoInput) => {
-      fireEvent.change(repoInput, { target: { value: "studio/tools" } });
-    });
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    await waitFor(() => expect(instructions.value).toBe("Draft the summary."));
+    fireEvent.change(instructions, { target: { value: "Draft the revised summary." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    const repository = patch.repository as Record<string, unknown> | string;
-    expect(JSON.stringify(repository)).not.toContain("studio-lore");
-    expect(JSON.stringify(repository)).not.toContain("lore");
-    expect(
-      typeof repository === "string"
-        ? repository
-        : (repository.repository as Record<string, unknown>).name,
-    ).toBe("studio/tools");
+    const alert = await screen.findByText(rejection);
+    expect(updates).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(alert));
+    expect(instructions.value).toBe("Draft the revised summary.");
   });
 
   it("does not serialize the primary Skill onto blank added steps", async () => {
@@ -19742,7 +20173,11 @@ describe("Task Create runtime command previews", () => {
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
     expect(screen.getByLabelText("Pinned target identity")).toBeTruthy();
-    expect(screen.getByLabelText("Editable repair intent")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Editable repair intent").textContent?.replace(/\s+/g, " "),
+    ).toContain(
+      "Instructions, Harness/Provider Profile selections, policies, branches, and publication controls remain editable until submit.",
+    );
     expect((screen.getByLabelText("Target workflow") as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByLabelText("Pinned run") as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByLabelText("Starting branch") as HTMLInputElement).value).toBe("main");
@@ -19883,13 +20318,24 @@ describe("Task Create runtime command previews", () => {
   });
 
   it("recomputes unsupported runtime warnings without mutating instructions", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "codex-default", account_label: "Codex Default", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "jules-default", account_label: "Jules Default", runtime_id: "jules" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     const instructions = await screen.findByLabelText("Instructions");
     fireEvent.change(instructions, {
       target: { value: "/review\nKeep this exact text." },
     });
-    fireEvent.change(screen.getByLabelText("Runtime"), {
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-default"));
+    fireEvent.change(screen.getByLabelText("Harness"), {
       target: { value: "jules" },
     });
 
@@ -19899,7 +20345,7 @@ describe("Task Create runtime command previews", () => {
     expect(await screen.findByText("Unsupported runtime command: /review")).toBeTruthy();
     expect(
       screen.getByText(
-        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text.",
+        "The selected Harness and Backend do not pass through slash commands. Choose a slash-command capable route or escape the slash for literal text.",
       ),
     ).toBeTruthy();
   });
@@ -20177,18 +20623,35 @@ describe("Task Create runtime switch layout stability", () => {
     fetchSpy.mockRestore();
   });
 
-  it("keeps Profile inventory and explicit selection stable when advanced runtime changes", async () => {
+  it("keeps Profile inventory and an explicit Profile recoverable when the Harness changes", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "profile:codex-default", account_label: "Codex Default", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "profile:codex-secondary", account_label: "Codex Secondary", runtime_id: "codex_cli" },
+          { profile_id: "profile:claude-default", account_label: "Claude Default", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("profile:codex-default"));
     fireEvent.change(profile, { target: { value: "profile:codex-secondary" } });
     const requests = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/v1/provider-profiles")).length;
-    fireEvent.change(screen.getByLabelText("Runtime"), { target: { value: "claude_code" } });
+    const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
+    expect(harness.closest("details")).toBeNull();
+    fireEvent.change(harness, { target: { value: "claude_code" } });
     expect(profile.disabled).toBe(false);
+    expect(profile.value).toBe("");
+    expect(within(profile).getByRole("option", { name: /Claude Default/ })).toBeTruthy();
+    expect(within(profile).queryByRole("option", { name: /Codex Secondary/ })).toBeNull();
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(harness, { target: { value: "codex_cli" } });
     expect(profile.value).toBe("profile:codex-secondary");
-    expect(screen.getByRole("option", { name: /Codex Default/ })).toBeTruthy();
     expect(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith("/api/v1/provider-profiles"))).toHaveLength(requests);
     expect(screen.queryByLabelText("Agent profile")).toBeNull();
-    expect(screen.getByLabelText("Runtime").closest("details")).toBeNull();
   });
 
   it("submits the native runtime of the selected Profile when switching from Codex to Claude", async () => {
@@ -20203,12 +20666,13 @@ describe("Task Create runtime switch layout stability", () => {
       return fallback(input, init);
     });
     const { queryClient } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
     await waitFor(() => expect(profile.value).toBe("native-codex"));
-    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("codex_cli");
+    expect((screen.getByLabelText("Harness") as HTMLSelectElement).value).toBe("codex_cli");
 
-    fireEvent.change(profile, { target: { value: "native-claude" } });
-    await waitFor(() => expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("claude_code"));
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "claude_code" } });
+    await waitFor(() => expect(profile.value).toBe("native-claude"));
+    expect(document.querySelector("[data-backend-summary]")?.textContent).toBe("Backend: Direct Claude compatibility");
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["workflow-start", "provider-profiles"] });
     });
@@ -20222,18 +20686,184 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
   });
 
-  it("uses the canonical runtime catalog ahead of legacy boot metadata", async () => {
+  it("restores a native Profile's own Backend after a Harness round trip", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    fireEvent.change(profile, { target: { value: "native-codex" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep the native Codex route." } });
+    const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
+    fireEvent.change(harness, { target: { value: "claude_code" } });
+    expect(profile.value).toBe("");
+    fireEvent.change(harness, { target: { value: "codex_cli" } });
+    expect(profile.value).toBe("native-codex");
+    const start = screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement;
+    await waitFor(() => expect(start.disabled).toBe(false));
+    fireEvent.click(start);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "native-codex" });
+  });
+
+  function configuredCodexInventory(fallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+    return (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.split("?")[0] === "/api/v1/provider-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "codex-configured", account_label: "Codex Configured", runtime_id: "codex_cli", is_default: true,
+            execution_selection: { profileId: "team-codex", version: 1, digest: `sha256:${"a".repeat(64)}`, providerProfileRef: "codex-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "codex-native" } },
+        ] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return fallback(input, init);
+    };
+  }
+
+  it("keeps an explicitly chosen Backend across a Harness round trip", async () => {
+    const fallback = configuredCodexInventory(fetchSpy.getMockImplementation()!);
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "codex-configured", account_label: "Codex Configured", runtime_id: "codex_cli", is_default: true,
+            execution_selection: { profileId: "team-codex", version: 1, digest: `sha256:${"a".repeat(64)}`, providerProfileRef: "codex-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "codex-native" } },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("codex-configured"));
+    fireEvent.change(profile, { target: { value: "codex-configured" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+
+    const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
+    fireEvent.change(harness, { target: { value: "claude_code" } });
+    fireEvent.change(harness, { target: { value: "codex_cli" } });
+    expect(profile.value).toBe("codex-configured");
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex_cli"));
+
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep the chosen Direct Backend." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured" });
+  });
+
+  it("does not offer Omnigent when the selected Harness's Omnigent target is disabled", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.split("?")[0] === "/api/v1/provider-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "claude-configured", account_label: "Claude Configured", runtime_id: "claude_code", is_default: true,
+            execution_selection: { profileId: "team-claude", version: 1, digest: `sha256:${"b".repeat(64)}`, providerProfileRef: "claude-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "claude-native" } },
+        ] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const catalog = mockDashboardConfig.system.runtimeTargetCatalog;
     const payload = {
       ...mockPayload,
       initialData: { dashboardConfig: {
         ...mockDashboardConfig,
-        system: { ...mockDashboardConfig.system, supportedRuntimes: ["codex_cli", "claude_code", "jules"] },
+        system: {
+          ...mockDashboardConfig.system,
+          runtimeTargetCatalog: {
+            ...catalog,
+            targets: [
+              ...catalog.targets,
+              { ...catalog.targets[0], targetId: "claude.generic-omnigent", label: "Claude Code via generic Omnigent",
+                harnessId: "claude-native", rolloutState: "disabled", defaultEligible: false, explicitSelectionAllowed: false },
+            ],
+          },
+        },
       } },
     } as BootPayload;
     renderWithClient(<WorkflowStartPage payload={payload} />);
-    const runtime = await screen.findByLabelText("Runtime");
-    expect(within(runtime).getByRole("option", { name: "Jules" })).toBeTruthy();
-    expect(within(runtime).queryByRole("option", { name: "Omnigent" })).toBeNull();
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("claude-configured"));
+    await waitFor(() => expect(document.querySelector("[data-runtime-unavailable]")?.textContent).toContain("No qualified target is available"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(Array.from(backend.options).map((option) => option.value)).not.toContain("omnigent");
+
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not submit a disabled route." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/executions", expect.anything());
+
+    fireEvent.change(backend, { target: { value: "claude_code" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "claude_code", profileId: "claude-configured" });
+  });
+
+  it("shows Backend only under Advanced for a genuine alternative and keeps it through Advanced toggles", async () => {
+    fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const harness = await screen.findByLabelText("Harness") as HTMLSelectElement;
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    expect(harness.value).toBe("codex_cli");
+    await waitFor(() => expect(document.querySelector("[data-backend-summary]")).toBeNull());
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(backend.value).toBe("omnigent");
+    fireEvent.change(backend, { target: { value: "codex_cli" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+    expect(document.querySelector("[data-backend-summary]")?.textContent).toBe("Backend: Direct Codex compatibility");
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex_cli");
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep the nondefault Backend." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.targetRuntime).toBe("codex_cli");
+    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured" });
+  });
+
+  it("omits the Backend selector when the Harness has one supported Backend", async () => {
+    fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: {
+          ...mockDashboardConfig.system,
+          defaultAgentRuntime: "omnigent",
+          runtimeTargetCatalog: {
+            ...mockDashboardConfig.system.runtimeTargetCatalog,
+            targets: mockDashboardConfig.system.runtimeTargetCatalog.targets.filter((target) => target.pathClass !== "direct_compatibility"),
+          },
+        },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+    expect(document.querySelector("[data-backend-summary]")).toBeNull();
   });
 
   it.each(["codex", "claude"])("submits a Profile's %s runtime for API validation despite a stale boot catalog", async (runtimeId) => {
@@ -20247,8 +20877,8 @@ describe("Task Create runtime switch layout stability", () => {
       return fallback(input, init);
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    await waitFor(() => expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe("selected-profile"));
-    await waitFor(() => expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe(runtimeId));
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("selected-profile"));
+    await waitFor(() => expect((screen.getByLabelText("Harness") as HTMLSelectElement).value).toBe(runtimeId));
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Preserve the selected Profile's runtime intent." } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
@@ -20257,16 +20887,114 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
   });
 
-  it.each(["omnigent", "claude_code"])("submits a %s step selection without deriving host capability claims", async (runtimeId) => {
+  it.each(["omnigent", "codex_cli"])("submits a %s step Backend without deriving host capability claims", async (runtimeId) => {
+    fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Validate the step runtime at API admission." } });
-    fireEvent.change(screen.getByLabelText("Step 1 Runtime"), { target: { value: runtimeId } });
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
+    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+    fireEvent.change(await screen.findByLabelText("Step 1 Backend"), { target: { value: runtimeId } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
     const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
     expect(request.payload.task.steps[0].runtime.mode).toBe(runtimeId);
     expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
+  });
+
+  function mixedRouteInventory(fallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+    return (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "codex-configured", account_label: "Codex Configured", runtime_id: "codex_cli", is_default: true,
+            execution_selection: { profileId: "team-codex", version: 1, digest: `sha256:${"a".repeat(64)}`, providerProfileRef: "codex-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "codex-native" } },
+          { profile_id: "codex-native-only", account_label: "Codex Native Only", runtime_id: "codex_cli" },
+          { profile_id: "claude-native-only", account_label: "Claude Native Only", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      if (String(input) === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return fallback(input, init);
+    };
+  }
+
+  it("offers step Backends from the selected step Profile, not other accounts of its Harness", async () => {
+    fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
+    fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: "codex-native-only" } });
+    const stepBackend = await screen.findByLabelText("Step 1 Backend") as HTMLSelectElement;
+    expect(Array.from(stepBackend.options).map((option) => option.textContent)).toEqual([
+      "Inherit workflow Backend",
+      "Direct Codex compatibility",
+    ]);
+  });
+
+  it("shows a step Profile's sole Backend when the inherited workflow Backend cannot serve it", async () => {
+    fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Run this step on Claude." } });
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
+    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+    fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: "claude-native-only" } });
+    const stepBackend = await screen.findByLabelText("Step 1 Backend") as HTMLSelectElement;
+    expect(Array.from(stepBackend.options).map((option) => option.value)).toEqual(["", "claude_code"]);
+    expect(screen.getByText(/The workflow Backend cannot serve this step's Provider Profile/)).toBeTruthy();
+    fireEvent.change(stepBackend, { target: { value: "claude_code" } });
+    expect(screen.queryByText(/The workflow Backend cannot serve this step's Provider Profile/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.steps[0].runtime).toMatchObject({ mode: "claude_code", profileId: "claude-native-only" });
+  });
+
+  it("scopes the configured default Profile to a deliberately chosen Harness", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli" },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: {
+          ...mockDashboardConfig.system,
+          providerProfiles: { ...mockDashboardConfig.system.providerProfiles, defaultProfileRef: "native-codex" },
+        },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "claude_code" } });
+    await waitFor(() => expect(profile.value).toBe("native-claude"));
+    expect(screen.queryByText(/Choose a Claude Code Provider Profile/)).toBeNull();
+  });
+
+  it("keeps steps inherited until a step Provider Profile is explicitly chosen", async () => {
+    fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Inherit the workflow selection." } });
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
+    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+    const stepProfile = await screen.findByLabelText("Step 1 Provider Profile") as HTMLSelectElement;
+    expect(stepProfile.value).toBe("");
+    expect(within(stepProfile).getByRole("group", { name: "Codex CLI" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.steps?.[0]?.runtime).toBeUndefined();
+    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured" });
   });
 
   it("surfaces authoritative capability admission errors from the API", async () => {
@@ -20286,7 +21014,7 @@ describe("Task Create runtime switch layout stability", () => {
     expect(navigateTo).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("preserves an explicit runtime override after Profile inventory refetch (Omnigent configuration: %s)", async (configured) => {
+  it("preserves an explicit Backend override after Profile inventory refetch", async () => {
     const fallback = fetchSpy.getMockImplementation()!;
     let inventoryVersion = 0;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -20294,22 +21022,23 @@ describe("Task Create runtime switch layout stability", () => {
         inventoryVersion += 1;
         return Promise.resolve({ ok: true, json: async () => [
           { profile_id: "runtime-profile", account_label: `Profile ${inventoryVersion}`, runtime_id: "codex_cli", is_default: true,
-            ...(configured ? { execution_selection: { profileId: "team-codex" } } : {}),
+            execution_selection: { profileId: "team-codex" },
           },
         ] } as Response);
       }
       return fallback(input, init);
     });
     const { queryClient } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
     await waitFor(() => expect(profile.value).toBe("runtime-profile"));
-    fireEvent.change(screen.getByLabelText("Runtime"), { target: { value: "claude_code" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["workflow-start", "provider-profiles"] });
     });
     expect(inventoryVersion).toBe(2);
     expect(profile.value).toBe("runtime-profile");
-    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("claude_code");
+    expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex_cli");
   });
 
   it("keeps a Profile configuration error blocking instead of silently selecting its native runtime", async () => {
@@ -20326,11 +21055,13 @@ describe("Task Create runtime switch layout stability", () => {
       return fallback(input, init);
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-    const profile = await screen.findByLabelText("Profile") as HTMLSelectElement;
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
     await waitFor(() => expect(profile.value).toBe("native-codex"));
-    fireEvent.change(profile, { target: { value: "pinned-claude" } });
-    expect((screen.getByLabelText("Runtime") as HTMLSelectElement).value).toBe("codex_cli");
-    expect(await screen.findByText(/Profile cannot be submitted: The pinned execution configuration is incompatible/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "claude_code" } });
+    await waitFor(() => expect(profile.value).toBe("pinned-claude"));
+    // The broken Profile does not route to its native direct runtime.
+    expect(document.querySelector("[data-backend-summary]")).toBeNull();
+    expect(await screen.findByText(/cannot be submitted: The pinned execution configuration is incompatible/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not bypass the pinned configuration." } });
     expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions")).toBe(false);
@@ -20340,7 +21071,7 @@ describe("Task Create runtime switch layout stability", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const providerProfileSelect = (await screen.findByLabelText(
-      "Profile",
+      "Provider Profile",
     )) as HTMLSelectElement;
     await waitFor(() => {
       expect(providerProfileSelect.value).toBe("profile:codex-default");
@@ -20534,7 +21265,7 @@ describe("Task Create runtime switch layout stability", () => {
     fireEvent.change(screen.getByLabelText("Workflow Model"), { target: { value: "" } });
     expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("custom");
     expect((screen.getByLabelText("Workflow Effort") as HTMLInputElement).value).toBe("high");
-    fireEvent.change(screen.getByLabelText("Profile"), { target: { value: "profile:codex-secondary" } });
+    fireEvent.change(screen.getByLabelText("Provider Profile"), { target: { value: "profile:codex-secondary" } });
     fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Keep Custom defaults." } });
     expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -20549,7 +21280,7 @@ describe("Task Create runtime switch layout stability", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect((screen.getByLabelText("Profile") as HTMLSelectElement).value).toBe(
+      expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe(
         "profile:codex-default",
       );
       expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe(
@@ -20814,8 +21545,8 @@ describe('removed target drafts (#4644)', () => {
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     await waitFor(() => expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step'));
-    expect((screen.getByLabelText('Runtime') as HTMLSelectElement).value).toBe('jules_api');
-    expect(screen.queryByText(/unsupported runtime jules_api/i)).toBeNull();
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('jules_api');
+    expect(screen.queryByText(/unsupported Harness jules_api/i)).toBeNull();
     expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('saved-model');
     expect((screen.getAllByLabelText('Instructions')[1] as HTMLTextAreaElement).value).toBe('Keep the supported step');
   });
@@ -20826,10 +21557,10 @@ describe('removed target drafts (#4644)', () => {
     expect(buildTemporalSubmissionDraftFromExecution(savedExecution, {}).taskInstructions).toContain('Preserve the original task');
     expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('saved-model');
     expect((screen.getByLabelText('Workflow Effort') as HTMLInputElement).value).toBe('high');
-    const runtime = screen.getByLabelText('Runtime') as HTMLSelectElement;
+    const runtime = screen.getByLabelText('Harness') as HTMLSelectElement;
     expect(Array.from(runtime.options).map((option) => option.value)).not.toContain('codex_cloud');
     expect(runtime.value).toBe('');
-    expect(screen.getAllByText(/unsupported runtime codex_cloud/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/unsupported Harness codex_cloud/i).length).toBeGreaterThan(0);
     expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step');
     expect((screen.getAllByLabelText('Instructions')[1] as HTMLTextAreaElement).value).toBe('Keep the supported step');
     fireEvent.submit(document.querySelector('#queue-submit-form')!);
@@ -20838,5 +21569,47 @@ describe('removed target drafts (#4644)', () => {
     expect(runtime.value).toBe('codex_cli');
     expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step');
     expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST' || init?.method === 'PATCH')).toBe(false);
+  });
+  it('keeps a Backend replacement control for a restored Backend the catalog no longer allows', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.startsWith('/api/executions/mm%3Aold-cloud') ? {
+        workflowId: 'mm:old-cloud', workflowType: 'MoonMind.UserWorkflow', state: 'executing', actions: { canUpdateInputs: true },
+        inputParameters: { workflow: {
+          instructions: 'Keep the saved Profile',
+          runtime: { mode: 'codex_cli', profileId: 'codex-configured' },
+          publish: { mode: 'none' },
+        } },
+      } : url.startsWith('/api/v1/provider-profiles') ? [
+        { profile_id: 'codex-configured', account_label: 'Codex Configured', runtime_id: 'codex_cli', is_default: true,
+          execution_selection: { profileId: 'team-codex', version: 1, digest: `sha256:${'a'.repeat(64)}`, providerProfileRef: 'codex-configured', launchPolicyRef: null, defaultForRuntime: true, harnessId: 'codex-native' } },
+      ] : url.startsWith('/api/skills') ? { items: { worker: [] } } : { items: [] };
+      return Promise.resolve({ ok: true, json: async () => data } as Response);
+    });
+    const catalog = mockDashboardConfig.system.runtimeTargetCatalog;
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: {
+          ...mockDashboardConfig.system,
+          runtimeTargetCatalog: {
+            ...catalog,
+            targets: catalog.targets.map((target) => target.targetId === 'codex.direct' ? { ...target, explicitSelectionAllowed: false, rolloutState: 'disabled' } : target),
+          },
+        },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    await waitFor(() => expect((screen.getByLabelText('Provider Profile') as HTMLSelectElement).value).toBe('codex-configured'));
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('codex_cli');
+    expect(screen.getAllByText(/No qualified target is available/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByLabelText('Advanced mode'));
+    const backend = screen.getByLabelText('Backend') as HTMLSelectElement;
+    expect(backend.value).toBe('');
+    fireEvent.change(backend, { target: { value: 'omnigent' } });
+    expect(backend.value).toBe('omnigent');
+    expect(screen.queryByText(/No qualified target is available/)).toBeNull();
+    expect((screen.getByLabelText('Provider Profile') as HTMLSelectElement).value).toBe('codex-configured');
   });
 });

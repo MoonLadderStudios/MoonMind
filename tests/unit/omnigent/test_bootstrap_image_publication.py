@@ -743,6 +743,51 @@ def test_operator_pin_is_preserved_as_resolution_input(
     image_resolution.reset_operator_image_configuration()
 
 
+def test_resolution_input_follows_the_installed_release_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """An API that outlived a release resolves the release now installed.
+
+    Compose rendered the previous release's refs into this process at start;
+    the desired-state record the release controller wrote since is the
+    deployment's image configuration, so no API recreation is needed.
+    """
+
+    import json
+
+    previous = "ghcr.io/example/server@sha256:" + "4" * 64
+    installed_server = "ghcr.io/example/server@sha256:" + "8" * 64
+    installed_host = "ghcr.io/example/host@sha256:" + "9" * 64
+    record_file = tmp_path / "desired-state.json"
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(record_file))
+    image_resolution.reset_operator_image_configuration()
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", previous)
+    monkeypatch.delenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", raising=False)
+    monkeypatch.delenv("OMNIGENT_SHARED_HOST_IMAGE_REF", raising=False)
+
+    # Without an installed record the startup configuration stands.
+    assert image_resolution.operator_image_configuration()["OMNIGENT_IMAGE_REF"] == (
+        previous
+    )
+
+    record_file.write_text(
+        json.dumps(
+            {
+                "omnigentRelease": {
+                    "revision": 2,
+                    "serverImageRef": installed_server,
+                    "hostImageRefs": {"shared": installed_host, "opencode": ""},
+                }
+            }
+        )
+    )
+    configuration = image_resolution.operator_image_configuration()
+    assert configuration["OMNIGENT_IMAGE_REF"] == installed_server
+    assert configuration["OMNIGENT_SHARED_HOST_IMAGE_REF"] == installed_host
+    assert "OMNIGENT_OPENCODE_HOST_IMAGE_REF" not in configuration
+    image_resolution.reset_operator_image_configuration()
+
+
 def test_selectors_fall_back_to_persisted_state_for_worker_processes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -798,18 +843,43 @@ def test_selectors_reject_a_quarantined_server_host_pair(
         host_classes.get_opencode_host_image_ref()
 
 
+def test_selectors_follow_the_installed_pair_over_a_stale_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker that outlived a release selects the installed images.
+
+    Compose copied the previous release's refs into this process when it was
+    created; the resolved state is what the release and the API image leg
+    verified afterwards, so it decides the selection without recreating the
+    process.
+    """
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform import host_classes
+
+    previous_server = "ghcr.io/example/omnigent-server@sha256:" + "4" * 64
+    previous_host = "ghcr.io/example/opencode-host@sha256:" + "5" * 64
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", previous_server)
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", previous_host)
+    monkeypatch.setattr(store, "load_resolved_state", _state)
+
+    assert host_classes.get_opencode_host_image_ref() == HOST_REF
+
+
 def test_selectors_reject_compatibility_evidence_for_a_different_image_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A ready verdict cannot authorize refs selected after reconciliation."""
+    """A ready verdict cannot authorize a host it did not judge."""
 
     from moonmind.omnigent.bootstrap import store
     from moonmind.omnigent.harness_platform import host_classes
 
     changed_host = "ghcr.io/example/opencode-host@sha256:" + "5" * 64
-    monkeypatch.setenv("OMNIGENT_IMAGE_REF", SERVER_REF)
-    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", changed_host)
-    monkeypatch.setattr(store, "load_resolved_state", _state)
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: _state(opencodeHostImageRef=changed_host),
+    )
 
     with pytest.raises(Exception, match="evidence does not match"):
         host_classes.get_opencode_host_image_ref()

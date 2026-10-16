@@ -752,6 +752,13 @@ class DbRuntimeBindingStore:
                             OmnigentRuntimeBindingRecord.binding_id.like(
                                 "omnigent-runtime-binding:sha256:%"
                             ),
+                            # The legacy harness store shares the table and
+                            # binding-ID namespace, but owns a different schema.
+                            # Stable rows have an immutable initial snapshot PK;
+                            # do not coerce legacy lifecycle/credential authority.
+                            OmnigentRuntimeBindingRecord.runtime_binding_ref.like(
+                                "omnigent-runtime-binding-snapshot:sha256:%"
+                            ),
                             (
                                 OmnigentRuntimeBindingRecord.heartbeat_at.is_(None)
                                 | (

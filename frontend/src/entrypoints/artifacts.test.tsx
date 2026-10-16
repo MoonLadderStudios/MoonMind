@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 
 import { renderWithClient } from '../utils/test-utils';
 import ArtifactsPage from './artifacts';
+import { DashboardApp } from './dashboard-app';
 
 describe('ArtifactsPage', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -85,5 +86,34 @@ describe('ArtifactsPage', () => {
     await screen.findByText('No authorized observability are available.');
     expect(fetchSpy.mock.calls.map(([input]) => new URL(String(input), window.location.origin).searchParams.get('category')))
       .toContain('observability');
+  });
+
+  it('keeps the filter field mounted and focused inside the dashboard shell (MoonMind#4559)', async () => {
+    window.history.replaceState({}, '', '/artifacts');
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input), window.location.origin);
+      const json = (value: unknown) => new Response(JSON.stringify(value), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (url.pathname === '/api/ui/info') {
+        return json({ app: 'moonmind', apiBase: '/api', features: { artifacts: true }, endpoints: {} });
+      }
+      if (url.pathname.startsWith('/api/v1/provider-profiles')) return json([]);
+      const category = url.searchParams.get('category') || 'artifacts';
+      return json({ category, items: [], total: 0, offset: 0, limit: 25, refreshed_at: '2026-07-10T12:01:00Z' });
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    const filter = await screen.findByLabelText('Filter artifacts');
+    filter.focus();
+
+    fireEvent.change(filter, { target: { value: 'final' } });
+
+    expect(screen.getByLabelText('Filter artifacts')).toBe(filter);
+    expect(document.activeElement).toBe(filter);
+    expect((filter as HTMLInputElement).value).toBe('final');
+    expect(window.location.search).toContain('artifacts_q=final');
+    expect(await screen.findByText('No artifacts match this filter.')).toBeTruthy();
+    expect(screen.getByLabelText('Filter artifacts')).toBe(filter);
+    window.history.replaceState({}, '', '/');
   });
 });

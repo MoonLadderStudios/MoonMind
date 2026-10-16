@@ -1,0 +1,265 @@
+"""A saved schedule's next occurrence binds the newly installed runtime.
+
+The schedule's stored plan was compiled before a release; the occurrence
+compiles the same frozen inputs through the real plan compiler at its own
+admission. Neither the schedule definition, its policy/Profile versions, nor
+the bulk schedule refresh are involved.
+"""
+
+from __future__ import annotations
+
+import json
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+
+from api_service.db.models import ManagedAgentProviderProfile, TemporalArtifact
+from api_service.services import omnigent_execution_plan_service as plan_service
+from api_service.services.recurring_workflows_service import (
+    RecurringWorkflowsService,
+)
+from moonmind.omnigent.harness_platform import stores
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _ArtifactService,
+    _configure_ready_host_image_pair,
+    _PlanStore,
+    _policy_snapshot,
+    _snapshot,
+)
+
+_REPO = "ghcr.io/example/omnigent-host@sha256:"
+_SERVER = "ghcr.io/example/omnigent-server@sha256:"
+_TASK_REF = "art_original_task"
+_TASK_DIGEST = "sha256:" + "1" * 64
+
+
+class _OccurrenceSession:
+    """Rows the occurrence admission reads; it writes nothing else."""
+
+    def __init__(self, provider) -> None:
+        self.provider = provider
+        self.commits = 0
+        self.rollbacks = 0
+
+    async def get(self, model, key):
+        if model is ManagedAgentProviderProfile and key == self.provider.profile_id:
+            return self.provider
+        if model is TemporalArtifact and key == _TASK_REF:
+            return SimpleNamespace(
+                created_by_principal="original-task-principal",
+                sha256=_TASK_DIGEST.removeprefix("sha256:"),
+            )
+        return None
+
+    async def commit(self):
+        self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
+
+
+def _install(monkeypatch, *, host: str, server: str) -> None:
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", host)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", server)
+
+
+@pytest.fixture
+def compiler(monkeypatch):
+    # Resolved state follows the installed env refs and records provenance.
+    _configure_ready_host_image_pair(monkeypatch)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "true")
+    monkeypatch.setattr(
+        plan_service,
+        "resolve_execution_evidence",
+        lambda *_a, **_kw: (None, "uncertified"),
+    )
+    policy_versions: list[str] = []
+
+    async def resolve_policy(**kwargs):
+        # The schedule keeps its policy version across the release.
+        policy_versions.append(kwargs["policy_ref"])
+        return _policy_snapshot(harness="codex-native", policy="codex-on-demand@1")
+
+    monkeypatch.setattr(
+        plan_service, "_resolve_runtime_policy_snapshot", resolve_policy
+    )
+
+    async def no_catalog(**_kwargs):
+        # Hermetic: the bounded fixture harness configuration.
+        return None
+
+    monkeypatch.setattr(plan_service, "_try_load_real_harness_config", no_catalog)
+    monkeypatch.setattr(stores, "SessionExecutionPlanStore", _PlanStore)
+
+    async def refresh_forbidden(*_args, **_kwargs):
+        raise AssertionError("an occurrence must not need the bulk schedule refresh")
+
+    monkeypatch.setattr(
+        RecurringWorkflowsService,
+        "refresh_managed_bootstrap_schedules",
+        refresh_forbidden,
+    )
+    return SimpleNamespace(policy_versions=policy_versions)
+
+
+async def _schedule_parameters(artifacts) -> dict:
+    """Plan a schedule the way the API did before the release."""
+
+    snapshot = _snapshot(
+        harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
+    )
+    parameters = {
+        "targetRuntime": "omnigent",
+        "publishMode": "none",
+        "workflow": {"instructions": "Summarize the nightly report."},
+        "agentProfileSnapshot": snapshot,
+        "system": {"recurrence": {"definitionId": "schedule-1"}},
+    }
+    stored = await plan_service.compile_and_persist_execution_plan(
+        session_factory=None,
+        artifact_service=artifacts,
+        principal="original-task-principal",
+        workflow_id="mm-schedule:schedule-1",
+        agent_profile_snapshot=snapshot,
+        provider_profile=_provider(),
+        initial_parameters=parameters,
+        authored_request_ref=_TASK_REF,
+        authored_request_digest=_TASK_DIGEST,
+        task_input_snapshot_ref=_TASK_REF,
+        task_input_snapshot_digest=_TASK_DIGEST,
+        execution_plan_store=_PlanStore(object()),
+    )
+    parameters["omnigentExecutionPlan"] = stored.binding.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    parameters["resolvedSkillsetRef"] = stored.resolved_skillset_ref
+    return parameters, stored.envelope.payload
+
+
+def _provider():
+    return SimpleNamespace(
+        profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+    )
+
+
+@pytest.mark.asyncio
+async def test_occurrence_binds_the_newly_installed_host_without_schedule_rewrite(
+    monkeypatch, compiler
+) -> None:
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters, stored_plan = await _schedule_parameters(artifacts)
+    assert stored_plan.hostImageRef == _REPO + "7" * 64
+    action_input = deepcopy(parameters)
+
+    # A routine release installs a rebuilt host and server of the same family.
+    _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
+    session = _OccurrenceSession(_provider())
+    admitted = await RecurringWorkflowsService(
+        session, artifact_service=artifacts
+    ).admit_occurrence_execution_plan(
+        workflow_id="mm:schedule-1:occurrence-2",
+        initial_parameters=parameters,
+    )
+
+    assert admitted["disposition"] == "admitted"
+    plan = _PlanStore.persisted.payload
+    assert plan.hostImageRef == _REPO + "8" * 64
+    assert plan.launchPolicyRef == "codex-on-demand@1"
+    launch = json.loads(
+        artifacts.payloads[plan.effectiveLaunchSnapshotRef.removeprefix("artifact:")]
+    )
+    assert launch["hostImageRef"] == _REPO + "8" * 64
+    assert launch["serverImageRef"] == _SERVER + "9" * 64
+    assert admitted["omnigentExecutionPlan"]["planRef"] == _PlanStore.persisted.planRef
+    assert admitted["omnigentExecutionPlan"]["planRef"] != (
+        action_input["omnigentExecutionPlan"]["planRef"]
+    )
+    # The frozen task input and its admitted principal carry over unchanged.
+    assert admitted["omnigentExecutionPlan"]["taskInputSnapshotRef"] == _TASK_REF
+    assert admitted["omnigentExecutionPlan"]["taskInputSnapshotDigest"] == _TASK_DIGEST
+    assert plan.authority.taskInputSnapshotRef == _TASK_REF
+    # No new policy/Profile version: both compiles used the same pinned refs.
+    assert set(compiler.policy_versions) == {"codex-on-demand@1"}
+    # The schedule's own inputs and stored plan are untouched, and the plan an
+    # earlier attempt recorded keeps its images.
+    assert parameters == action_input
+    assert stored_plan.hostImageRef == _REPO + "7" * 64
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_occurrence_keeps_its_recorded_plan_for_a_foreign_host_family(
+    monkeypatch, compiler
+) -> None:
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters, _stored_plan = await _schedule_parameters(artifacts)
+
+    _install(
+        monkeypatch,
+        host="ghcr.io/example/other-host@sha256:" + "8" * 64,
+        server=_SERVER + "9" * 64,
+    )
+    session = _OccurrenceSession(_provider())
+    admitted = await RecurringWorkflowsService(
+        session, artifact_service=artifacts
+    ).admit_occurrence_execution_plan(
+        workflow_id="mm:schedule-1:occurrence-2",
+        initial_parameters=parameters,
+    )
+
+    # Another image family is never substituted; the admitted plan stays.
+    assert admitted["disposition"] == "recorded"
+    assert "host image" in admitted["reason"]
+    assert "omnigentExecutionPlan" not in admitted
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_activity_admits_the_occurrence_through_the_schedule_owner(
+    monkeypatch, compiler
+) -> None:
+    from contextlib import asynccontextmanager
+
+    from api_service.db import base as db_base
+    from moonmind.workflows.temporal.activities import omnigent_activities
+
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters, _stored_plan = await _schedule_parameters(artifacts)
+    _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
+    session = _OccurrenceSession(_provider())
+
+    @asynccontextmanager
+    async def session_maker():
+        yield session
+
+    monkeypatch.setattr(db_base, "async_session_maker", session_maker)
+    monkeypatch.setattr(
+        omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
+    )
+
+    with pytest.raises(ValueError, match="workflowId"):
+        await omnigent_activities.omnigent_admit_scheduled_occurrence_plan_activity(
+            {"initialParameters": parameters}
+        )
+    # Temporal delivers the workflow's parameters as JSON.
+    admitted = (
+        await (
+            omnigent_activities.omnigent_admit_scheduled_occurrence_plan_activity(
+                {
+                    "workflowId": "mm:schedule-1:occurrence-3",
+                    "initialParameters": json.loads(json.dumps(parameters)),
+                }
+            )
+        )
+    )
+
+    assert admitted["disposition"] == "admitted"
+    assert _PlanStore.persisted.payload.hostImageRef == _REPO + "8" * 64
+    assert admitted["omnigentExecutionPlan"]["planRef"] == _PlanStore.persisted.planRef
+    assert session.commits == 1

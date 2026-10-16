@@ -138,7 +138,7 @@ Preferred command order for new histories:
 4. submit the turn.
 
 Changes to this order are replay-visible and require Temporal patch/version
-markers or Worker Versioning so in-flight histories replay their recorded path.
+markers so in-flight histories replay their recorded path.
 
 ### 3.3 Turn runtime selection
 

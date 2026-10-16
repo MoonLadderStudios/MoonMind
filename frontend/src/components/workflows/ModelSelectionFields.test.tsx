@@ -3,11 +3,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ModelSelectionFields } from './ModelSelectionFields';
 import type { ModelSelection, ModelSelectionProfile } from '../../lib/modelSelection';
+import type { ProviderProfileTierCapabilities } from '../../utils/providerProfileTiers';
 
 const profile = { default_model_tier: 2, model_tiers: [{ model: 'plan', effort: 'low' }, { model: 'implement', effort: 'high' }] };
-function Form({ initial = {}, policy = profile, inherited }: { initial?: ModelSelection; policy?: ModelSelectionProfile; inherited?: ModelSelection | undefined }) {
+function Form({ initial = {}, policy = profile, inherited, capabilities }: { initial?: ModelSelection; policy?: ModelSelectionProfile; inherited?: ModelSelection | undefined; capabilities?: ProviderProfileTierCapabilities }) {
   const [value, setValue] = useState(initial);
-  return <><ModelSelectionFields scope="Workflow" value={value} profile={policy} inherited={inherited} onChange={setValue} /><output aria-label="payload">{JSON.stringify(value)}</output></>;
+  return <><ModelSelectionFields scope="Workflow" value={value} profile={policy} inherited={inherited} capabilities={capabilities} onChange={setValue} /><output aria-label="payload">{JSON.stringify(value)}</output></>;
 }
 const payload = () => JSON.parse(screen.getByLabelText('payload').textContent || '{}');
 afterEach(cleanup);
@@ -106,6 +107,35 @@ describe('MoonMind#4636 saved partial inheritance and capabilities', () => {
 
 
 describe('MoonMind#4636 capability diagnostics preserve manual values', () => {
+  const contributor = 'opencode-go/gemini-4-argon-contributor';
+  const catalog: ProviderProfileTierCapabilities = {
+    version: 'observed', profile_id: 'go', runtime_id: 'opencode', provider_id: 'opencode-go',
+    evidence: { source: 'profile_catalog_evidence', credential_generation: 1, image_ref: 'host', observed_at: '2026-10-16T07:00:00Z', stale: false },
+    tier_constraints: { min_count: 1, max_count: null },
+    model: { runtime_default: null, allow_custom: true, options: [{ value: contributor, label: 'Gemini Contributor', description: null, status: 'available' }] },
+    effort: { supported: true, runtime_default: null, allow_custom: true, application: 'cli_flag', options: [] },
+    diagnostics: [],
+  };
+  it('explains an unobserved custom ID and preserves it until the user selects the published ID', () => {
+    const initial = { model: 'opencode-go/gemini-4-argon', effort: 'xhigh' };
+    render(<Form initial={initial} capabilities={catalog} />);
+    const warning = screen.getByText(/not in this profile’s observed catalog/);
+    expect(warning.getAttribute('role')).toBe('status');
+    expect(warning.textContent).toContain('not in this profile’s observed catalog');
+    expect(warning.textContent).toContain(contributor);
+    expect(payload()).toEqual(initial);
+    fireEvent.change(screen.getByLabelText('Workflow Model'), { target: { value: contributor } });
+    expect(screen.queryByText(/not in this profile’s observed catalog/)).toBeNull();
+    expect(payload()).toEqual({ model: contributor, effort: 'xhigh' });
+  });
+  it.each(['stale', 'draft', 'empty', 'known', 'default'])('does not invent a catalog mismatch from %s evidence or selection', (scenario) => {
+    const capabilities = structuredClone(catalog);
+    if (scenario === 'stale') capabilities.evidence.stale = true;
+    if (scenario === 'draft') capabilities.evidence.source = 'runtime_draft';
+    if (scenario === 'empty') capabilities.model.options = [];
+    render(<Form initial={{ model: scenario === 'known' ? contributor : scenario === 'default' ? null : 'manual-model', effort: 'xhigh' }} capabilities={capabilities} />);
+    expect(screen.queryByText(/not in this profile’s observed catalog/)).toBeNull();
+  });
   it('retains a known incompatible effort and shows its profile diagnostic', () => {
     const onChange = () => {};
     const capabilities = {

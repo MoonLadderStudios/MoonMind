@@ -455,7 +455,7 @@ async def _seed_codex_profile(session_factory) -> None:
         await seed_bootstrap_policies(session, image_resolver=resolve_image)
 
 
-async def _codex_plan(session_factory):
+async def _codex_plan(session_factory, skillset_ref: str):
     """Compile the Codex plan from persisted launch authority, as the compiler does."""
 
     from api_service.services.omnigent_execution_plan_service import (
@@ -497,6 +497,10 @@ async def _codex_plan(session_factory):
     if "/" not in architecture:
         architecture = f"linux/{architecture}"
     inputs = _codex_plan_inputs(LAUNCH_POLICY)
+    # The plan admits the exact Skill set the request delivers.
+    inputs["resolved_skills"] = inputs["resolved_skills"].model_copy(
+        update={"resolvedSkillSetRef": f"artifact:{skillset_ref}"}
+    )
     inputs["host_class"] = inputs["host_class"].model_copy(
         update={"imageRef": HOST_IMAGE, "architectures": [architecture]}
     )
@@ -600,13 +604,20 @@ def _request(
     )
 
 
+@pytest.mark.parametrize("auth_mode", ["disabled", "oidc"])
 async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and_result(
     session_factory,
     production_transport_pool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    auth_mode: str,
 ) -> None:
+    from moonmind.config.settings import settings
     from moonmind.omnigent import production, profile_bound_execution
+
+    # The Skill set is owned by its producer, so under authentication only
+    # the Step Execution's admitted scope can read it (#4633).
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
 
     workflow_id = "mm:codex-durable-skill-journey"
     host_id = "host-" + hashlib.sha256(workflow_id.encode()).hexdigest()[:16]
@@ -684,7 +695,7 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             run_store=OmnigentBridgeSessionStore(session_factory),
         )
         realizer = services.realizer_registry.require("codex-profile-bound@1")
-        plan = await _codex_plan(session_factory)
+        plan = await _codex_plan(session_factory, skillset_ref)
         result = await realizer.execute(
             _request(
                 plan,

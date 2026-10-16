@@ -22,8 +22,10 @@ from api_service.db.models import (
     OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
+    OmnigentRuntimeBindingRecord,
     ProviderProfileSlotLease,
 )
+from moonmind.provider_profiles.lease_client import ACTIVE_DURABLE_LEASE_STATES
 from moonmind.provider_profiles.oauth_policy import (
     is_claude_oauth_profile,
     is_codex_oauth_profile,
@@ -241,7 +243,15 @@ class OmnigentOAuthHostRepository:
         execution_profile_ref: str | None = None,
         launch_policy_ref: str | None = None,
         effective_launch_snapshot: dict[str, Any] | None = None,
+        require_idle: bool = False,
     ) -> OmnigentOAuthHostBinding:
+        """Create or update a profile's binding.
+
+        ``require_idle`` refuses the update while the profile holds an active
+        host lease. The check runs under the binding-row lock that lease
+        creation also takes, so no lease can be acquired on the old launch
+        between the check and the update.
+        """
         if static_host_id and host_launch_profile_ref:
             raise ValueError(
                 "static_host_id and host_launch_profile_ref are mutually exclusive"
@@ -253,11 +263,28 @@ class OmnigentOAuthHostRepository:
             mount = self._mount_from_profile(profile)
             harness = self._harness_for_mount(mount)
             result = await session.execute(
-                select(OmnigentOAuthHostBindingRecord).where(
-                    OmnigentOAuthHostBindingRecord.provider_profile_id == profile_id
-                )
+                select(OmnigentOAuthHostBindingRecord)
+                .where(OmnigentOAuthHostBindingRecord.provider_profile_id == profile_id)
+                .with_for_update()
             )
             record = result.scalar_one_or_none()
+            if require_idle:
+                active = (
+                    await session.execute(
+                        select(OmnigentOAuthHostLeaseRecord.lease_id)
+                        .where(
+                            OmnigentOAuthHostLeaseRecord.provider_profile_id
+                            == profile_id,
+                            OmnigentOAuthHostLeaseRecord.status.in_(ACTIVE_HOST_STATES),
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                if active is not None:
+                    raise OmnigentOAuthHostError(
+                        "host binding is leased and keeps its launch",
+                        code="OMNIGENT_HOST_BINDING_LEASED",
+                    )
             if record is None:
                 record = OmnigentOAuthHostBindingRecord(
                     binding_ref=f"omnigent-oauth:{profile_id}",
@@ -783,11 +810,54 @@ class OmnigentOAuthHostRepository:
                         == OmnigentOAuthHostLeaseRecord.provider_lease_id,
                     )
                     .where(
+                        ProviderProfileSlotLease.profile_id
+                        == OmnigentOAuthHostLeaseRecord.provider_profile_id,
+                        ProviderProfileSlotLease.lease_state.in_(
+                            sorted(ACTIVE_DURABLE_LEASE_STATES)
+                        ),
                         OmnigentOAuthHostLeaseRecord.status.in_(
                             TERMINAL_HOST_STATES
-                        )
+                        ),
                     )
                 )
+            ).scalars()
+            return self._cleanup_lease_models(rows, failures)
+
+    async def list_terminal_host_leases_with_pending_binding_cleanup(
+        self, *, profile_id: str | None = None, failures=None
+    ) -> list[OmnigentHostLease]:
+        """Find confirmed teardown whose final fenced binding write is owed."""
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord)
+                    .where(
+                        OmnigentOAuthHostLeaseRecord.provider_profile_id == profile_id
+                    if profile_id else True,
+                    OmnigentOAuthHostLeaseRecord.status == "stopped",
+                        OmnigentOAuthHostLeaseRecord.cleanup_completed_at.is_not(None),
+                        select(ProviderProfileSlotLease.lease_id)
+                        .where(
+                            ProviderProfileSlotLease.lease_id
+                            == OmnigentOAuthHostLeaseRecord.provider_lease_id,
+                            ProviderProfileSlotLease.profile_id
+                            == OmnigentOAuthHostLeaseRecord.provider_profile_id,
+                            ProviderProfileSlotLease.lease_state == "released",
+                        )
+                        .exists(),
+                        select(OmnigentRuntimeBindingRecord.runtime_binding_ref)
+                        .where(
+                            OmnigentRuntimeBindingRecord.host_lease_ref
+                            == OmnigentOAuthHostLeaseRecord.lease_id,
+                            # Legacy OAuth binding states, not the generic v2 owner.
+                            OmnigentRuntimeBindingRecord.state.in_(
+                                ("host_attested", "session_bound")
+                            ),
+                        )
+                        .exists(),
+                    )
+                    .order_by(OmnigentOAuthHostLeaseRecord.lease_id)
+                    )
             ).scalars()
             return self._cleanup_lease_models(rows, failures)
 

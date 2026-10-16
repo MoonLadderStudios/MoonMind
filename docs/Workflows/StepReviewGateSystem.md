@@ -142,7 +142,10 @@ runtime within the existing review-attempt budget, even when
 capability.
 
 Disclosed Unverified criteria never count as passed; observed defects and failed
-checks remain blocking. Optional diagnostics remain optional according to the
+checks remain blocking. An unchanged repository is a publication outcome,
+not an implementation failure or proof of completion. Already-implemented work
+continues to the same verifier and live completion-target checks without creating
+a filler commit or repeating the agent solely to obtain a diff. Optional diagnostics remain optional according to the
 selected acceptance policy. Neither `failure_mode: CONTINUE` nor a draft PR
 bypasses that policy.
 
@@ -231,6 +234,14 @@ also supplied a URL or workspace path. Those authored references remain report
 content and do not turn a valid non-pass decision into a routing failure.
 Reports without inline remaining work preserve their separate remaining-work
 artifact reference so the next turn receives the actual gaps.
+Downstream agent instructions carry only bounded gate navigation fields when the
+workflow-owned report is a declared input attachment. Agents read the complete
+report from `.moonmind/attachments/`; hydrated acceptance rows stay intact in the
+workflow and artifact, rather than being copied into the next request. Histories
+before this handoff retain their original inline instructions on replay.
+Both the full report and its remediation wrapper are linked to the admitted
+parent workflow, whose identity owns attachment reads. Unrelated, restricted,
+and quarantined artifacts remain rejected; this grants no general service access.
 Diagnostics must remain readable without another LLM invocation. Distinguish
 implementation failures, report defects, missing evidence, infrastructure failures,
 and real human decisions rather than displaying all as manual review.

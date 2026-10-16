@@ -89,7 +89,7 @@ exists yet, so the parent's existing bounded step retry starts a fresh Step
 Execution instead of failing the workflow. Hermetic coverage
 lives in `test_mounted_tool_preflight.py` and the full handoff regression in
 `test_generic_platform_production_services.py`.
-| `moonmind/omnigent/legacy_retirement.py`, `session_migration_inventory.py`, `session_supervisor_rollback.py` | Legacy admission table, migration inventory, rollback authority | Governance |
+| `moonmind/omnigent/legacy_retirement.py`, `session_supervisor_rollback.py` | Legacy admission table, rollback authority | Governance |
 
 ## 3. Allowed dependency direction
 
@@ -167,6 +167,15 @@ cannot drift apart, without a second implementation to pair against.
 | Provider Profile authority, policy snapshot, attempt ordinal | `execution_ports.py` | `execution_adapters.py` | Conformance |
 | Workspace checkpoint/restore | `remediation_workspace.py::RemediationWorkspaceOwner` | `SandboxRemediationWorkspaceOwner` | Conformance |
 | Secret resolution | `secret_resolution.py::SecretResolver` | root resolver chain | Conformance |
+
+The stable runtime binding store and legacy harness binding store currently
+share a table and binding-ID prefix, but not a serialized authority schema.
+Generic recovery inventory selects only stable rows, identified by their
+immutable initial `omnigent-runtime-binding-snapshot:sha256:` primary key.
+Legacy records (including `cleanup_complete`) stay with their lifecycle owner;
+they are not projected into stable cleanup authority. Stable snapshot validation
+and the positive Temporal-owner-closed gate remain mandatory. This separation
+is needed until the legacy producer and its retained records are retired.
 
 The stable runtime binding store recomputes its snapshot digest from the
 persisted row. The shared contract fixture is SQLite, which returns

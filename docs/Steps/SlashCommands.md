@@ -524,7 +524,7 @@ MoonMind will pass this command through to the selected runtime.
 If the selected runtime does not support slash-command pass-through, show:
 
 ```text
-/review may not be recognized by the selected runtime. Choose a slash-command capable runtime or escape it as \/review to send literal text.
+/review may not be recognized by the selected Harness. Choose a slash-command capable Harness or escape it as \/review to send literal text.
 ```
 
 ### Runtime changes

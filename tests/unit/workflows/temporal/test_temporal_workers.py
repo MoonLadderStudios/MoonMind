@@ -130,7 +130,6 @@ def test_registered_workflow_types_exclude_retired_manifest_ingest():
     assert "MoonMind.ManifestIngest" not in list_registered_workflow_types()
     assert list_registered_workflow_types() == (
         "MoonMind.UserWorkflow",
-        "MoonMind.ReleaseCanary",
         "MoonMind.ContainerJob",
         "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",
@@ -191,8 +190,6 @@ def test_executable_worker_spec_drives_registration_and_stable_identity() -> Non
         "environ": {
             "MOONMIND_BUILD_SHA": "abc123",
             "MOONMIND_IMAGE_DIGEST": "sha256:image",
-            "TEMPORAL_WORKER_DEPLOYMENT_NAME": "moonmind-test",
-            "TEMPORAL_WORKER_VERSIONING_ENABLED": "true",
         },
     }
     first = build_worker_spec(**kwargs)
@@ -203,7 +200,6 @@ def test_executable_worker_spec_drives_registration_and_stable_identity() -> Non
     assert "MoonMind.PublicationRecoveryV1" in first.readiness_payload()[
         "workflowTypes"
     ]
-    assert first.versioning_enabled is True
     assert first.build_id == "abc123"
 
     alternate_lane = build_worker_spec(
@@ -226,29 +222,31 @@ def test_production_worker_spec_requires_immutable_release_identity() -> None:
         )
 
 
-def test_production_worker_spec_requires_temporal_worker_versioning() -> None:
+def test_production_worker_spec_polls_ordinary_queues_without_versioning() -> None:
     topology = build_worker_topology(fleet=WORKFLOW_FLEET)
-    with pytest.raises(ValueError, match="TEMPORAL_WORKER_VERSIONING_ENABLED"):
-        build_worker_spec(
-            topology=topology,
-            workflows=workflow_fleet_workflow_classes(),
-            activities=workflow_fleet_activity_handlers(),
-            environ={
-                "MOONMIND_DEPLOYMENT_MODE": "production",
-                "MOONMIND_BUILD_SHA": "abc123",
-            },
-        )
+    spec = build_worker_spec(
+        topology=topology,
+        workflows=workflow_fleet_workflow_classes(),
+        activities=workflow_fleet_activity_handlers(),
+        environ={
+            "MOONMIND_DEPLOYMENT_MODE": "production",
+            "MOONMIND_BUILD_SHA": "abc123",
+            # An older installation's leftover switch selects nothing.
+            "TEMPORAL_WORKER_VERSIONING_ENABLED": "true",
+        },
+    )
+    payload = spec.readiness_payload()
+    assert payload["buildId"] == "abc123"
+    assert payload["taskQueues"] == list(topology.task_queues)
+    assert "workerVersioningEnabled" not in payload
+    assert "deploymentId" not in payload
 
 
 def test_recorded_worker_versions_keep_distinct_builds_during_replay_window() -> None:
     topology = build_worker_topology(fleet=WORKFLOW_FLEET)
     workflows = workflow_fleet_workflow_classes()
     activities = workflow_fleet_activity_handlers()
-    common = {
-        "MOONMIND_DEPLOYMENT_MODE": "production",
-        "TEMPORAL_WORKER_VERSIONING_ENABLED": "true",
-        "TEMPORAL_WORKER_DEPLOYMENT_NAME": "moonmind-workflow-fleet",
-    }
+    common = {"MOONMIND_DEPLOYMENT_MODE": "production"}
 
     recorded = build_worker_spec(
         topology=topology,
@@ -263,11 +261,8 @@ def test_recorded_worker_versions_keep_distinct_builds_during_replay_window() ->
         environ={**common, "MOONMIND_BUILD_SHA": "replacement-build"},
     )
 
-    assert recorded.deployment_id == replacement.deployment_id
     assert recorded.build_id == "recorded-build"
     assert replacement.build_id == "replacement-build"
-    assert recorded.versioning_enabled is True
-    assert replacement.versioning_enabled is True
     assert recorded.readiness_payload()["workflowTypes"] == (
         replacement.readiness_payload()["workflowTypes"]
     )

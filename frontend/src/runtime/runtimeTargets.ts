@@ -5,9 +5,9 @@
  *
  * The server owns the versioned rollout policy and publishes the resolved
  * target catalog in `dashboardConfig.system.runtimeTargetCatalog`. This module
- * is the only place the dashboard derives runtime labels, recommended-vs-
- * compatibility grouping, and the offline default. No component reconstructs a
- * runtime default or a display-name map of its own.
+ * is the only place the dashboard derives runtime and Harness labels, Backend
+ * choices, and the offline default. No component reconstructs a runtime
+ * default or a display-name map of its own.
  */
 
 /** Documented offline fallback for `system.runtimeTargetCatalog.defaultRuntimeId`. */
@@ -111,54 +111,47 @@ export function formatRuntimeLabel(
   );
 }
 
-export interface RuntimeOption {
+/**
+ * Harness labels name the agent implementation behind a Provider Profile's
+ * canonical runtime id (Codex CLI, Claude Code, OpenCode). Unlike
+ * `formatRuntimeLabel`, a direct compatibility target never renames the
+ * Harness, because the same Harness may also run on Omnigent.
+ */
+export function formatHarnessLabel(runtimeId: string): string {
+  return RUNTIME_ID_LABELS[runtimeId] || titleCaseRuntimeId(runtimeId);
+}
+
+export interface BackendOption {
   runtimeId: string;
   label: string;
-  compatibilityPath: boolean;
-  available: boolean;
 }
 
-export interface RuntimeOptionGroups {
-  recommended: RuntimeOption[];
-  compatibility: RuntimeOption[];
-  unavailable: RuntimeOption[];
-}
-
-/** Group runtime families by direct compatibility and policy availability. */
-export function runtimeOptionGroups(
-  runtimeIds: readonly string[],
-  catalog?: RuntimeTargetCatalog | null,
-): RuntimeOptionGroups {
-  const groups: RuntimeOptionGroups = {
-    recommended: [],
-    compatibility: [],
-    unavailable: [],
-  };
-  runtimeIds.forEach((runtimeId) => {
-    if (!Object.prototype.hasOwnProperty.call(RUNTIME_ID_LABELS, runtimeId)) {
-      return;
-    }
-    const registered = targetsForRuntime(catalog, runtimeId);
-    const option: RuntimeOption = {
-      runtimeId,
-      label: formatRuntimeLabel(runtimeId, catalog),
-      compatibilityPath: registered.some(
-        (row) => row.pathClass === 'direct_compatibility',
-      ),
-      available: registered.length === 0 ||
-        registered.some((row) => row.explicitSelectionAllowed),
-    };
-    if (!option.available) {
-      groups.unavailable.push(option);
-      return;
-    }
-    if (option.compatibilityPath) {
-      groups.compatibility.push(option);
-      return;
-    }
-    groups.recommended.push(option);
-  });
-  return groups;
+/**
+ * Backend choices for one Harness. Omnigent is the normal backend whenever the
+ * Harness has an Omnigent route; a direct compatibility backend is offered only
+ * while the server catalog publishes an explicitly selectable target for the
+ * Harness's runtime id. Callers render a Backend selector only when more than
+ * one choice exists or the current Backend matches none of them (so it can be
+ * repaired); no frontend list keeps Direct alive on its own.
+ */
+export function backendOptionsForHarness(
+  harnessRuntimeId: string,
+  catalog: RuntimeTargetCatalog | null | undefined,
+  { omnigentRoute }: { omnigentRoute: boolean },
+): BackendOption[] {
+  const options: BackendOption[] = [];
+  if (omnigentRoute) {
+    options.push({ runtimeId: 'omnigent', label: formatRuntimeLabel('omnigent', catalog) });
+  }
+  const direct = targetsForRuntime(catalog, harnessRuntimeId).find(
+    (target) =>
+      target.pathClass === 'direct_compatibility' &&
+      target.explicitSelectionAllowed,
+  );
+  if (harnessRuntimeId && direct) {
+    options.push({ runtimeId: harnessRuntimeId, label: direct.label });
+  }
+  return options;
 }
 
 const ROLLOUT_STATE_LABELS: Record<RuntimeTargetRolloutState, string> = {
@@ -181,17 +174,48 @@ export function formatRolloutStateLabel(
 }
 
 /**
+ * Omnigent targets the catalog publishes for one Harness (`codex-native`).
+ * Empty when no Harness is known or the catalog does not list it, so server
+ * admission stays the authority for that combination.
+ */
+function omnigentTargetsForHarness(
+  catalog: RuntimeTargetCatalog | null | undefined,
+  harnessId: string | null | undefined,
+): RuntimeTarget[] {
+  if (!harnessId) return [];
+  return targetsForRuntime(catalog, 'omnigent').filter(
+    (target) => target.harnessId === harnessId,
+  );
+}
+
+/** Whether new work may select Omnigent for this Harness. */
+export function omnigentAllowedForHarness(
+  catalog: RuntimeTargetCatalog | null | undefined,
+  harnessId: string | null | undefined,
+): boolean {
+  const targets = omnigentTargetsForHarness(catalog, harnessId);
+  return targets.length === 0 || targets.some((target) => target.explicitSelectionAllowed);
+}
+
+/**
  * Return the exact reason a runtime id cannot be selected, or `null` when it
  * can. The caller shows this instead of quietly choosing another runtime.
+ * For Omnigent, `harnessId` narrows the check to that Harness's own targets,
+ * because one Harness can be allowed through Omnigent while another is not.
  */
 export function runtimeUnavailableReason(
   runtimeId: string,
   catalog?: RuntimeTargetCatalog | null,
+  harnessId?: string | null,
 ): string | null {
   if (!Object.prototype.hasOwnProperty.call(RUNTIME_ID_LABELS, runtimeId)) {
-    return `Unsupported runtime ${runtimeId}. Explicitly choose a supported replacement; your draft content is preserved.`;
+    return `Unsupported Harness ${runtimeId}. Explicitly choose a supported replacement; your draft content is preserved.`;
   }
-  const registered = targetsForRuntime(catalog, runtimeId);
+  const harnessTargets =
+    runtimeId === 'omnigent' ? omnigentTargetsForHarness(catalog, harnessId) : [];
+  const registered = harnessTargets.length > 0
+    ? harnessTargets
+    : targetsForRuntime(catalog, runtimeId);
   if (registered.length === 0) {
     return null;
   }
@@ -205,7 +229,7 @@ export function runtimeUnavailableReason(
   return `No qualified target is available for ${formatRuntimeLabel(
     runtimeId,
     catalog,
-  )} (${detail}). Review runtime availability and the Profile configuration in Settings.`;
+  )} (${detail}). Review Harness availability and the Profile configuration in Settings.`;
 }
 
 /**

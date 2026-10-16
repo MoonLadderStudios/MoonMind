@@ -64,6 +64,33 @@ def test_reconcile_same_repo_drift_pins_selected_image():
     validate_effective_launch_snapshot(reconciled)
 
 
+def test_reconcile_binds_the_installed_server_from_the_same_repository():
+    host = "ghcr.io/example/host@sha256:" + "a" * 64
+    old_server = "ghcr.io/example/server@sha256:" + "1" * 64
+    new_server = "ghcr.io/example/server@sha256:" + "2" * 64
+    launch = _launch(host, extra={"serverImageRef": old_server})
+    launch["boundaries"]["host"]["serverImageRef"] = old_server
+
+    reconciled = reconcile_effective_launch_to_selected_host(
+        launch, host, selected_server_image_ref=new_server
+    )
+
+    assert reconciled is not None
+    assert reconciled["hostImageRef"] == host
+    assert reconciled["serverImageRef"] == new_server
+    assert reconciled["boundaries"]["host"]["serverImageRef"] == new_server
+    assert launch["serverImageRef"] == old_server
+    assert reconciled["snapshotRef"] != launch.get("snapshotRef")
+    # A server from another repository is left for attestation to judge.
+    foreign = reconcile_effective_launch_to_selected_host(
+        launch,
+        host,
+        selected_server_image_ref="ghcr.io/example/other@sha256:" + "2" * 64,
+    )
+    assert foreign is not None
+    assert foreign["serverImageRef"] == old_server
+
+
 def test_reconcile_foreign_repository_fails_closed():
     old = "ghcr.io/example/host@sha256:" + "a" * 64
     foreign = "ghcr.io/example/other@sha256:" + "b" * 64

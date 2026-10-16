@@ -551,7 +551,7 @@ def provider_profile_creation_capabilities(
     diagnostics: list[str] = []
     if not methods:
         diagnostics.append(
-            "No validated creation preset exists for this runtime and provider."
+            "No validated creation preset exists for this Harness and provider."
         )
 
     return {
@@ -806,7 +806,7 @@ def validate_manual_credential_contract(
         ):
             return
         raise ValueError(
-            "This runtime and provider does not advertise expert manual "
+            "This Harness and provider does not advertise expert manual "
             "credential overrides; choose the supported authentication method."
         )
     raise ValueError(

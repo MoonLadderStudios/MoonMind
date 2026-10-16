@@ -388,6 +388,12 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
         )
 
         async def dispatch(name, payload, **_kwargs):
+            if name == "repo.sync_pr_unverified_criteria":
+                return await github.sync_pull_request_unverified_criteria(
+                    repo=payload["repo"], pr_url=payload["prUrl"],
+                    section=payload["section"],
+                    expected_head_sha=payload["expectedHeadSha"],
+                )
             assert name == "github_issue.collect_evidence"
             return await activities.github_issue_collect_evidence(payload)
 
@@ -482,6 +488,9 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
         assert owner._remediation_loop_state.consumed_budgets.evidence_retries == 1
         assert owner._moonspec_draft_publication_reason is None
         assert state["marked_ready"] is True
+        assert len(state["comments"]) == 1
+        assert "no Unverified criteria" in state["comments"][0]["body"]
+        assert HEAD in state["comments"][0]["body"]
         assert len(report_reads) == (2 if initial_verdict == "NO_DETERMINATION" else 1)
         if initial_verdict == "NO_DETERMINATION":
             _, original_bytes = await store.read(

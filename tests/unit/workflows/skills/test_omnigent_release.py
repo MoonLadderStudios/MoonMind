@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from moonmind.workflows.skills.deployment_execution import FileDesiredStateStore
@@ -10,7 +12,6 @@ from moonmind.workflows.skills.omnigent_release import (
     OmnigentRelease,
     OmnigentReleaseDrivers,
     OmnigentReleaseError,
-    build_migrated_policy_document,
     decide_release_transition,
     migrate_omnigent_release,
     read_omnigent_release,
@@ -171,44 +172,6 @@ def test_decide_advance_when_candidate_adds_host_family():
     assert action == "advance"
 
 
-def test_build_migrated_policy_document_carries_operator_fields():
-    document = {
-        "host": {"serverImageRef": OLD_SERVER, "hostImageRef": OLD_HOST, "mode": "x"},
-        "resources": {"cpuMillis": 1000},
-        "rollout": {"state": "y"},
-    }
-    migrated = build_migrated_policy_document(
-        document, server_ref=NEW_SERVER, host_ref=NEW_HOST
-    )
-    assert migrated["host"]["serverImageRef"] == NEW_SERVER
-    assert migrated["host"]["hostImageRef"] == NEW_HOST
-    assert migrated["host"]["mode"] == "x"
-    assert migrated["resources"] == {"cpuMillis": 1000}
-    assert migrated["rollout"] == {"state": "y"}
-    # Input untouched.
-    assert document["host"]["serverImageRef"] == OLD_SERVER
-
-
-
-def test_build_migrated_policy_document_drops_retired_retrieval_section():
-    document = {
-        "host": {"serverImageRef": OLD_SERVER, "hostImageRef": OLD_HOST},
-        "rag": {"collectionRefs": ["workflow-default"], "credentialRef": "retrieval-profile"},
-    }
-    migrated = build_migrated_policy_document(
-        document, server_ref=NEW_SERVER, host_ref=NEW_HOST
-    )
-    assert "rag" not in migrated
-    # The recorded version keeps its section; only the successor sheds it.
-    assert document["rag"]["collectionRefs"] == ["workflow-default"]
-
-def test_build_migrated_policy_document_rejects_bad_shapes():
-    with pytest.raises(OmnigentReleaseError):
-        build_migrated_policy_document({}, server_ref=NEW_SERVER, host_ref=NEW_HOST)
-    with pytest.raises(OmnigentReleaseError):
-        build_migrated_policy_document({"host": {}}, server_ref="", host_ref=NEW_HOST)
-
-
 def _enable_omnigent(monkeypatch):
     from moonmind.omnigent import settings
 
@@ -243,22 +206,13 @@ def _drivers(calls, *, candidates=None, live=None, running=None):
         calls.append("await-resolution")
         return {k: v for k, v in target.items() if k != "codex"}
 
-    async def sync_catalog():
-        calls.append("catalog")
-        return {"catalogRef": "catalog:new"}
-
-    async def cut_policy_versions(_target):
-        calls.append("policies")
-        return {"cut": ["omnigent-on-demand@17"], "skipped": []}
-
-    async def refresh_schedules():
-        calls.append("schedules")
-        return {"refreshed": 3, "failures": []}
-
     async def verify_live_container(server_ref):
         calls.append("verify-live")
         # running="" models no running omnigent container.
         return server_ref if running is None else (running or None)
+
+    async def publish_resolution(_target):
+        calls.append("publish-resolution")
 
     return OmnigentReleaseDrivers(
         deployment_inputs=deployment_inputs,
@@ -266,10 +220,8 @@ def _drivers(calls, *, candidates=None, live=None, running=None):
         read_live_refs=read_live_refs,
         restart_server=restart_server,
         await_resolution=await_resolution,
-        sync_catalog=sync_catalog,
-        cut_policy_versions=cut_policy_versions,
-        refresh_schedules=refresh_schedules,
         verify_live_container=verify_live_container,
+        publish_resolution=publish_resolution,
     )
 
 
@@ -292,17 +244,16 @@ async def test_migrate_noop_reruns_post_steps(tmp_path, monkeypatch):
         drivers=_drivers(calls, candidates=_refs(), live=_refs()),
     )
     assert receipt["status"] == "aligned"
-    # Aligned refs still rerun convergent post-record steps (without restart)
-    # so an interrupted advance that already aligned the server completes its
-    # catalog/policy/schedule work instead of reporting stale alignment.
+    # Aligned refs still re-verify the installation (without restart) so an
+    # interrupted advance that already aligned the server finishes resolution
+    # and live verification instead of reporting unverified alignment. No
+    # policy, profile, schedule, or catalog work belongs to the release.
     assert calls == [
         "resolve",
         "live",
         "await-resolution",
-        "catalog",
-        "policies",
-        "schedules",
         "verify-live",
+        "publish-resolution",
     ]
 
 
@@ -310,9 +261,9 @@ async def test_migrate_noop_reruns_post_steps(tmp_path, monkeypatch):
 async def test_migrate_advances_0_13_to_0_14_and_converges_after(tmp_path, monkeypatch):
     """Replay of the 2026-09-15 saga: 0.13 record, upstream at 0.14.
 
-    First pass advances the record, restarts, cuts policy, refreshes
-    schedules. Second pass (live now on the record) is a no-op, which is
-    what makes every later schedule fire dispatch instead of failing.
+    First pass advances the record, restarts the server, and verifies it.
+    Second pass (live now on the record) is a no-op. Neither pass versions a
+    policy or re-plans a schedule: fresh attempts bind the installed images.
     """
     from moonmind.omnigent import settings
 
@@ -334,17 +285,15 @@ async def test_migrate_advances_0_13_to_0_14_and_converges_after(tmp_path, monke
     assert receipt["status"] == "migrated"
     assert receipt["revision"] == 2
     assert receipt["serverImageRef"] == NEW_SERVER
-    assert receipt["policiesCut"] == ["omnigent-on-demand@17"]
-    assert receipt["schedulesRefreshed"] == 3
+    assert "policiesCut" not in receipt
+    assert "schedulesRefreshed" not in receipt
     assert calls == [
         "resolve",
         "live",
         "restart",
         "await-resolution",
-        "catalog",
-        "policies",
-        "schedules",
         "verify-live",
+        "publish-resolution",
     ]
     env_entries, record_doc = store.read()
     assert env_entries["OMNIGENT_IMAGE_REF"] == NEW_SERVER
@@ -364,10 +313,8 @@ async def test_migrate_advances_0_13_to_0_14_and_converges_after(tmp_path, monke
         "resolve",
         "live",
         "await-resolution",
-        "catalog",
-        "policies",
-        "schedules",
         "verify-live",
+        "publish-resolution",
     ]
 
 
@@ -598,9 +545,6 @@ async def test_migrate_requires_runner_bound_drivers(tmp_path, monkeypatch):
         read_live_refs=drivers.read_live_refs,
         restart_server=None,
         await_resolution=drivers.await_resolution,
-        sync_catalog=drivers.sync_catalog,
-        cut_policy_versions=None,
-        refresh_schedules=drivers.refresh_schedules,
         verify_live_container=drivers.verify_live_container,
     )
     with pytest.raises(OmnigentReleaseError, match="wiring"):
@@ -626,9 +570,6 @@ async def test_migrate_surfaces_step_failures(tmp_path, monkeypatch):
         read_live_refs=drivers.read_live_refs,
         restart_server=boom,
         await_resolution=drivers.await_resolution,
-        sync_catalog=drivers.sync_catalog,
-        cut_policy_versions=drivers.cut_policy_versions,
-        refresh_schedules=drivers.refresh_schedules,
         verify_live_container=drivers.verify_live_container,
     )
     with pytest.raises(RuntimeError, match="compose daemon refused"):
@@ -638,23 +579,17 @@ async def test_migrate_surfaces_step_failures(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outage", [False, True], ids=["one-schedule", "whole-pass"])
-async def test_schedule_refresh_failure_does_not_fail_a_verified_release(
-    tmp_path, monkeypatch, outage
+async def test_release_installs_and_verifies_without_the_application_database(
+    tmp_path, monkeypatch
 ):
-    """Schedules consume the release; they do not gate it.
+    """The repair engine needs no API database, policy, or schedule service.
 
-    Replays mm:220e9937 (2026-10-06): the fleet and the Omnigent release were
-    installed and verified, then one recurring schedule could not be re-planned
-    and every attempt failed the whole deployment update. The API's bootstrap
-    reconciliation keeps retrying that schedule; the receipt names it.
+    A release that moves the installed images completes from Compose,
+    resolution, and live verification alone, so the controller can repair a
+    stack whose application services are down and no policy or schedule
+    rewrite can turn a verified installation into a failed update.
     """
-    import dataclasses
-    from contextlib import asynccontextmanager
-
     from api_service.db import base
-    from api_service.services import recurring_workflows_service as schedules
-    from moonmind.workflows.skills import omnigent_release
 
     _enable_omnigent(monkeypatch)
     store = _store(tmp_path)
@@ -663,73 +598,31 @@ async def test_schedule_refresh_failure_does_not_fail_a_verified_release(
         env_updates=release.to_env(),
         json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
     )
-    reason = (
-        "a81dd46f: could not refresh scheduled Omnigent authority: effective "
-        "launch host image conflicts with the selected Host Class"
-    )
 
-    class Session:
-        async def commit(self):
-            return None
+    def unavailable(*_args, **_kwargs):
+        raise AssertionError("release migration opened an application session")
 
-    @asynccontextmanager
-    async def session_context():
-        yield Session()
-
-    async def refresh(_service, limit=500):
-        if outage:
-            raise RuntimeError("database connection reset")
-        return schedules.ManagedScheduleRefresh(refreshed=2, failures=(reason,))
-
-    monkeypatch.setattr(base, "get_async_session_context", session_context)
-    monkeypatch.setattr(
-        schedules.RecurringWorkflowsService,
-        "refresh_managed_bootstrap_schedules",
-        refresh,
-    )
+    monkeypatch.setattr(base, "get_async_session_context", unavailable)
+    monkeypatch.setattr(base, "async_session_maker", unavailable)
     calls: list[str] = []
-    drivers = dataclasses.replace(
-        _drivers(calls, candidates=_refs(server=NEW_SERVER, host=NEW_HOST), live=_refs()),
-        refresh_schedules=omnigent_release._default_refresh_schedules,
-    )
-
     receipt = await migrate_omnigent_release(
-        store=store, runner=object(), owner="test", drivers=drivers
+        store=store,
+        runner=object(),
+        owner="test",
+        drivers=_drivers(
+            calls, candidates=_refs(server=NEW_SERVER, host=NEW_HOST), live=_refs()
+        ),
     )
 
     assert receipt["status"] == "migrated"
     assert receipt["serverImageRef"] == NEW_SERVER
-    # Verification still runs after the schedule pass.
-    assert calls[-1] == "verify-live"
-    if outage:
-        assert receipt["schedulesRefreshed"] == 0
-        assert receipt["scheduleRefreshFailures"] == [
-            "schedule refresh pass failed: database connection reset"
-        ]
-    else:
-        assert receipt["schedulesRefreshed"] == 2
-        assert receipt["scheduleRefreshFailures"] == [reason]
-    assert receipt["scheduleRefreshFailureCount"] == 1
+    assert calls[-3:] == ["await-resolution", "verify-live", "publish-resolution"]
 
 
 @pytest.mark.asyncio
-async def test_receipt_naming_many_failed_schedules_survives_the_controller_tail(
-    tmp_path, monkeypatch
-):
-    """The standalone controller recovers the receipt from a bounded log tail.
-
-    A receipt carrying every failed schedule outgrows that tail, the controller
-    loses the result prefix, and reports "returned no release receipt" for an
-    update that was installed and verified.
-    """
+async def test_unverified_runtime_leaves_the_release_incomplete(tmp_path, monkeypatch):
+    """A required runtime that never becomes observable stays a failed step."""
     import dataclasses
-    import json
-
-    from tests.support.deployment_controller import load_controller_modules
-
-    load_controller_modules(monkeypatch)
-    import redact
-    import server
 
     _enable_omnigent(monkeypatch)
     store = _store(tmp_path)
@@ -738,30 +631,84 @@ async def test_receipt_naming_many_failed_schedules_survives_the_controller_tail
         env_updates=release.to_env(),
         json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
     )
-    failures = [f"schedule-{index:03d}: " + "x" * 480 for index in range(500)]
 
-    async def refresh_schedules():
-        return {"refreshed": 0, "failures": failures}
+    async def never_ready(_target):
+        raise OmnigentReleaseError("await-resolution", "status=blocked")
 
     drivers = dataclasses.replace(
         _drivers([], candidates=_refs(server=NEW_SERVER, host=NEW_HOST), live=_refs()),
-        refresh_schedules=refresh_schedules,
+        await_resolution=never_ready,
     )
-    receipt = await migrate_omnigent_release(
-        store=store, runner=object(), owner="test", drivers=drivers
+    with pytest.raises(OmnigentReleaseError) as exc:
+        await migrate_omnigent_release(
+            store=store, runner=object(), owner="test", drivers=drivers
+        )
+    assert exc.value.step == "await-resolution"
+    # The record keeps the selected revision so a rerun converges toward it.
+    stored = read_omnigent_release(*store.read())
+    assert stored is not None and stored.revision == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("running", ["", OLD_SERVER])
+async def test_failed_live_verification_never_publishes_resolved_state(
+    tmp_path, monkeypatch, running
+):
+    """Fresh admission binds the resolved state, so only a verified install publishes it."""
+
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release()
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    calls: list[str] = []
+    with pytest.raises(OmnigentReleaseError) as exc:
+        await migrate_omnigent_release(
+            store=store,
+            runner=object(),
+            owner="test",
+            drivers=_drivers(
+                calls,
+                candidates=_refs(server=NEW_SERVER, host=NEW_HOST),
+                live=_refs(),
+                running=running,
+            ),
+        )
+    assert exc.value.step == "verify"
+    assert calls[-2:] == ["await-resolution", "verify-live"]
+    assert "publish-resolution" not in calls
+
+
+@pytest.mark.asyncio
+async def test_default_resolution_publishes_only_on_request(monkeypatch):
+    """Awaiting the recorded images observes them; publishing is a separate step."""
+    from moonmind.omnigent.bootstrap import image_resolution, store
+    from moonmind.workflows.skills import omnigent_release
+
+    state = SimpleNamespace(
+        server_image_ref=NEW_SERVER,
+        opencode_host_image_ref="",
+        shared_host_image_ref=NEW_HOST,
+        pi_host_image_ref="",
+        details={},
     )
 
-    # Same line, stream order, and bound as controller_omnigent_cli feeding
-    # the controller's subprocess runner.
-    diagnostics = "\n".join(f"migration diagnostic {n}" for n in range(400))
-    line = server.OMNIGENT_RESULT_PREFIX + json.dumps(receipt, sort_keys=True)
-    last = redact.tail_text(f"{diagnostics}\n{line}").splitlines()[-1]
-    assert last.startswith(server.OMNIGENT_RESULT_PREFIX)
-    parsed = json.loads(last[len(server.OMNIGENT_RESULT_PREFIX) :])
-    assert parsed["status"] == "migrated"
-    assert parsed["scheduleRefreshFailureCount"] == 500
-    assert parsed["scheduleRefreshFailures"]
-    assert parsed["scheduleRefreshFailures"][0].startswith("schedule-000: ")
+    async def resolve(_env):
+        return state
+
+    saved: list = []
+    monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
+    monkeypatch.setattr(store, "save_resolved_state", saved.append)
+    target = {"server": NEW_SERVER, "shared": NEW_HOST}
+
+    observed = await omnigent_release._default_await_resolution(target, attempts=1)
+    assert observed == target
+    assert saved == []
+
+    await omnigent_release._default_publish_resolution(target)
+    assert saved == [state]
 
 
 def test_store_merge_preserves_unrelated_entries(tmp_path):
@@ -884,12 +831,11 @@ async def test_release_migrate_wires_store_runner_and_image(tmp_path, monkeypatc
     seen: dict[str, object] = {}
 
     async def fake_migrate(
-        *, store, runner, owner, moonmind_image, drivers, actor, selected_revision
+        *, store, runner, owner, moonmind_image, drivers, selected_revision
     ):
         seen["selected_revision"] = selected_revision
         seen["owner"] = owner
         seen["moonmind_image"] = moonmind_image
-        seen["actor"] = actor
         seen["has_drivers"] = drivers is not None
         store.read()
         seen["store_path"] = str(getattr(store, "env_file_path", ""))
@@ -908,7 +854,6 @@ async def test_release_migrate_wires_store_runner_and_image(tmp_path, monkeypatc
     assert seen["selected_revision"] == 7
     assert seen["owner"] == "owner-1"
     assert seen["moonmind_image"] == "img@sha256:" + "f" * 64
-    assert seen["actor"] == "release"
     assert seen["has_drivers"] is True
     assert seen["store_path"] == str(env_file)
     assert os.environ["MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE"] == str(env_file)
@@ -923,114 +868,6 @@ async def test_release_migrate_reports_missing_desired_state(tmp_path, monkeypat
     assert receipt["status"] == "skipped"
 
 
-def test_release_drift_compatible_rebuild_points_at_bootstrap_reconcile():
-    """#4379 R7: same-repo rebuild is fenced with an executable recovery."""
-    from moonmind.workflows.skills.omnigent_release import (
-        raise_for_release_policy_drift,
-        release_policy_drift_dispositions,
-    )
-
-    # NOTE: "c"*64/"0"*64 digests are synthetic placeholders that never
-    # auto-advance; use real-looking digests so the rebuild qualifies.
-    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
-    new = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "e" * 64
-    dispositions = release_policy_drift_dispositions(
-        {"omnigent-on-demand": old},
-        {"server": NEW_SERVER, "opencode": new},
-    )
-    assert len(dispositions) == 1
-    assert dispositions[0]["compatibleRebuild"] is True
-    assert dispositions[0]["fencePromotion"] is True
-    assert "bootstrap reconcile" in dispositions[0]["recovery"]
-    with pytest.raises(OmnigentReleaseError) as exc:
-        raise_for_release_policy_drift(dispositions)
-    assert exc.value.step == "drift-fence"
-    assert "bootstrap reconcile" in str(exc.value)
-
-
-def test_release_drift_family_change_fences_with_explicit_revision():
-    """#4379 R7: a genuinely incompatible image fences closed."""
-    from moonmind.workflows.skills.omnigent_release import (
-        raise_for_release_policy_drift,
-        release_policy_drift_dispositions,
-    )
-
-    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
-    foreign = "ghcr.io/example/other-host@sha256:" + "e" * 64
-    dispositions = release_policy_drift_dispositions(
-        {"omnigent-on-demand": old},
-        {"server": NEW_SERVER, "opencode": foreign},
-    )
-    assert len(dispositions) == 1
-    assert dispositions[0]["compatibleRebuild"] is False
-    with pytest.raises(OmnigentReleaseError) as exc:
-        raise_for_release_policy_drift(dispositions)
-    assert exc.value.step == "drift-fence"
-    assert "explicitly" in str(exc.value)
-
-
-def test_release_pins_codex_policies_to_the_shared_tool_owning_host():
-    """Codex policies follow the shared host, never the upstream host image."""
-    from moonmind.workflows.skills.omnigent_release import (
-        release_policy_drift_dispositions,
-    )
-
-    upstream = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "d" * 64
-    target = {"server": NEW_SERVER, "codex": upstream, "shared": NEW_HOST}
-
-    dispositions = release_policy_drift_dispositions(
-        {
-            policy_id: upstream
-            for policy_id in ("omnigent-codex", "codex-static", "codex-on-demand")
-        },
-        target,
-    )
-
-    assert {item["policyRef"] for item in dispositions} == {
-        "omnigent-codex",
-        "codex-static",
-        "codex-on-demand",
-    }
-    assert {item["selectedHostImageRef"] for item in dispositions} == {NEW_HOST}
-    assert (
-        release_policy_drift_dispositions({"codex-on-demand": NEW_HOST}, target) == []
-    )
-
-
-def test_release_drift_absent_when_aligned():
-    from moonmind.workflows.skills.omnigent_release import (
-        raise_for_release_policy_drift,
-        release_policy_drift_dispositions,
-    )
-
-    assert (
-        release_policy_drift_dispositions(
-            {"omnigent-on-demand": NEW_HOST},
-            {"server": NEW_SERVER, "opencode": NEW_HOST},
-        )
-        == []
-    )
-    assert raise_for_release_policy_drift([]) is None
-
-
-def test_release_drift_missing_selected_fences():
-    """P1: a policy pin with no recorded host target must fence promotion."""
-    from moonmind.workflows.skills.omnigent_release import (
-        raise_for_release_policy_drift,
-        release_policy_drift_dispositions,
-    )
-
-    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
-    dispositions = release_policy_drift_dispositions(
-        {"omnigent-on-demand": old},
-        {"server": NEW_SERVER, "opencode": ""},
-    )
-    assert len(dispositions) == 1
-    assert dispositions[0]["fencePromotion"] is True
-    with pytest.raises(OmnigentReleaseError, match="drift-fence"):
-        raise_for_release_policy_drift(dispositions)
-
-
 def test_decide_advance_preserves_recorded_host_on_transient_empty():
     """P1: a transiently empty candidate must not clear recorded authority."""
     release = _release()
@@ -1042,82 +879,3 @@ def test_decide_advance_preserves_recorded_host_on_transient_empty():
     assert action == "advance"
     assert target["server"] == NEW_SERVER
     assert target["codex"] == OLD_HOST
-
-
-@pytest.mark.asyncio
-async def test_qualify_host_drift_fails_when_policy_load_fails(monkeypatch):
-    """P1: unavailable qualification must fence instead of silently passing."""
-    from moonmind.workflows.skills import omnigent_release as release_module
-
-    class _Policy:
-        default_version = 14
-
-    async def _get_version(_self, _policy_id, _version):
-        raise RuntimeError("transient db error")
-
-    class _Service:
-        def __init__(self, _session):
-            pass
-
-        get_version = _get_version
-
-    @__import__("contextlib").asynccontextmanager
-    async def _session_ctx():
-        class _Session:
-            async def get(self, _model, _policy_id):
-                return _Policy()
-
-        yield _Session()
-
-    monkeypatch.setattr(
-        "api_service.services.omnigent_policies.OmnigentPolicyService", _Service
-    )
-    monkeypatch.setattr(
-        release_module, "OMNIGENT_RELEASE_POLICIES", (("omnigent-on-demand", "opencode"),)
-    )
-    import api_service.db.base as db_base
-
-    monkeypatch.setattr(db_base, "get_async_session_context", _session_ctx)
-    with pytest.raises(OmnigentReleaseError, match="qualify-host-drift"):
-        await release_module._default_qualify_host_drift({"opencode": NEW_HOST})
-
-
-@pytest.mark.asyncio
-async def test_migrate_fences_promotion_while_drift_remains(tmp_path, monkeypatch):
-    """#4379 R7: drift after cut/refresh blocks the release receipt."""
-    _enable_omnigent(monkeypatch)
-    store = _store(tmp_path)
-    release = _release()
-    await store.merge(
-        env_updates=release.to_env(),
-        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
-    )
-    from dataclasses import replace
-
-    from moonmind.workflows.skills.omnigent_release import OmnigentReleaseError
-
-    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
-    foreign = "ghcr.io/example/other-host@sha256:" + "e" * 64
-
-    async def fenced_drift(_target):
-        return [
-            {
-                "policyRef": "omnigent-on-demand@14",
-                "plannedHostImageRef": old,
-                "selectedHostImageRef": foreign,
-                "compatibleRebuild": False,
-                "fencePromotion": True,
-                "recovery": "revise the policy, profile, and schedule explicitly",
-            }
-        ]
-
-    calls: list[str] = []
-    drivers = replace(_drivers(calls), qualify_host_drift=fenced_drift)
-    with pytest.raises(OmnigentReleaseError) as exc:
-        await migrate_omnigent_release(
-            store=store,
-            runner=object(),
-            owner="test",
-            drivers=drivers,
-        )
-    assert exc.value.step == "drift-fence"

@@ -15,8 +15,9 @@ import {
 // ProviderProfilesManager with synthetic credential-free fixtures (long
 // unbroken identity, long tier labels, several tiers, non-first default) and
 // pins both the normalized UI state and the canonical save payload so the
-// layout refactor cannot silently alter behavior. Geometry at 320px is proven
-// by frontend/src/browser/mobileOverflow4559.browser.test.tsx in the browser
+// layout refactor cannot silently alter behavior. Geometry and the real
+// edit/save journey inside the dashboard shell are proven by
+// frontend/src/browser/mobileOverflow.browser.test.tsx in the browser
 // matrix; this suite runs in jsdom and guards the markup/behavior contract.
 const LONG_ID =
   'agent-profile-with-a-very-long-unbroken-identity-that-must-wrap-on-mobile-0123456789';

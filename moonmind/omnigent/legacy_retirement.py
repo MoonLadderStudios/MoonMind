@@ -381,9 +381,8 @@ class ObsoleteConfiguration(BaseModel):
 
 # Every legacy configuration identity that will produce an actionable startup
 # failure once its owning retirement row stops admitting new work. Nothing is
-# deprecated yet: the aliases below are still the supported way to pin a prior
-# image while the rollback window is open (#3833 has not promoted the qualified
-# generic rows).
+# deprecated yet: each owning row is still an active product path, so the
+# aliases remain a supported way to pin a prior host image.
 OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
     ObsoleteConfiguration(
         variable="OMNIGENT_HOST_IMAGE_REF",

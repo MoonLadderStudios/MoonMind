@@ -440,7 +440,7 @@ def test_retained_history_replays_through_cutover_boundary_after_cutoff():
     """R4: retained decoders/inputs/routing survive the retired-lane cutoff."""
 
     from moonmind.omnigent.workspace_sources import decode_legacy_workspace_path
-    from moonmind.workflows.temporal.release_routing import current_version
+    from moonmind.workflows.temporal.unversioned_cutover import current_version
 
     env = {DEPLOYMENT_CUTOFF_ENV: "2026-01-01T00:00:00Z"}
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
@@ -684,7 +684,7 @@ def test_workflow_boundaries_resolve_against_live_drain_evidence():
     """R6: real workflow/activity helpers bind to drain/disposition evidence."""
 
     from moonmind.omnigent.codex_cutover_drain import run_live_codex_drain
-    from moonmind.workflows.temporal.release_routing import current_version
+    from moonmind.workflows.temporal.unversioned_cutover import current_version
     from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
     # Restart/retry helpers on the real run workflow stay wired.

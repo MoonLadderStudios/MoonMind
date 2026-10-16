@@ -4472,6 +4472,89 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_idle_binding_update_refuses_a_profile_with_an_active_lease(
+    tmp_path,
+) -> None:
+    """The idle check and launch replacement share one binding-row transaction.
+
+    Lease creation serializes on the same binding row, so a lease acquired on
+    the old launch can never be left behind by a replacement that observed the
+    profile idle before that lease committed.
+    """
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/hosts.db")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    max_parallel_runs=1,
+                    credential_generation=3,
+                    enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                )
+            )
+            await session.commit()
+        repository = OmnigentOAuthHostRepository(factory)
+
+        def launch(name: str) -> dict:
+            return {"snapshotRef": f"omnigent-launch:sha256:{name}"}
+
+        await repository.create_or_update_static_binding(
+            profile_id="codex",
+            endpoint_ref="default",
+            host_launch_profile_ref="codex-on-demand@16",
+            execution_profile_ref="omnigent-codex@1",
+            launch_policy_ref="codex-on-demand@16",
+            effective_launch_snapshot=launch("old"),
+        )
+        installed = await repository.create_or_update_static_binding(
+            profile_id="codex",
+            endpoint_ref="default",
+            host_launch_profile_ref="codex-on-demand@16",
+            execution_profile_ref="omnigent-codex@1",
+            launch_policy_ref="codex-on-demand@16",
+            effective_launch_snapshot=launch("installed"),
+            require_idle=True,
+        )
+        assert installed.effective_launch_snapshot == launch("installed")
+        await repository.create_or_get_host_lease(
+            binding=installed,
+            provider_lease_id="provider-lease-1",
+            holder_workflow_id="workflow-1",
+            agent_run_id="step-1",
+            idempotency_key="idem-1",
+        )
+
+        with pytest.raises(OmnigentOAuthHostError) as leased:
+            await repository.create_or_update_static_binding(
+                profile_id="codex",
+                endpoint_ref="default",
+                host_launch_profile_ref="codex-on-demand@16",
+                execution_profile_ref="omnigent-codex@1",
+                launch_policy_ref="codex-on-demand@16",
+                effective_launch_snapshot=launch("newer"),
+                require_idle=True,
+            )
+        assert leased.value.code == "OMNIGENT_HOST_BINDING_LEASED"
+        kept = await repository.get_binding_for_profile("codex")
+        assert kept is not None
+        assert kept.effective_launch_snapshot == launch("installed")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_unconfirmed_host_stop_fences_successor_until_janitor_confirms(
     tmp_path,
 ) -> None:
@@ -4977,7 +5060,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup(exposure) 
 async def _drive_authority_chain_coordinator(
     execute,
     *,
-    publication: dict | None = None,
+    publication: dict | Exception | None = None,
     completion_evidence: list[dict] | None = None,
     session_inspector: OmnigentOAuthHostRuntime | None = None,
     request_parameters: dict | None = None,
@@ -5115,6 +5198,8 @@ async def _drive_authority_chain_coordinator(
             ordered.append("host_cleanup")
 
         async def publish_workspace(self, **_kwargs):
+            if isinstance(publication, Exception):
+                raise publication
             return publication or {
                 "push_status": "pushed",
                 "push_branch": "moonmind-job-00000000",
@@ -5281,8 +5366,8 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
 
 
 @pytest.mark.asyncio
-async def test_coordinator_rejects_false_success_without_publishable_commits() -> None:
-    """A completed provider turn is not repository terminal evidence by itself."""
+async def test_coordinator_rejects_missing_repository_publication() -> None:
+    """A completed provider turn is not repository publication evidence by itself."""
 
     async def execute(request, **_kwargs):
         return AgentRunResult(summary="provider reported completed")
@@ -5291,7 +5376,7 @@ async def test_coordinator_rejects_false_success_without_publishable_commits() -
         await _drive_authority_chain_coordinator(
             execute,
             publication={
-                "push_status": "no_commits",
+                "push_status": "not_attempted",
                 "push_branch": "moonmind-job-00000000",
                 "push_base_branch": "main",
                 "push_commit_count": 0,
@@ -5303,7 +5388,7 @@ async def test_coordinator_rejects_false_success_without_publishable_commits() -
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
     assert result.retry_recommendation == "retry"
-    assert metadata["push_status"] == "no_commits"
+    assert metadata["push_status"] == "not_attempted"
     assert metadata["repositoryContinuationCount"] == 8
     assert "repository_publication" in ordered
     assert authority_metadata[0]["terminal"]["harvestState"] == "failed"
@@ -5311,18 +5396,31 @@ async def test_coordinator_rejects_false_success_without_publishable_commits() -
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("remote_verified", [True, False])
-async def test_coordinator_accepts_remotely_verified_trusted_no_commit(
+async def test_coordinator_returns_no_commit_transport_outcome_without_repeating_work(
     remote_verified,
 ) -> None:
-    """A trusted no-change result retains whether its saved head is the tip."""
+    """Publication preserves no-change evidence; the workflow owns acceptance."""
+
+    runner_calls = []
+    verification = {
+        "verdict": "NO_DETERMINATION",
+        "recommendedNextAction": "blocked",
+        "recoverableInCurrentRuntime": False,
+    }
 
     async def execute(request, **_kwargs):
+        runner_calls.append(request.idempotency_key)
         return AgentRunResult(
-            summary="issue is already implemented",
-            metadata={"omnigentSessionId": "session-1"},
+            summary="Existing implementation retained; required proof is unavailable.",
+            outputRefs=["artifact://verification-evidence"],
+            metadata={
+                "omnigentSessionId": "session-1",
+                "verifyArtifactPath": "reports/moonspec-verify-result.json",
+                "moonSpecVerify": verification,
+            },
         )
 
-    _ordered, authority_metadata, metadata, result = (
+    ordered, authority_metadata, metadata, result = (
         await _drive_authority_chain_coordinator(
             execute,
             publication={
@@ -5333,21 +5431,17 @@ async def test_coordinator_accepts_remotely_verified_trusted_no_commit(
                 "push_commit_count": 0,
                 "remote_verified": remote_verified,
             },
-            request_parameters={
-                "repositoryOutcomePolicy": {
-                    "schemaVersion": "repository-outcome-policy/v2",
-                    "allowNoCommit": True,
-                    "authority": "trusted_assessment",
-                    "assessmentVerdict": "FULLY_IMPLEMENTED",
-                    "assessmentArtifactRef": "art_assessment_1",
-                    "assessedRepository": "owner/repo",
-                    "assessedBranch": "main",
-                }
-            },
         )
     )
 
     assert result.failure_class is None
+    assert result.provider_error_code is None
+    assert result.retry_recommendation is None
+    assert runner_calls == ["idem-1"]
+    assert not any(event.startswith("repository_continuation_") for event in ordered)
+    assert result.output_refs == ["artifact://verification-evidence"]
+    assert metadata["verifyArtifactPath"] == "reports/moonspec-verify-result.json"
+    assert metadata["moonSpecVerify"] == verification
     assert metadata["push_status"] == "no_commits"
     assert metadata["repositoryContinuationCount"] == 0
     assert metadata["acceptedRepositoryEvidence"] == {
@@ -5367,10 +5461,16 @@ async def test_coordinator_accepts_remotely_verified_trusted_no_commit(
 
 
 @pytest.mark.asyncio
-async def test_coordinator_rejects_no_commit_policy_for_another_repository() -> None:
+async def test_coordinator_preserves_provider_failure_without_no_commit_recovery() -> None:
+    runner_calls = []
+
     async def execute(request, **_kwargs):
+        runner_calls.append(request.idempotency_key)
         return AgentRunResult(
-            summary="issue is already implemented",
+            summary="Provider execution failed",
+            failureClass="execution_error",
+            providerErrorCode="provider_execution_failed",
+            retryRecommendation="retry",
             metadata={"omnigentSessionId": "session-1"},
         )
 
@@ -5385,22 +5485,45 @@ async def test_coordinator_rejects_no_commit_policy_for_another_repository() -> 
                 "push_commit_count": 0,
                 "remote_verified": True,
             },
-            request_parameters={
-                "repositoryOutcomePolicy": {
-                    "schemaVersion": "repository-outcome-policy/v2",
-                    "allowNoCommit": True,
-                    "authority": "trusted_assessment",
-                    "assessmentVerdict": "FULLY_IMPLEMENTED",
-                    "assessmentArtifactRef": "art_assessment_1",
-                    "assessedRepository": "another/repository",
-                    "assessedBranch": "main",
-                }
-            },
         )
     )
 
-    assert result.provider_error_code == "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
-    assert metadata["repositoryContinuationCount"] == 8
+    assert result.failure_class == "execution_error"
+    assert result.provider_error_code == "provider_execution_failed"
+    assert result.retry_recommendation == "retry"
+    assert runner_calls == ["idem-1"]
+    assert "push_status" not in metadata
+    assert "acceptedRepositoryEvidence" not in metadata
+    assert "repositoryContinuationCount" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_coordinator_preserves_unverified_publication_failure() -> None:
+    """An actual publisher failure cannot become accepted no-change evidence."""
+
+    runner_calls = []
+
+    async def execute(request, **_kwargs):
+        runner_calls.append(request.idempotency_key)
+        return AgentRunResult(
+            summary="No implementation changes were needed",
+            metadata={"omnigentSessionId": "session-1"},
+        )
+
+    _ordered, _authority, metadata, result = await _drive_authority_chain_coordinator(
+        execute,
+        publication=HarnessPlatformError(
+            "unchanged repository head did not match the exact remote base",
+            code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+        ),
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED"
+    assert result.retry_recommendation == "retry"
+    assert runner_calls == ["idem-1"]
+    assert metadata["push_status"] == "failed"
+    assert "acceptedRepositoryEvidence" not in metadata
 
 
 @pytest.mark.asyncio
@@ -7878,6 +8001,7 @@ class _StreamingArtifactService:
         principal: str,
         allow_restricted_raw: bool = False,
         chunk_size: int = 1024,
+        admitted_principal: str | None = None,
     ):
         assert allow_restricted_raw is True
         assert principal == "service:omnigent_workspace_restore"

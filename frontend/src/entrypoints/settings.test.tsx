@@ -127,7 +127,7 @@ describe('MoonLadderStudios/MoonMind#4019 Source Control on Providers & Secrets'
   });
 });
 
-describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () => {
+describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filter', () => {
   const codexProfile = {
     profile_id: 'codex_minimax_team',
     runtime_id: 'codex_cli',
@@ -206,7 +206,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
 
   function runtimeFilterControl(): HTMLSelectElement {
     return screen.getByLabelText(
-      'Profile runtime filter',
+      'Harness filter',
     ) as HTMLSelectElement;
   }
 
@@ -224,7 +224,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     return within(section as HTMLElement).getByRole('table');
   }
 
-  it('fetches the complete Provider Profile collection and defaults to All runtimes', async () => {
+  it('fetches the complete Provider Profile collection and defaults to All Harnesses', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Profiles' });
@@ -260,7 +260,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
       }));
 
     expect(options).toEqual([
-      { value: 'all', label: 'All runtimes' },
+      { value: 'all', label: 'All Harnesses' },
       { value: 'codex_cli', label: 'Codex CLI' },
       { value: 'claude_code', label: 'Claude Code' },
       { value: 'jules', label: 'Jules' },
@@ -329,7 +329,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     selectRuntimeFilter('jules');
 
     expect(
-      screen.getByText('No provider profiles are configured for Jules.'),
+      screen.getByText('No Provider Profiles are configured for Jules.'),
     ).toBeTruthy();
     expect(screen.queryByText('No provider profiles configured yet.')).toBeNull();
   });

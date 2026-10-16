@@ -4441,11 +4441,9 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.github_issue_reconcile import (
         MoonMindGitHubIssueReconcileWorkflow,
     )
-    from moonmind.workflows.temporal.workflows.release_canary import ReleaseCanaryWorkflow, inspect_release_activity
 
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
-        ReleaseCanaryWorkflow,
         MoonMindContainerJobWorkflow,
             MoonMindControlStopContinuationWorkflow,
         MoonMindProviderProfileManagerWorkflow,
@@ -4464,7 +4462,6 @@ async def test_main_async_workflow_fleet(
         MoonMindGitHubIssueReconcileWorkflow,
     )
     assert kwargs["activities"] == (
-        inspect_release_activity,
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,
@@ -4553,15 +4550,10 @@ async def test_main_async_lane_failure_stops_every_lane_and_never_reports_ready(
         _lane("merge", fails=True),
     ]
 
-    with patch(
-        "moonmind.workflows.temporal.release_routing.bootstrap_version_routing",
-        new=AsyncMock(return_value={"status": "unversioned"}),
-    ) as routing:
-        with pytest.raises(BaseExceptionGroup) as exc_info:
-            await main_async()
+    with pytest.raises(BaseExceptionGroup) as exc_info:
+        await main_async()
 
     assert exc_info.group_contains(RuntimeError, match="merge poller unavailable")
-    routing.assert_not_awaited()
     health_state = mock_healthcheck.call_args.args[0]
     assert health_state.pollers_started is False
     assert health_state.ready is False
@@ -4582,7 +4574,14 @@ async def test_main_async_activity_fleet(
     mock_describe,
     mock_runtime_activities,
     mock_healthcheck,
+    monkeypatch,
 ):
+    # An installed immutable release used to enable Worker Versioning and
+    # startup routing bootstrap. Installed workers now poll ordinary queues.
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workers.installed_release",
+        lambda: {"digest": "sha256:" + "a" * 64, "sourceRevision": "abc123"},
+    )
     # Setup mocks
     mock_healthcheck_server = MagicMock()
     mock_healthcheck_server.wait_closed = AsyncMock()
@@ -4617,8 +4616,7 @@ async def test_main_async_activity_fleet(
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.activity.artifacts"
     assert kwargs["workflows"] == ()
-    from moonmind.workflows.temporal.workflows.release_canary import inspect_release_activity
-    assert kwargs["activities"] == (test_handler, inspect_release_activity)
+    assert kwargs["activities"] == (test_handler,)
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs
@@ -4629,6 +4627,13 @@ async def test_main_async_activity_fleet(
     mock_runtime_activities.assert_awaited_once_with(mock_topology)
     mock_worker.run.assert_awaited_once()
     mock_resources.aclose.assert_awaited_once()
+    # Readiness needs only real pollers: no routing state is published and
+    # no version-management call reaches Temporal.
+    health_state = mock_healthcheck.call_args.args[0]
+    assert health_state.readiness_metadata["buildId"] == "sha256:" + "a" * 64
+    assert "releaseRouting" not in health_state.readiness_metadata
+    assert "workerVersioningEnabled" not in health_state.readiness_metadata
+    assert not mock_client.workflow_service.mock_calls
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")

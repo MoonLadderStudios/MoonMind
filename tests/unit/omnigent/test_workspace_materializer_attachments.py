@@ -12,8 +12,9 @@ from tests.unit.omnigent.test_workspace_materializer import _request, _workspace
 @pytest.mark.asyncio
 @pytest.mark.parametrize("named_evidence", [False, True])
 @pytest.mark.parametrize("changed_brief", [False, True])
+@pytest.mark.parametrize("step_authority", [False, True])
 async def test_ready_workspace_readmits_ordinary_attachments_without_replacing_candidate(
-    tmp_path, named_evidence, changed_brief
+    tmp_path, named_evidence, changed_brief, step_authority
 ):
     workspace = tmp_path / "temporal_sandbox" / _workspace_id() / "repo"
     (workspace / ".git" / "info").mkdir(parents=True)
@@ -28,13 +29,14 @@ async def test_ready_workspace_readmits_ordinary_attachments_without_replacing_c
 
     class Artifacts:
         async def get_metadata(self, *, artifact_id, principal):
-            assert principal == "service:omnigent_workspace_attachment"
+            assert principal == "workflow:workflow-1"
             metadata_reads.append(artifact_id)
             return SimpleNamespace(size_bytes=len(payloads[artifact_id])), [
                 SimpleNamespace(workflow_id="workflow-1")
             ]
 
         async def read_chunks(self, *, artifact_id, **kwargs):
+            assert kwargs["principal"] == "workflow:workflow-1"
             return SimpleNamespace(), iter((payloads[artifact_id],))
 
     async def no_clone(*args, **kwargs):
@@ -51,6 +53,12 @@ async def test_ready_workspace_readmits_ordinary_attachments_without_replacing_c
             "branch": "main",
         }
     )
+    if step_authority:
+        request.step_execution = SimpleNamespace(
+            workflow_id="workflow-1",
+            step_execution_id="step-1",
+        )
+        request.correlation_id = "unrelated-correlation"
     request.input_refs = ["artifact://original"]
     if named_evidence:
         request.parameters = {"gateResultRef": "artifact://gate"}

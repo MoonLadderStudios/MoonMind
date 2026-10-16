@@ -357,20 +357,14 @@ async def test_connected_claude_resolves_managed_omnigent_configuration(
         },
         image_resolver=resolver,
     )
+    # A same-repository image move keeps the recorded policy version: admission
+    # binds the installed digests, so the profile needs no policy cutover.
     assert await reconcile_bootstrap_agent_profile(session, inventory=inventory)
-    assert claude.active_version == 2
+    assert claude.active_version == 1
     assert version.document["policyRef"] == "claude-on-demand@1"
     assert (await profile_execution_selection(session, provider, None))[
         "launchPolicyRef"
-    ] == "claude-on-demand@2"
-    policy_cutover = await session.scalar(
-        select(OmnigentAgentProfileVersion).where(
-            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID,
-            OmnigentAgentProfileVersion.version == claude.active_version,
-        )
-    )
-    assert policy_cutover.rollout_metadata["origin"] == "bootstrap_policy_cutover"
-    assert policy_cutover.rollout_metadata["managedBuiltin"] == "claude"
+    ] == "claude-on-demand@1"
 
     inventory[1] = {**inventory[1], "version": "3"}
     assert await reconcile_bootstrap_agent_profile(session, inventory=inventory)
@@ -398,9 +392,9 @@ async def test_connected_claude_resolves_managed_omnigent_configuration(
     assert active.rollout_metadata["managedBuiltin"] == "claude"
     assert active.created_by is None
     assert await reconcile_builtin_claude_agent_profile(session, inventory=inventory)
-    assert claude.active_version == 3
+    assert claude.active_version == 2
     assert version.document["source"]["upstreamVersion"] == "2"
-    assert (await profile_execution_selection(session, provider, None))["version"] == 3
+    assert (await profile_execution_selection(session, provider, None))["version"] == 2
 
     claude.state = "disabled"
     await session.commit()
@@ -408,7 +402,7 @@ async def test_connected_claude_resolves_managed_omnigent_configuration(
     assert not await reconcile_builtin_claude_agent_profile(
         session, inventory=inventory
     )
-    assert claude.active_version == 3
+    assert claude.active_version == 2
 
 
 async def test_seed_does_not_claim_ready_before_upstream_identity_is_observed(session):

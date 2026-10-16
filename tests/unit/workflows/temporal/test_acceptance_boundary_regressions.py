@@ -2,14 +2,18 @@
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from temporalio import activity
 
 from moonmind.config.settings import settings
+from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
@@ -73,8 +77,10 @@ def _child_info():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("requirement_count", [1, 40])
+@pytest.mark.parametrize("remediation_wrapper", [False, True])
 async def test_published_full_report_is_readable_by_parent_only(
-    tmp_path, monkeypatch, source_bound_report  # noqa: F811
+    tmp_path, monkeypatch, source_bound_report, requirement_count, remediation_wrapper  # noqa: F811
 ):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     workspace = tmp_path / "workspace"
@@ -143,6 +149,34 @@ async def test_published_full_report_is_readable_by_parent_only(
         binding["evidence"][0].update(
             obligationDigest=_digest(plan), evidenceRefs=[evidence_ref]
         )
+        if requirement_count > 1:
+            evidence_row = binding["evidence"][0]
+            binding["scope"]["requirementIds"] = [
+                f"AC-{index}" for index in range(requirement_count)
+            ]
+            binding["verificationMap"] = []
+            binding["evidence"] = []
+            for identifier in binding["scope"]["requirementIds"]:
+                row = {
+                    **plan, "id": identifier,
+                    "requiredBehavior": identifier + " 修正🙂検証。" * 250,
+                }
+                binding["verificationMap"].append(row)
+                binding["evidence"].append({
+                    **evidence_row, "requirementId": identifier,
+                    "obligationDigest": _digest(row),
+                })
+            binding["evidence"][-1].update(status="PARTIAL", evidenceRefs=[])
+            report.update(
+                verdict="ADDITIONAL_WORK_NEEDED",
+                recommendedNextAction="reattempt_current_step",
+                remainingWork=[{
+                    "requirement": "AC-39", "gapType": "implementation",
+                    "remainingWork": "Repair the final requirement's retry behavior.",
+                    "suggestedEvidence": ["tests/test_retry.py"],
+                    "recoverableInCurrentRuntime": True,
+                }],
+            )
         report_path.write_text(json.dumps(report))
         assert len(report_path.read_bytes()) > 16 * 1024
         activities = TemporalAgentRuntimeActivities(
@@ -163,7 +197,11 @@ async def test_published_full_report_is_readable_by_parent_only(
                 acceptanceScopeContract="source-bound/v1",
                 briefArtifactRef=brief.artifact_id,
             ),
-            result=AgentRunResult(),
+            result=AgentRunResult(metadata={
+                "moonmind": {"remediationCadence": {
+                    "role": "moonspec-verification-gate", "attempt": 1,
+                }},
+            } if remediation_wrapper else {}),
             include_parent_execution=True,
         )
         published = await activities.agent_runtime_publish_artifacts(enriched)
@@ -184,9 +222,11 @@ async def test_published_full_report_is_readable_by_parent_only(
             run_module.workflow,
             "info",
             lambda: SimpleNamespace(
+                namespace="default",
                 workflow_id="parent",
                 run_id="parent-run",
                 task_queue="mm.workflow.user.v2",
+                parent=None,
             ),
         )
         parent = run_module.MoonMindRunWorkflow()
@@ -204,7 +244,49 @@ async def test_published_full_report_is_readable_by_parent_only(
         )
         full = hydrated["outputs"]["moonSpecVerify"]
         assert full["validatedRefs"]["acceptance"] == binding
-        assert acceptance_evidence(full) is not None
+        parsed = parse_step_gate_result(full, require_acceptance=True)
+        assert parsed.verdict == report["verdict"]
+        assert not parsed.invalid and not parsed.degraded
+        parent._record_moonspec_verify_gate(node_id="verify", outputs=hydrated["outputs"])
+        assert not parent._publish_context["moonSpecGate"]["invalid"]
+        previous = parent._merge_trusted_issue_context({
+            "trustedSource": "moonmind.github.get_issue", "issueRef": "example/repo#1",
+        })
+        request = parent._build_agent_execution_request(
+            node_inputs={
+                "targetRuntime": "omnigent", "repository": "example/repo",
+                "instructions": "Continue from the controlling verifier findings.",
+                "previousOutputs": previous,
+            },
+            node_id="remediate", tool_name="omnigent",
+        )
+        assert len(request.model_dump_json(by_alias=True).encode()) < 64 * 1024
+        assert f"artifact://{full['gateResultRef']}" in request.input_refs
+        fresh_workspace = tmp_path / "fresh-remediation-workspace"
+        fresh_workspace.mkdir()
+        await session.commit()
+        gateway = TemporalOmnigentArtifactGateway(
+            async_sessionmaker(session.bind, expire_on_commit=False)
+        )
+        projector = WorkspaceArtifactProjector(gateway)
+        # Repeated fresh-turn preparation must preserve both the first and last
+        # findings byte-for-byte, without relying on the verifier's old workspace.
+        report_path.unlink()
+        for _ in range(2):
+            attachments = await projector.project_attachments(
+                fresh_workspace, refs=tuple(request.input_refs), workflow_id="parent",
+                runtime_uid=os.getuid(), runtime_gid=os.getgid(),
+            )
+            attached = json.loads((fresh_workspace / attachments[0]["path"]).read_bytes())
+            if remediation_wrapper:
+                assert attached["artifactType"] == "remediation.verification"
+                assert attached["remainingGaps"] == report.get("remainingWork", [])
+                attached = attached["moonSpecVerify"]
+            assert attached["validatedRefs"]["acceptance"] == binding
+            rows = attached["validatedRefs"]["acceptance"]["verificationMap"]
+            assert rows[0] == binding["verificationMap"][0]
+            assert rows[-1] == binding["verificationMap"][-1]
+            assert attached.get("remainingWork") == report.get("remainingWork")
 
 
 def test_handoff_identity_comes_from_workflow_and_admitted_parent(monkeypatch):

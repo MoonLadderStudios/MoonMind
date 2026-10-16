@@ -642,14 +642,22 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
                 "assessment": b'{"verdict":"PARTIALLY_IMPLEMENTED"}',
             }
 
-        async def get_metadata(self, *, artifact_id, principal):
+        async def get_metadata(
+            self, *, artifact_id, principal, admitted_principal=None
+        ):
             self.reads.append((artifact_id, principal))
             artifact = SimpleNamespace(size_bytes=len(self.payloads[artifact_id]))
             links = [SimpleNamespace(workflow_id="workflow-1")]
             return artifact, links
 
         async def read_chunks(
-            self, *, artifact_id, principal, allow_restricted_raw, chunk_size
+            self,
+            *,
+            artifact_id,
+            principal,
+            allow_restricted_raw,
+            chunk_size,
+            admitted_principal=None,
         ):
             assert allow_restricted_raw is True
             self.reads.append((artifact_id, principal))
@@ -1196,11 +1204,12 @@ async def test_historical_remediation_request_materializes_named_evidence_and_re
 
     class Artifacts:
         async def get_metadata(self, *, artifact_id, principal):
-            assert principal == 'service:omnigent_workspace_attachment'
+            assert principal == 'workflow:workflow-1'
             return (SimpleNamespace(size_bytes=len(payloads[artifact_id])),
                     [SimpleNamespace(workflow_id='workflow-1')])
 
         async def read_chunks(self, *, artifact_id, **kwargs):
+            assert kwargs['principal'] == 'workflow:workflow-1'
             return SimpleNamespace(), iter((payloads[artifact_id],))
 
     async def no_clone(*args, **kwargs):

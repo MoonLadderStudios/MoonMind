@@ -718,6 +718,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByText('Omnigent authority')).toBeTruthy();
     expect(screen.getByText(planRef)).toBeTruthy();
     expect(screen.getByText(bindingRef)).toBeTruthy();
+    // The recorded Backend is shown; no Harness name is guessed for Omnigent.
+    expect(screen.getByText('Backend').closest('div')?.textContent).toBe('BackendOmnigent');
+    expect(screen.queryByText('Harness')).toBeNull();
     expect(
       screen.getByText(
         (_content, node) =>
@@ -2121,7 +2124,7 @@ describe('Workflow Detail Entrypoint', () => {
       : existingFetch(input, init));
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
     await screen.findByRole('option', { name: 'Team Profile' });
-    fireEvent.change(await screen.findByLabelText('Profile'), { target: { value: 'profile-oauth-2' } });
+    fireEvent.change(await screen.findByLabelText('Provider Profile'), { target: { value: 'profile-oauth-2' } });
     fireEvent.change(screen.getByLabelText('Execution profile / launch policy'), { target: { value: 'omnigent-isolated' } });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gpt-5.6-sol' } });
     fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'max' } });
@@ -4118,6 +4121,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByText('Runtime Command')).toBeTruthy();
     expect(screen.getByText('/review')).toBeTruthy();
     expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
+    const commandBlock = screen.getByText('Runtime Command').closest('.td-summary-block') as HTMLElement;
+    expect(Array.from(commandBlock.querySelectorAll('dt')).map((term) => term.textContent)).toContain('Harness');
+    expect(within(commandBlock).queryByText('Runtime')).toBeNull();
     expect(screen.getByText('prompt prefix')).toBeTruthy();
     expect(screen.getByText('detected')).toBeTruthy();
     expect(screen.getAllByText('2026-05-13').length).toBeGreaterThanOrEqual(1);
@@ -6202,8 +6208,12 @@ describe('Workflow Detail Entrypoint', () => {
       );
       expect(screen.getByText('Lifecycle Intent').closest('div')?.textContent).toContain('snapshot-reuse');
       expect(screen.queryByText('FULL SKILL BODY SHOULD NOT LEAK')).toBeNull();
-      expect(screen.getByText('Anthropic')).toBeTruthy();
-      expect(screen.getByText('profile:claude-default')).toBeTruthy();
+      // Recorded Harness/Backend/Provider Profile/Provider stay distinct facts.
+      expect(screen.getByText('Harness').closest('div')?.textContent).toBe('HarnessClaude Code');
+      expect(screen.getByText('Backend').closest('div')?.textContent).toBe('BackendDirect');
+      expect(screen.getByText('Provider Profile').closest('div')?.textContent).toBe('Provider Profileprofile:claude-default');
+      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('Anthropic');
+      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('anthropic');
       expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
       expect(screen.getByText(/Created by schedule/)).toBeTruthy();
@@ -6282,6 +6292,49 @@ describe('Workflow Detail Entrypoint', () => {
       const modelFact = screen.getByText('Model').closest('div');
       expect(modelFact?.textContent).toContain('gpt-5-codex');
     });
+  });
+
+  it('keeps recorded Provider metadata visible without a recorded Provider Profile', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      targetRuntime: 'claude_code',
+      title: 'Provider provenance task',
+      summary: 'Provider recorded without a Profile',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      providerId: 'anthropic',
+      providerLabel: 'Anthropic',
+      actions: { canSetTitle: false, canCancel: false, canRerun: false },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ direction: 'inbound', items: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('Anthropic');
+    });
+    expect(screen.queryByText('Provider Profile')).toBeNull();
   });
 
   // MoonLadderStudios/MoonMind#3800 — historical detail must explain the
@@ -9932,7 +9985,7 @@ describe('Workflow Detail Entrypoint', () => {
       status: 'completed',
       state: 'completed',
       rawState: 'completed',
-      targetRuntime: 'codex_cli',
+      targetRuntime: 'omnigent',
       model: 'gpt-5',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
@@ -9991,6 +10044,20 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('gpt-5').length).toBeGreaterThan(0);
       expect(screen.getByText('Claude Code')).toBeTruthy();
       expect(screen.getByText('claude-sonnet-test')).toBeTruthy();
+      // Recorded targetRuntime splits into Harness and Backend columns; an
+      // Omnigent run records no Harness, so none is guessed for it.
+      const comparison = screen
+        .getByRole('heading', { name: 'Run Comparison' })
+        .closest('section') as HTMLElement;
+      expect(
+        within(comparison).getAllByRole('columnheader').map((cell) => cell.textContent),
+      ).toEqual(['Relation', 'Workflow', 'Run', 'Status', 'Harness', 'Backend', 'Model']);
+      const cellsFor = (label: string) =>
+        Array.from(
+          within(comparison).getByText(label).closest('tr')?.querySelectorAll('td') ?? [],
+        ).map((cell) => cell.textContent);
+      expect(cellsFor('current').slice(4, 6)).toEqual(['—', 'Omnigent']);
+      expect(cellsFor('test-456').slice(4, 6)).toEqual(['Claude Code', 'Direct']);
       fireEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
       expect(screen.getByRole('menuitem', { name: 'Compare run' }).getAttribute('href')).toBe(
         taskCompareHref('test-123'),

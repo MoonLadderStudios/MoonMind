@@ -120,8 +120,17 @@ def test_tool_submits_and_observes_the_controller_operation(
     assert controller.applied == [operation_id]
 
 
+@pytest.mark.parametrize(
+    "health",
+    [
+        {"status": "ok"},
+        # Predates request identity: it answered a new request for `latest`
+        # with the earlier success instead of applying.
+        {"status": "ok", "capabilities": ["active-journal-transition"]},
+    ],
+)
 def test_old_controller_is_bootstrapped_before_the_durable_update_is_submitted(
-    controller_factory, monkeypatch
+    controller_factory, monkeypatch, health
 ):
     controller = controller_factory()
     request = controller_client._controller_request
@@ -129,7 +138,7 @@ def test_old_controller_is_bootstrapped_before_the_durable_update_is_submitted(
 
     def old_health(endpoint, **kwargs):
         if kwargs["path"] == "/v1/healthz" and not bootstrapped:
-            return 200, {"status": "ok"}
+            return 200, health
         if kwargs["method"] == "POST":
             assert bootstrapped
         return request(endpoint, **kwargs)
@@ -360,17 +369,11 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     async def await_resolution(selected):
         return dict(selected)
 
-    async def catalog():
-        return {"catalogRef": "catalog:selected"}
-
-    async def policies(selected):
-        return {"cut": [], "skipped": []}
-
-    async def schedules():
-        return {"refreshed": 0, "failures": []}
-
     async def running_server(expected):
         return live["server"]
+
+    async def publish_resolution(selected):
+        return None
 
     def drivers(**kwargs):
         assert kwargs["runner"].project_name == target["project"]
@@ -381,10 +384,8 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
             read_live_refs=read_live,
             restart_server=restart,
             await_resolution=await_resolution,
-            sync_catalog=catalog,
-            cut_policy_versions=policies,
-            refresh_schedules=schedules,
             verify_live_container=running_server,
+            publish_resolution=publish_resolution,
         )
 
     monkeypatch.setattr(omnigent_release, "production_drivers", drivers)

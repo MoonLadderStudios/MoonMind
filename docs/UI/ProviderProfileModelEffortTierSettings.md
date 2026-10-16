@@ -126,9 +126,9 @@ Save actions
 `Model and effort tiers` is a full-width section, not part of the compact grid
 used for scalar fields. The form has no separate `Default model` or `Default
 effort` input or read-only mirror; the selected default tier is the only place a
-profile's default model and effort are authored or shown. A profile row may offer
-`Edit tiers`, which opens the normal editor focused on this section rather than
-a second persistence path.
+profile's default model and effort are authored or shown. Each writable profile
+row has one `Edit` action that opens this editor, tiers included, and moves focus
+to its heading; a separate tier shortcut would only imply a second edit path.
 
 ---
 
@@ -157,8 +157,8 @@ local and not persisted.
 `model_tiers` is always populated by the profile contract, including rows
 converted from pre-tier fields, and the frontend never reconstructs tiers from
 another field. A missing or empty array is a backend contract violation, so the
-summary reads `Tier policy unavailable · needs repair` and keeps `Edit tiers` so
-a writer can reach the repair state (section 15.3).
+summary reads `Tier policy unavailable · needs repair`, and the row's `Edit`
+action opens the repair state (section 15.3).
 
 ---
 

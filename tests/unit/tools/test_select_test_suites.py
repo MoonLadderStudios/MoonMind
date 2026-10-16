@@ -732,7 +732,7 @@ def test_profile_authoring_changes_run_renderer_and_admission_replay(path):
         "api_service/services/recurring_workflows_service.py",
         "api_service/api/routers/recurring_workflows.py",
         "frontend/src/entrypoints/schedules.tsx",
-        "tests/fixtures/reliability/release_worker.py",
+        "moonmind/workflows/temporal/unversioned_cutover.py",
     ],
 )
 def test_recurring_availability_boundaries_require_the_real_recovery_journeys(path):

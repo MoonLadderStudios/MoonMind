@@ -24,7 +24,6 @@ services:
       - ./docs:/app/docs:ro
       - ./services:/app/services:ro
     environment: &development-worker-environment
-      - TEMPORAL_WORKER_VERSIONING_ENABLED=false
       - MOONMIND_DEPLOYMENT_MODE=development
   temporal-worker-artifacts:
     environment: *development-worker-environment
