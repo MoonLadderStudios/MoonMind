@@ -70,7 +70,6 @@ async def link_verified_execution_plan_inputs(
         verify_execution_plan_envelope,
     )
     from moonmind.workflows.temporal.artifacts import (
-        ExecutionRef,
         TemporalArtifactRepository,
         TemporalArtifactService,
     )
@@ -124,27 +123,8 @@ async def link_verified_execution_plan_inputs(
         service = TemporalArtifactService(repository)
 
         async def link(artifact_id: str) -> None:
-            # Readiness polls and Activity retries reuse this same grant.
-            # Serialize the check/insert through the artifact row so concurrent
-            # admissions cannot append duplicate links on PostgreSQL either.
-            await repository.get_artifact_for_update(artifact_id)
-            if any(
-                link.namespace == "default"
-                and link.workflow_id == workflow_id
-                and link.run_id == run_id
-                and link.link_type == "input.execution_plan"
-                for link in await repository.list_links(artifact_id)
-            ):
-                return
-            await service.link_artifact(
-                artifact_id=artifact_id,
-                principal=_GATEWAY_PRINCIPAL,
-                execution_ref=ExecutionRef(
-                    namespace="default",
-                    workflow_id=workflow_id,
-                    run_id=run_id,
-                    link_type="input.execution_plan",
-                ),
+            await _link_execution_input(
+                repository, artifact_id, workflow_id=workflow_id, run_id=run_id
             )
 
         for artifact_id in sorted(_artifact_ids(refs)):
@@ -158,6 +138,39 @@ async def link_verified_execution_plan_inputs(
                 await _skill_content_ids(service, manifest_id, workflow_id=workflow_id)
             ):
                 await link(artifact_id)
+
+
+async def _link_execution_input(
+    repository, artifact_id: str, *, workflow_id: str, run_id: str
+) -> None:
+    """Grant one execution read access to an input it was admitted to use."""
+    from moonmind.workflows.temporal.artifacts import (
+        ExecutionRef,
+        TemporalArtifactService,
+    )
+
+    # Readiness polls and Activity retries reuse this same grant. Serialize
+    # the check/insert through the artifact row so concurrent admissions
+    # cannot append duplicate links on PostgreSQL either.
+    await repository.get_artifact_for_update(artifact_id)
+    if any(
+        link.namespace == "default"
+        and link.workflow_id == workflow_id
+        and link.run_id == run_id
+        and link.link_type == "input.execution_plan"
+        for link in await repository.list_links(artifact_id)
+    ):
+        return
+    await TemporalArtifactService(repository).link_artifact(
+        artifact_id=artifact_id,
+        principal=_GATEWAY_PRINCIPAL,
+        execution_ref=ExecutionRef(
+            namespace="default",
+            workflow_id=workflow_id,
+            run_id=run_id,
+            link_type="input.execution_plan",
+        ),
+    )
 
 
 def _execution_plan_input_refs(plan, binding) -> set[str]:
@@ -607,9 +620,11 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
     ) -> bytes:
         """Read the Skill manifest the workflow selected, before a plan exists.
 
-        Only the request's own resolved Skill set ref is readable, with the
-        Step Execution's delegation. Without that identity the gateway's bare
-        principal remains subject to the service's ownership policy.
+        Only the request's own resolved Skill set ref is readable. The plan
+        will admit that exact manifest, so it is linked to the Step Execution
+        here, ahead of admission: a manifest linked to another execution or
+        to none is otherwise unreadable to the planner. Without that identity
+        the gateway's bare principal remains subject to the ownership policy.
         """
         identity = request.step_execution
         requested = {
@@ -626,8 +641,18 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             )
         if identity is None:
             return await self.read_bytes(artifact_ref)
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
+
+        artifact_id = self._artifact_id(artifact_ref)
+        async with self._session_factory() as session:
+            await _link_execution_input(
+                TemporalArtifactRepository(session),
+                artifact_id,
+                workflow_id=identity.workflow_id,
+                run_id=identity.run_id,
+            )
         return await self._read_for_execution(
-            self._artifact_id(artifact_ref), workflow_id=identity.workflow_id
+            artifact_id, workflow_id=identity.workflow_id
         )
 
     async def read_chunks(
