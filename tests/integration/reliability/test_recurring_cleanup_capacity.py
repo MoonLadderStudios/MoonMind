@@ -49,7 +49,7 @@ from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor import (
     MoonMindOmnigentOAuthHostJanitorWorkflow,
 )
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.integration.services.temporal.workflows.test_agent_run import (
     MockProviderProfileManager,
 )

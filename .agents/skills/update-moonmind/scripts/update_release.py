@@ -40,8 +40,14 @@ _CONTROLLER_SUBMIT_ATTEMPTS = 2
 _CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 # Controller behavior this submitter relies on (deploy/controller/server.py
 # CONTROLLER_CAPABILITIES). Without request identity a controller answers a
-# new `latest` request with an earlier success, so it is refreshed first.
-_REQUIRED_CONTROLLER_CAPABILITIES = ("active-journal-transition", "request-identity")
+# new `latest` request with an earlier success, so it is refreshed first. A
+# controller without the routing cutover would install unversioned workers
+# while Temporal still routes to the old Worker Deployment version.
+_REQUIRED_CONTROLLER_CAPABILITIES = (
+    "active-journal-transition",
+    "request-identity",
+    "unversioned-routing-cutover",
+)
 
 
 _MAX_DIAGNOSTIC_CHARS = 4000

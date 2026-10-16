@@ -191,8 +191,6 @@ class WorkerSpec:
     build_id: str
     build_sha: str | None
     image_digest: str | None
-    deployment_id: str
-    versioning_enabled: bool
     deployment_mode: str
     immutable_release_identity: bool
 
@@ -207,12 +205,10 @@ class WorkerSpec:
             # the revision the worker process must report in its heartbeat and
             # /readyz projection so stale bind-mounted modules are detectable.
             "workerCodeRevision": self.build_sha or self.build_id,
-            "deploymentId": self.deployment_id,
             "registryFingerprint": self.registry_fingerprint,
             "taskQueues": list(self.task_queues),
             "workflowTypes": list(self.workflow_types),
             "activityTypes": list(self.activity_types),
-            "workerVersioningEnabled": self.versioning_enabled,
             "deploymentMode": self.deployment_mode,
             "immutableReleaseIdentity": self.immutable_release_identity,
             "resolverCore": {
@@ -282,11 +278,6 @@ def build_worker_spec(
     build_id = build_sha or image_digest or fingerprint.split(":", 1)[1][:32]
     if release is not None:
         build_id = release["digest"]
-    deployment_id = str(
-        env.get("TEMPORAL_WORKER_DEPLOYMENT_NAME") or "moonmind-workflow-fleet"
-    ).strip()
-    versioning_value = str(env.get("TEMPORAL_WORKER_VERSIONING_ENABLED") or "auto").strip().lower()
-    versioning_enabled = bool(release) if versioning_value == "auto" else versioning_value in {"1", "true", "yes", "on"}
     deployment_mode = (
         str(env.get("MOONMIND_DEPLOYMENT_MODE") or "auto").strip().lower()
     )
@@ -297,11 +288,6 @@ def build_worker_spec(
         raise TemporalWorkerBootstrapError(
             "production workflow workers require MOONMIND_BUILD_SHA or "
             "MOONMIND_IMAGE_DIGEST"
-        )
-    if deployment_mode == "production" and not versioning_enabled:
-        raise TemporalWorkerBootstrapError(
-            "production workflow workers require "
-            "TEMPORAL_WORKER_VERSIONING_ENABLED=true"
         )
     return WorkerSpec(
         fleet=topology.fleet,
@@ -314,8 +300,6 @@ def build_worker_spec(
         build_id=build_id,
         build_sha=build_sha,
         image_digest=image_digest,
-        deployment_id=deployment_id,
-        versioning_enabled=versioning_enabled,
         deployment_mode=deployment_mode,
         immutable_release_identity=immutable_release_identity,
     )

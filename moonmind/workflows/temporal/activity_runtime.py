@@ -5164,7 +5164,6 @@ class TemporalIntegrationActivities:
             "buildId": build_ids[0] if len(build_ids) == 1 else None,
             "buildSha": _single_value("buildSha"),
             "imageDigest": _single_value("imageDigest"),
-            "deploymentId": _single_value("deploymentId"),
             "resolverCore": (
                 dict(children[0].get("resolverCore") or {})
                 if len(children) == 1

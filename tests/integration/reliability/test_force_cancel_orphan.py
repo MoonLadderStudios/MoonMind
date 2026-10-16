@@ -25,7 +25,7 @@ from api_service.db.models import (
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.unit.workflows.temporal.test_temporal_service import temporal_db
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]

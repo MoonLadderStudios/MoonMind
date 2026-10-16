@@ -27,7 +27,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
 

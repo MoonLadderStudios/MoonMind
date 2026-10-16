@@ -36,7 +36,7 @@ from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CO
 from moonmind.workflows.temporal.workflows.merge_automation import (
     MoonMindMergeAutomationWorkflow,
 )
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.unit.workflows.temporal.workflows.test_merge_automation_temporal import (
     _payload,
 )
