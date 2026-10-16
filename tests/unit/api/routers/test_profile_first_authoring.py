@@ -50,7 +50,15 @@ FIXTURE = json.loads(
 )
 @pytest.mark.parametrize(
     "change",
-    [None, "configuration", "configuration_removed", "unavailable", "target", "profile"],
+    [
+        None,
+        "configuration",
+        "configuration_removed",
+        "unavailable",
+        "target",
+        "profile",
+        "backend",
+    ],
 )
 def test_rendered_profile_request_reaches_matching_immutable_plan(
     client, monkeypatch, authored, change, policy_override
@@ -159,6 +167,13 @@ def test_rendered_profile_request_reaches_matching_immutable_plan(
         session.version.validation_result = {"ready": False}
     elif change == "target":
         request["payload"]["requestedTargetId"] = "codex.legacy-profile-bound-omnigent"
+    elif change == "backend":
+        # The UI offers a direct Backend only for its own Harness. An authored
+        # direct Claude Backend for this OpenCode Profile fails before effects;
+        # an explicitly unauthored one is only a hint, so the Profile's normal
+        # Omnigent route wins instead of a legacy direct path.
+        request["payload"]["targetRuntime"] = "claude_code"
+        runtime["mode"] = "claude_code"
     elif change == "profile":
         request["payload"]["agentProfile"] = {
             **runtime["executionConfiguration"],
@@ -183,7 +198,7 @@ def test_rendered_profile_request_reaches_matching_immutable_plan(
         )
 
     response = test_client.post("/api/executions", json=request)
-    if change:
+    if change and not (change == "backend" and authored is False):
         assert response.status_code in {409, 422}, response.text
         if change == "configuration":
             assert (
@@ -207,6 +222,8 @@ def test_rendered_profile_request_reaches_matching_immutable_plan(
             assert "Requested runtime target does not match" in response.text
         elif change == "profile":
             assert "must use the selected Profile" in response.text
+        elif change == "backend":
+            assert "requires targetRuntime='omnigent'" in response.text
         temporal.create_execution.assert_not_awaited()
         assert compiled == []
         store.persist.assert_not_awaited()

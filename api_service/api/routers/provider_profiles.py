@@ -123,7 +123,7 @@ def _credential_manager_unavailable_report(recovery: Any) -> tuple[str, str]:
         # Send the operator to teardown verification and ledger
         # reconciliation, not to another retry.
         return refusal, (
-            "Credential setup could not start because this runtime's provider "
+            "Credential setup could not start because this Harness's provider "
             "credential manager cannot process requests, and it cannot be "
             f"replaced while {held if held is not None else 'some'} lease "
             "row(s) still hold its capacity. Your saved credentials have not "
@@ -134,7 +134,7 @@ def _credential_manager_unavailable_report(recovery: Any) -> tuple[str, str]:
         )
     if refusal == MANAGER_UNREADABLE_LEDGER:
         return refusal, (
-            "Credential setup could not start because this runtime's provider "
+            "Credential setup could not start because this Harness's provider "
             "credential manager cannot process requests, and the credential "
             "ledger could not be read to confirm it is safe to replace. Your "
             "saved credentials have not changed. Try again; if this "
@@ -1027,7 +1027,7 @@ async def _validate_imported_credential_volume(
     if not preset.supported or mount_path_field is None:
         raise HTTPException(
             status_code=422,
-            detail="This runtime and provider do not support imported credential volumes.",
+            detail="This Harness and provider do not support imported credential volumes.",
         )
     mount_path = mount_path_field.value
     if not isinstance(mount_path, str) or not mount_path:
@@ -1404,7 +1404,7 @@ async def _enforce_scope_compatibility(
             status_code=422,
             detail={
                 "code": "provider_profile_scope_incompatible",
-                "message": "Capacity scope belongs to a different runtime.",
+                "message": "Capacity scope belongs to a different Harness.",
             },
         )
     if provider_id and scope.provider_class not in ("unknown", "", provider_id):
@@ -1873,7 +1873,7 @@ async def update_profile(
                                     "code": "provider_profile_clear_env_keys_locked",
                                     "message": (
                                         "clear_env_keys is backend-owned launch-security metadata "
-                                        "and cannot be edited directly for this runtime/provider. "
+                                        "and cannot be edited directly for this Harness and provider. "
                                         "To repair a stale profile, submit exactly the backend-derived "
                                         "policy shown in launch isolation, or use the guided creation "
                                         "preset or an authorized manual profile path."

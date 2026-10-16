@@ -1719,7 +1719,7 @@ async def test_creation_preset_reports_actionable_unsupported_combination(
             "code": "no_safe_standard_creation_preset",
             "severity": "error",
             "message": (
-                "No validated standard creation preset exists for this runtime, "
+                "No validated standard creation preset exists for this Harness, "
                 "provider, and authentication method. Use the authorized manual "
                 "profile path and supply every required launch field."
             ),
@@ -5765,9 +5765,10 @@ async def test_3821_non_superuser_update_of_clear_env_keys_locked(
         )
 
     assert response.status_code == 422
-    assert (
-        response.json()["detail"]["code"]
-        == "provider_profile_clear_env_keys_locked"
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_profile_clear_env_keys_locked"
+    assert "cannot be edited directly for this Harness and provider." in (
+        detail["message"]
     )
     async with db_base.async_session_maker() as session:
         persisted = await session.get(ManagedAgentProviderProfile, profile_id)
