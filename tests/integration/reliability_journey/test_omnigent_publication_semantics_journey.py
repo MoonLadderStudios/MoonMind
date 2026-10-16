@@ -328,6 +328,10 @@ async def test_pr_publication_projects_existing_remote_pull_request(
         "moonmind.workflows.adapters.github_service.GitHubService.resolve_pull_request_selector",
         resolve_pull_request_selector,
     )
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService.open_pull_request_heads",
+        AsyncMock(return_value={}),
+    )
     remote = _init_bare_remote_with_seed(tmp_path)
     workflow_id = "mm:pr-handoff-replay"
     step_execution_id = "mm:pr-handoff-replay:agent:node-1"

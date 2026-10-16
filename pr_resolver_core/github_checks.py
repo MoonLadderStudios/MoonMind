@@ -164,9 +164,10 @@ def reconcile_check_runs(
     applicable, and unresolvedChecks must degrade the caller's CI signal rather
     than grant a clean gate.
 
-    Successful unique checks need no workflow lookup. Other providers, including
-    security apps, always remain applicable. Empty input remains empty, so the
-    caller must still apply the ordinary missing-CI/required-context gate.
+    Passing checks do not need cross-run PR/ref equivalence when all checks of
+    that identity pass: keeping every result is sufficient, without supersession.
+    Other providers, including security apps, always remain applicable. Empty
+    input remains empty, so callers must still apply the missing-CI/required gate.
     """
     evidence: dict[str, list[dict[str, Any]]] = {
         "supersededChecks": [],
@@ -342,7 +343,17 @@ def reconcile_check_runs(
                 for other, candidate in mapped.items()
             ):
                 unresolved[index] = "check_attempt_unverified"
-            if any(
+            needs_context = state not in _PASSING_CHECK_STATES or any(
+                candidate["identity"] == current["identity"]
+                and str(
+                    check_runs[other].get("conclusion")
+                    or check_runs[other].get("status")
+                    or ""
+                ).lower()
+                not in _PASSING_CHECK_STATES
+                for other, candidate in mapped.items()
+            )
+            if needs_context and any(
                 candidate["identity"] == current["identity"]
                 and candidate["runId"] != current["runId"]
                 and (
@@ -352,7 +363,7 @@ def reconcile_check_runs(
                 for candidate in mapped.values()
             ):
                 unresolved[index] = "workflow_pr_context_unverified"
-            if any(
+            if needs_context and any(
                 candidate["identity"] == current["identity"]
                 and candidate["runId"] != current["runId"]
                 and (candidate["headBranch"] is None or current["headBranch"] is None)

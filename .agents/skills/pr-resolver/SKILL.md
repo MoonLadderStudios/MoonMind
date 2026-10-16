@@ -318,6 +318,11 @@ metadata flag.
    requires the same head, workflow, event, app and check name, with matching
    observed PR/base context and nonempty matching head branches across runs;
    a later unrelated or unproven check never erases an older failure.
+   Cross-run PR/base/ref equivalence is needed to replace a check, not to
+   retain otherwise verified passing checks. When every check of an identity
+   passes, keep all observations without degrading CI just because GitHub
+   omitted their cross-run PR/ref context. Failed, incomplete, unknown, or
+   unverified check identities remain blocked under the existing rules.
    Same-run reruns require verified job
    attempt evidence. Missing checks, unknown states and unresolved identities
    stay blocked, and security checks remain gating.
