@@ -258,6 +258,7 @@ from moonmind.workflows.skills.approval_policy import (
 from moonmind.workflows.skills.run_projection import (
     append_remediation_attempt_context,
     prepend_skill_activation_summary,
+    step_execution_read_principal,
 )
 from moonmind.workflows.skills.tool_plan_contracts import (
     REVIEW_VERDICTS,
@@ -10723,7 +10724,10 @@ class TemporalAgentRuntimeActivities:
             )
 
         try:
-            resolved_skillset = await self._load_resolved_skillset(skillset_ref)
+            admitted_principal = step_execution_read_principal(request)
+            resolved_skillset = await self._load_resolved_skillset(
+                skillset_ref, admitted_principal=admitted_principal
+            )
             resolved_names = {entry.skill_name for entry in resolved_skillset.skills}
             if selected_skill not in resolved_names:
                 raise TemporalActivityRuntimeError(
@@ -10758,6 +10762,7 @@ class TemporalAgentRuntimeActivities:
                 projection_owner_uid=_MANAGED_AGENT_UID,
                 projection_owner_gid=_MANAGED_AGENT_GID,
                 project_adapter_aliases=project_adapter_aliases,
+                admitted_principal=admitted_principal,
             )
             materialization = await materializer.materialize(
                 resolved_skillset=resolved_skillset,
@@ -10908,7 +10913,9 @@ class TemporalAgentRuntimeActivities:
                     f"local skill source for '{entry.skill_name}' is disabled by skill source policy"
                 )
 
-    async def _load_resolved_skillset(self, skillset_ref: str) -> ResolvedSkillSet:
+    async def _load_resolved_skillset(
+        self, skillset_ref: str, *, admitted_principal: str | None = None
+    ) -> ResolvedSkillSet:
         if self._artifact_service is None:
             raise TemporalActivityRuntimeError(
                 "selected skill materialization failed before runtime launch: "
@@ -10918,6 +10925,11 @@ class TemporalAgentRuntimeActivities:
             _artifact, payload = await self._artifact_service.read(
                 artifact_id=skillset_ref,
                 principal="agent_runtime",
+                **(
+                    {"admitted_principal": admitted_principal}
+                    if admitted_principal
+                    else {}
+                ),
                 allow_restricted_raw=True,
             )
             data = json.loads(payload.decode("utf-8"))
