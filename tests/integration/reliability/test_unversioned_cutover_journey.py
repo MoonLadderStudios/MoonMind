@@ -19,6 +19,7 @@ from temporalio.api.workflow.v1 import VersioningOverride, WorkflowExecutionOpti
 from temporalio.api.workflowservice.v1 import (
     DescribeWorkerDeploymentVersionRequest,
     SetWorkerDeploymentCurrentVersionRequest,
+    SetWorkerDeploymentRampingVersionRequest,
     UpdateWorkflowExecutionOptionsRequest,
 )
 from temporalio.client import (
@@ -154,10 +155,7 @@ def _versioned(deployment, build):
     )
 
 
-async def _make_current(client, deployment, build, queues):
-    """Recreate the routing an older installation's promotion left behind."""
-    version = f"{deployment}.{build}"
-
+async def _await_registered(client, version, queues):
     async def registered():
         response = await client.workflow_service.describe_worker_deployment_version(
             DescribeWorkerDeploymentVersionRequest(
@@ -176,6 +174,12 @@ async def _make_current(client, deployment, build, queues):
         attempts=60,
         interval_seconds=0.5,
     )
+
+
+async def _make_current(client, deployment, build, queues):
+    """Recreate the routing an older installation's promotion left behind."""
+    version = f"{deployment}.{build}"
+    await _await_registered(client, version, queues)
     snapshot = await describe_deployment(client, deployment)
     await client.workflow_service.set_worker_deployment_current_version(
         SetWorkerDeploymentCurrentVersionRequest(
@@ -299,6 +303,117 @@ async def test_auto_upgrade_and_queued_work_cross_the_unversioned_cutover():
     await Replayer(
         workflows=[CutoverProbe], workflow_runner=UnsandboxedWorkflowRunner()
     ).replay_workflow(await in_flight.fetch_history())
+
+
+async def _make_ramping(client, deployment, build, queues, percentage):
+    """Recreate an older installation's canary ramp toward another version."""
+    version = f"{deployment}.{build}"
+    await _await_registered(client, version, queues)
+    snapshot = await describe_deployment(client, deployment)
+    await client.workflow_service.set_worker_deployment_ramping_version(
+        SetWorkerDeploymentRampingVersionRequest(
+            namespace=client.namespace,
+            deployment_name=deployment,
+            version=version,
+            percentage=percentage,
+            conflict_token=snapshot.conflict_token,
+            identity="older-installation",
+        )
+    )
+    assert ramping_version(await describe_deployment(client, deployment)) == version
+
+
+async def test_cutover_clears_a_ramp_and_queued_work_reaches_ordinary_workers():
+    client = await connect()
+    deployment = f"cutover-ramp-{uuid4().hex}"
+    queue, activity_queue = f"{deployment}-workflow", f"{deployment}-activity"
+    queues = (queue, activity_queue)
+
+    async with (
+        Worker(
+            client,
+            task_queue=queue,
+            workflows=[CutoverProbe],
+            deployment_config=_versioned(deployment, "old"),
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(
+            client,
+            task_queue=activity_queue,
+            activities=[_probe("old")],
+            deployment_config=_versioned(deployment, "old"),
+        ),
+        Worker(
+            client,
+            task_queue=queue,
+            workflows=[CutoverProbe],
+            deployment_config=_versioned(deployment, "new"),
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(
+            client,
+            task_queue=activity_queue,
+            activities=[_probe("new")],
+            deployment_config=_versioned(deployment, "new"),
+        ),
+    ):
+        await _make_current(client, deployment, "old", queues)
+        await _make_ramping(client, deployment, "new", queues, 50)
+    # Both versioned fleets are gone; new work queues behind the ramp.
+    queued = await client.start_workflow(
+        CutoverProbe.run,
+        activity_queue,
+        id=f"{deployment}-queued",
+        task_queue=queue,
+        execution_timeout=timedelta(seconds=300),
+    )
+
+    async with (
+        Worker(
+            client,
+            task_queue=queue,
+            workflows=[CutoverProbe],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(client, task_queue=activity_queue, activities=[_probe("ordinary")]),
+    ):
+        receipt = await _await_temporal_condition(
+            "ordinary workers to poll every queue",
+            lambda: run_cutover(client, deployment=deployment),
+            attempts=30,
+            interval_seconds=1,
+            is_ready=lambda result: result["outcome"] != "missing_queue",
+        )
+        assert receipt["status"] == "completed", receipt
+        assert receipt["outcome"] == "transitioned"
+        assert receipt["previousRouting"] == {
+            "currentVersion": f"{deployment}.old",
+            "rampingVersion": f"{deployment}.new",
+        }
+        snapshot = await describe_deployment(client, deployment)
+        assert current_version(snapshot) == ""
+        assert ramping_version(snapshot) == ""
+        routing = snapshot.worker_deployment_info.routing_config
+        assert routing.ramping_version_percentage == 0
+
+        await queued.signal(CutoverProbe.resume)
+        assert await asyncio.wait_for(queued.result(), 60) == [
+            "ordinary",
+            "ordinary",
+        ]
+        fresh = await client.start_workflow(
+            CutoverProbe.run,
+            activity_queue,
+            id=f"{deployment}-new",
+            task_queue=queue,
+            execution_timeout=timedelta(seconds=60),
+        )
+        await fresh.signal(CutoverProbe.resume)
+        assert await asyncio.wait_for(fresh.result(), 60) == ["ordinary", "ordinary"]
+
+        again = await run_cutover(client, deployment=deployment)
+        assert again["status"] == "completed"
+        assert again["outcome"] == "already_unversioned"
 
 
 async def test_cutover_retires_release_canaries_and_preserves_unexpected_pins():
