@@ -151,6 +151,8 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - Ensure the working tree is clean except for the fixed files.
 - Stage the resolved files with `git add <file>`.
 - Commit the changes using a descriptive message (e.g. `fix(ci): <short failure summary>`).
+  When delegated by pr-resolver, commit through its `pr_resolve_commit.py`
+  helper; a refused commit is `local_commit_failed`, never `publish_unavailable`.
 - Push to the current branch with `git push --recurse-submodules=check` when publication is authorized.
 
 6. Verify the pushed head in CI.

@@ -394,13 +394,21 @@ Never start detached polling, emit the final agent response, and claim the poll
 will continue after the managed CLI exits. Background task identifiers in output
 have no lifecycle authority.
 
-After any local commit-producing remediation, verify the exact current `HEAD` is visible on the remote PR branch before continuing. If `git push`, `gh`, or any GitHub connector path cannot publish the commit, stop as blocked with reason `publish_unavailable`; do not proceed to finalize and do not report success. Before repeating a push or merge whose outcome is uncertain, reconcile first: re-read the remote branch head and PR merge state and continue from the reconciled state instead of repeating the write blindly. An accepted merge request, queued check, local commit, missing auth, or stale snapshot is not success: only a fresh `gh pr view` reporting `state=MERGED` for the verified head is terminal merge evidence. Auxiliary output failures never erase a verified primary effect and never cause another push/merge on their own.
+Delegated remediations create every commit with the commit helper, after staging only the intended paths:
+
+```bash
+python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_commit.py" --pr <pr_number> -m "<message>"
+```
+
+It commits exactly the staged index under the configured identity, hooks, and signing policy, and never accepts an author, amends, or pushes. Exit 0 means committed (`reconciled` when a recorded attempt's commit already landed); exit 1 means nothing was staged, so take the verified no-op path. Exit 4 means Git refused the commit and the helper wrote `var/pr_resolver/result.json` with reason `local_commit_failed`, `mergeAutomationDisposition=failed`, the bounded original Git error, and `localCommit.kind`: `identity_missing`, `signing_failed`, `hook_rejected`, or `other`. Nothing was published, so this is never `publish_unavailable`. Address a hook's findings within the same remediation and run the helper again; never bypass hooks or signing, invent an author, or overwrite configured attribution. Otherwise stop on the recorded result: its `next_step` names the local condition and its owner. When a resumed run finds that receipt for the same PR and its staged work still present, run the helper again once the condition is corrected, then push and finalize; do not repeat the completed remediation or reset its budgets. The helper refuses a fourth attempt on the same candidate and keeps the evidence.
+
+After any local commit-producing remediation, verify the exact current `HEAD` is visible on the remote PR branch before continuing. If `git push`, `gh`, or any GitHub connector path is denied authentication or authorization, stop as blocked with reason `publish_unavailable`; do not proceed to finalize and do not report success. A timeout or dropped connection is uncertain delivery, not denial. Before repeating a push or merge whose outcome is uncertain, reconcile first: re-read the remote branch head and PR merge state and continue from the reconciled state instead of repeating the write blindly. An accepted merge request, queued check, local commit, missing auth, or stale snapshot is not success: only a fresh `gh pr view` reporting `state=MERGED` for the verified head is terminal merge evidence. Auxiliary output failures never erase a verified primary effect and never cause another push/merge on their own.
 
 Resolve the selected PR's exact repository, head, base, and allowed finish mode from authoritative inputs before any mutation. Preserve source authority for fork or otherwise unsupported combinations and stop before unsafe mutation. Revalidate relevant identity changes before writes, using only existing authorized identity configuration.
 
 Never print raw environment variables while diagnosing GitHub auth or publish failures. Use targeted checks such as `test -n "$GITHUB_TOKEN"` or trusted-tool health calls; do not run `printenv`, `env`, `set`, or equivalent commands that can expose secrets.
 
-When a delegated remediation step cannot publish, overwrite `var/pr_resolver/result.json` before stopping so parent workflows do not report stale gate state. Use `status=blocked`, `merge_outcome=blocked`, `mergeAutomationDisposition=manual_review`, `reason=publish_unavailable`, `final_reason=publish_unavailable`, and `next_step=manual_review`.
+When a delegated remediation step's push or remote verification is denied, overwrite `var/pr_resolver/result.json` before stopping so parent workflows do not report stale gate state. Use `status=blocked`, `merge_outcome=blocked`, `mergeAutomationDisposition=manual_review`, `reason=publish_unavailable`, `final_reason=publish_unavailable`, and `next_step=manual_review`.
 
 ## Bounded remediation actions
 

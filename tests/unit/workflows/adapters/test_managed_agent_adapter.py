@@ -4105,6 +4105,28 @@ def test_pr_resolver_other_manual_review_reasons_still_fail_under_merge_gate(
     assert summary is not None
 
 
+def test_pr_resolver_local_commit_failure_reports_the_local_condition(
+    tmp_path: Path,
+) -> None:
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"blocked","mergeAutomationDisposition":"failed",'
+        '"reason":"local_commit_failed","next_step":"provide_commit_identity"}',
+        encoding="utf-8",
+    )
+
+    failure_class, summary = _derive_pr_resolver_failure(
+        str(tmp_path), merge_gate_owned=True
+    )
+
+    assert failure_class == "execution_error"
+    assert summary == (
+        "pr-resolver reported status 'blocked'; local_commit_failed; "
+        "next_step=provide_commit_identity"
+    )
+
+
 async def test_fetch_result_clears_generic_failed_exit_for_human_approval_gate(
     tmp_path: Path,
 ):
