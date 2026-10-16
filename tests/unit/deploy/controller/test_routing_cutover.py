@@ -69,6 +69,7 @@ def controller(controller_path, tmp_path, monkeypatch):
     server = load("server")
     store = record.OperationStore(tmp_path / "state")
     helper_calls = []
+    monkeypatch.setattr(server, "ROUTING_CUTOVER_RETRY_SECONDS", 0)
 
     def install(runner, helper):
         monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
@@ -163,6 +164,67 @@ def test_rollback_floor_refuses_a_versioning_image_before_containers_change(cont
     assert "Worker Deployment routing writers" in result["errorSummary"]
     assert runner.applied() == []
     assert set(helper_calls) == {"routing-cutover-probe"}
+
+
+def test_rollback_floor_holds_once_routing_is_cleared_with_work_left_to_report(
+    controller,
+):
+    server, store, install, begin, apply, helper_calls = controller
+    cleared = begin()
+    install(
+        Runner([("temporal-worker-workflow", NEW_ID)]),
+        lambda phase, operation: {
+            "status": "attention",
+            "outcome": "transitioned",
+            "preservedPinned": [{"workflowId": "pinned-user"}],
+        },
+    )
+    assert apply(cleared)["status"] == "partially_verified"
+    rollback = begin("ghcr.io/org/app@sha256:older")
+    runner = Runner([("temporal-worker-workflow", NEW_ID)])
+    install(runner, lambda phase, operation: {"status": "unsupported"})
+    with pytest.raises(server.engine.ApplyError):
+        apply(rollback)
+    assert "Worker Deployment routing writers" in (
+        store.load(rollback["operationId"])["errorSummary"]
+    )
+    assert runner.applied() == []
+
+
+def test_transient_cutover_failure_is_retried_within_the_same_operation(controller):
+    server, store, install, begin, apply, helper_calls = controller
+    operation = begin()
+    receipts = [
+        {"status": "pending", "outcome": "observation_unavailable", "detail": "down"},
+        {"status": "pending", "outcome": "missing_queue", "detail": "mm.workflow"},
+        {"status": "completed", "outcome": "transitioned"},
+    ]
+    install(
+        Runner([("temporal-worker-workflow", NEW_ID)]),
+        lambda phase, current: receipts.pop(0),
+    )
+    result = apply(operation)
+    assert result["status"] == "succeeded"
+    assert result["routingCutover"]["status"] == "completed"
+    assert helper_calls == ["routing-cutover-apply"] * 3
+
+
+def test_persistent_cutover_failure_stops_after_bounded_attempts(controller):
+    server, store, install, begin, apply, helper_calls = controller
+    operation = begin()
+    install(
+        Runner([("temporal-worker-workflow", NEW_ID)]),
+        lambda phase, current: {
+            "status": "pending",
+            "outcome": "observation_unavailable",
+            "detail": "Temporal is unavailable",
+        },
+    )
+    result = apply(operation)
+    assert result["status"] == "partially_verified"
+    assert helper_calls == ["routing-cutover-apply"] * server.ROUTING_CUTOVER_ATTEMPTS
+    assert result["routingCutover"]["attempts"] == server.ROUTING_CUTOVER_ATTEMPTS
+    assert _check(store, operation)["status"] == "unavailable"
 
 
 @pytest.mark.parametrize("effect_applied", [False, True])
@@ -268,12 +330,18 @@ def test_unfinished_cutover_stays_explicit_and_runs_again_next_update(
     later = begin("ghcr.io/org/app@sha256:def")
     install(
         Runner([("temporal-worker-workflow", NEW_ID)]),
-        lambda phase, op: {"status": "completed", "outcome": "already_unversioned"},
+        lambda phase, op: (
+            {"status": "supported"}
+            if phase == "routing-cutover-probe"
+            else {"status": "completed", "outcome": "already_unversioned"}
+        ),
     )
     helper_calls.clear()
     assert apply(later)["status"] == "succeeded"
-    # Not completed earlier, so no rollback floor yet and the cutover reruns.
-    assert helper_calls == ["routing-cutover-apply"]
+    # Not completed earlier, so the cutover reruns. Cleared routing (attention)
+    # already holds the rollback floor; a pending cutover does not.
+    floor = ["routing-cutover-probe"] if receipt["status"] == "attention" else []
+    assert helper_calls == [*floor, "routing-cutover-apply"]
 
 
 def test_selected_image_that_still_versions_workers_needs_no_cutover(controller):

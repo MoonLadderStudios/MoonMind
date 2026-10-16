@@ -21,7 +21,6 @@ cannot be observed stays ``unknown``; it is never reported as absent.
 from __future__ import annotations
 
 import asyncio
-import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,8 +34,6 @@ from temporalio.api.workflowservice.v1 import (
     SetWorkerDeploymentRampingVersionRequest,
 )
 from temporalio.service import RPCError, RPCStatusCode
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_DEPLOYMENT_NAME = "moonmind-workflow-fleet"
 UNVERSIONED = "__unversioned__"
@@ -211,16 +208,20 @@ async def inspect_open_executions(client, *, deployment: str) -> list[dict[str, 
     return [entry for entry in described if entry is not None]
 
 
-async def _queues_without_ordinary_pollers(client, version: str) -> list[str]:
-    """Missing-queue protection: every queue the version serves needs a live
-    unversioned poller before ordinary workers can become current."""
-    response = await client.workflow_service.describe_worker_deployment_version(
-        DescribeWorkerDeploymentVersionRequest(
-            namespace=client.namespace, version=version
+async def _queues_without_ordinary_pollers(client, versions) -> list[str]:
+    """Missing-queue protection: every queue a routed (current or ramping)
+    version serves needs a live unversioned poller before routing clears."""
+    queues: dict[tuple[str, int], Any] = {}
+    for version in versions:
+        response = await client.workflow_service.describe_worker_deployment_version(
+            DescribeWorkerDeploymentVersionRequest(
+                namespace=client.namespace, version=version
+            )
         )
-    )
+        for queue in response.worker_deployment_version_info.task_queue_infos:
+            queues.setdefault((queue.name, queue.type), queue)
     missing = []
-    for queue in response.worker_deployment_version_info.task_queue_infos:
+    for queue in queues.values():
         observed = await client.workflow_service.describe_task_queue(
             DescribeTaskQueueRequest(
                 namespace=client.namespace,
@@ -338,10 +339,9 @@ async def run_cutover(client, *, deployment: str) -> dict[str, Any]:
     result["retiredCanaries"] = await _retire_release_canaries(client, canaries)
     result["preservedPinned"] = pinned
     result["unknownExecutions"] = unknown
-    if previous["currentVersion"]:
-        missing = await _queues_without_ordinary_pollers(
-            client, previous["currentVersion"]
-        )
+    routed = [version for version in previous.values() if version]
+    if routed:
+        missing = await _queues_without_ordinary_pollers(client, routed)
         if missing:
             return {
                 **result,

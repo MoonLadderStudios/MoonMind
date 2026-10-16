@@ -340,11 +340,14 @@ class OperationStore:
         operation["routingCutover"] = dict(values)
         return self._write(operation)
 
-    def completed_routing_cutover(self, *, stack: str) -> dict | None:
-        """The operation whose cutover completed for ``stack``, if any.
+    def routing_cutover(
+        self, *, stack: str, statuses: tuple[str, ...] = ("completed",)
+    ) -> dict | None:
+        """The operation whose cutover for ``stack`` reached ``statuses``.
 
         Completion is durable stack state: later operations never change
-        routing again, and it sets the rollback floor.
+        routing again. ``attention`` also means routing was cleared, so either
+        status sets the rollback floor.
         """
         if not self.operations_dir.is_dir():
             return None
@@ -354,7 +357,7 @@ class OperationStore:
             except (OSError, ValueError):
                 continue
             cutover = operation.get("routingCutover") or {}
-            if operation.get("stack") == stack and cutover.get("status") == "completed":
+            if operation.get("stack") == stack and cutover.get("status") in statuses:
                 return operation
         return None
 

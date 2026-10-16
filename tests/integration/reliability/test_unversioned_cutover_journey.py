@@ -555,7 +555,7 @@ async def test_manual_trigger_correlates_authored_identity_and_reports_overlap()
         )
         marker = datetime.now(timezone.utc)
         try:
-            result = await adapter.trigger_schedule(
+            await adapter.trigger_schedule(
                 definition_id=definition, request_id=str(uuid4()), scheduled_at=marker
             )
 

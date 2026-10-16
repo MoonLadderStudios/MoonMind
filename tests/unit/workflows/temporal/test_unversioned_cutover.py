@@ -58,9 +58,20 @@ def _info(
 
 
 class FakeService:
-    def __init__(self, *, current="", ramping="", queues=(), ordinary=(), conflicts=0):
+    def __init__(
+        self,
+        *,
+        current="",
+        ramping="",
+        queues=(),
+        ordinary=(),
+        conflicts=0,
+        version_queues=None,
+    ):
         self.current, self.ramping = current, ramping
         self.queues = queues
+        # Per-build queues; otherwise every version serves ``queues``.
+        self.version_queues = version_queues or {}
         self.ordinary = set(ordinary)
         self.conflicts = conflicts
         self.mutations = []
@@ -90,7 +101,9 @@ class FakeService:
                     WorkerDeploymentVersionInfo.VersionTaskQueueInfo(
                         name=name, type=kind
                     )
-                    for name, kind in self.queues
+                    for name, kind in self.version_queues.get(
+                        request.version.rpartition(".")[2], self.queues
+                    )
                 ]
             )
         )
@@ -303,6 +316,25 @@ async def test_missing_ordinary_poller_keeps_versioned_routing():
     assert "mm.activity.artifacts (activity)" in receipt["detail"]
     assert service.mutations == []
     assert service.current == "old"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current", ["", "old"])
+async def test_missing_poller_on_a_ramping_only_queue_keeps_the_ramp(current):
+    ramp_only = ("mm.activity.ramp", TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY)
+    service = FakeService(
+        current=current,
+        ramping="newer",
+        queues=QUEUES,
+        version_queues={"newer": (*QUEUES, ramp_only)},
+        ordinary=[name for name, _ in QUEUES],
+    )
+    receipt = await cutover.run_cutover(FakeClient(service), deployment=DEPLOYMENT)
+    assert receipt["status"] == "pending"
+    assert receipt["outcome"] == "missing_queue"
+    assert "mm.activity.ramp (activity)" in receipt["detail"]
+    assert service.mutations == []
+    assert service.ramping == "newer"
 
 
 @pytest.mark.asyncio
