@@ -5,7 +5,9 @@ helper writes the ``local_commit_failed`` receipt, the managed adapter
 validates it, ``MoonMind.Run`` decides the step retry, the managed-session
 controller's preparation of the reused checkout reapplies the admitted
 identity, and the resumed helper commits the preserved staged work once.
-Only the GitHub push/finalize that would follow is synthetic.
+Only the GitHub push/finalize that would follow is synthetic. An Omnigent
+attempt runs in its own sandbox, restored without the ignored receipt, so
+there the verdict stays final.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CONDITIONAL_REGISTRY_READ_PATCH,
     RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
     RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH,
+    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
     RUN_RESOLVER_HOST_REPAIR_RETRY_PATCH,
     MoonMindRunWorkflow,
 )
@@ -286,6 +289,7 @@ def _install_run_harness(
     *,
     enabled_patches: set[str],
     child: Callable[[int], Any],
+    runtime: str = "codex_cli",
 ) -> list[AgentExecutionRequest]:
     requests: list[AgentExecutionRequest] = []
 
@@ -308,10 +312,10 @@ def _install_run_harness(
                 "nodes": [
                     {
                         "id": "resolve",
-                        "tool": {"type": "agent_runtime", "name": "omnigent"},
+                        "tool": {"type": "agent_runtime", "name": runtime},
                         "inputs": {
                             "instructions": "Resolve PR #4486.",
-                            "runtime": {"mode": "omnigent"},
+                            "runtime": {"mode": runtime},
                         },
                     }
                 ],
@@ -513,3 +517,44 @@ async def test_commit_refusal_the_host_cannot_repair_is_not_retried(
     assert len(requests) == 1
     assert _result(workspace.repo)["localCommit"]["kind"] == kind
     assert _git(workspace.repo, "rev-parse", "HEAD") == workspace.base
+
+
+@pytest.mark.asyncio
+async def test_identity_refusal_in_an_attempt_owned_omnigent_sandbox_stays_final(
+    monkeypatch: pytest.MonkeyPatch, workspace: _ResolverWorkspace
+) -> None:
+    """A fresh sandbox would lose the receipt and repeat the remediation."""
+
+    async def resolver_attempt(ordinal: int) -> AgentRunResult:
+        started_at = datetime.now(UTC)
+        if not workspace.resumes_commit():
+            workspace.remediate()
+        assert workspace.commit() == 4
+        return await workspace.attempt_result(ordinal, started_at)
+
+    workflow = MoonMindRunWorkflow()
+    requests = _install_run_harness(
+        monkeypatch,
+        workflow,
+        enabled_patches=_PATCHES | {RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH},
+        child=resolver_attempt,
+        runtime="omnigent",
+    )
+
+    with pytest.raises(ValueError, match="provide_commit_identity"):
+        await workflow._run_execution_stage(
+            parameters={"publishMode": "none"}, plan_ref="plan-ref"
+        )
+
+    assert len(requests) == 1
+    assert workspace.remediations == 1
+    result = _result(workspace.repo)
+    assert (result["reason"], result["next_step"]) == (
+        "local_commit_failed",
+        "provide_commit_identity",
+    )
+    assert result["mergeAutomationDisposition"] == "failed"
+    receipt = result["localCommit"]
+    assert (receipt["kind"], receipt["attempts"]) == ("identity_missing", 1)
+    assert _git(workspace.repo, "rev-parse", "HEAD") == workspace.base
+    assert _git(workspace.repo, "diff", "--cached", "--name-only") == "fix.py"
