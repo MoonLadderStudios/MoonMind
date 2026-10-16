@@ -312,16 +312,21 @@ async def test_admitted_skill_closure_reaches_every_runtime_consumer(
 ):
     skills = await _skill_set(artifacts, tag=shape, **SHAPES[shape])
     plan, binding = await _admitted_plan(artifacts, skills)
-    await _admit(artifacts, plan, binding, workflow_id="run-wf")
     request = _request(plan, binding, workflow_id="run-wf", skills=skills)
     gateway = TemporalOmnigentArtifactGateway(artifacts)
 
+    # Planning reads the selected manifest before any plan or admission exists.
+    pre_plan = request.model_copy(
+        update={"omnigent_execution_plan": None, "parameters": {}}
+    )
+    assert await gateway.read_requested_skill_snapshot(
+        skills.manifest_id, request=pre_plan
+    ) == await _read_as_owner(artifacts, skills.manifest_id)
+
+    await _admit(artifacts, plan, binding, workflow_id="run-wf")
     assert await gateway.read_admitted_input(skills.body_id, request=request) == (
         skills.body
     )
-    assert await gateway.read_requested_skill_snapshot(
-        skills.manifest_id, request=request
-    ) == await _read_as_owner(artifacts, skills.manifest_id)
 
     # Generic host delivery (shared by the generic realizer).
     workspace_root = tmp_path / "worker"
