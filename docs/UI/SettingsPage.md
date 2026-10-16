@@ -146,7 +146,7 @@ Dropdown navigation is real route navigation. When the current page has a dirty 
 
 Configuration pages follow the shared responsive design in [DashboardDesignSystem.md](./DashboardDesignSystem.md): one modest phone gutter, restrained section padding, shrinkable single-column grids, and viewport-bounded overlays. Native `fieldset`/`legend` grouping is kept, but fieldsets opt out of the intrinsic `min-content` minimum so forms fit narrow viewports; inputs are `min-width: 0` and `max-width: 100%`; generated-settings rows pair a `minmax(0, 1fr)` description column with the control column; and long keys, SecretRefs, and digests wrap instead of stretching the grid. Enrollment drawers, confirmations, and tier dialogs are viewport-bounded with a single scroll container and wrapping footer actions.
 
-On narrow viewports, saved Provider Profile records stack each label above its value with actions in a full-width wrapping area below. This is CSS on the same table, not a second list, so records keep one data and action owner. Tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. A browser test under `frontend/src/browser/` checks these pages for mobile overflow.
+On narrow viewports, saved Provider Profile and Managed Secret records stack each label above its value with actions in a full-width wrapping area below. This is CSS on the same table, not a second list, so records keep one data and action owner. Tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. `frontend/src/browser/mobileOverflow.browser.test.tsx` renders Providers & Secrets in the dashboard shell and checks it for mobile overflow, reachable actions, and the tier edit/save journey.
 
 ---
 

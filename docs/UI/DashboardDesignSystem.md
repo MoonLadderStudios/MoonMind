@@ -745,20 +745,23 @@ component/style owners — not a parallel mobile tree:
   value. Shared `DataTable` mirrors loading/error/empty states into its
   card fallback so hiding the table never hides the state.
 - Long machine identifiers wrap (`overflow-wrap: anywhere`); human prose
-  wraps naturally. Action groups wrap into full-width buttons with a
-  `2.75rem` minimum touch height instead of compressing into tall pills.
+  wraps naturally. Action groups wrap into full-width buttons instead of
+  compressing into tall pills. On phones, inventory and Settings controls
+  (buttons, selects, text inputs, disclosures, standalone links) keep a
+  `2.75rem` minimum height; form text stays at 16px.
 - Overlays stay viewport-bounded (`100dvh`-based max height with internal
   scroll) with reachable close/save actions and preserved focus behavior.
 - Genuinely two-dimensional technical content (policy JSON, diffs, worker
   health tables) may use a bounded local scroll region or wrap; ordinary
   fields and actions never require sideways page panning.
 
-Prove repairs with `frontend/src/browser/mobileOverflow.browser.test.tsx`
-(geometry at 320–1440px plus a narrow container in a wide viewport),
-`frontend/src/browser/settingsMobileGutters.browser.test.tsx` (phone gutters
-on the rendered Providers & Secrets page), and
-`npm run ui:test:browser` across the Chromium/Firefox matrix and the
-targeted WebKit leg. Workflow list/detail/chat, collection rails,
+Prove repairs with `frontend/src/browser/mobileOverflow.browser.test.tsx`,
+which renders the production Agents and Providers & Secrets pages in the
+dashboard shell at phone, short-landscape, tablet, and desktop sizes plus
+200% text in the dark theme, and drives their real filter/retry/refresh and
+Provider edit/save journeys; `frontend/src/browser/settingsMobileGutters.browser.test.tsx`
+covers phone gutters. `npm run ui:test:browser` runs them across the
+Chromium/Firefox matrix and the WebKit leg. Workflow list/detail/chat, collection rails,
 sidebars, and native chat composition are out of scope for shared-selector
 changes.
 

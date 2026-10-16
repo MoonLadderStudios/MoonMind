@@ -362,8 +362,8 @@ export function SecretManager({
           <div className="border-b border-slate-200 dark:border-slate-800 px-5 py-4">
             <h4 className="text-base font-semibold text-slate-900 dark:text-white">Stored secrets</h4>
           </div>
-          <div className="managed-secrets-table-wrap overflow-x-auto px-5 py-4">
-            <table className="managed-secrets-table w-full text-left text-sm border-collapse">
+          <div className="managed-secrets-table-wrap stacked-records-wrap overflow-x-auto px-5 py-4">
+            <table className="managed-secrets-table stacked-records w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800">
                   <th className="px-2 py-3 font-medium text-slate-600 dark:text-slate-400">Secret slug</th>

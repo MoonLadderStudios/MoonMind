@@ -180,8 +180,9 @@ Mobile overflow handling does not change this shared contract: workflow,
 Recurring, Skills, Remediation, and Artifacts keep their existing desktop
 workspace, list-display modes, sidebars, information hierarchy, and action
 semantics. Mobile overflow handling is scoped to the
-inventory/provider/settings responsive rules and the shared dialog bounds;
-regression cover for those boundaries lives in
-`frontend/src/browser/mobileOverflow4559.browser.test.tsx` (geometry) and the
-existing responsive suites (remediationResponsive, collection rails, Skills,
-workflow toolbar).
+inventory/provider/settings responsive rules and the shared dialog bounds.
+`frontend/src/browser/mobileOverflow.browser.test.tsx` renders the Agents and
+Providers & Secrets pages in the real dashboard shell; the workflow-related
+routes rely on their existing responsive suites (remediationResponsive,
+collection rails, Skills, workflow toolbar), which do not cover every phone
+state.

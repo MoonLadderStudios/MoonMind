@@ -1553,13 +1553,13 @@ function RoutedDashboardPage({
   const layout = readSharedLayout(routedPayload);
   // Workflows and Skills keep a stable key so their workspaces stay mounted
   // across table/detail navigation (preserving sidebar filter state); other
-  // pages remount per path. Settings and Omnigent inventories read their
-  // query reactively, so typing a filter must not remount them.
+  // pages remount per path. Settings, Omnigent inventories and Artifacts read
+  // their query reactively, so typing a filter must not remount them.
   const routeKey = route.page === 'workflows-workspace'
     ? 'workflows-workspace'
     : route.page === 'skills'
       ? 'skills'
-      : route.page.startsWith('settings-') || route.page === 'omnigent-inventory'
+      : route.page.startsWith('settings-') || route.page === 'omnigent-inventory' || route.page === 'artifacts'
         ? `${route.page}:${route.currentPath}`
         : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
 

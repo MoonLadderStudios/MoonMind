@@ -52,7 +52,7 @@ describe('OmnigentInventoryPage', () => {
     // Responsive DataTable renders rows twice in jsdom (table + cards, made
     // mutually exclusive only by the CSS breakpoint in real browsers), so
     // presence assertions use the plural queries here. The browser suite
-    // (mobileOverflow4559) proves exactly one representation is exposed per
+    // (mobileOverflow.browser.test.tsx) proves exactly one representation is exposed per
     // width via computed display.
     expect((await screen.findAllByText('Codex')).length).toBeGreaterThanOrEqual(1);
     expect(fetch).toHaveBeenCalledTimes(2);
