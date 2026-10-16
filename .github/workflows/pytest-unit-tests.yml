@@ -997,10 +997,12 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
-      - name: Qualify active journal transition and host controller refresh
+      - name: Qualify active journal transition and controller refresh and handoff
         # Real Docker consumers, PostgreSQL, artifact bytes and source-image
         # helper. Kill the owner after partial recreation, resume the same
-        # operation, then run the pre-chunk reader/sweeper contract.
+        # operation, then run the pre-chunk reader/sweeper contract. A release
+        # one-off hands an open operation to the candidate's controller, and a
+        # replacement that cannot run is reverted.
         if: matrix.suite == 'controller-journey'
         timeout-minutes: 7
         env:
@@ -1015,7 +1017,8 @@ jobs:
           "$journal_test_env/bin/python" -m pytest \
             --confcutdir=tests/integration/host_update \
             tests/integration/host_update/test_journal_transition.py \
-            tests/integration/host_update/test_controller_refresh.py -q
+            tests/integration/host_update/test_controller_refresh.py \
+            tests/integration/host_update/test_controller_handoff.py -q
       - name: Upload redacted journey startup timings and resource footprints
         if: always() && endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
