@@ -20541,6 +20541,35 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
   });
 
+  it("restores a native Profile's own Backend after a Harness round trip", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli", is_default: true },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    fireEvent.change(profile, { target: { value: "native-codex" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep the native Codex route." } });
+    const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
+    fireEvent.change(harness, { target: { value: "claude_code" } });
+    expect(profile.value).toBe("");
+    fireEvent.change(harness, { target: { value: "codex_cli" } });
+    expect(profile.value).toBe("native-codex");
+    const start = screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement;
+    await waitFor(() => expect(start.disabled).toBe(false));
+    fireEvent.click(start);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "native-codex" });
+  });
+
   function configuredCodexInventory(fallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
     return (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
