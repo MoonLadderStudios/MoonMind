@@ -422,6 +422,12 @@ backing store, exposes it at the materialized `visiblePath` (aliased at
 runtime instructions, and launches the runtime with refs to the snapshot and
 materialization metadata.
 
+The manifest and Skill bodies are read with the Step Execution's admitted scope,
+not the worker's service identity, so a snapshot resolved by the Run or another
+admitted producer stays readable under authenticated modes and after worker
+replacement. See
+[service and worker access](../Temporal/WorkflowArtifactSystemDesign.md#93-service-and-worker-access).
+
 ### 14.2 Active Backing Store
 
 The backing store is MoonMind-owned (not repo-author-owned), run-scoped,

@@ -30,6 +30,7 @@ class AgentSkillMaterializer:
         projection_owner_uid: int | None = None,
         projection_owner_gid: int | None = None,
         project_adapter_aliases: bool = True,
+        admitted_principal: str | None = None,
     ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
@@ -45,6 +46,11 @@ class AgentSkillMaterializer:
         self.projection_owner_uid = projection_owner_uid
         self.projection_owner_gid = projection_owner_gid
         self.project_adapter_aliases = project_adapter_aliases
+        # The admitted execution scope for Skill body reads; the service
+        # still requires each body to be owned by or linked to it.
+        self._read_scope = (
+            {"admitted_principal": admitted_principal} if admitted_principal else {}
+        )
 
     async def materialize(
         self,
@@ -119,6 +125,7 @@ class AgentSkillMaterializer:
                     _artifact, payload = await self._artifact_service.read(
                         artifact_id=skill.content_ref,
                         principal="system",
+                        **self._read_scope,
                         allow_restricted_raw=True,
                     )
                     self._verify_payload_digest(skill, payload)

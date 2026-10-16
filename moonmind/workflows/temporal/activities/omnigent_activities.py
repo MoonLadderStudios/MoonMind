@@ -661,7 +661,11 @@ async def _try_generic_realizer_dispatch(
                 raise ValueError(
                     "persisted Omnigent execution plan digest mismatch"
                 )
-            if getattr(persisted.payload, "resolvedTools", {}).get("repositoryAccess"):
+            # Delegate the verified plan's inputs (repository snapshots and
+            # the Skill closure) to this execution before any runtime reader.
+            if request.step_execution is not None or getattr(
+                persisted.payload, "resolvedTools", {}
+            ).get("repositoryAccess"):
                 from moonmind.omnigent.harness_platform.execution_plan import (
                     verify_execution_plan_envelope,
                 )
