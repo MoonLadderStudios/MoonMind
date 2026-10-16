@@ -38,6 +38,10 @@ _CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
 _CONTROLLER_SUBMIT_ATTEMPTS = 2
 # Receipt line printed by the controller's `bootstrap.py ensure --prefer-requested`.
 _CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
+# Controller behavior this submitter relies on (deploy/controller/server.py
+# CONTROLLER_CAPABILITIES). Without request identity a controller answers a
+# new `latest` request with an earlier success, so it is refreshed first.
+_REQUIRED_CONTROLLER_CAPABILITIES = ("active-journal-transition", "request-identity")
 
 
 _MAX_DIAGNOSTIC_CHARS = 4000
@@ -636,7 +640,8 @@ _CONTROLLER_SOURCE_EXPORT = (
     "print('{}') if not present else None; "
     "sys.exit(0) if not present else None; import bootstrap,server; "
     "supported=callable(getattr(bootstrap,'cmd_ensure',None)) and "
-    "'active-journal-transition' in getattr(server,'CONTROLLER_CAPABILITIES',()); "
+    f"set({_REQUIRED_CONTROLLER_CAPABILITIES!r}).issubset("
+    "getattr(server,'CONTROLLER_CAPABILITIES',())); "
     "methods={'identity-recovery':'cmd_recover_identity',"
     "'bind-discovery':'cmd_describe_installation'}; "
     "supported=supported and all(callable(getattr(bootstrap,methods[arg],None)) "
@@ -649,7 +654,7 @@ def _controller_sources(image, repo, *, identity_recovery=False, bind_discovery=
     """Export the controller's trusted, image-owned Python sources.
 
     The export runs without network access and returns ``{}`` when the image
-    ships no controller or one without journal-transition support.
+    ships no controller or one without the required controller capabilities.
     """
     return json.loads(
         run(
@@ -874,8 +879,8 @@ def _ensure_controller_journal_transition(
         )
     except ControllerUnreachableError:
         health = {}
-    if not refresh and "active-journal-transition" in (
-        health.get("capabilities") or ()
+    if not refresh and set(health.get("capabilities") or ()).issuperset(
+        _REQUIRED_CONTROLLER_CAPABILITIES
     ):
         return
     if refresh:
@@ -912,9 +917,11 @@ def _ensure_controller_journal_transition(
         _, health = _controller_call(
             controller_url, secret, "GET", "/v1/healthz", timeout=5
         )
-        if "active-journal-transition" not in (health.get("capabilities") or ()):
+        if not set(health.get("capabilities") or ()).issuperset(
+            _REQUIRED_CONTROLLER_CAPABILITIES
+        ):
             raise RuntimeError(
-                "Controller prerequisite did not expose journal transition support."
+                "Controller prerequisite did not expose the required controller capabilities."
             )
         return
     if failure is not None:
