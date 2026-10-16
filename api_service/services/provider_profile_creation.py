@@ -806,7 +806,7 @@ def validate_manual_credential_contract(
         ):
             return
         raise ValueError(
-            "This runtime and provider does not advertise expert manual "
+            "This Harness and provider does not advertise expert manual "
             "credential overrides; choose the supported authentication method."
         )
     raise ValueError(

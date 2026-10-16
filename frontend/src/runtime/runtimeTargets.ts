@@ -182,7 +182,7 @@ export function runtimeUnavailableReason(
   catalog?: RuntimeTargetCatalog | null,
 ): string | null {
   if (!Object.prototype.hasOwnProperty.call(RUNTIME_ID_LABELS, runtimeId)) {
-    return `Unsupported runtime ${runtimeId}. Explicitly choose a supported replacement; your draft content is preserved.`;
+    return `Unsupported Harness ${runtimeId}. Explicitly choose a supported replacement; your draft content is preserved.`;
   }
   const registered = targetsForRuntime(catalog, runtimeId);
   if (registered.length === 0) {
@@ -198,7 +198,7 @@ export function runtimeUnavailableReason(
   return `No qualified target is available for ${formatRuntimeLabel(
     runtimeId,
     catalog,
-  )} (${detail}). Review runtime availability and the Profile configuration in Settings.`;
+  )} (${detail}). Review Harness availability and the Profile configuration in Settings.`;
 }
 
 /**
