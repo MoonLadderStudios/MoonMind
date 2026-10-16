@@ -406,7 +406,11 @@ function RuntimeCommandDetail({
       {hasCommand ? (
         <div className="td-facts-grid">
           {commandName ? <Fact label="Command"><code>{commandName}</code></Fact> : null}
-          {runtime ? <Fact label="Runtime">{formatRuntimeLabel(runtime)}</Fact> : null}
+          {recordedHarnessLabel(runtime) ? (
+            <Fact label="Harness">{recordedHarnessLabel(runtime)}</Fact>
+          ) : runtime ? (
+            <Fact label="Backend">{recordedBackendLabel(runtime)}</Fact>
+          ) : null}
           {renderMode ? <Fact label="Render Mode">{formatStatusLabel(renderMode)}</Fact> : null}
           {status ? <Fact label="Status">{formatStatusLabel(status)}</Fact> : null}
           {hintCatalogVersion ? <Fact label="Hint Catalog Version">{hintCatalogVersion}</Fact> : null}
@@ -2287,27 +2291,34 @@ export function resolveWorkflowSourceContext(execution: {
   return { repository, startingBranch, hasRepository, startingBranchState };
 }
 
-function renderProviderProfileSummary(
+// Recorded targetRuntime presented as Harness and Backend. An Omnigent run
+// records its Backend, not a Harness name, so no Harness is guessed for it.
+function recordedHarnessLabel(targetRuntime: string | null | undefined): string | null {
+  return targetRuntime && targetRuntime !== 'omnigent' ? formatRuntimeLabel(targetRuntime) : null;
+}
+
+function recordedBackendLabel(targetRuntime: string | null | undefined): string | null {
+  if (!targetRuntime) return null;
+  return targetRuntime === 'omnigent' ? 'Omnigent' : 'Direct';
+}
+
+// Provider Profile identity and the upstream Provider stay separate facts, so
+// a provider name is never presented as the recorded Profile.
+function recordedProviderSummary(
   execution: z.infer<typeof ExecutionDetailSchema>,
   launchProfileId?: string | null,
 ): ReactNode {
-  const profileId = launchProfileId?.trim() || execution.profileId?.trim();
   const launchProfileChanged = Boolean(
     launchProfileId?.trim() && launchProfileId?.trim() !== execution.profileId?.trim(),
   );
-  const providerLabel = launchProfileChanged ? undefined : execution.providerLabel?.trim();
-  const providerId = launchProfileChanged ? undefined : execution.providerId?.trim();
-  const primary = providerLabel || providerId || profileId;
-  if (!primary) return '—';
-
+  if (launchProfileChanged) return null;
+  const providerLabel = execution.providerLabel?.trim();
+  const providerId = execution.providerId?.trim();
+  const primary = providerLabel || providerId;
+  if (!primary) return null;
   return (
     <span className="stack gap-1">
-      <code className="text-xs break-all">{primary}</code>
-      {profileId && profileId !== primary ? (
-        <span className="small">
-          Profile ID: <code className="text-xs break-all">{profileId}</code>
-        </span>
-      ) : null}
+      <span>{primary}</span>
       {providerId && providerId !== primary ? (
         <span className="small">
           Provider ID: <code className="text-xs break-all">{providerId}</code>
@@ -5368,13 +5379,13 @@ function BranchExplorerPanel({
             </select>
           </label>
           <label>
-            Profile
+            Provider Profile
             <select value={draft.providerProfileRef} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, providerProfileRef: event.target.value }))}>
-              <option value="">Inherit execution Profile</option>
+              <option value="">Inherit execution Provider Profile</option>
               {draft.providerProfileRef && !(profilesQuery.data || []).some((profile) => profile.profile_id === draft.providerProfileRef) ? <option value={draft.providerProfileRef}>{draft.providerProfileRef} · Unavailable</option> : null}
               {(profilesQuery.data || []).map((profile) => <option key={profile.profile_id} value={profile.profile_id}>{profile.account_label || profile.profile_id}{profile.enabled === false ? ' · Disabled' : profile.launch_ready === false ? ' · Needs setup' : ''}</option>)}
             </select>
-            {profilesQuery.isError ? <span role="status">Profiles could not be loaded. Your selection is preserved.</span> : null}
+            {profilesQuery.isError ? <span role="status">Provider Profiles could not be loaded. Your selection is preserved.</span> : null}
           </label>
           <label>
             Execution profile / launch policy
@@ -8845,7 +8856,8 @@ function RunComparisonPanel({
               <th>Workflow</th>
               <th>Run</th>
               <th>Status</th>
-              <th>Runtime</th>
+              <th>Harness</th>
+              <th>Backend</th>
               <th>Model</th>
             </tr>
           </thead>
@@ -8855,7 +8867,8 @@ function RunComparisonPanel({
               <td><code>{execution.workflowId || execution.taskId}</code></td>
               <td><code>{execution.runId || execution.temporalRunId || '—'}</code></td>
               <td>{formatStatusLabel(currentStatus)}</td>
-              <td>{formatRuntimeLabel(execution.targetRuntime)}</td>
+              <td>{recordedHarnessLabel(execution.targetRuntime) ?? '—'}</td>
+              <td>{recordedBackendLabel(execution.targetRuntime) ?? '—'}</td>
               <td>{execution.model || execution.resolvedModel || execution.requestedModel || '—'}</td>
             </tr>
             {execution.relatedRuns.map((run, index) => (
@@ -8864,7 +8877,8 @@ function RunComparisonPanel({
                 <td><a href={run.href}><code>{run.workflowId}</code></a></td>
                 <td><code>{run.runId || '—'}</code></td>
                 <td>{formatStatusLabel(run.status || 'unknown')}</td>
-                <td>{formatRuntimeLabel(run.targetRuntime)}</td>
+                <td>{recordedHarnessLabel(run.targetRuntime) ?? '—'}</td>
+                <td>{recordedBackendLabel(run.targetRuntime) ?? '—'}</td>
                 <td>{run.model || run.resolvedModel || run.requestedModel || '—'}</td>
               </tr>
             ))}
@@ -10452,8 +10466,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 skillRuntime={execution.skillRuntime}
               />
 
-              <FactGroup title="Runtime">
-                {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
+              <FactGroup title="Agent">
+                {recordedHarnessLabel(execution.targetRuntime) ? (
+                  <Fact label="Harness">{recordedHarnessLabel(execution.targetRuntime)}</Fact>
+                ) : null}
+                {recordedBackendLabel(execution.targetRuntime) ? (
+                  <Fact label="Backend">{recordedBackendLabel(execution.targetRuntime)}</Fact>
+                ) : null}
                 {historicalModel ? (
                   <Fact label="Model">
                     <code className="text-xs">{historicalModel}</code>
@@ -10461,7 +10480,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 ) : null}
                 {historicalProfileId ? (
                   <Fact label="Provider Profile">
-                    {renderProviderProfileSummary(execution, historicalProfileId)}
+                    <code className="text-xs break-all">{historicalProfileId}</code>
+                  </Fact>
+                ) : null}
+                {recordedProviderSummary(execution, historicalProfileId) ? (
+                  <Fact label="Provider">
+                    {recordedProviderSummary(execution, historicalProfileId)}
                   </Fact>
                 ) : null}
                 {historicalEffort ? <Fact label="Effort">{historicalEffort}</Fact> : null}

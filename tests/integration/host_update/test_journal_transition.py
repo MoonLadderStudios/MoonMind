@@ -199,7 +199,7 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_pat
         assert store.load(rollback["operationId"])["journalTransition"]["helperImage"] in original_sources
     finally:
         # Preserve this disposable project's actual evidence before cleanup;
-        # the workflow's generic Compose diagnostics target another project.
+        # the controller-journey row collects and uploads it on failure.
         for name, args in (("ps", ("ps", "--all", "--format", "json")),
                            ("logs", ("logs", "--no-color", "--tail", "80"))):
             result = compose(*args, check=False)

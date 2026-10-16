@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import json
 from contextlib import asynccontextmanager
@@ -10403,6 +10404,624 @@ def test_create_task_shaped_execution_accepts_provider_repository_for_resolvers(
     create_kwargs = service.create_execution.await_args.kwargs
     assert create_kwargs["repository"] == "Moon/Mind"
     assert create_kwargs["initial_parameters"]["repository"] == repository_target
+
+
+_NO_PUBLISH_TASK = {"instructions": "Summarize.", "publish": {"mode": "none"}}
+
+
+@pytest.mark.parametrize(
+    ("submitted", "expected_repository", "expected_access"),
+    [
+        # Omitted source and branch: scratch with no repository or credential.
+        ({}, None, ("", False)),
+        # Explicit anonymous read; the omitted branch stays omitted so the
+        # source adapter clones the remote default.
+        (
+            {
+                "repository": "Moon/Mind",
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "accessMode": "anonymous",
+                    }
+                },
+            },
+            "Moon/Mind",
+            ("", True),
+        ),
+        (
+            {
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "Moon/Mind",
+                        "accessMode": "anonymous",
+                    }
+                }
+            },
+            "Moon/Mind",
+            ("", True),
+        ),
+    ],
+)
+def test_create_execution_hands_authored_workspace_source_to_run_parameters(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    submitted: dict[str, Any],
+    expected_repository: str | None,
+    expected_access: tuple[str, bool],
+) -> None:
+    """MoonLadderStudios/MoonMind#2615: no-repository admission keeps its source."""
+    from moonmind.workflows.executions.repository_contract import (
+        authored_repository_access,
+    )
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex",
+                "task": dict(_NO_PUBLISH_TASK),
+                **copy.deepcopy(submitted),
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    create_kwargs = service.create_execution.await_args.kwargs
+    parameters = create_kwargs["initial_parameters"]
+    assert create_kwargs["repository"] == expected_repository
+    # Run and its planner read the repository a source names only here.
+    assert parameters.get("repository") == expected_repository
+    if "workspace" in submitted:
+        assert parameters["workspaceSpec"] == submitted["workspace"]
+    else:
+        assert "workspaceSpec" not in parameters
+    assert "repositoryBranch" not in parameters
+    assert authored_repository_access(parameters) == expected_access
+
+
+def test_input_snapshot_records_admitted_workspace_source() -> None:
+    from api_service.api.routers.executions import (
+        _build_original_workflow_input_snapshot_payload,
+        _snapshot_source_payload_from_parameters,
+    )
+
+    workspace = {"workspaceSource": {"kind": "repository", "accessMode": "anonymous"}}
+    source, workflow = _snapshot_source_payload_from_parameters(
+        {
+            "repository": "Moon/Mind",
+            "workspaceSpec": copy.deepcopy(workspace),
+            "workflow": dict(_NO_PUBLISH_TASK),
+        }
+    )
+    snapshot = _build_original_workflow_input_snapshot_payload(
+        source_kind="create", payload=source, task_payload=workflow
+    )
+
+    assert snapshot["draft"]["workspace"] == workspace
+    assert snapshot["draft"]["repository"] == "Moon/Mind"
+
+
+_ANONYMOUS_WORKSPACE = {
+    "workspaceSource": {
+        "kind": "repository",
+        "repository": "Moon/Mind",
+        "branch": "release",
+        "accessMode": "anonymous",
+    }
+}
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize(
+    ("workspace", "expected_spec"),
+    [
+        (_ANONYMOUS_WORKSPACE, _ANONYMOUS_WORKSPACE),
+        # A stated null clears the recorded source instead of inheriting it.
+        (None, None),
+    ],
+)
+def test_edit_and_rerun_readmit_the_stated_workspace_source(
+    update_name: str,
+    workspace: dict[str, Any] | None,
+    expected_spec: dict[str, Any] | None,
+) -> None:
+    """MoonLadderStudios/MoonMind#2619: edit/rerun reuse Create's admission."""
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "workspaceSpec": copy.deepcopy(_ANONYMOUS_WORKSPACE),
+            "workflow": dict(_NO_PUBLISH_TASK),
+        }
+        service.describe_execution.return_value = record
+        service.update_execution.return_value = {
+            "accepted": True,
+            "applied": "next_safe_point",
+            "message": "Accepted.",
+        }
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": update_name,
+                "parametersPatch": {
+                    "repository": "Moon/Mind",
+                    "workspace": copy.deepcopy(workspace),
+                    "publishMode": "none",
+                    "workflow": dict(_NO_PUBLISH_TASK),
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.json()
+        patch = service.update_execution.await_args.kwargs["parameters_patch"]
+        assert patch["workspaceSpec"] == expected_spec
+
+
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        (
+            {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workspace": {
+                    "workspaceSource": {"kind": "repository", "accessMode": "anonymous"}
+                },
+                "workflow": dict(_NO_PUBLISH_TASK),
+            },
+            "anonymous access reads a selected repository without a connectionRef",
+        ),
+        (
+            {
+                "repository": "Moon/Mind",
+                "workspace": copy.deepcopy(_ANONYMOUS_WORKSPACE),
+                "publishMode": "pr",
+                "workflow": {"instructions": "Summarize.", "publish": {"mode": "pr"}},
+            },
+            "anonymous workspace source cannot publish",
+        ),
+    ],
+)
+def test_edit_rejects_a_workspace_source_create_would_reject(
+    patch: dict[str, Any], message: str
+) -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        service.describe_execution.return_value = record
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={"updateName": "UpdateInputs", "parametersPatch": patch},
+        )
+
+        assert response.status_code == 422, response.json()
+        assert message in response.json()["detail"]["message"]
+        service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        # The patch omits publication, so the recorded PR mode would survive
+        # the shallow merge.
+        (
+            {"workspace": copy.deepcopy(_ANONYMOUS_WORKSPACE)},
+            "anonymous workspace source cannot publish",
+        ),
+        # A derived workspaceSpec is admitted like an authored workspace.
+        (
+            {"workspaceSpec": copy.deepcopy(_ANONYMOUS_WORKSPACE)},
+            "anonymous workspace source cannot publish",
+        ),
+        (
+            {"workspaceSpec": {"workspacePath": "/srv/host/checkout"}},
+            "payload.workspace is invalid",
+        ),
+    ],
+)
+def test_edit_admits_the_source_against_the_merged_parameters(
+    update_name: str, patch: dict[str, Any], message: str
+) -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "publishMode": "pr",
+            "workflow": {"instructions": "Summarize.", "publish": {"mode": "pr"}},
+        }
+        service.describe_execution.return_value = record
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={"updateName": update_name, "parametersPatch": patch},
+        )
+
+        assert response.status_code == 422, response.json()
+        assert message in response.json()["detail"]["message"]
+        service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize(
+    ("recorded_runtime", "patch_runtime"),
+    [
+        # The edit selects the runtime the source cannot run on.
+        ({}, {"targetRuntime": "claude_code"}),
+        # The edit keeps the recorded runtime, which Create would also reject.
+        ({"targetRuntime": "claude"}, {}),
+        # The edit selects the runtime only through the nested workflow mode,
+        # which the workflow applies over the recorded top-level runtime.
+        (
+            {"targetRuntime": "codex_cli"},
+            {"workflow": {**_NO_PUBLISH_TASK, "runtime": {"mode": "claude_code"}}},
+        ),
+    ],
+)
+def test_edit_and_rerun_apply_creates_source_runtime_check(
+    update_name: str,
+    recorded_runtime: dict[str, Any],
+    patch_runtime: dict[str, Any],
+) -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "workflow": dict(_NO_PUBLISH_TASK),
+            **recorded_runtime,
+        }
+        service.describe_execution.return_value = record
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": update_name,
+                "parametersPatch": {
+                    "repository": "Moon/Mind",
+                    "workspace": copy.deepcopy(_ANONYMOUS_WORKSPACE),
+                    "publishMode": "none",
+                    "workflow": dict(_NO_PUBLISH_TASK),
+                    **patch_runtime,
+                },
+            },
+        )
+
+        assert response.status_code == 422, response.json()
+        assert (
+            "workspace source 'repository' is not supported on runtime "
+            "'claude_code'" in response.json()["detail"]["message"]
+        )
+        service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+def test_edit_admits_a_source_against_the_recorded_repository(
+    update_name: str,
+) -> None:
+    """A workspace-only patch names its repository through the merged record."""
+    workspace = {"workspaceSource": {"kind": "repository", "accessMode": "anonymous"}}
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "workflow": dict(_NO_PUBLISH_TASK),
+        }
+        service.describe_execution.return_value = record
+        service.update_execution.return_value = {
+            "accepted": True,
+            "applied": "next_safe_point",
+            "message": "Accepted.",
+        }
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": update_name,
+                "parametersPatch": {
+                    "workspace": copy.deepcopy(workspace),
+                    "publishMode": "none",
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.json()
+        patch = service.update_execution.await_args.kwargs["parameters_patch"]
+        assert patch["workspaceSpec"] == workspace
+        assert "repository" not in patch
+
+
+@pytest.mark.parametrize(
+    ("submitted", "message"),
+    [
+        (
+            {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "accessMode": "anonymous",
+                    }
+                },
+            },
+            "anonymous",
+        ),
+        (
+            {
+                "repository": "Moon/Mind",
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "accessMode": "anonymous",
+                        "connectionRef": "repository-connection:git-default",
+                    }
+                },
+            },
+            "anonymous",
+        ),
+        (
+            {
+                "repository": "Moon/Mind",
+                "workspace": {
+                    "workspaceSource": {"kind": "repository", "accessMode": "public"}
+                },
+            },
+            "accessMode",
+        ),
+        (
+            {
+                "repository": "Moon/Mind",
+                "workspace": {"workspaceSource": {"kind": "scratch"}},
+            },
+            "payload.repository",
+        ),
+        (
+            {
+                "repository": "Moon/Mind",
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "Other/Repo",
+                    }
+                },
+            },
+            "payload.repository",
+        ),
+        (
+            {"workspace": {"workspaceSource": {"kind": "repository"}}},
+            "repository",
+        ),
+        (
+            {
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "artifact",
+                        "artifactRef": "artifact://saved-output",
+                    }
+                }
+            },
+            "digest",
+        ),
+        ({"workspace": {"workspacePath": "/tmp/elsewhere"}}, "workspacePath"),
+        (
+            {
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "Moon/Mind",
+                        "accessMode": "explicit",
+                    }
+                }
+            },
+            "explicit access requires a connectionRef",
+        ),
+        (
+            {
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "Moon/Mind",
+                        "accessMode": "routed",
+                        "connectionRef": "repository-connection:work",
+                    }
+                }
+            },
+            "routed access",
+        ),
+        (
+            {
+                "repository": {
+                    "provider": "git",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workspace": {
+                    "workspaceSource": {"kind": "repository", "branch": "feature"}
+                },
+            },
+            "branch",
+        ),
+        ({"workspace": "scratch"}, "payload.workspace"),
+    ],
+)
+def test_create_execution_rejects_invalid_workspace_source_before_scheduling(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    submitted: dict[str, Any],
+    message: str,
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex",
+                "task": dict(_NO_PUBLISH_TASK),
+                **submitted,
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.json()
+    assert message in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_rejects_publication_from_anonymous_source(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex",
+                "repository": "Moon/Mind",
+                "task": {"instructions": "Fix it.", "publish": {"mode": "pr"}},
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "accessMode": "anonymous",
+                    }
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.json()
+    assert "anonymous" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_checks_workspace_source_against_selected_runtime(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "targetRuntime": "codex",
+                "task": dict(_NO_PUBLISH_TASK),
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "artifact",
+                        "artifactRef": "artifact://saved-output",
+                        "artifactDigest": "sha256:" + "a" * 64,
+                    }
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.json()
+    assert "codex_cli" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_admits_issue_authority_from_workspace_repository(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected GitHub issue.",
+                    "publish": {"mode": "none"},
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                },
+                "workspace": {
+                    "workspaceSource": {
+                        "kind": "repository",
+                        "repository": "MoonLadderStudios/Tactics",
+                    }
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["repository"] == "MoonLadderStudios/Tactics"
+
+
+def test_recurring_schedule_target_carries_admitted_workspace_source(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    workspace = {
+        "workspaceSource": {
+            "kind": "repository",
+            "repository": "Moon/Mind",
+            "accessMode": "anonymous",
+        }
+    }
+
+    with patch(
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Nightly read",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "targetRuntime": "codex",
+                    "schedule": {"mode": "recurring", "cron": "0 * * * *"},
+                    "task": dict(_NO_PUBLISH_TASK),
+                    "workspace": copy.deepcopy(workspace),
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    stored = service.create_definition.await_args.kwargs["target"]["initialParameters"]
+    assert stored["workspaceSpec"] == workspace
+    assert stored["repository"] == "Moon/Mind"
 
 
 @pytest.mark.parametrize(

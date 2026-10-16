@@ -58,7 +58,7 @@ async def test_retained_boundary_workflow_replays_across_cutoff():
     await replayer.replay_workflow(history)
     # The same retained bindings resolve outside the workflow after cutoff.
     from moonmind.omnigent.cutover import CutoverPhase, evaluate_promotion
-    from moonmind.workflows.temporal.release_routing import current_version
+    from moonmind.workflows.temporal.unversioned_cutover import current_version
 
     decision = evaluate_promotion(
         current_phase=CutoverPhase.BROAD_DEFAULT,

@@ -7,7 +7,7 @@
 #       docs/tmp/**                                  (migration/rollout notes)
 #       docs/ReleaseNotes/**                         (historical)
 #   - README.md
-#   - AGENTS.md (CLAUDE.md / GEMINI.md are symlinks to it)
+#   - AGENTS.md
 #   - .agents/skills/**/*.md
 #
 # Banned patterns (case-insensitive unless noted):

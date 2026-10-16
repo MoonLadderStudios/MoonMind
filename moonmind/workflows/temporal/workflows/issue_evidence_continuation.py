@@ -504,6 +504,10 @@ async def resume_published_issue_evidence(
             owner._record_moonspec_verify_gate(
                 node_id=f"{node['id']}:published-evidence:{ordinal}", outputs=outputs
             )
+            if workflow.patched("run-issue-evidence-disclosure-refresh-v1"):
+                # The new report can change disclosures even at the same head.
+                # Publish it before ready-for-review or merge can use this gate.
+                await owner._sync_pr_unverified_criteria(pull_request_url)
             if parsed.verdict == "ADDITIONAL_WORK_NEEDED":
                 signature = _semantic_gap_signature(owner, outputs, parsed)
                 state = record_semantic_progress(

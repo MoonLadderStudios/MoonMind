@@ -31,6 +31,7 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentExecutionPlanBinding,
 )
 from moonmind.omnigent.harness_platform.execution_plan import AdmissionAuthority
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
 )
@@ -483,6 +484,34 @@ def test_admission_contract_is_frozen_compact_and_fail_closed() -> None:
             admissionMode="enabled",
             admittedFeatureGeneration="omnigent-session-v2",
         )
+
+
+@pytest.mark.parametrize(
+    ("admitted", "reason_code", "admission_mode"),
+    [
+        (True, "canary_selected", "canary"),
+        (False, "canary_owner_not_allowlisted", "canary"),
+        (False, "execution_profile_not_allowlisted", "enabled"),
+        (False, "feature_generation_mismatch", "enabled"),
+        (False, "new_selection_disabled", "disabled"),
+    ],
+)
+def test_recorded_rollout_setting_decisions_remain_replay_decodable(
+    admitted: bool, reason_code: str, admission_mode: str
+) -> None:
+    # AgentRun replay validates the admission result already in history, so
+    # decisions recorded under the retired rollout settings must still decode.
+    decision = OmnigentSessionAdmissionDecision.model_validate(
+        {
+            "admitted": admitted,
+            "reasonCode": reason_code,
+            "admissionMode": admission_mode,
+            "admittedFeatureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+        }
+    )
+
+    assert decision.admitted is admitted
+    assert decision.reason_code == reason_code
 
 
 @pytest.mark.asyncio
@@ -2470,3 +2499,90 @@ async def test_signal_continuation_claims_through_the_canonical_command_service(
         ) == 2
 
     await engine.dispose()
+
+
+class _HostBindings:
+    def __init__(self, *, active_leases=()):
+        self.active_leases = list(active_leases)
+        self.updates: list[dict] = []
+
+    async def create_or_update_static_binding(self, **kwargs):
+        assert kwargs["profile_id"] == "codex"
+        # The repository checks and updates under one binding-row lock.
+        if kwargs.get("require_idle") and self.active_leases:
+            raise OmnigentOAuthHostError(
+                "host binding is leased and keeps its launch",
+                code="OMNIGENT_HOST_BINDING_LEASED",
+            )
+        self.updates.append(kwargs)
+        return SimpleNamespace(
+            binding_ref="omnigent-oauth:codex",
+            effective_launch_snapshot=kwargs["effective_launch_snapshot"],
+        )
+
+
+def _cached_binding():
+    return SimpleNamespace(
+        binding_ref="omnigent-oauth:codex",
+        endpoint_ref="default",
+        static_host_id=None,
+        host_launch_profile_ref="codex-on-demand@16",
+        effective_launch_snapshot={"snapshotRef": "omnigent-launch:sha256:old"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_admitted_plan_replaces_an_idle_binding_launch() -> None:
+    """A plan bound to newly installed images is not blocked by an old cache."""
+
+    hosts = _HostBindings()
+    planned = {"snapshotRef": "omnigent-launch:sha256:installed"}
+
+    binding, launch = await omnigent_session_activities._bind_cached_host_launch(
+        hosts,
+        _cached_binding(),
+        profile_id="codex",
+        execution_profile_ref="omnigent-codex@1",
+        launch_policy_ref="codex-on-demand@16",
+        effective_launch=planned,
+        planned=True,
+    )
+
+    assert launch == planned
+    assert binding.effective_launch_snapshot == planned
+    assert hosts.updates[0]["launch_policy_ref"] == "codex-on-demand@16"
+    assert hosts.updates[0]["host_launch_profile_ref"] == "codex-on-demand@16"
+    assert hosts.updates[0]["require_idle"] is True
+
+
+@pytest.mark.asyncio
+async def test_leased_binding_keeps_its_launch_against_a_newer_plan() -> None:
+    """A host still running the cached launch keeps its actual binding."""
+
+    hosts = _HostBindings(active_leases=[SimpleNamespace(lease_id="lease-1")])
+
+    with pytest.raises(ValueError, match="conflicts with planned launch authority"):
+        await omnigent_session_activities._bind_cached_host_launch(
+            hosts,
+            _cached_binding(),
+            profile_id="codex",
+            execution_profile_ref="omnigent-codex@1",
+            launch_policy_ref="codex-on-demand@16",
+            effective_launch={"snapshotRef": "omnigent-launch:sha256:installed"},
+            planned=True,
+        )
+    assert hosts.updates == []
+
+    # Without an admitted plan the cached launch stays authority.
+    binding = _cached_binding()
+    same, launch = await omnigent_session_activities._bind_cached_host_launch(
+        hosts,
+        binding,
+        profile_id="codex",
+        execution_profile_ref="omnigent-codex@1",
+        launch_policy_ref="codex-on-demand@16",
+        effective_launch={"snapshotRef": "omnigent-launch:sha256:installed"},
+        planned=False,
+    )
+    assert same is binding
+    assert launch == binding.effective_launch_snapshot

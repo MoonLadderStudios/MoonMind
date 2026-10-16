@@ -270,6 +270,25 @@ def test_success_only_and_empty_snapshots_do_not_require_actions_reads():
     assert not github_checks.head_ci_reported([], [], [], None)
 
 
+@pytest.mark.parametrize("missing_context", ["pull_requests", "head_branch"])
+@pytest.mark.parametrize("conclusion", ["success", "neutral", "skipped"])
+def test_passing_duplicate_checks_do_not_require_cross_run_equivalence(
+    missing_context, conclusion
+):
+    first, second = _check(), _check(2, 102, conclusion=conclusion)
+    runs = [_run(), _run(102, head_branch="another-branch")]
+    for run in runs:
+        run[missing_context] = [] if missing_context == "pull_requests" else None
+    checks, evidence = _reconcile([first, second], runs)
+
+    assert checks == [first, second]
+    assert evidence == {
+        "supersededChecks": [],
+        "strandedChecks": [],
+        "unresolvedChecks": [],
+    }
+
+
 def test_security_and_required_check_failures_stay_until_same_check_replacement():
     required = _check(conclusion="failure")
     security = _check(2, name="Analyze (python)", conclusion="failure")

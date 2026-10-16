@@ -1195,7 +1195,9 @@ async def _load_verified_execution_plan(
         raise ValueError(
             "execution plan binding conflicts with task-input snapshot authority"
         )
-    if persisted.payload.resolvedTools.get("repositoryAccess") and workflow_id:
+    if workflow_id:
+        # Every artifact-backed plan input, including the Skill closure, is
+        # delegated to the concrete execution before any reader consumes it.
         # Trusted native Activities have a real workflow/run identity without
         # an AgentRun. Agent consumers derive that identity from their Step.
         execution_run_id = run_id
@@ -3241,6 +3243,51 @@ async def _resolve_legacy_launch_policy_snapshot(
     return str(snapshot["policyRef"]), snapshot
 
 
+async def _bind_cached_host_launch(
+    hosts: Any,
+    binding: Any,
+    *,
+    profile_id: str,
+    execution_profile_ref: str,
+    launch_policy_ref: str,
+    effective_launch: dict[str, Any],
+    planned: bool,
+) -> tuple[Any, dict[str, Any]]:
+    """Return the binding and launch a host for this attempt starts from.
+
+    Without an admitted plan the binding's cached launch is authority. An
+    admitted plan's launch replaces an idle binding's cache (for example an
+    earlier attempt's launch from before newly installed images); a host
+    still leased under the cached launch keeps that binding until it ends.
+    """
+
+    bound_effective_launch = dict(binding.effective_launch_snapshot)
+    if not planned or bound_effective_launch.get("snapshotRef") == (
+        effective_launch.get("snapshotRef")
+    ):
+        return binding, bound_effective_launch
+    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+
+    try:
+        binding = await hosts.create_or_update_static_binding(
+            profile_id=profile_id,
+            endpoint_ref=binding.endpoint_ref,
+            static_host_id=binding.static_host_id,
+            host_launch_profile_ref=binding.host_launch_profile_ref,
+            execution_profile_ref=execution_profile_ref,
+            launch_policy_ref=launch_policy_ref,
+            effective_launch_snapshot=effective_launch,
+            require_idle=True,
+        )
+    except OmnigentOAuthHostError as exc:
+        if exc.code != "OMNIGENT_HOST_BINDING_LEASED":
+            raise
+        raise ValueError(
+            "durable host binding conflicts with planned launch authority"
+        ) from exc
+    return binding, effective_launch
+
+
 async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Materialize and bind one exact host without returning mutable paths."""
 
@@ -3422,16 +3469,15 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             effective_launch_snapshot=effective_launch,
         )
     else:
-        bound_effective_launch = dict(binding.effective_launch_snapshot)
-        if (
-            execution_plan is not None
-            and bound_effective_launch.get("snapshotRef")
-            != effective_launch.get("snapshotRef")
-        ):
-            raise ValueError(
-                "durable host binding conflicts with planned launch authority"
-            )
-        effective_launch = bound_effective_launch
+        binding, effective_launch = await _bind_cached_host_launch(
+            hosts,
+            binding,
+            profile_id=session.provider_profile_id,
+            execution_profile_ref=execution_profile_ref,
+            launch_policy_ref=launch_policy_ref,
+            effective_launch=effective_launch,
+            planned=execution_plan is not None,
+        )
 
     lease = await hosts.create_or_get_host_lease(
         binding=binding,

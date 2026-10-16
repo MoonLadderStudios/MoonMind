@@ -30,7 +30,6 @@ with workflow.unsafe.imports_passed_through():
         AgentExecutionRequest,
         ExecutionBudget,
         OmnigentExecutionPlanBinding,
-        RepositoryOutcomePolicy,
         resolve_execution_budget,
     )
     from moonmind.omnigent.stock_agents import (
@@ -587,6 +586,11 @@ RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
 RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = "run-update-inputs-visibility-refresh-v1"
 RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
+# A schedule-started occurrence binds the installed Omnigent runtime at its own
+# admission; histories started before this keep the schedule's recorded plan.
+RUN_SCHEDULED_OCCURRENCE_PLAN_ADMISSION_PATCH = (
+    "run-scheduled-occurrence-plan-admission-v1"
+)
 RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH = (
     "run-canonical-git-repository-projection-v1"
 )
@@ -639,6 +643,9 @@ RUN_LEGACY_TITLE_UPDATE_TRANSITION_PATCH = "run-legacy-title-update-transition-v
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
     "run-moonspec-verify-attachment-handoff-v1"
 )
+# Only retained histories use the former no-commit policy markers and payloads.
+# Remove their compatibility branch after those histories leave replay retention.
+RUN_RETIRED_REPOSITORY_OUTCOME_POLICY_PATCH = "run-retired-repository-outcome-policy-v1"
 RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH = (
     "run-trusted-no-commit-repository-outcome-v1"
 )
@@ -868,6 +875,11 @@ RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = "run-moonspec-verify-publication-ga
 RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH = "run-incomplete-draft-objective-outcome-v1"
 RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
     "run-moonspec-gate-previous-outputs-handoff-v1"
+)
+# Hydrated acceptance evidence stays in workflow state and the durable report,
+# not in the next AgentRun's instruction. Preserve pre-cutover request bytes.
+RUN_ARTIFACT_BACKED_VERIFIER_INSTRUCTION_PATCH = (
+    "run-artifact-backed-verifier-instruction-v1"
 )
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = "run-moonspec-verify-remediation-index-v1"
 RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
@@ -10349,16 +10361,67 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _append_trusted_previous_outputs_to_agent_inputs(
         self,
         node_inputs: Mapping[str, Any],
+        *,
+        agent_kind: str | None = None,
     ) -> dict[str, Any]:
         include_assessment = self._patched_or_false_outside_workflow(
             RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
         )
+        previous_outputs = node_inputs.get("previousOutputs")
+        artifact_backed_gate = False
+        if (
+            include_assessment
+            and agent_kind is not None
+            and isinstance(previous_outputs, Mapping)
+            and self._patched_or_false_outside_workflow(
+                RUN_ARTIFACT_BACKED_VERIFIER_INSTRUCTION_PATCH
+            )
+        ):
+            gate = self._publish_context.get("moonSpecGate")
+            gate_ref = gate.get("gateResultRef") if isinstance(gate, Mapping) else None
+            if (
+                isinstance(gate_ref, str)
+                and len(gate_ref) <= 400
+                and self._bounded_story_loop_artifact_ref(gate_ref)
+                in self._append_durable_handoff_attachment_refs(
+                    [], agent_kind=agent_kind
+                )
+            ):
+                # The publisher-owned attachment carries every requirement and
+                # finding. Per-string truncation cannot bound a many-row report.
+                # Project only orientation here; never mutate hydrated proof or
+                # use an authored previousOutputs ref to choose its replacement.
+                handoff: dict[str, Any] = {"gateResultRef": gate_ref}
+                for key in (
+                    "verdict",
+                    "recommendedNextAction",
+                    "recoverableInCurrentRuntime",
+                    "invalid",
+                    "degraded",
+                ):
+                    value = gate.get(key)
+                    if isinstance(value, bool):
+                        handoff[key] = value
+                    elif isinstance(value, str):
+                        handoff[key] = self._coerce_text(value, max_chars=120)
+                previous_outputs = {
+                    **previous_outputs,
+                    "moonSpecVerify": handoff,
+                    "moonSpecVerifyArtifactRef": gate_ref,
+                }
+                artifact_backed_gate = True
         previous_context = self._trusted_previous_outputs_instruction(
-            node_inputs.get("previousOutputs"),
+            previous_outputs,
             include_assessment=include_assessment,
         )
         if not previous_context:
             return dict(node_inputs)
+        if artifact_backed_gate:
+            previous_context += (
+                "\nRead the complete controlling verifier attachment, including all "
+                "remaining work and acceptance evidence. The inline gate fields "
+                "are navigation context, not the full findings or acceptance proof."
+            )
         merged_inputs = dict(node_inputs)
         for key in (
             "instructions",
@@ -11828,6 +11891,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return {"status": "canceled"}
 
         try:
+            if (
+                self._remediation_loop_continuation is None
+                and self._has_recurrence_metadata(parameters)
+                and isinstance(parameters.get("omnigentExecutionPlan"), Mapping)
+                and temporal_scheduled_start_time(workflow.info()) is not None
+                and workflow.patched(RUN_SCHEDULED_OCCURRENCE_PLAN_ADMISSION_PATCH)
+            ):
+                await self._admit_scheduled_occurrence_plan(parameters)
             resolved_plan_ref = await self._run_planning_stage(
                 parameters=parameters,
                 input_ref=input_ref,
@@ -12276,6 +12347,57 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    async def _admit_scheduled_occurrence_plan(
+        self, parameters: dict[str, Any]
+    ) -> None:
+        """Bind a fresh schedule occurrence to the installed Omnigent runtime.
+
+        The schedule action carries the plan compiled when the schedule was
+        last planned. This occurrence's admission compiles the same frozen
+        inputs against the installed host and server, so a release needs no
+        schedule re-plan. The admitted plan is written into the carried input:
+        Continue-As-New and interrupted-step successors keep it. A ``recorded``
+        disposition keeps the schedule's plan and its reason is logged.
+        """
+
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "omnigent.admit_scheduled_occurrence_plan"
+        )
+        admitted = await workflow.execute_activity(
+            "omnigent.admit_scheduled_occurrence_plan",
+            {
+                "workflowId": workflow.info().workflow_id,
+                "initialParameters": parameters,
+            },
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(admitted, Mapping):
+            raise ValueError("scheduled occurrence admission returned no decision")
+        if admitted.get("disposition") != "admitted":
+            self._get_logger().warning(
+                "Scheduled occurrence keeps its recorded execution plan: %s",
+                admitted.get("reason"),
+            )
+            return
+        binding = admitted.get("omnigentExecutionPlan")
+        skillset_ref = str(admitted.get("resolvedSkillsetRef") or "").strip()
+        if not isinstance(binding, Mapping) or not skillset_ref:
+            raise ValueError(
+                "scheduled occurrence admission omitted plan or Skill authority"
+            )
+        admitted_fields = {
+            "omnigentExecutionPlan": dict(binding),
+            "resolvedSkillsetRef": skillset_ref,
+        }
+        parameters.update(admitted_fields)
+        for key in ("initialParameters", "initial_parameters"):
+            original = self._original_input_payload.get(key)
+            if isinstance(original, Mapping):
+                self._original_input_payload[key] = {
+                    **original,
+                    **admitted_fields,
+                }
 
     def _record_integration_from_parameters(
         self,
@@ -22251,7 +22373,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         trusted_remediation_checkpoint_restore_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
-        node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
         runtime_block_raw = node_inputs.get("runtime")
         runtime_block = (
             runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
@@ -22267,9 +22388,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel"
             )
 
+        agent_kind = self._agent_kind_for_id(agent_id)
+        node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(
+            node_inputs, agent_kind=agent_kind
+        )
         if self._workflow_patch_enabled("run-supported-runtime-admission-v1"):
             resolve_runtime_execution_capabilities(agent_id)
-        agent_kind = self._agent_kind_for_id(agent_id)
         # Prefer runtime_block profile values (set by the runtime planner)
         # over top-level node_inputs keys, which may have been corrupted
         # by AI-generated plan modifications or template injection.
@@ -22573,26 +22697,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             else:
                 parameters["repositoryMutationRequired"] = True
         publish_mode = str(parameters.get("publishMode") or "").strip().lower()
-        assessment_verdict = (
-            str(
-                self._assessment_context.get("assessmentVerdict")
-                or self._assessment_context.get("assessment_verdict")
-                or ""
-            )
-            .strip()
-            .upper()
-        )
-        assessment_artifact_ref = str(
-            self._assessment_context.get("assessmentArtifactRef")
-            or self._assessment_context.get("assessment_artifact_ref")
-            or ""
-        ).strip()
-        assessed_repository = str(
-            self._assessment_context.get("assessedRepository") or ""
-        ).strip()
-        assessed_branch = str(
-            self._assessment_context.get("assessedBranch") or ""
-        ).strip()
         identity_request = AgentExecutionRequest(
             agentKind=agent_kind,
             agentId=agent_id,
@@ -22602,7 +22706,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             parameters=parameters,
         )
         current_repository = authored_repository_source(identity_request)
-        current_branch = authored_starting_branch(identity_request)
         if (
             agent_kind == "external"
             and agent_id == "omnigent"
@@ -22632,44 +22735,52 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     )
                 ):
                     parameters["acceptedPublishedHead"]["baseBranch"] = accepted_base
-        repository_bound_policy = self._workflow_patch_enabled(
-            RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
-        )
-        trusted_no_commit_candidate = (
-            agent_kind == "external"
-            and agent_id == "omnigent"
-            and publish_mode in {"branch", "pr"}
-            and repository_operation != "read"
-            and assessment_verdict == "FULLY_IMPLEMENTED"
-            and assessment_artifact_ref
-            and self._workflow_patch_enabled(
-                RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH
+        if not self._workflow_patch_enabled(RUN_RETIRED_REPOSITORY_OUTCOME_POLICY_PATCH):
+            # Replay-only: reproduce scheduled Activity request payloads for old
+            # histories. The publisher no longer consumes this inert policy;
+            # new executions omit it and leave acceptance to the workflow gate.
+            assessment_verdict = (
+                str(
+                    self._assessment_context.get("assessmentVerdict")
+                    or self._assessment_context.get("assessment_verdict")
+                    or ""
+                )
+                .strip()
+                .upper()
             )
-        )
-        if trusted_no_commit_candidate and (
-            not repository_bound_policy
-            or (
-                assessed_repository == current_repository
-                and assessed_branch == current_branch
+            assessment_artifact_ref = str(
+                self._assessment_context.get("assessmentArtifactRef")
+                or self._assessment_context.get("assessment_artifact_ref")
+                or ""
+            ).strip()
+            assessed_repository = str(
+                self._assessment_context.get("assessedRepository") or ""
+            ).strip()
+            assessed_branch = str(
+                self._assessment_context.get("assessedBranch") or ""
+            ).strip()
+            current_branch = authored_starting_branch(identity_request)
+            repository_bound_policy = self._workflow_patch_enabled(
+                RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
             )
-        ):
-            # This reserved parameter is derived exclusively from durable
-            # workflow state. It is deliberately absent from ``parameter_keys``
-            # so authored node/workflow inputs cannot grant no-commit authority.
-            if repository_bound_policy:
-                parameters["repositoryOutcomePolicy"] = RepositoryOutcomePolicy(
-                    allowNoCommit=True,
-                    authority="trusted_assessment",
-                    assessmentVerdict="FULLY_IMPLEMENTED",
-                    assessmentArtifactRef=assessment_artifact_ref,
-                    assessedRepository=assessed_repository,
-                    assessedBranch=assessed_branch,
-                ).model_dump(mode="json", by_alias=True)
-            else:
-                # Replay-only shape for histories that recorded the original
-                # policy before repository identity became mandatory. Current
-                # workers reject it at execution rather than granting unbound
-                # no-commit authority.
+            trusted_no_commit_candidate = (
+                agent_kind == "external"
+                and agent_id == "omnigent"
+                and publish_mode in {"branch", "pr"}
+                and repository_operation != "read"
+                and assessment_verdict == "FULLY_IMPLEMENTED"
+                and assessment_artifact_ref
+                and self._workflow_patch_enabled(
+                    RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH
+                )
+            )
+            if trusted_no_commit_candidate and (
+                not repository_bound_policy
+                or (
+                    assessed_repository == current_repository
+                    and assessed_branch == current_branch
+                )
+            ):
                 parameters["repositoryOutcomePolicy"] = {
                     "schemaVersion": "repository-outcome-policy/v1",
                     "allowNoCommit": True,
@@ -22677,6 +22788,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "assessmentVerdict": "FULLY_IMPLEMENTED",
                     "assessmentArtifactRef": assessment_artifact_ref,
                 }
+                if repository_bound_policy:
+                    parameters["repositoryOutcomePolicy"].update(
+                        {
+                            "schemaVersion": "repository-outcome-policy/v2",
+                            "assessedRepository": assessed_repository,
+                            "assessedBranch": assessed_branch,
+                        }
+                    )
         if self._workflow_patch_enabled(RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH):
             resolved_capabilities = (
                 self._resolved_skill_required_capabilities_by_step.get(node_id, ())

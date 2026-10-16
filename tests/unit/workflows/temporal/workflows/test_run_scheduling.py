@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 import asyncio
 from types import SimpleNamespace
 
@@ -690,3 +691,114 @@ async def test_run_workflow_handles_failed_dependency_with_degraded_outcome(
     planning_calls = [c for c in call_order if c[0] == "planning"]
     assert dependency_calls
     assert not planning_calls
+
+
+_STORED_PLAN = {
+    "planRef": "omnigent-execution-plan:sha256:" + "1" * 64,
+    "planDigest": "sha256:" + "1" * 64,
+    "planArtifactRef": "art_schedule_plan",
+    "taskInputSnapshotRef": "art_original_task",
+    "taskInputSnapshotDigest": "sha256:" + "a" * 64,
+}
+_OCCURRENCE_PLAN = {
+    **_STORED_PLAN,
+    "planRef": "omnigent-execution-plan:sha256:" + "2" * 64,
+    "planDigest": "sha256:" + "2" * 64,
+    "planArtifactRef": "art_occurrence_plan",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start", ["scheduled", "recorded", "manual"])
+async def test_scheduled_occurrence_binds_its_admitted_plan_before_planning(
+    mock_run_environment, monkeypatch, start
+):
+    """A schedule occurrence carries its own admitted plan to every consumer.
+
+    ``recorded`` keeps the schedule's plan when admission cannot compile it;
+    ``manual`` (a non-schedule start of the same inputs, such as a rerun)
+    never re-admits.
+    """
+
+    from moonmind.workflows.temporal.workflows import run as run_module
+
+    admissions = []
+    stages = []
+
+    async def execute_activity(activity_name, *args, **kwargs):
+        if activity_name == "omnigent.admit_scheduled_occurrence_plan":
+            # Temporal serializes the Activity input when it is scheduled.
+            admissions.append(deepcopy(args[0]))
+            if start == "recorded":
+                return {"disposition": "recorded", "reason": "policy inactive"}
+            return {
+                "disposition": "admitted",
+                "omnigentExecutionPlan": _OCCURRENCE_PLAN,
+                "resolvedSkillsetRef": "art_occurrence_skills",
+            }
+        return await fake_execute_activity(activity_name, *args, **kwargs)
+
+    async def planning_stage(self, *, parameters, input_ref, plan_ref):
+        stages.append(("planning", deepcopy(parameters)))
+        return "ref-123"
+
+    async def execution_stage(self, *, parameters, plan_ref):
+        stages.append(("execution", deepcopy(parameters)))
+        stages.append(
+            ("carried", deepcopy(self._original_input_payload["initial_parameters"]))
+        )
+
+    monkeypatch.setattr(workflow, "execute_activity", execute_activity)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", planning_stage)
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_execution_stage", execution_stage)
+    monkeypatch.setattr(
+        run_module,
+        "temporal_scheduled_start_time",
+        lambda _info: (
+            None if start == "manual" else datetime(2026, 1, 1, tzinfo=timezone.utc)
+        ),
+    )
+    initial_parameters = {
+        "targetRuntime": "omnigent",
+        "omnigentExecutionPlan": _STORED_PLAN,
+        "resolvedSkillsetRef": "art_schedule_skills",
+        "system": {"recurrence": {"definitionId": "schedule-1"}},
+    }
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-occurrence",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            result = await env.client.execute_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": initial_parameters,
+                    "plan_artifact_ref": "ref-123",
+                },
+                id=f"test-wf-occurrence-{start}",
+                task_queue="test-task-queue-occurrence",
+            )
+
+    assert result["status"] == "success"
+    expected_plan, expected_skills = (
+        (_OCCURRENCE_PLAN, "art_occurrence_skills")
+        if start == "scheduled"
+        else (_STORED_PLAN, "art_schedule_skills")
+    )
+    assert [name for name, _ in stages] == ["planning", "execution", "carried"]
+    for _name, parameters in stages:
+        assert parameters["omnigentExecutionPlan"] == expected_plan
+        assert parameters["resolvedSkillsetRef"] == expected_skills
+        assert parameters["system"] == initial_parameters["system"]
+    if start == "manual":
+        assert admissions == []
+    else:
+        assert len(admissions) == 1
+        assert admissions[0]["workflowId"] == f"test-wf-occurrence-{start}"
+        assert admissions[0]["initialParameters"]["omnigentExecutionPlan"] == (
+            _STORED_PLAN
+        )

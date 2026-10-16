@@ -116,7 +116,6 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     OmnigentHostLease,
-    RepositoryOutcomePolicy,
 )
 from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
@@ -159,26 +158,6 @@ _REPOSITORY_PUBLICATION_CONTINUATION_DIGEST = compute_digest(
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _trusted_no_commit_repository_policy(
-    request: AgentExecutionRequest,
-) -> RepositoryOutcomePolicy | None:
-    """Validate the exact workflow-owned authority required for no-commit success."""
-
-    parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
-    raw_policy = parameters.get("repositoryOutcomePolicy")
-    if not isinstance(raw_policy, Mapping):
-        return None
-    try:
-        policy = RepositoryOutcomePolicy.model_validate(raw_policy)
-    except (TypeError, ValueError):
-        return None
-    if policy.assessed_repository != authored_repository_source(request):
-        return None
-    if policy.assessed_branch != authored_starting_branch(request):
-        return None
-    return policy
 
 
 def _compile_persisted_effective_launch(
@@ -441,28 +420,54 @@ class OmnigentProfileBoundExecutionCoordinator:
         *,
         policy_snapshot: Mapping[str, Any],
         effective_launch: Mapping[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
+        """Return the admitted plan's launch, proven from its policy snapshot.
+
+        Admission binds the installed host and server images to the plan, so
+        a launch recompiled from the unchanged policy snapshot may name the
+        images that policy version recorded. Binding it to the plan's host and
+        the installed server must then reproduce the admitted digest exactly;
+        anything else is drift from the admitted plan.
+        """
+
         plan = self._execution_plan
         if plan is None:
-            return
+            return dict(effective_launch)
         payload = plan.payload
+        recorded = effective_launch
+        if (
+            payload.effectiveLaunchSnapshotDigest is not None
+            and self._canonical_digest(effective_launch)
+            != payload.effectiveLaunchSnapshotDigest
+        ):
+            from moonmind.omnigent.host_image_drift import (
+                installed_server_image_ref,
+                reconcile_effective_launch_to_selected_host,
+            )
+
+            recorded = (
+                reconcile_effective_launch_to_selected_host(
+                    effective_launch,
+                    str(payload.hostImageRef or ""),
+                    selected_server_image_ref=installed_server_image_ref(),
+                )
+                or effective_launch
+            )
         if (
             payload.policySnapshotDigest is None
             or payload.effectiveLaunchSnapshotDigest is None
-            or self._canonical_digest(policy_snapshot)
-            != payload.policySnapshotDigest
-            or self._canonical_digest(effective_launch)
-            != payload.effectiveLaunchSnapshotDigest
-            or str(effective_launch.get("launchPolicyRef") or "")
-            != payload.launchPolicyRef
-            or str(effective_launch.get("harness") or "") != payload.harnessId
-            or str(effective_launch.get("hostImageRef") or "")
+            or self._canonical_digest(policy_snapshot) != payload.policySnapshotDigest
+            or self._canonical_digest(recorded) != payload.effectiveLaunchSnapshotDigest
+            or str(recorded.get("launchPolicyRef") or "") != payload.launchPolicyRef
+            or str(recorded.get("harness") or "") != payload.harnessId
+            or str(recorded.get("hostImageRef") or "")
             != str(payload.hostImageRef or "")
         ):
             raise HarnessPlatformError(
                 "Codex launch authority has drifted from the admitted plan",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
+        return dict(recorded)
 
     async def _write_plan_runtime_evidence(
         self,
@@ -1172,7 +1177,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             # legacy coordinator may resolve mutable catalog rows only to prove
             # that they still equal that authority, and must do so before lease
             # acquisition or any host/provider mutation.
-            self._require_recorded_launch(
+            effective_launch = self._require_recorded_launch(
                 policy_snapshot=policy_snapshot,
                 effective_launch=effective_launch,
             )
@@ -1956,7 +1961,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                 publication_requested or running_turn_recovery is not None
             ):
                 publication_stage = "repository_publication"
-                no_commit_policy = _trusted_no_commit_repository_policy(request)
                 for continuation_index in range(
                     REPOSITORY_PUBLICATION_CONTINUATION_LIMIT + 1
                 ):
@@ -2092,10 +2096,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                     push_status = str(
                         publication.get("push_status") or ""
                     ).strip().lower()
-                    no_commit_accepted = (
-                        push_status == "no_commits" and no_commit_policy is not None
-                    )
-                    if push_status == "pushed" or no_commit_accepted:
+                    # The publisher proves that saved work is retained remotely.
+                    # Like the generic host path, return its canonical no-change
+                    # outcome without asking the agent to invent more changes.
+                    # The workflow's verifier still owns task acceptance; this
+                    # transport evidence does not turn an unverified result into
+                    # a completed issue or override a blocking verification gate.
+                    if push_status in {"pushed", "no_commits"}:
                         evidence = AcceptedRepositoryEvidence(
                             pushStatus=push_status,
                             branch=publication.get("push_branch"),
@@ -2135,18 +2142,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                                     "remote_verified"
                                 ),
                                 "continuationCount": continuation_index,
-                                **(
-                                    {
-                                        "noCommitAuthority": (
-                                            no_commit_policy.authority
-                                        ),
-                                        "assessmentArtifactRef": (
-                                            no_commit_policy.assessment_artifact_ref
-                                        ),
-                                    }
-                                    if no_commit_accepted
-                                    else {}
-                                ),
                             },
                         )
                         break

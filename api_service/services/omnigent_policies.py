@@ -29,6 +29,7 @@ from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
     resolve_container_backend_settings,
 )
+from moonmind.omnigent.compatibility import is_same_image_repository
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.host_classes import (
     resolve_shared_host_image_ref,
@@ -1378,7 +1379,17 @@ async def _reconcile_bootstrap_authority(
     definitions: tuple[_BootstrapPolicyDefinition, ...],
     live_server_image_resolver: LiveServerImageResolver,
 ) -> list[str]:
-    """Version bootstrap image and resource defaults without rewriting history."""
+    """Version bootstrap image-family and resource defaults without rewriting history.
+
+    A bootstrap version's image refs name its image family and record the
+    images current when it was written. Admission binds the installed
+    same-repository images to each attempt, so a routine image update leaves
+    the recorded version as that family's evidence and cuts no successor.
+    A successor is cut only for a resource-default migration or when the
+    installed host or server belongs to another image family (for example a
+    Codex default still pinned to the upstream host, which lacks the MoonMind
+    tools); it then carries the installed images.
+    """
 
     reconciled: list[str] = []
     live_server_checked = False
@@ -1420,15 +1431,21 @@ async def _reconcile_bootstrap_authority(
             desired_resources = stock_resources
         # A bootstrap-owned policy already on fixed limits needs no migration.
         versions = await service.versions(policy_id)
-        desired_server_image = (
-            server_image
-            if resolved_images_valid
-            else current_host.get("serverImageRef")
+        desired_server_image = current_host.get("serverImageRef")
+        desired_host_image = current_host.get("hostImageRef")
+        # The installed images enter a version only with a successor that is
+        # cut anyway (resources) or for a foreign image family.
+        carry_installed_images = resolved_images_valid and (
+            current_resources != desired_resources
+            or not is_same_image_repository(desired_host_image, host_image)
+            or not is_same_image_repository(desired_server_image, server_image)
         )
-        desired_host_image = (
-            host_image if resolved_images_valid else current_host.get("hostImageRef")
-        )
-        if resolved_images_valid and current_host.get("serverImageRef") != server_image:
+        if carry_installed_images:
+            desired_host_image = host_image
+        if (
+            carry_installed_images
+            and current_host.get("serverImageRef") != server_image
+        ):
             if not live_server_checked:
                 live_server_image = await live_server_image_resolver(str(server_image))
                 live_server_checked = True

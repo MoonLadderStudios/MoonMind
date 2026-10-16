@@ -5,11 +5,9 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-10-04
+**Last Updated:** 2026-10-16
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
-
-This document describes the deployment update design. Some code from the earlier candidate/retained fleet design still exists, for example deployment maintenance recognizes leftover `mm-candidate-`/`mm-retained-` cohort resources (`moonmind/workflows/skills/deployment_maintenance.py`). Those paths are not the default update path, and removing them preserves saved work, histories, deployment settings, and the supported recovery path.
 
 ## 1. Purpose
 
@@ -29,7 +27,7 @@ The steady state is one installed Compose fleet per instance, not blue/green can
 
 One portable controller implements updates for the host entrypoint and the Settings Operations action. The host path stays usable when the API, Temporal workers, provider manager, or application artifact service is unhealthy, because those are the components an update may need to repair.
 
-The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery, using Docker/Compose and local job files. Temporal and the UI may request or observe an update, but neither is required for progress or runs a second update algorithm. There is no parallel supervisor, promotion state machine, or mandatory approval workflow.
+The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery, using Docker/Compose and local job files. Temporal and the UI may request or observe an update, but neither is required for progress or runs a second update algorithm. There is no parallel supervisor or mandatory approval workflow.
 
 ## 3. Terminology
 
@@ -85,7 +83,7 @@ Stack state lists controller operations (requested and installed image, status, 
 
 The API reaches the controller over the private `deployment-controller-network` using the bearer secret in the read-only deployment state mount (`deploy/state/controller`). Only the API (read-only) and the deployment-control worker see that state; the agent runtime sees an empty view, and the secret never reaches the browser.
 
-Without an installed controller, Settings Operations refuses an update with `deployment_controller_not_installed` (HTTP 503) and names the host repair route `./tools/update-moonmind.sh`, which installs the controller and updates through it. An installed controller without active-journal transition support is refused with `deployment_controller_refresh_required` and the same route. API submission needs neither Temporal nor the deployment worker.
+Without an installed controller, Settings Operations refuses an update with `deployment_controller_not_installed` (HTTP 503) and names the host repair route `./tools/update-moonmind.sh`, which installs the controller and updates through it. Submitters trust only a controller whose `/v1/healthz` advertises the behavior they rely on: `active-journal-transition`, and `request-identity` (a completed operation answers only its own identity). A controller without request identity answers a new update to `latest` with the earlier success and pulls nothing, so its `202` would not mean the request was applied. The API refuses such a controller with `deployment_controller_refresh_required` and the same route, because only the host entrypoint and the deployment-control worker can refresh the controller; the worker refreshes it before submitting. API submission needs neither Temporal nor the deployment worker.
 
 The workflow's deployment observer heartbeats while reading its registry and awaiting the durable result. A 60-second heartbeat timeout detects a replaced observer independently of the longer command and release deadlines, and its retry reattaches with the same operation identity, reading an existing terminal receipt without repeating deployment.
 
@@ -117,7 +115,7 @@ A broken application health check is diagnostic input, not a prerequisite, becau
 
 Host and UI submissions share one per-stack local lock; a second request reattaches to the existing operation or waits within a bound. Ownership is not transferred merely because a PID or timestamp looks old in another container namespace. Controller replacement holds the same lock, so controller lifecycle and deployment mutation share one exclusion boundary. Separate deployment projects have independent locks.
 
-Staging/apply failures retry automatically up to the bounded per-group attempt budget, so a transient failure ends in `failed` or a later `succeeded` instead of staying open. Restart recovery reconciles before applying: only the newest open operation per stack survives, and an open operation older than a confirmed installation for the same stack is superseded rather than replayed over confirmed intent. A retried submission for an already-installed image reattaches to the recorded terminal success, including after a lost response.
+Staging/apply failures retry automatically up to the bounded per-group attempt budget, so a transient failure ends in `failed` or a later `succeeded` instead of staying open. Restart recovery reconciles before applying: only the newest open operation per stack survives, and an open operation older than a confirmed installation for the same stack is superseded rather than replayed over confirmed intent. Resubmitting the same operation identity, including after a lost response, observes that operation's terminal result instead of repeating it. Any other request is new work even when its image is already installed: `latest` names whatever was published last, so each update to it pulls again.
 
 ### 10.3 Capture before state
 
@@ -131,7 +129,7 @@ Host image-selection failures retain redacted Docker diagnostics and stop before
 
 ### 10.5 Persist desired image
 
-The selected deployment intent is persisted before recreation (section 9), with no candidate qualification or routing-promotion prerequisite.
+The selected deployment intent is persisted before recreation (section 9).
 
 ### 10.6 Recreate services
 
@@ -162,13 +160,13 @@ An unavailable optional integration is reported separately, and missing mandator
 
 An ordinary MoonMind update also checks the configured Omnigent server and required host image channels (image/tag inputs in the operator `.env` or worker environment) for newly published artifacts. Mutable tags resolve to concrete digests, and the installed release advances when a suitable new image exists for a configured channel; channels without configured inputs keep their recorded refs, and a channel with no suitable new image leaves the installed release in place. A running server container that already carries the candidate outside the release (for example after a plain `docker compose up` rendered the mutable tag) is adopted rather than converged back, because it may already have migrated the Omnigent database forward.
 
-Selected digests are recorded under the deployment lock before the main Compose pass renders them, so that pass installs a server that accepts the current schema. After the fleet verifies, migration finishes that selected revision without resolving channels again and refreshes the server, API, and agent runtime worker. Running static host profiles follow a changed shared host image and are recreated without draining; inactive profiles stay inactive. An explicit operator digest pin in `.env` stays in effect until changed. If a recorded candidate later fails verification, the desired state stays recorded with no automatic rollback; recovery is an explicit rerun or rollback.
+Selected digests are recorded under the deployment lock before the main Compose pass renders them, so that pass installs a server that accepts the current schema. After the fleet verifies, migration finishes that selected revision without resolving channels again: it recreates the server, waits until the recorded images resolve (with the OpenCode pair qualified when that family is installed), requires the running server to carry the recorded digest, and only then persists them as the resolved state, so a candidate that fails verification never becomes the installed release fresh attempts bind. Running static host profiles follow a changed shared host image and are recreated without draining; inactive profiles stay inactive. The API and workers are not recreated: image resolution reads the installed record, and Host Class selection reads the resolved state, rather than refs a process inherited at start. Migration needs no API database, policy, schedule, or catalog service, so it can repair a stack whose application is down. An explicit operator digest pin in `.env` stays in effect until changed. If a recorded candidate later fails verification, the desired state stays recorded with no automatic rollback; recovery is an explicit rerun or rollback.
 
 The standalone controller delegates selection and migration to `deployment_release --omnigent-select` and `--omnigent-migrate` in bounded Compose one-offs from the selected MoonMind image, holding the deployment lock and giving them its own Docker transport so repair does not need the target project's proxy. The main Compose pass layers the operator `.env`, release-owned `.env.deploy`, and controller image overlay in that order. A selection failure leaves the fleet untouched; a migration failure keeps the confirmed installation and records the original error as failed verification. Lost acknowledgments reuse the saved selection, and a still-running one-off is observed before another attempt launches.
 
-**Interrupted agent steps.** Updates do not drain or checkpoint. An agent step interrupted by a replaced host fails with host loss; its old host is confirmed stopped (or fenced for the host janitor) before any successor runs. Only that step receives a new Step Execution under the same workflow and logical step, within its remaining execution ceiling, restoring the latest verified saved workspace or restarting from its admitted inputs with that limitation recorded. Completed steps and confirmed publication effects are not repeated, because every attempt publishes under the logical step's identity. Cancellation starts no successor. A successor currently launches the server and host images its execution plan recorded; fresh attempts do not yet consume newly installed images, so a successor whose recorded images can no longer be launched or attested fails with that diagnostic.
+**Interrupted agent steps.** Updates do not drain or checkpoint. An agent step interrupted by a replaced host fails with host loss; its old host is confirmed stopped (or fenced for the host janitor) before any successor runs. Only that step receives a new Step Execution under the same workflow and logical step, within its remaining execution ceiling, restoring the latest verified saved workspace or restarting from its admitted inputs with that limitation recorded. Completed steps and confirmed publication effects are not repeated, because every attempt publishes under the logical step's identity. Cancellation starts no successor. A successor launches the server and host images its execution plan recorded, so one whose recorded images can no longer be launched or attested fails with that diagnostic; a freshly admitted attempt binds the installed same-repository images.
 
-**Recurring schedules.** Image changes are not copied into new policy/profile versions, and recurring schedules are not re-admitted merely to keep digest strings equal; historical attempts keep what they actually ran. While schedule launch pins exist, schedules consume the release rather than gate it. Migration refreshes schedules bound to the managed bootstrap profile onto the cut policy, with or without a recorded execution plan, once their provider's host binding has moved. A schedule it cannot refresh is counted in the receipt (`scheduleRefreshFailureCount`, with the first few named in `scheduleRefreshFailures` so the receipt fits the controller's bounded log tail) and retried by the API's bootstrap reconciliation; it does not fail a verified update that no rerun could fix.
+**Policies and schedules.** Neither migration nor the API cuts policy or profile versions, re-plans recurring schedules, or fences completion on policy images for an image update: admission binds the installed images to each fresh attempt, and historical attempts keep what they actually ran. A schedule-started occurrence is a fresh attempt: before planning, it compiles its schedule's frozen inputs (task input, Agent Profile snapshot, Provider Profile, model and Skills) against the installed host and server, without rewriting the schedule's definition or action. The schedule's stored plan stays as the fallback when that compile is refused (for example a foreign host family), and the occurrence logs why. Schedules consume the release rather than gate it. A bootstrap-owned policy version keeps its recorded images as its image family; bootstrap versions it only for a resource-default migration or a move to another image family.
 
 ### 10.9 Capture after state
 
@@ -202,7 +200,7 @@ The host entrypoint derives the endpoint port from the controller's identity. Th
 
 **Repair after failure.** An advertised method cannot prove a controller will apply a release whose controller fixes a defect. After a failed operation, a default host or deployment-control submission gives the requested release's controller one attempt: `bootstrap.py ensure --prefer-requested` refreshes to the requested image under the same lock and open-operation refusal. Only a confirmed change (`refreshed: true`) earns a Retry of the same operation; otherwise the original failure stands beside the refresh diagnostic. The API cannot run bootstrap, so a failed Settings Operations submission recovers through the host command or a workflow-submitted update.
 
-An older installed API/controller may reach a newer target's `--omnigent-select` callback. The callback requires the owning controller's `active-journal-transition` method before touching release state, so an older owner is refused before any mutation and pointed to `./tools/update-moonmind.sh`, which bootstraps and retries the release.
+An older installed API/controller may reach a newer target's `--omnigent-select` callback. The callback requires the owning controller's `active-journal-transition` and `unversioned-routing-cutover` methods before touching release state, so an older owner is refused before any mutation and pointed to `./tools/update-moonmind.sh`, which bootstraps and retries the release.
 
 ### 11.3 Runner image policy
 
@@ -210,11 +208,13 @@ The controller runs trusted deployment-owned code from a verified artifact. The 
 
 ### 11.4 Execution availability and automatic recovery
 
-The default has one installed fleet recreated in place, without parallel candidate/retained fleets, promotion canaries, application-owned worker-version routing gates, or a retained-cohort restoration supervisor.
+Workers poll ordinary task queues: no Worker Versioning, promotion canary, startup routing repair, or cohort restoration supervisor.
 
-Ordinary process restart belongs to Docker/Compose, and an interrupted update reconciles its local record and Docker state through the same controller; unknown state is neither success nor permission to destroy something that may still own work. Replay-sensitive changes need compatible replay or a controlled migration, because removing versioning does not make old histories safe to replay on new code.
+An installation still routed by a Temporal Worker Deployment crosses once: after `up`, before confirming the operation, the selected image's cutover one-off retires identified release canaries, preserves other pinned executions, and makes ordinary workers current once every routed queue has a live ordinary poller. Unavailable Temporal or a missing poller is retried briefly within the operation, because a terminal operation is not resumed; older-image workers or a persistent failure leave it pending and the operation `partially_verified`. Each run rereads routing, so a lost controller resumes the same operation. After a `completed` receipt, routing never changes again. Once routing is cleared (`completed`, or `attention` with pinned work left to report), images whose versioned workers would re-promote themselves are refused.
 
-Leftover legacy updater jobs and cohort resources keep their evidence and any active-work recovery path. An old image-owned controller is not relaunched, because it would recreate the removed architecture, and an unidentified or still-serving cohort is not deleted automatically. An unresolved ownership or data risk stays visible for operator action.
+Ordinary process restart belongs to Docker/Compose. Replay-sensitive changes need compatible replay or a controlled migration, because removing versioning does not make old histories safe to replay on new code.
+
+Leftover legacy updater jobs and `mm-candidate-`/`mm-retained-` cohort resources (`deployment_maintenance.py`) keep their evidence and any active-work recovery path. An old image-owned controller is not relaunched, because it would recreate the removed architecture, and an unidentified or still-serving cohort is not deleted automatically. An unresolved ownership or data risk stays visible for operator action.
 
 A provider-manager fault is diagnosed as its own fault and does not block installing its fix. Maintenance can expose incomplete operations but does not promote images, overwrite target intent, or restart retired controllers.
 

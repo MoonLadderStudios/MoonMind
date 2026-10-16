@@ -299,26 +299,6 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     });
   });
 
-  it("reads repository and branch from a structured repository target", () => {
-    const draft = buildTemporalSubmissionDraftFromExecution({
-      workflowId: "mm:lore-edit",
-      workflowType: "MoonMind.UserWorkflow",
-      targetRuntime: "codex_cli",
-      inputParameters: {
-        repository: {
-          provider: "lore",
-          connectionRef: "studio-lore",
-          repository: { name: "studio/game" },
-          branch: { name: "trunk" },
-        },
-        workflow: { instructions: "Rebuild the level lighting." },
-      },
-    });
-
-    expect(draft.repository).toBe("studio/game");
-    expect(draft.branch).toBe("trunk");
-  });
-
   it("preserves GitHub orchestration metadata from saved workflow steps", () => {
     const githubOrchestration = {
       task: {
@@ -568,5 +548,83 @@ describe('MoonLadderStudios/MoonMind#4636 nullable authored reconstruction', () 
       const draft = buildTemporalSubmissionDraftFromExecution({ workflowId: 'issue-4636', workflowType: 'MoonMind.UserWorkflow', inputParameters: { model: 'old-model', effort: 'old-effort', [container]: { instructions: 'Work', runtime: selection } } });
       expect(draft.modelSelection).toEqual(selection);
     }
+  });
+});
+
+describe("MoonLadderStudios/MoonMind#2619 source intent round-trip", () => {
+  it("hydrates an object-form repository target with its branch and connection", () => {
+    const repository = {
+      provider: "git",
+      connectionRef: "repository-connection:team-gitlab",
+      repository: { name: "gitlab.example.com/platform/deployer" },
+      branch: { name: "develop" },
+    };
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:object-repository",
+        workflowType: "MoonMind.UserWorkflow",
+        inputParameters: {
+          repository,
+          workflow: { instructions: "Deploy.", publish: { mode: "branch" } },
+        },
+      },
+      { draft: { repository, workflow: { instructions: "Deploy." } } },
+    );
+
+    expect(draft.repository).toBe("gitlab.example.com/platform/deployer");
+    expect(draft.branch).toBe("develop");
+    expect(draft.repositoryTarget).toEqual(repository);
+  });
+
+  it("keeps a bare repository name branchless with no invented target", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:bare-repository",
+      workflowType: "MoonMind.UserWorkflow",
+      inputParameters: {
+        repository: "MoonLadderStudios/MoonMind",
+        workflow: { instructions: "Summarize." },
+      },
+    });
+
+    expect(draft.repository).toBe("MoonLadderStudios/MoonMind");
+    expect(draft.branch).toBeNull();
+    expect(draft.repositoryTarget).toBeNull();
+    expect(draft.workspace).toBeNull();
+  });
+
+  it("hydrates the admitted workspace source from the snapshot or run parameters", () => {
+    const workspace = {
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/public",
+        accessMode: "anonymous",
+      },
+    };
+    const fromSnapshot = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:anonymous-snapshot",
+        workflowType: "MoonMind.UserWorkflow",
+        inputParameters: { repository: "octo/public" },
+      },
+      {
+        draft: {
+          repository: "octo/public",
+          workspace,
+          workflow: { instructions: "Read it." },
+        },
+      },
+    );
+    const fromParameters = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:anonymous-parameters",
+      workflowType: "MoonMind.UserWorkflow",
+      inputParameters: {
+        repository: "octo/public",
+        workspaceSpec: workspace,
+        workflow: { instructions: "Read it." },
+      },
+    });
+
+    expect(fromSnapshot.workspace).toEqual(workspace);
+    expect(fromParameters.workspace).toEqual(workspace);
   });
 });

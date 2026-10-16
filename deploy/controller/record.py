@@ -149,12 +149,11 @@ class OperationStore:
         supplies its own ``operation_id`` reattaches to that record whatever
         its status, so resubmitting after a timeout observes the original
         operation instead of starting another. When an unfinished operation
-        already targets the same concrete image, the caller reattaches to it
-        instead of launching a competing apply. When no unfinished operation
-        targets the image but a completed (succeeded or partially verified)
-        one does, the caller reattaches to that recorded success so a
-        retried submission observes the terminal result instead of
-        repeating the Compose mutation.
+        already targets the same image, the caller reattaches to it instead
+        of launching a competing apply. A completed operation answers only
+        its own identity: any other request is new work, because a tag such
+        as ``latest`` names whatever the registry publishes next and only a
+        fresh pull can tell whether that changed.
         """
         if operation_id is not None:
             check_operation_id(operation_id)
@@ -165,9 +164,6 @@ class OperationStore:
         for operation in self.list_open(stack=stack):
             if operation.get("desired", {}).get("image") == desired_image:
                 return operation
-        completed = self.find_completed(stack=stack, desired_image=desired_image)
-        if completed is not None:
-            return completed
         operation = {
             "operationId": operation_id or str(uuid.uuid4()),
             "stack": stack,
@@ -236,25 +232,6 @@ class OperationStore:
             )
         )
         return operations
-
-    def find_completed(
-        self, *, stack: str, desired_image: str
-    ) -> dict | None:
-        """Return the completed record that still describes the installation.
-
-        Only successful terminal states reattach: a retried submission for
-        an already-installed image observes the recorded success instead
-        of repeating the mutation. An older success for the same image is
-        not proof once a later completed operation installed something else.
-        """
-        completed = [
-            operation
-            for operation in self.list_terminal(stack=stack)
-            if operation.get("status") in ("succeeded", "partially_verified")
-        ]
-        if not completed or completed[-1].get("desired", {}).get("image") != desired_image:
-            return None
-        return completed[-1]
 
     def supersede(self, operation_id: str, *, reason: str = "") -> dict:
         """Close an open operation as superseded without applying it.
@@ -354,6 +331,35 @@ class OperationStore:
             **(operation.get("journalTransition") or {}), **dict(values)
         }
         return self._write(operation)
+
+    def record_routing_cutover(
+        self, operation_id: str, values: Mapping[str, Any]
+    ) -> dict:
+        """Keep the latest one-time unversioned routing cutover receipt."""
+        operation = self.load(operation_id)
+        operation["routingCutover"] = dict(values)
+        return self._write(operation)
+
+    def routing_cutover(
+        self, *, stack: str, statuses: tuple[str, ...] = ("completed",)
+    ) -> dict | None:
+        """The operation whose cutover for ``stack`` reached ``statuses``.
+
+        Completion is durable stack state: later operations never change
+        routing again. ``attention`` also means routing was cleared, so either
+        status sets the rollback floor.
+        """
+        if not self.operations_dir.is_dir():
+            return None
+        for path in sorted(self.operations_dir.glob("*.json")):
+            try:
+                operation = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            cutover = operation.get("routingCutover") or {}
+            if operation.get("stack") == stack and cutover.get("status") in statuses:
+                return operation
+        return None
 
     def confirm_installed(self, operation_id: str, *, image: str) -> dict:
         """Record a confirmed installation. Append-only: nothing clears it."""

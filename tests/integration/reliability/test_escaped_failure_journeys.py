@@ -85,6 +85,9 @@ from moonmind.omnigent.host_services.runtime_scripts import (
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_image_drift import (
+    reconcile_effective_launch_to_selected_host,
+)
 from moonmind.omnigent.oauth_hosts import (
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
@@ -555,9 +558,29 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
                 OmnigentPolicyVersion.version == policy.default_version,
             )
         )
-        assert version.document_json["host"]["serverImageRef"] == resolved["server"]
-        assert version.document_json["host"]["hostImageRef"] == resolved["host"]
+        recorded_host = version.document_json["host"]
+        assert recorded_host["serverImageRef"] == manifest["persistedServerImageRef"]
+        assert recorded_host["hostImageRef"] == manifest["persistedHostImageRef"]
     await engine.dispose()
+
+    # The recorded version names the image family; admission binds the
+    # installed same-repository digests to the attempt.
+    admitted = reconcile_effective_launch_to_selected_host(
+        {
+            "launchPolicyRef": f"codex-on-demand@{expected['defaultPolicyVersion']}",
+            "hostImageRef": recorded_host["hostImageRef"],
+            "serverImageRef": recorded_host["serverImageRef"],
+            "boundaries": {"host": dict(recorded_host)},
+        },
+        resolved["host"],
+        selected_server_image_ref=resolved["server"],
+    )
+    assert admitted is not None
+    assert admitted["serverImageRef"] == manifest["observedServerImageRef"]
+    assert admitted["hostImageRef"] == manifest["observedHostImageRef"]
+    assert admitted["boundaries"]["host"]["serverImageRef"] == (
+        manifest["observedServerImageRef"]
+    )
 
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
     runtime._run = AsyncMock(  # type: ignore[method-assign]
@@ -4290,9 +4313,11 @@ async def test_unposted_terminal_bridge_reopens_for_temporal_activity_retry(
     ]
 
 
+@pytest.mark.parametrize("lease_released", [True, False])
 async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    lease_released: bool,
 ) -> None:
     """Replay mm:4e1c43a5 at host readiness and cleanup-authority handoffs."""
 
@@ -4372,7 +4397,7 @@ async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
             request.idempotency_key,
             event_type="terminal",
             status="failed",
-            metadata={"cleanupCompleted": True, "leaseReleased": True},
+            metadata={"cleanupCompleted": True, "leaseReleased": lease_released},
         )
 
         reopened = await store.get_or_create(

@@ -134,6 +134,11 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.cutover import assert_runtime_new_admission
 from moonmind.omnigent.native_ui import native_ui_unavailable_reason
 from moonmind.omnigent.settings import resolved_native_ui_serving_enabled
+from moonmind.omnigent.workspace_sources import (
+    WorkspaceSourceError,
+    check_source_runtime_supported,
+    compile_workspace_source,
+)
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
@@ -284,6 +289,7 @@ from moonmind.workflows.executions.provider_profile_projection import (
 )
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
+    authored_repository_access,
     compile_repository_target,
     github_repository_name_from_value,
     repository_branch_from_value,
@@ -10968,7 +10974,7 @@ def _snapshot_source_payload_from_parameters(
             list(capabilities_value) if isinstance(capabilities_value, list) else []
         ),
     }
-    workspace_value = parameters.get("workspace")
+    workspace_value = parameters.get("workspaceSpec") or parameters.get("workspace")
     if isinstance(workspace_value, Mapping):
         payload["workspace"] = copy.deepcopy(dict(workspace_value))
     return payload, task
@@ -11931,6 +11937,220 @@ def _normalize_submitted_repository(
     )
 
 
+def _admit_workspace_source(
+    value: object,
+    *,
+    repository_payload: str | Mapping[str, Any] | None,
+    repository: str | None,
+    workflow_id: str,
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Validate authored ``payload.workspace`` with the plan's source compiler.
+
+    Returns the spec for ``initialParameters.workspaceSpec``, the key plan
+    admission and the agent request read, the repository the source selects,
+    and the compiled source kind. Create, the CLI, and the API share this
+    path, so it is how anonymous, artifact, and checkpoint sources reach plan
+    admission. The selected runtime is checked once it is resolved.
+    """
+
+    if value is None:
+        return None, repository, None
+    if not isinstance(value, Mapping):
+        raise _invalid_workflow_request("payload.workspace must be an object.")
+    workspace = copy.deepcopy(dict(value))
+    authored = _coerce_mapping(workspace.get("workspaceSource"))
+    kind = str(authored.get("kind") or "").strip().lower()
+    access_mode = authored.get("accessMode")
+    if access_mode is not None and access_mode not in {
+        "explicit",
+        "routed",
+        "anonymous",
+    }:
+        raise _invalid_workflow_request(
+            "payload.workspace.workspaceSource.accessMode must be explicit, "
+            "routed, or anonymous."
+        )
+    if kind in {"", "repository"}:
+        authored_repository = authored.get("repository") or _coerce_mapping(
+            authored.get("repositoryTarget")
+        ).get("repository")
+    else:
+        authored_repository = authored.get("baseRepository") or authored.get(
+            "base_repository"
+        )
+    if isinstance(authored_repository, Mapping):
+        authored_repository = authored_repository.get("name")
+    authored_name = str(authored_repository or "").strip()
+    # A recorded run projects the source's base repository to
+    # payload.repository, so an edit or rerun may repeat that same name.
+    if (
+        repository_payload is not None
+        and kind not in {"", "repository"}
+        and not authored_name
+    ):
+        raise _invalid_workflow_request(
+            f"payload.repository conflicts with a {kind} workspace source; "
+            "name its base repository in the workspace source instead."
+        )
+    if authored_name and repository and authored_name != repository:
+        raise _invalid_workflow_request(
+            f"payload.repository {repository!r} conflicts with workspace source "
+            f"repository {authored_name!r}."
+        )
+    spec = dict(workspace)
+    if isinstance(repository_payload, Mapping):
+        spec.setdefault("repositoryTarget", dict(repository_payload))
+    elif repository_payload:
+        spec.setdefault("repository", repository_payload)
+    try:
+        source = compile_workspace_source(
+            spec,
+            workflow_id=workflow_id,
+            step_execution_id=workflow_id,
+            runtime="omnigent",
+        )
+    except WorkspaceSourceError as exc:
+        raise _invalid_workflow_request(f"payload.workspace is invalid: {exc}") from exc
+    if source.kind == "repository" and not source.repository_ref:
+        raise _invalid_workflow_request(
+            "A repository workspace source requires a repository."
+        )
+    target_branch = repository_branch_from_value(repository_payload)
+    if (
+        target_branch
+        and source.repository_branch
+        and target_branch != source.repository_branch
+    ):
+        raise _invalid_workflow_request(
+            f"payload.repository branch {target_branch!r} conflicts with workspace "
+            f"source branch {source.repository_branch!r}."
+        )
+    connection_ref, anonymous = authored_repository_access(
+        {"repository": repository_payload, "workspaceSpec": workspace}
+    )
+    if anonymous and (connection_ref or not source.repository_ref):
+        raise _invalid_workflow_request(
+            "anonymous access reads a selected repository without a "
+            "connectionRef; remove the connection or choose routed or explicit "
+            "access."
+        )
+    # Plan admission derives the mode from the reference, so an authored mode
+    # it would contradict must fail here instead of binding another account.
+    if access_mode == "explicit" and not connection_ref:
+        raise _invalid_workflow_request(
+            "explicit access requires a connectionRef; add one or choose routed "
+            "access."
+        )
+    if access_mode == "routed" and connection_ref:
+        raise _invalid_workflow_request(
+            f"routed access selects its connection by route, but connectionRef "
+            f"{connection_ref!r} was supplied; remove it or choose explicit access."
+        )
+    return workspace, repository or source.repository_ref, source.kind
+
+
+def _check_workspace_source_runtime(kind: str, runtime: str) -> None:
+    try:
+        check_source_runtime_supported(kind, runtime)
+    except WorkspaceSourceError as exc:
+        raise _invalid_workflow_request(f"payload.workspace is invalid: {exc}") from exc
+
+
+def _reject_anonymous_source_publication(
+    workspace_spec: Mapping[str, Any] | None, *publish_modes: object
+) -> None:
+    # Direct runtimes never reach Omnigent plan admission, so an anonymous
+    # read must not schedule work that would later need publication authority.
+    if (
+        workspace_spec is None
+        or not authored_repository_access({"workspaceSpec": workspace_spec})[1]
+    ):
+        return
+    if any(str(mode or "none").strip().lower() != "none" for mode in publish_modes):
+        raise _invalid_workflow_request(
+            "anonymous workspace source cannot publish; set publish.mode to "
+            "'none' or choose routed or explicit access."
+        )
+
+
+def _stated_runtime(
+    parameters: Mapping[str, Any], *, last_applied: bool = False
+) -> object:
+    """Return the runtime ``parameters`` state, or ``None``.
+
+    A run starts on the first of the top-level, ``workflow.runtime``,
+    ``runtime``, and ``authoredTaskInput.runtime`` selections; an in-flight
+    update applies them in reverse, so its last stated one wins.
+    """
+
+    sources = [
+        parameters,
+        _coerce_mapping(_workflow_payload_from_parameters(parameters).get("runtime")),
+        _coerce_mapping(parameters.get("runtime")),
+        _coerce_mapping(
+            _coerce_mapping(parameters.get("authoredTaskInput")).get("runtime")
+        ),
+    ]
+    for runtime in reversed(sources) if last_applied else sources:
+        for key in ("targetRuntime", "target_runtime", "mode"):
+            if str(runtime.get(key) or "").strip():
+                return runtime[key]
+    return None
+
+
+def _readmit_edited_workspace_source(
+    parameters_patch: Mapping[str, Any],
+    *,
+    recorded_parameters: Mapping[str, Any],
+    workflow_id: str,
+) -> dict[str, Any]:
+    """Admit the source an edit or rerun states, exactly as Create does.
+
+    The patch is merged shallowly over the recorded parameters, so the
+    re-admitted ``workspaceSpec`` (``None`` when the source was removed)
+    replaces the recorded one instead of inheriting it unchecked. A patched
+    ``workspaceSpec`` is admitted like an authored ``workspace``. Runtime and
+    publication are checked against what that merge selects.
+    """
+
+    admitted = dict(parameters_patch)
+    repository_payload, repository = _normalize_submitted_repository(
+        admitted.get("repository", recorded_parameters.get("repository"))
+    )
+    workspace_spec, repository, kind = _admit_workspace_source(
+        admitted["workspace"] if "workspace" in admitted else admitted["workspaceSpec"],
+        repository_payload=repository_payload,
+        repository=repository,
+        workflow_id=workflow_id,
+    )
+    if repository_payload is None and repository:
+        admitted["repository"] = repository
+    admitted["workspaceSpec"] = workspace_spec
+    merged = {**recorded_parameters, **admitted}
+    if kind is not None:
+        # The source must run on whichever runtime the edit selects: an update
+        # applies the patch to the running workflow, and a rerun starts from
+        # the merge.
+        for runtime in dict.fromkeys(
+            (
+                normalize_runtime_id(
+                    _stated_runtime(admitted, last_applied=True)
+                    or _stated_runtime(recorded_parameters)
+                ),
+                normalize_runtime_id(_stated_runtime(merged)),
+            )
+        ):
+            _check_workspace_source_runtime(kind, runtime)
+    _reject_anonymous_source_publication(
+        workspace_spec,
+        merged.get("publishMode"),
+        _coerce_mapping(_workflow_payload_from_parameters(merged).get("publish")).get(
+            "mode"
+        ),
+    )
+    return admitted
+
+
 def _selected_repository_skill_names(
     task_payload: Mapping[str, Any],
 ) -> set[str]:
@@ -12198,6 +12418,19 @@ async def _create_execution_from_workflow_request(
     repository_payload, repository = _normalize_submitted_repository(
         payload.get("repository")
     )
+    workspace_spec, repository, workspace_source_kind = _admit_workspace_source(
+        payload.get("workspace"),
+        repository_payload=repository_payload,
+        repository=repository,
+        workflow_id=reserved_workflow_id,
+    )
+    if workspace_spec is not None:
+        # Run, its planner, and a recurring schedule's stored target read the
+        # admitted source and repository from these parameters, so a
+        # repository named only by the source is projected here too.
+        payload["workspaceSpec"] = workspace_spec
+        if repository_payload is None and repository:
+            repository_payload = repository
     if repository_payload is None:
         payload.pop("repository", None)
     else:
@@ -12380,6 +12613,7 @@ async def _create_execution_from_workflow_request(
         task_payload=task_payload,
         publish_payload=publish_payload,
     )
+    _reject_anonymous_source_publication(workspace_spec, publish_payload.get("mode"))
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
         field_name="payload.workflow.skills",
@@ -12589,6 +12823,10 @@ async def _create_execution_from_workflow_request(
                 "Must be one of: codex_cli, claude_code, jules, omnigent."
             )
         canonical_target_runtime = normalized_rt
+    if workspace_source_kind is not None:
+        _check_workspace_source_runtime(
+            workspace_source_kind, canonical_target_runtime or "omnigent"
+        )
 
     if (
         runtime_payload.get("executionConfiguration") is not None
@@ -12721,6 +12959,8 @@ async def _create_execution_from_workflow_request(
         # without a phase gate or SHA/digest fingerprint.
         "runtimeCutover": dict(new_work_runtime_evidence),
     }
+    if workspace_spec is not None:
+        initial_parameters["workspaceSpec"] = workspace_spec
     if principal.is_workflow_principal:
         initial_parameters["parentWorkflowId"] = principal.workflow_id
     if isinstance(payload.get("omnigent"), Mapping):
@@ -19990,6 +20230,19 @@ async def update_execution(
     )
 
     effective_parameters_patch = payload.parameters_patch
+    if (
+        is_task_editing_update
+        and effective_parameters_patch is not None
+        and (
+            "workspace" in effective_parameters_patch
+            or "workspaceSpec" in effective_parameters_patch
+        )
+    ):
+        effective_parameters_patch = _readmit_edited_workspace_source(
+            effective_parameters_patch,
+            recorded_parameters=dict(record.parameters or {}),
+            workflow_id=record.workflow_id,
+        )
     if exact_plan_rerun:
         exact_snapshot_parameters = await _exact_rerun_parameters_from_snapshot(
             session=session,

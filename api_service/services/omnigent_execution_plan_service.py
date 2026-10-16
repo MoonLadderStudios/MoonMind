@@ -1530,11 +1530,27 @@ async def compile_and_persist_execution_plan(
             )
             if value
         ]
+        # Static Compose hosts run the installed shared host image. A policy
+        # naming another image family keeps its explicit host.
+        from moonmind.omnigent.harness_platform.host_classes import (
+            resolve_shared_host_image_ref,
+        )
+        from moonmind.omnigent.host_image_drift import is_compatible_image_drift
+
+        static_image_ref = str(effective_launch.get("hostImageRef") or "")
+        try:
+            installed_shared_ref = resolve_shared_host_image_ref()
+        except HarnessPlatformError:
+            installed_shared_ref = ""
+        if installed_shared_ref and is_compatible_image_drift(
+            static_image_ref, installed_shared_ref
+        ):
+            static_image_ref = installed_shared_ref
         host_class = HostClass.model_validate(
             {
                 "hostClassId": config["hostClassRef"].rpartition("@")[0],
                 "version": int(config["hostClassRef"].rpartition("@")[2]),
-                "imageRef": effective_launch.get("hostImageRef"),
+                "imageRef": static_image_ref,
                 "omnigentVersion": catalog_omnigent_version,
                 "omnigentBuildDigest": omnigent_build_digest,
                 "architectures": architectures,
@@ -1573,44 +1589,32 @@ async def compile_and_persist_execution_plan(
             requested_host_mode=str(effective_launch.get("hostMode") or ""),
             requested_host_class_ref=config["hostClassRef"],
         )
-    # Rebuilt host images change SHA/patch while keeping the same repository.
-    # The persisted policy snapshot may still pin the previous digest while
-    # Host Class selection reads current deployment evidence. Same-repository
-    # drift is reconciled to the selected Host Class image (launch-time
-    # attestation verifies the actual host); a foreign repository still fails
-    # closed instead of substituting another image family.
-    if host_class.imageRef != str(effective_launch.get("hostImageRef") or ""):
-        from moonmind.omnigent.host_image_drift import (
-            reconcile_effective_launch_to_selected_host,
-        )
+    # The persisted policy snapshot records the images current when that
+    # policy version was written; Host Class selection and the installed
+    # server come from current deployment evidence. A fresh attempt binds the
+    # installed same-repository images (launch-time attestation verifies the
+    # actual host and server), so a routine update needs no new policy
+    # version; a foreign host repository still fails closed instead of
+    # substituting another image family.
+    from moonmind.omnigent.host_image_drift import (
+        installed_server_image_ref,
+        reconcile_effective_launch_to_selected_host,
+    )
 
-        # The retained Codex coordinator recompiles the policy snapshot, so
-        # its explicit image authority must agree before a plan is persisted.
-        # Bootstrap owns advancing that policy for a new default host image.
-        reconciled = (
-            reconcile_effective_launch_to_selected_host(
-                effective_launch, host_class.imageRef
-            )
-            if harness_id != "codex-native"
-            else None
+    reconciled = reconcile_effective_launch_to_selected_host(
+        effective_launch,
+        host_class.imageRef,
+        selected_server_image_ref=installed_server_image_ref(),
+    )
+    if reconciled is None:
+        planned_ref = str(effective_launch.get("hostImageRef") or "")
+        raise ValueError(
+            "effective launch host image conflicts with the selected Host Class "
+            f"(planned={planned_ref[:120]} selected={host_class.imageRef[:120]} "
+            f"hostClass={config['hostClassRef']}); the policy names a different "
+            "host image family than the installed one"
         )
-        if reconciled is None:
-            planned_ref = str(effective_launch.get("hostImageRef") or "")
-            raise ValueError(
-                "effective launch host image conflicts with the selected Host Class "
-                f"(planned={planned_ref[:120]} selected={host_class.imageRef[:120]} "
-                f"hostClass={config['hostClassRef']}); refresh the bootstrap policy "
-                "default to the qualified image and retry"
-            )
-        import logging
-
-        logging.getLogger(__name__).info(
-            "planning host image drift: reconciling same-repo policy "
-            "image to selected Host Class (planned=%s selected=%s)",
-            str(effective_launch.get("hostImageRef") or "")[:80],
-            host_class.imageRef[:80],
-        )
-        effective_launch = reconciled
+    effective_launch = reconciled
     policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
         artifact_service=artifact_service,
         principal=principal,

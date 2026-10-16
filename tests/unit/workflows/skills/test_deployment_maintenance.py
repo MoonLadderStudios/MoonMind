@@ -4,7 +4,6 @@ import pytest
 
 from moonmind.workflows.skills import deployment_maintenance as maintenance
 from moonmind.workflows.skills import deployment_release as release
-from moonmind.workflows.temporal import release_routing
 
 
 @pytest.mark.asyncio

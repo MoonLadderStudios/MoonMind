@@ -56,6 +56,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH,
     RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
+    RUN_RETIRED_REPOSITORY_OUTCOME_POLICY_PATCH,
     RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
@@ -4319,7 +4320,63 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
         self.assertIn("moonSpecVerifyArtifactRef", request.instruction_ref or "")
         self.assertIn("FULLY_IMPLEMENTED", request.instruction_ref or "")
 
-    def test_trusted_full_assessment_authorizes_verified_no_commit_result(self) -> None:
+    def test_new_requests_retire_repository_outcome_policy(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._assessment_context.update(
+            {
+                "assessmentArtifactRef": "art_assessment_1",
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessedRepository": "MoonLadderStudios/MoonMind",
+                "assessedBranch": "main",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="mm:trusted-no-commit",
+            run_id="run-trusted-no-commit",
+            parent=None,
+        )
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id
+                    in {
+                        RUN_RETIRED_REPOSITORY_OUTCOME_POLICY_PATCH,
+                        RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH,
+                        RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
+                    }
+                ),
+            ) as patched,
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "targetRuntime": "omnigent",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "startingBranch": "main",
+                    "repositoryOperation": "write",
+                    "publishMode": "pr",
+                    # Obsolete authored policy inputs must not revive the path.
+                    "repositoryOutcomePolicy": {
+                        "allowNoCommit": False,
+                        "authority": "user",
+                    },
+                },
+                node_id="implement",
+                tool_name="omnigent",
+            )
+
+        self.assertNotIn("repositoryOutcomePolicy", request.parameters)
+        visited = {call.args[0] for call in patched.call_args_list}
+        self.assertIn(RUN_RETIRED_REPOSITORY_OUTCOME_POLICY_PATCH, visited)
+        self.assertNotIn(RUN_TRUSTED_NO_COMMIT_REPOSITORY_OUTCOME_PATCH, visited)
+        self.assertNotIn(RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH, visited)
+
+    def test_replay_preserves_repository_bound_no_commit_request_shape(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._assessment_context.update(
             {
@@ -4381,7 +4438,7 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
             },
         )
 
-    def test_assessment_for_another_repository_does_not_authorize_no_commit(
+    def test_replay_keeps_foreign_assessment_without_no_commit_policy(
         self,
     ) -> None:
         wf = MoonMindRunWorkflow()
@@ -4406,7 +4463,7 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
             ),
             patch(
                 "moonmind.workflows.temporal.workflows.run.workflow.patched",
-                return_value=True,
+                side_effect=lambda patch_id: patch_id != RUN_RETIRED_REPOSITORY_OUTCOME_POLICY_PATCH,
             ),
         ):
             request = wf._build_agent_execution_request(
@@ -4471,7 +4528,7 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
             },
         )
 
-    def test_partial_assessment_does_not_authorize_no_commit_result(self) -> None:
+    def test_replay_keeps_partial_assessment_without_no_commit_policy(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._assessment_context.update(
             {
@@ -4492,7 +4549,7 @@ class TestEnsureAssessmentParameters(unittest.TestCase):
             ),
             patch(
                 "moonmind.workflows.temporal.workflows.run.workflow.patched",
-                return_value=True,
+                side_effect=lambda patch_id: patch_id != RUN_RETIRED_REPOSITORY_OUTCOME_POLICY_PATCH,
             ),
         ):
             request = wf._build_agent_execution_request(

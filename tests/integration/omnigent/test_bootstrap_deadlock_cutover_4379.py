@@ -2,8 +2,8 @@
 
 Exercises the policy/bootstrap/schedule boundaries together on disposable
 SQLite storage (no production execution, no registry): default v1 (old
-digest) + active non-default v2 + advanced resolved image must yield default
-@3 with the new image, an auto-advanced Agent Profile admitting @3, and
+image) + active non-default v2 + a resolved host of another image family must
+yield default @3 with the new image, an auto-advanced Agent Profile admitting @3, and
 preserved v1/v2 history — without manual DB writes or manual
 profile/schedule edits. In-flight usages keep their pinned version.
 """
@@ -35,17 +35,14 @@ from api_service.services.omnigent_agent_profile_selection import (
     advance_agent_profiles_for_policy_cutover,
 )
 from moonmind.omnigent.policies import PolicyDocument, PolicyState
-from moonmind.workflows.skills.omnigent_release import (
-    raise_for_release_policy_drift,
-    release_policy_drift_dispositions,
-)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 OLD_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "a" * 64
 OLD_HOST = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64
 NEW_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "b" * 64
-NEW_HOST = "ghcr.io/example/omnigent-host@sha256:" + "b" * 64
+# Another host image family; a same-repository digest needs no new version.
+NEW_HOST = "ghcr.io/example/omnigent-host-moonmind@sha256:" + "b" * 64
 
 
 def _image_resolver_factory(server_ref: str, host_ref: str):
@@ -201,12 +198,6 @@ async def test_deadlock_reconcile_advances_policy_and_profile(tmp_path, monkeypa
         )
         await session.commit()
 
-        # Pre-fix shape: drift is a compatible same-repo rebuild.
-        pre = release_policy_drift_dispositions(
-            {policy_id: OLD_HOST}, {"opencode": NEW_HOST}
-        )
-        assert len(pre) == 1 and pre[0]["compatibleRebuild"] is True
-
         reconciled = await policies.seed_bootstrap_policies(
             session,
             image_resolver=_image_resolver_factory(NEW_SERVER, NEW_HOST),
@@ -249,13 +240,6 @@ async def test_deadlock_reconcile_advances_policy_and_profile(tmp_path, monkeypa
         )
         assert usage.version == 1
         assert usage.effective_snapshot == {"launchPolicyRef": f"{policy_id}@1"}
-
-        # Post-cut: no drift remains, promotion unfenced.
-        post = release_policy_drift_dispositions(
-            {policy_id: NEW_HOST}, {"opencode": NEW_HOST}
-        )
-        assert post == []
-        assert raise_for_release_policy_drift(post) is None
 
         # History preserved: v1 and v2 still resolve on the old image.
         for version in (1, 2):

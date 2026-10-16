@@ -133,7 +133,7 @@ def test_writes_are_atomic_across_interruption(controller_path, tmp_path):
     assert leftovers == []
 
 
-def test_begin_reattaches_to_completed_instead_of_forking_duplicate(
+def test_begin_with_caller_operation_id_observes_its_recorded_success(
     controller_path, tmp_path
 ):
     record = _record_module(controller_path)
@@ -142,23 +142,47 @@ def test_begin_reattaches_to_completed_instead_of_forking_duplicate(
         stack="moonmind",
         desired_image="ghcr.io/org/app@sha256:abc",
         source_revision="abc123",
+        operation_id="ui-1",
     )
-    store.confirm_installed(op["operationId"], image="ghcr.io/org/app@sha256:abc")
+    store.confirm_installed("ui-1", image="ghcr.io/org/app@sha256:abc")
     # A retried submission after a lost terminal response observes the
     # recorded success instead of repeating the Compose mutation.
     again = store.begin(
         stack="moonmind",
         desired_image="ghcr.io/org/app@sha256:abc",
         source_revision="abc123",
+        operation_id="ui-1",
     )
     assert again["operationId"] == op["operationId"]
     assert again["status"] == "succeeded"
     assert again["installed"]["image"] == "ghcr.io/org/app@sha256:abc"
+    assert len(list((tmp_path / "operations").glob("*.json"))) == 1
 
 
-def test_begin_does_not_reuse_success_superseded_by_a_later_install(
-    controller_path, tmp_path
-):
+def test_new_request_for_an_installed_tag_is_new_work(controller_path, tmp_path):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    first = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app:latest",
+        source_revision="",
+        operation_id="ui-1",
+    )
+    store.confirm_installed("ui-1", image="ghcr.io/org/app:latest")
+    # `latest` names whatever the registry publishes next, so a new update
+    # request must pull and apply again, never answer with the old success.
+    again = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/app:latest",
+        source_revision="",
+        operation_id="ui-2",
+    )
+    assert again["operationId"] == "ui-2"
+    assert again["status"] == "pending"
+    assert store.load(first["operationId"])["status"] == "succeeded"
+
+
+def test_rollback_to_an_earlier_image_is_new_work(controller_path, tmp_path):
     record = _record_module(controller_path)
     store = record.OperationStore(tmp_path)
     first = store.begin(
@@ -173,8 +197,6 @@ def test_begin_does_not_reuse_success_superseded_by_a_later_install(
         source_revision="abc124",
     )
     store.confirm_installed(second["operationId"], image="ghcr.io/org/app@sha256:def")
-    # The first success no longer describes the installation, so requesting
-    # its image again is new work rather than an already-satisfied no-op.
     again = store.begin(
         stack="moonmind",
         desired_image="ghcr.io/org/app@sha256:abc",

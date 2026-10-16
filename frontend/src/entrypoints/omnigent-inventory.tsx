@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DataTable, type Column } from '../components/tables/DataTable';
+import { useUrlSearchText } from '../lib/urlSearchText';
 
 type InventoryKind = 'agents' | 'policies';
 type InventoryRow = {
@@ -164,7 +165,6 @@ function compactRows(payload: unknown): InventoryRow[] {
 
 export default function OmnigentInventoryPage({ payload }: { payload: BootPayload }) {
   const location = useLocation();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<InventoryRow | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<PolicyVersion | null>(null);
@@ -179,8 +179,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   const featureKey = kind === 'agents' ? 'omnigentAgents' : 'omnigentPolicies';
   const label = kind === 'agents' ? 'Agents' : 'Policies';
   const queryKey = kind === 'agents' ? 'omnigent_agents_q' : 'omnigent_policies_q';
-  const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const filter = params.get(queryKey) ?? '';
+  const [filter, setFilter] = useUrlSearchText(queryKey);
   const initialData = payload.initialData as { uiEndpoints?: Record<string, unknown>; dashboardConfig?: { system?: Record<string, unknown> } } | undefined;
   const endpoints = initialData?.uiEndpoints;
   const enabled = payload.features?.[featureKey] === true;
@@ -381,11 +380,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       await queryClient.invalidateQueries({ queryKey: ['omnigent-inventory', kind] });
     },
   });
-  const setFilter = (value: string) => {
-    const next = new URLSearchParams(location.search);
-    if (value) next.set(queryKey, value); else next.delete(queryKey);
-    navigate({ pathname: location.pathname, search: next.toString() }, { replace: true });
-  };
 
   if (!enabled || !endpoint) {
     return <div className="omnigent-inventory" role="alert"><h1>Omnigent {label}</h1><p>This inventory is not available for this deployment.</p></div>;

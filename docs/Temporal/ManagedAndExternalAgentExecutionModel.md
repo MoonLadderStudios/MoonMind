@@ -596,9 +596,10 @@ activation fails closed with image readiness evidence. Credentialed conformance
 and release manifests still name the resolved immutable `OMNIGENT_IMAGE_REF`
 and `OMNIGENT_HOST_IMAGE_REF` values explicitly.
 
-Bootstrap-owned policy defaults advance through a new immutable version when
-those resolved repository digests move; operator-authored defaults are never
-rewritten by bootstrap. Image resolution, registry refresh, provider validation,
+Bootstrap-owned policy defaults advance through a new immutable version only
+for a resource-default migration or a resolved image of another repository
+family; a same-repository digest move is bound at admission instead.
+Operator-authored defaults are never rewritten by bootstrap. Image resolution, registry refresh, provider validation,
 and deployment qualification run in the lifespan-owned background reconciler.
 API startup does not wait for this runtime maintenance or for credential leases
 held by active workflows. The reconciler starts automatically after local
@@ -1106,7 +1107,7 @@ silently create a fresh checkout or switch source authority.
 
 ### 16.2 Workflow replay
 
-Changes that add, remove, or reorder workflow commands use Temporal patch/version markers or Worker Versioning so in-flight histories replay to the recorded command path.
+Changes that add, remove, or reorder workflow commands use Temporal patch/version markers so in-flight histories replay to the recorded command path.
 
 Temporal resets preserve dynamic remediation child identities from the run
 identity recorded by the policy-compilation Activity. A new reset execution ID

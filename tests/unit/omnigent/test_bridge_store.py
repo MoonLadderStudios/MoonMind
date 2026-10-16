@@ -193,8 +193,10 @@ async def test_generic_profile_authorization_persists_plan_and_binding(store) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lease_released", [True, False])
+@pytest.mark.parametrize("cleanup_owner", ["coordinator", "janitor"])
 async def test_stopped_lease_retry_retires_and_rebinds_cleanup_authority(
-    store,
+    store, lease_released, cleanup_owner,
 ) -> None:
     request = _request("stopped-lease-retry")
     launch = _effective_launch()
@@ -223,15 +225,19 @@ async def test_stopped_lease_retry_retires_and_rebinds_cleanup_authority(
         request.idempotency_key,
         event_type="terminal",
         status="failed",
-        metadata={"cleanupCompleted": False, "leaseReleased": False},
+        metadata={
+            "cleanupCompleted": cleanup_owner == "coordinator",
+            "leaseReleased": lease_released if cleanup_owner == "coordinator" else False,
+        },
     )
-    await store.record_terminal_cleanup(
-        host_lease_ref="lease-1",
-        completed=True,
-        egress_evidence_ref="artifact://terminal-egress-1",
-        launch_evidence_ref="artifact://launch-egress-1",
-        lease_released=True,
-    )
+    if cleanup_owner == "janitor":
+        await store.record_terminal_cleanup(
+            host_lease_ref="lease-1",
+            completed=True,
+            egress_evidence_ref="artifact://terminal-egress-1",
+            launch_evidence_ref="artifact://launch-egress-1",
+            lease_released=lease_released,
+        )
 
     reopened = await store.get_or_create(
         request=request,
@@ -279,8 +285,9 @@ async def test_stopped_lease_retry_retires_and_rebinds_cleanup_authority(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lease_released", [True, False])
 async def test_unposted_retry_preserves_live_cleanup_authority_without_cleanup_proof(
-    store,
+    store, lease_released,
 ) -> None:
     request = _request("ambiguous-cleanup-retry")
     launch = _effective_launch()
@@ -309,7 +316,7 @@ async def test_unposted_retry_preserves_live_cleanup_authority_without_cleanup_p
         request.idempotency_key,
         event_type="terminal",
         status="failed",
-        metadata={"cleanupCompleted": False, "leaseReleased": False},
+        metadata={"cleanupCompleted": False, "leaseReleased": lease_released},
     )
     await store.get_or_create(
         request=request,

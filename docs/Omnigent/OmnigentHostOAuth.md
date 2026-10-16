@@ -540,6 +540,20 @@ Run cleanup may not remove:
 
 A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release still follows confirmed host teardown, even when cleanup requires retries. The janitor marks the host lease `stopped` only after the release, the terminal cleanup record, and the runtime-binding cleanup complete. A lease that is still `draining` therefore means the handoff is unfinished. A recovered dispatch that receives its idempotent lease while it is `draining` waits, within a bounded budget, for that state to clear. If the Provider Profile lease is still active, it then restarts the same host lease. If the wait aborts, it leaves cleanup to the janitor and keeps the capacity held.
 
+Terminal host inventory includes only matching Provider Profile leases in `held`
+or `cleanup_requested` state. Released lease tombstones remain fencing history
+and do not trigger repeated host/session probes. Expiry alone does not release
+capacity. Active-host and orphan reconciliation remain independent of this filter.
+An upstream session-stop error remains diagnostic, but confirmed teardown of
+the owning host ends its runner and tunnel independently. Upstream stop is
+non-sticky and does not delete retained conversation history. Unconfirmed host
+teardown retains capacity and remains eligible for cleanup retry.
+A targeted inventory separately includes positively stopped/released OAuth hosts
+whose exact legacy runtime binding is still `host_attested` or `session_bound`.
+The same janitor pass completes only that fenced binding write, without replaying
+host/session calls or rewriting the confirmed release receipt. Completed bindings
+and bindings moved to a successor are excluded.
+
 On-demand OAuth initialization uses a deterministic `<host-container>-init`
 container carrying the host lease, profile, and credential generation labels.
 Docker `--rm` alone does not cover interruption between container creation and
@@ -579,6 +593,12 @@ A binding saved before host attachment can be completed only when the current
 execution scope has the same provider lease, profile, and credential generation
 and no bound host or session authority. Completion still checks its revision and
 fencing generation; a replacement binding remains protected.
+
+A retry of an unposted bridge attempt retires its prior host cleanup authority
+only after confirmed host teardown. Provider Profile capacity may remain owned
+by the workflow across Activity retries; releasing that slot is not required to
+archive the removed host's authority and attest its replacement. An incomplete
+cleanup retains the original authority even if capacity release was recorded.
 
 Runtime-binding cleanup completion is idempotent for the same current binding
 and fencing generation. A coordinator and janitor that observed the same
@@ -653,7 +673,6 @@ Legacy `oauth_host_runtime.py`, profile-bound Codex realization, direct-runtime 
 - Temporal replay passes
 - historical reads remain available
 - protected live generic parity passes
-- rollback without the legacy path is exercised
 - retention and retirement policy permits removal
 
 Legacy code may remain as a replay-visible wrapper without remaining a selectable product path.

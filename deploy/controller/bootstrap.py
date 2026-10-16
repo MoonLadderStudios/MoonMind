@@ -44,7 +44,13 @@ DERIVED_PORT_RANGE = 100
 TARGET_NETWORK_SETTING = "MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK"
 TARGET_NETWORK_KEY = "deployment-controller-network"
 CONTROLLER_ALIAS = "moonmind-controller"
-JOURNAL_TRANSITION_CAPABILITY = "active-journal-transition"
+# Behavior submitters require of the running controller (server.py
+# CONTROLLER_CAPABILITIES). A controller lacking any of it is refreshed.
+REQUIRED_CAPABILITIES = (
+    "active-journal-transition",
+    "request-identity",
+    "unversioned-routing-cutover",
+)
 # `ensure --prefer-requested` reports whether the controller now runs a
 # different release, so a submitter retries only when the code changed.
 REFRESH_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
@@ -130,8 +136,8 @@ def _first_capable_controller_image(candidates: list[str], requested: str) -> st
         "import pathlib,sys; p=pathlib.Path('/app/deploy/controller'); "
         "sys.exit(10) if not (p/'server.py').is_file() else None; "
         "sys.path.insert(0,str(p)); import server; "
-        f"sys.exit(0 if {JOURNAL_TRANSITION_CAPABILITY!r} in "
-        "getattr(server,'CONTROLLER_CAPABILITIES',()) else 10)"
+        f"sys.exit(0 if set({REQUIRED_CAPABILITIES!r}).issubset("
+        "getattr(server,'CONTROLLER_CAPABILITIES',())) else 10)"
     )
     for image in [None, *candidates]:
         if image is None:
@@ -170,7 +176,7 @@ def _first_capable_controller_image(candidates: list[str], requested: str) -> st
                 f"Controller prerequisite image probe failed (exit {result.returncode})."
             )
     raise RuntimeError(
-        "Neither the installed source nor requested image supplies journal transition support."
+        "Neither the installed source nor requested image supplies the required controller capabilities."
     )
 
 
@@ -233,7 +239,7 @@ def cmd_ensure(args, env) -> int:
 
     def supported():
         try:
-            return JOURNAL_TRANSITION_CAPABILITY in controller_capabilities(url, secret)
+            return controller_capabilities(url, secret).issuperset(REQUIRED_CAPABILITIES)
         except urllib.error.HTTPError:
             raise
         except OSError:
@@ -325,8 +331,8 @@ def cmd_ensure(args, env) -> int:
         deadline = time.monotonic() + 30
         while True:
             try:
-                if JOURNAL_TRANSITION_CAPABILITY in controller_capabilities(
-                    url, secret
+                if controller_capabilities(url, secret).issuperset(
+                    REQUIRED_CAPABILITIES
                 ):
                     if prefer_requested:
                         _print_refresh_receipt(refreshed=True, image=image)
@@ -337,7 +343,7 @@ def cmd_ensure(args, env) -> int:
                 pass
             if time.monotonic() >= deadline:
                 raise RuntimeError(
-                    "Controller prerequisite did not expose journal transition support."
+                    "Controller prerequisite did not expose the required controller capabilities."
                 )
             time.sleep(1)
 

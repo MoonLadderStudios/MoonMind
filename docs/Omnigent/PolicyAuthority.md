@@ -101,6 +101,14 @@ and Claude policies use the deployment-resolved shared host image
 (`OMNIGENT_SHARED_HOST_IMAGE_REF`), which owns the MoonMind tools under
 `/opt/moonmind-tools`; the upstream `omnigent-host` image does not carry them,
 so bootstrap versions any bootstrap-owned Codex default still pinned to it.
+A version's image refs name the image family and record the images current
+when it was written: fresh admission, including each schedule-started
+occurrence, binds the installed same-repository server and host images to the
+attempt (an explicitly requested Host Class stays exact, and a foreign host
+family fails closed), and admitted attempts keep the images they recorded.
+Bootstrap therefore cuts a successor only for a resource-default migration or
+an installed image of another family; a same-family digest move leaves the
+recorded version, its Agent Profiles, OAuth bindings and schedules unchanged.
 `codex-on-demand@1` is the normal Codex default and static hosting remains an
 explicit advanced choice. Normal work uses persisted selections; a planner or
 runtime may not synthesize one policy from another, and durable/environment

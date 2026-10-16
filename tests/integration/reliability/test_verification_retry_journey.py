@@ -16,7 +16,7 @@ from temporalio import activity, workflow
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.unit.workflows.temporal.workflows.test_run_integration import (
     _dynamic_loop_spec_payload,
     _loop_controller_node,
