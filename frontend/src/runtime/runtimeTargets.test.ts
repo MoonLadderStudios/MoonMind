@@ -199,7 +199,7 @@ describe('runtimeUnavailableReason', () => {
     const reason = runtimeUnavailableReason('omnigent', rolledBack);
     expect(reason).toContain('No qualified target is available');
     expect(reason).toContain('Unavailable');
-    expect(reason).toContain('Review runtime availability and the Profile configuration in Settings.');
+    expect(reason).toContain('Review Harness availability and the Profile configuration in Settings.');
   });
 
   it('returns null while a selectable target exists', () => {
@@ -236,6 +236,6 @@ describe('formatRolloutStateLabel', () => {
 describe('removed and unknown authoring targets (#4644)', () => {
   it.each([undefined, promotedCatalog, { targets: [target({ runtimeId: 'codex_cloud' })] }])('never offers Cloud from an old boot catalog or fallback', (catalog) => {
     expect(backendOptionsForHarness('codex_cloud', catalog, { omnigentRoute: false })).toEqual([]);
-    expect(runtimeUnavailableReason('codex_cloud', catalog)).toMatch(/unsupported.*explicit|explicit.*supported/i);
+    expect(runtimeUnavailableReason('codex_cloud', catalog)).toMatch(/^Unsupported Harness codex_cloud\. Explicitly choose a supported replacement/);
   });
 });

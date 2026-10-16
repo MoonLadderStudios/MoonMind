@@ -245,7 +245,9 @@ def test_locked_guided_contract_cannot_be_submitted_as_manual_overrides() -> Non
         provider_id="openai",
     )
 
-    with pytest.raises(ValueError, match="does not advertise expert manual"):
+    with pytest.raises(
+        ValueError, match="This Harness and provider does not advertise expert manual"
+    ):
         validate_manual_credential_contract(
             credential_source="secret_ref",
             runtime_materialization_mode="api_key_env",

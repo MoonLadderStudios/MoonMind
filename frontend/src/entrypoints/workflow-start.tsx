@@ -11273,8 +11273,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
       {pageMode.intent === "comparison" && !modeLoadError ? (
         <p className="notice" role="status">
-          You are starting a comparison run. Choose a different runtime or model
-          to compare results with the source run.
+          You are starting a comparison run. Choose a different Harness,
+          Provider Profile, or model to compare results with the source run.
         </p>
       ) : null}
 
@@ -11414,8 +11414,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             >
               <legend>Editable repair intent</legend>
               <p className="small">
-                Instructions, runtime/profile selections, policies, branches, and
-                publication controls remain editable until submit.
+                Instructions, Harness/Provider Profile selections, policies,
+                branches, and publication controls remain editable until submit.
               </p>
             <div className="grid-2">
               <label>
@@ -13151,7 +13151,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <div className="notice queue-advanced-info-panel">
               <p className="small">
                 Shows optional Skill inputs, skill args, required capabilities,
-                and worker routing overrides. Runtime, publish mode, skills, and
+                and worker routing overrides. Harness, publish mode, skills, and
                 presets already add common capabilities automatically.
               </p>
             </div>

@@ -6125,7 +6125,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByRole("heading", { name: "Compare Workflow" })).toBeTruthy();
     expect(
       await screen.findByText(
-        "You are starting a comparison run. Choose a different runtime or model to compare results with the source run.",
+        "You are starting a comparison run. Choose a different Harness, Provider Profile, or model to compare results with the source run.",
       ),
     ).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Harness"), {
@@ -13538,6 +13538,37 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(publish.value).toBe("none");
   });
 
+  it("asks a comparison run to change the Harness, Provider Profile, or model", async () => {
+    mockRecordedExecution({
+      workflowId: "mm:compare-copy",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "MoonLadderStudios/MoonMind",
+        workflow: {
+          instructions: "Compare this run.",
+          runtime: { mode: "codex_cli" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState(
+      {},
+      "Task Comparison",
+      "/workflows/new?rerunExecutionId=mm%3Acompare-copy&mode=compare",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    expect(
+      await screen.findByText(
+        "You are starting a comparison run. Choose a different Harness, Provider Profile, or model to compare results with the source run.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("round-trips an anonymous public-repository read through rerun", async () => {
     const updates = mockRecordedExecution({
       workflowId: "mm:anonymous-rerun",
@@ -20032,7 +20063,11 @@ describe("Task Create runtime command previews", () => {
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
     expect(screen.getByLabelText("Pinned target identity")).toBeTruthy();
-    expect(screen.getByLabelText("Editable repair intent")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Editable repair intent").textContent?.replace(/\s+/g, " "),
+    ).toContain(
+      "Instructions, Harness/Provider Profile selections, policies, branches, and publication controls remain editable until submit.",
+    );
     expect((screen.getByLabelText("Target workflow") as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByLabelText("Pinned run") as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByLabelText("Starting branch") as HTMLInputElement).value).toBe("main");
@@ -21317,7 +21352,7 @@ describe('removed target drafts (#4644)', () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     await waitFor(() => expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step'));
     expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('jules_api');
-    expect(screen.queryByText(/unsupported runtime jules_api/i)).toBeNull();
+    expect(screen.queryByText(/unsupported Harness jules_api/i)).toBeNull();
     expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('saved-model');
     expect((screen.getAllByLabelText('Instructions')[1] as HTMLTextAreaElement).value).toBe('Keep the supported step');
   });
@@ -21331,7 +21366,7 @@ describe('removed target drafts (#4644)', () => {
     const runtime = screen.getByLabelText('Harness') as HTMLSelectElement;
     expect(Array.from(runtime.options).map((option) => option.value)).not.toContain('codex_cloud');
     expect(runtime.value).toBe('');
-    expect(screen.getAllByText(/unsupported runtime codex_cloud/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/unsupported Harness codex_cloud/i).length).toBeGreaterThan(0);
     expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step');
     expect((screen.getAllByLabelText('Instructions')[1] as HTMLTextAreaElement).value).toBe('Keep the supported step');
     fireEvent.submit(document.querySelector('#queue-submit-form')!);
