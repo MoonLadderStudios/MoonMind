@@ -1008,7 +1008,9 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert payload["operationId"] == op["operationId"]
                 assert payload["target"] == target
                 assert payload["moonmindImage"] == op["desired"]["image"]
-                assert payload["controllerCapabilities"] == ["active-journal-transition"]
+                assert payload["controllerCapabilities"] == [
+                    "active-journal-transition", "request-identity"
+                ]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase
                     phase.append("select")
@@ -1307,6 +1309,10 @@ def test_each_update_request_for_latest_pulls_and_applies_again(
             202, "ui-2", "succeeded"
         )
         assert applied == ["ui-1", "ui-2"]
+        # Submitters require this advertisement before trusting a 202.
+        status, health = harness.call("GET", "/v1/healthz")
+        assert status == 200
+        assert "request-identity" in health["capabilities"]
     finally:
         harness.close()
 

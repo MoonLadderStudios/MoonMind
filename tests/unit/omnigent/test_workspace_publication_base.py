@@ -34,6 +34,18 @@ def git(*args: str, cwd: Path) -> str:
     ).stdout.strip()
 
 
+@pytest.fixture(autouse=True)
+def candidate_pr_discovery(monkeypatch):
+    """Most Git-only cases start without an earlier GitHub publication."""
+    from moonmind.workflows.adapters.github_service import GitHubService
+
+    original = GitHubService.open_pull_request_heads
+    monkeypatch.setattr(
+        GitHubService, "open_pull_request_heads", AsyncMock(return_value={})
+    )
+    return original
+
+
 @pytest.mark.parametrize(
     ("diagnostic", "retryable"),
     [
@@ -146,13 +158,41 @@ async def test_failed_git_command_reports_remote_outage_as_transient(
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_restore_preserves_accepted_pr_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("accepted", "observation"),
+    [
+        (True, "matched"),
+        (False, "matched"),
+        (False, "other_local_branch"),
+        (False, "large_inventory"),
+        (False, "pre_moved"),
+        (False, "pre_rebased"),
+        (False, "unrelated"),
+        (False, "paginated"),
+        (False, "malformed_later_page"),
+        (False, "cross_origin_page"),
+        (False, "narrowed_page"),
+        (False, "absent"),
+        (False, "ambiguous"),
+        (False, "moved"),
+        (False, "unavailable"),
+        (False, "malformed"),
+        (False, "wrong_base"),
+        (False, "draft"),
+    ],
+)
+async def test_checkpoint_restore_reconciles_existing_pr_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    accepted: bool,
+    observation: str,
+    candidate_pr_discovery,
 ) -> None:
-    """Replay capture -> restore -> exact remote PR discovery, including retry."""
+    """A PR created before the managed boundary must not get a duplicate branch/PR."""
     replay = json.loads(
-        (Path(__file__).parent / "fixtures/checkpoint-executable-publication.json")
-        .read_text()
+        (
+            Path(__file__).parent / "fixtures/checkpoint-executable-publication.json"
+        ).read_text()
     )
     monkeypatch.setattr(settings.security, "high_security_mode", False)
     for prefix in ("AUTHOR", "COMMITTER"):
@@ -181,9 +221,9 @@ async def test_checkpoint_restore_preserves_accepted_pr_publication(
     git("commit", "-am", "candidate", cwd=source)
     head_sha = git("rev-parse", "HEAD", cwd=source)
     git("push", "origin", candidate, cwd=source)
-    archive, _ = TemporalSandboxActivities(workspace_root=tmp_path)._build_worktree_archive(
-        source
-    )
+    archive, _ = TemporalSandboxActivities(
+        workspace_root=tmp_path
+    )._build_worktree_archive(source)
 
     class Artifacts:
         async def get_metadata(self, **_kwargs):
@@ -203,8 +243,12 @@ async def test_checkpoint_restore_preserves_accepted_pr_publication(
     payload = replay["request"]
     payload.update(correlationId=workflow_id, idempotencyKey=step_id)
     payload["parameters"]["acceptedPublishedHead"]["headSha"] = head_sha
+    if not accepted:
+        payload["parameters"].pop("acceptedPublishedHead")
     payload["workspaceSpec"]["workspaceLocator"] = {
-        "kind": "sandbox", "workspaceId": workspace_id, "relativePath": "repo"
+        "kind": "sandbox",
+        "workspaceId": workspace_id,
+        "relativePath": "repo",
     }
     request = AgentExecutionRequest.model_validate(payload)
     materializer = OmnigentWorkspaceMaterializer(
@@ -216,46 +260,194 @@ async def test_checkpoint_restore_preserves_accepted_pr_publication(
         request, runtime_uid=os.getuid(), runtime_gid=os.getgid()
     )
     assert git("status", "--porcelain", cwd=workspace) == ""
-    assert subprocess.run(
-        [str(workspace / "run.sh")], check=True, capture_output=True, text=True
-    ).stdout == "candidate works\n"
+    assert (
+        subprocess.run(
+            [str(workspace / "run.sh")], check=True, capture_output=True, text=True
+        ).stdout
+        == "candidate works\n"
+    )
     assert not (workspace / "work.txt").stat().st_mode & 0o111
+    if observation in {"other_local_branch", "pre_moved"}:
+        git("checkout", "-b", "local-workspace", cwd=workspace)
+    if observation == "ambiguous":
+        git("push", "origin", "HEAD:refs/heads/duplicate-candidate", cwd=source)
+    if observation == "large_inventory":
+        base_sha = git("rev-parse", "main", cwd=origin)
+        subprocess.run(
+            ["git", "update-ref", "--stdin"],
+            input="".join(
+                f"create refs/heads/aaa-unrelated-{index:03d} {base_sha}\n"
+                for index in range(100)
+            ),
+            cwd=origin,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert len(git("ls-remote", "--heads", "origin", cwd=workspace).encode()) > 4096
 
     # The agent created this PR before the trusted publisher inspected the
     # restored workspace. Exercise the real selector against its HTTP contract.
     pull_request = replay["pullRequest"]
+    pull_request["state"] = "open"
     pull_request["head"]["sha"] = head_sha
+    if observation == "wrong_base":
+        pull_request["base"]["ref"] = "release"
+    if observation == "draft":
+        pull_request["draft"] = True
+    if observation in {"pre_moved", "pre_rebased"}:
+        if observation == "pre_rebased":
+            git("reset", "--hard", "main", cwd=source)
+        (source / "concurrent.txt").write_text("newer retained progress\n")
+        git("add", ".", cwd=source)
+        git("commit", "-m", "newer progress", cwd=source)
+        git("push", "--force", "origin", candidate, cwd=source)
+        pull_request["head"]["sha"] = git("rev-parse", "HEAD", cwd=source)
+    if observation == "unrelated":
+        git("checkout", "-b", "peer", "main", cwd=source)
+        (source / "peer.txt").write_text("unrelated work\n")
+        git("add", ".", cwd=source)
+        git("commit", "-m", "unrelated work", cwd=source)
+        git("push", "origin", "peer", cwd=source)
+        pull_request["head"].update(
+            ref="peer", sha=git("rev-parse", "HEAD", cwd=source)
+        )
     lookups = []
+    association_pages = []
+
+    def twin(branch):
+        number = 4086 if branch == "duplicate-candidate" else 4085
+        return {
+            **pull_request,
+            "number": number,
+            "html_url": f"https://github.com/MoonLadderStudios/MoonMind/pull/{number}",
+            "head": {**pull_request["head"], "ref": branch},
+        }
 
     def github(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
+        if observation == "unavailable":
+            return httpx.Response(503, json={"message": "temporarily unavailable"})
+        if observation == "malformed":
+            return httpx.Response(200, json={"message": "missing PR inventory"})
+        assert request.url.path == "/repos/MoonLadderStudios/MoonMind/pulls"
+        if "head" not in request.url.params:
+            association_pages.append(request.url.params.get("page", "1"))
+            if observation in {
+                "paginated",
+                "malformed_later_page",
+                "cross_origin_page",
+                "narrowed_page",
+            }:
+                if association_pages[-1] == "1":
+                    next_page = str(request.url.copy_set_param("page", "2"))
+                    if observation == "cross_origin_page":
+                        next_page = "https://untrusted.example/pulls?page=2"
+                    if observation == "narrowed_page":
+                        next_page = str(
+                            request.url.copy_set_param("page", "2").copy_set_param(
+                                "state", "closed"
+                            )
+                        )
+                    return httpx.Response(
+                        200,
+                        json=[{"state": "closed"}] * 100,
+                        headers={"Link": f'<{next_page}>; rel="next"'},
+                    )
+                if observation == "malformed_later_page":
+                    return httpx.Response(200, json={"message": "incomplete page"})
+            prs = [] if observation == "absent" else [pull_request]
+            if observation == "ambiguous":
+                prs = [pull_request, twin("duplicate-candidate")]
+            return httpx.Response(200, json=prs)
         assert request.url.path == "/repos/MoonLadderStudios/MoonMind/pulls"
         lookups.append(request.url.params["head"])
-        return httpx.Response(200, json=[pull_request])
+        if observation == "moved":
+            (source / "concurrent.txt").write_text("concurrent update\n")
+            git("add", ".", cwd=source)
+            git("commit", "-m", "concurrent update", cwd=source)
+            git("push", "origin", candidate, cwd=source)
+        if observation == "ambiguous":
+            branch = request.url.params["head"].split(":", 1)[1]
+            return httpx.Response(200, json=[twin(branch)])
+        return httpx.Response(
+            200, json=[] if observation == "absent" else [pull_request]
+        )
 
     client = httpx.AsyncClient
     monkeypatch.setattr(
         "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
         lambda **kwargs: client(transport=httpx.MockTransport(github), **kwargs),
     )
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService.open_pull_request_heads",
+        candidate_pr_discovery,
+    )
     publisher = OmnigentWorkspacePublicationService(tmp_path)
+    if observation in {
+        "moved",
+        "pre_moved",
+        "pre_rebased",
+        "malformed_later_page",
+        "cross_origin_page",
+        "narrowed_page",
+        "unavailable",
+        "malformed",
+        "wrong_base",
+        "draft",
+        "ambiguous",
+    }:
+        with pytest.raises(HarnessPlatformError):
+            await publisher.publish_request_workspace(
+                request=request,
+                current_workflow_id=workflow_id,
+                current_step_execution_id=step_id,
+            )
+        assert git("rev-parse", "HEAD", cwd=workspace) == head_sha
+        assert git("status", "--porcelain", cwd=workspace) == ""
+        if observation in {"pre_moved", "pre_rebased"}:
+            assert git("show", f"{candidate}:concurrent.txt", cwd=origin) == (
+                "newer retained progress"
+            )
+        expected_branches = ["main", candidate]
+        if observation == "ambiguous":
+            expected_branches.insert(0, "duplicate-candidate")
+        assert (
+            git("branch", "--format=%(refname:short)", cwd=origin).splitlines()
+            == expected_branches
+        )
+        return
     for _attempt in range(2):
         evidence = await publisher.publish_request_workspace(
             request=request,
             current_workflow_id=workflow_id,
             current_step_execution_id=step_id,
         )
-        assert evidence["pull_request_url"] == pull_request["html_url"]
-        assert evidence["push_branch"] == candidate
+        if observation in {"absent", "unrelated"}:
+            assert "pull_request_url" not in evidence
+            assert evidence["push_branch"].startswith("moonmind-job-")
+        else:
+            assert evidence["pull_request_url"] == pull_request["html_url"]
+            assert evidence["push_branch"] == candidate
         assert evidence["push_head_sha"] == head_sha
         assert evidence["push_commit_count"] == 1
         assert evidence["remote_verified"] is True
         assert git("status", "--porcelain", cwd=workspace) == ""
         assert git("rev-parse", "HEAD", cwd=workspace) == head_sha
-    assert lookups == [f"MoonLadderStudios:{candidate}"] * 2
-    assert git("branch", "--format=%(refname:short)", cwd=origin).splitlines() == [
-        "main", candidate
-    ]
+    if observation not in {"absent", "unrelated"}:
+        expected_lookup = [f"MoonLadderStudios:{candidate}"] * 2
+        assert lookups == expected_lookup
+        if observation == "paginated":
+            assert association_pages == ["1", "2"] * 2
+        expected_branches = ["main", candidate]
+        if observation == "large_inventory":
+            expected_branches = [
+                f"aaa-unrelated-{index:03d}" for index in range(100)
+            ] + expected_branches
+        assert (
+            git("branch", "--format=%(refname:short)", cwd=origin).splitlines()
+            == expected_branches
+        )
 
 
 @pytest.mark.asyncio

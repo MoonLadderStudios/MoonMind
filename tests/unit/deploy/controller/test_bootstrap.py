@@ -151,7 +151,7 @@ def test_missing_identity_is_recovered_from_installed_compose_without_losing_wor
     monkeypatch.setattr(
         bootstrap,
         "controller_capabilities",
-        lambda *args: {"active-journal-transition"},
+        lambda *args: set(bootstrap.REQUIRED_CAPABILITIES),
     )
 
     def image(project, target):
@@ -241,7 +241,7 @@ def test_ensure_refreshes_a_capable_controller_from_the_requested_release(
     monkeypatch.setattr(
         bootstrap,
         "controller_capabilities",
-        lambda *args: {"active-journal-transition"},
+        lambda *args: set(bootstrap.REQUIRED_CAPABILITIES),
     )
     monkeypatch.setattr(bootstrap, "_application_controller_image", select)
     monkeypatch.setattr(bootstrap, "_checked_capture", lambda _args: '""')
@@ -283,7 +283,7 @@ def test_ensure_observes_a_capable_controller_with_active_work(
     monkeypatch.setattr(
         bootstrap,
         "controller_capabilities",
-        lambda *args: {"active-journal-transition"},
+        lambda *args: set(bootstrap.REQUIRED_CAPABILITIES),
     )
     monkeypatch.setattr(
         bootstrap, "_run_capture", lambda *args: pytest.fail("Docker touched")
@@ -412,7 +412,7 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
     monkeypatch.setattr(
         bootstrap,
         "controller_capabilities",
-        lambda *args: ({"active-journal-transition"} if upgraded else set()),
+        lambda *args: (set(bootstrap.REQUIRED_CAPABILITIES) if upgraded else set()),
     )
     monkeypatch.setattr(bootstrap, "_compose", compose_run)
     assert (
@@ -526,7 +526,7 @@ def test_ensure_prefer_requested_replaces_a_capable_controller_that_failed_the_r
     monkeypatch.setattr(
         bootstrap,
         "controller_capabilities",
-        lambda *args: {"active-journal-transition"},
+        lambda *args: set(bootstrap.REQUIRED_CAPABILITIES),
     )
     monkeypatch.setattr(bootstrap, "_compose", compose_run)
     arguments = [
@@ -667,7 +667,7 @@ def test_controller_prerequisite_can_retry_failed_recreation(
             raise ConnectionRefusedError(
                 "old controller stopped before recreation failed"
             )
-        return {"active-journal-transition"} if upgraded else set()
+        return set(bootstrap.REQUIRED_CAPABILITIES) if upgraded else set()
 
     monkeypatch.setattr(
         bootstrap, "_application_controller_image", lambda *args: concrete
@@ -831,7 +831,7 @@ def test_ensure_replaces_a_stopped_controller_on_wsl_spelled_binds(
     monkeypatch.setattr(
         bootstrap,
         "controller_capabilities",
-        lambda *args: ({"active-journal-transition"} if upgraded else set()),
+        lambda *args: (set(bootstrap.REQUIRED_CAPABILITIES) if upgraded else set()),
     )
     assert (
         bootstrap.main(
@@ -1312,7 +1312,7 @@ def test_ensure_keeps_the_application_image_process_identity(
     monkeypatch.setattr(
         bootstrap,
         "controller_capabilities",
-        lambda *args: ({"active-journal-transition"} if upgraded else set()),
+        lambda *args: (set(bootstrap.REQUIRED_CAPABILITIES) if upgraded else set()),
     )
     assert (
         bootstrap.main(

@@ -20235,7 +20235,7 @@ describe("Task Create runtime command previews", () => {
     expect(await screen.findByText("Unsupported runtime command: /review")).toBeTruthy();
     expect(
       screen.getByText(
-        "This Harness does not pass through slash commands. Choose a slash-command capable Harness or escape the slash for literal text.",
+        "The selected Harness and Backend do not pass through slash commands. Choose a slash-command capable route or escape the slash for literal text.",
       ),
     ).toBeTruthy();
   });
@@ -20620,6 +20620,90 @@ describe("Task Create runtime switch layout stability", () => {
       return fallback(input, init);
     };
   }
+
+  it("keeps an explicitly chosen Backend across a Harness round trip", async () => {
+    const fallback = configuredCodexInventory(fetchSpy.getMockImplementation()!);
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "codex-configured", account_label: "Codex Configured", runtime_id: "codex_cli", is_default: true,
+            execution_selection: { profileId: "team-codex", version: 1, digest: `sha256:${"a".repeat(64)}`, providerProfileRef: "codex-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "codex-native" } },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("codex-configured"));
+    fireEvent.change(profile, { target: { value: "codex-configured" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+
+    const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
+    fireEvent.change(harness, { target: { value: "claude_code" } });
+    fireEvent.change(harness, { target: { value: "codex_cli" } });
+    expect(profile.value).toBe("codex-configured");
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex_cli"));
+
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep the chosen Direct Backend." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured" });
+  });
+
+  it("does not offer Omnigent when the selected Harness's Omnigent target is disabled", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.split("?")[0] === "/api/v1/provider-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "claude-configured", account_label: "Claude Configured", runtime_id: "claude_code", is_default: true,
+            execution_selection: { profileId: "team-claude", version: 1, digest: `sha256:${"b".repeat(64)}`, providerProfileRef: "claude-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "claude-native" } },
+        ] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const catalog = mockDashboardConfig.system.runtimeTargetCatalog;
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: {
+          ...mockDashboardConfig.system,
+          runtimeTargetCatalog: {
+            ...catalog,
+            targets: [
+              ...catalog.targets,
+              { ...catalog.targets[0], targetId: "claude.generic-omnigent", label: "Claude Code via generic Omnigent",
+                harnessId: "claude-native", rolloutState: "disabled", defaultEligible: false, explicitSelectionAllowed: false },
+            ],
+          },
+        },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("claude-configured"));
+    await waitFor(() => expect(document.querySelector("[data-runtime-unavailable]")?.textContent).toContain("No qualified target is available"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(Array.from(backend.options).map((option) => option.value)).not.toContain("omnigent");
+
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Do not submit a disabled route." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchSpy).not.toHaveBeenCalledWith("/api/executions", expect.anything());
+
+    fireEvent.change(backend, { target: { value: "claude_code" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "claude_code", profileId: "claude-configured" });
+  });
 
   it("shows Backend only under Advanced for a genuine alternative and keeps it through Advanced toggles", async () => {
     fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
