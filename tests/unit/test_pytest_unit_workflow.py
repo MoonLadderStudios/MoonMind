@@ -95,7 +95,9 @@ def test_integration_rows_retain_row_owned_redacted_reports() -> None:
     assert all(name != "Verify docker compose availability" for name in steps)
 
     # Each row collects only what its own owner wrote: the hermetic wrapper's
-    # report, log and project diagnostics, or the journey's own log tree. No
+    # report, log and project diagnostics, or the journey's own log tree. The
+    # controller-journey row also runs the journal transition test, which
+    # writes its disposable project's redacted phase, ps and log evidence. No
     # shared step queries a Compose project the row did not create.
     collect = steps["Collect row-owned integration report and diagnostics"]
     assert collect["if"] == (
@@ -103,6 +105,7 @@ def test_integration_rows_retain_row_owned_redacted_reports() -> None:
     )
     assert "artifacts/integration-ci" in collect["run"]
     assert "var/artifacts/first-run-3938" in collect["run"]
+    assert "var/artifacts/journal-transition" in collect["run"]
     assert "docker-compose.test.yaml" not in collect["run"]
     assert "tools/ci/redact_diagnostics.py" in collect["run"]
     assert "not zero tests" in collect["run"]
@@ -115,6 +118,72 @@ def test_integration_rows_retain_row_owned_redacted_reports() -> None:
     assert "${{ github.run_attempt }}" in upload["with"]["name"]
     assert upload["with"]["path"] == "/tmp/pytest-integration-ci"
     assert int(upload["timeout-minutes"]) <= 3
+
+
+def _run_integration_collect(tmp_path: Path, suite: str) -> Path:
+    import re
+    import subprocess
+
+    steps = {
+        step["name"]: step
+        for step in _load_workflow()["jobs"]["integration-ci"]["steps"]
+    }
+    run = steps["Collect row-owned integration report and diagnostics"]["run"]
+    out = tmp_path / "upload"
+    script = run.replace("out=/tmp/pytest-integration-ci", f"out={out}")
+    assert script != run
+    script = script.replace("${{ matrix.suite }}", suite)
+    script = re.sub(r"\$\{\{\s*github\.[^}]+\}\}", "test", script)
+    (tmp_path / "tools" / "ci").mkdir(parents=True)
+    (tmp_path / "tools" / "ci" / "redact_diagnostics.py").symlink_to(
+        REPO_ROOT / "tools" / "ci" / "redact_diagnostics.py"
+    )
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return out
+
+
+def test_controller_journey_collects_journal_transition_evidence(tmp_path) -> None:
+    secret = "ghp_" + "a" * 36
+    journal = tmp_path / "var" / "artifacts" / "journal-transition" / "proj"
+    journal.mkdir(parents=True)
+    (journal / "phase-1-crash.json").write_text(f'{{"stderr": "{secret}"}}')
+    (journal / "logs.txt").write_text("writer exited 71\n")
+    journey = tmp_path / "var" / "artifacts" / "first-run-3938" / "controller"
+    journey.mkdir(parents=True)
+    (journey / "journey.log").write_text("controller step failed\n")
+
+    out = _run_integration_collect(tmp_path, "controller-journey")
+
+    collected = out / "journal-transition" / "proj"
+    assert (collected / "logs.txt").read_text() == "writer exited 71\n"
+    assert secret not in (collected / "phase-1-crash.json").read_text()
+    assert (out / "first-run-3938" / "controller" / "journey.log").is_file()
+
+
+def test_journal_transition_evidence_stays_with_controller_journey(tmp_path) -> None:
+    controller_root = tmp_path / "controller"
+    (controller_root / "var" / "artifacts" / "first-run-3938").mkdir(parents=True)
+    controller = _run_integration_collect(controller_root, "controller-journey")
+    assert "missing var/artifacts/journal-transition" in (
+        controller / "collection-status.txt"
+    ).read_text()
+
+    # Only the row that runs the journal transition test owns its evidence.
+    fresh_root = tmp_path / "fresh"
+    (fresh_root / "var" / "artifacts" / "journal-transition" / "proj").mkdir(
+        parents=True
+    )
+    fresh = _run_integration_collect(fresh_root, "fresh-journey")
+    assert not (fresh / "journal-transition").exists()
+    assert "journal-transition" not in (fresh / "collection-status.txt").read_text()
 
 
 def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
