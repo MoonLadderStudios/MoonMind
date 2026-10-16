@@ -744,6 +744,7 @@ class OmnigentWorkspacePublicationService:
                 ]
             )
         published = None
+        reconciled_pr_url = None
         # A later PR step may start on this workflow's own accepted candidate.
         # That candidate is the publication destination, never its own base:
         # fast-forward it and keep comparing against the authored base it was
@@ -882,6 +883,84 @@ class OmnigentWorkspacePublicationService:
                         remote_verified=True,
                         commits_ahead_of_base=commit_count,
                     )
+        # The agent may already have opened the exact candidate's PR before
+        # the first managed publication receipt exists. Reconcile that effect
+        # before generating another branch, which would strand the original PR.
+        if (
+            published is None
+            and normalized_mode == "pr"
+            and accepted_published_head is None
+            and repository
+            and token
+        ):
+            status = await run_command(["git", "status", "--porcelain"])
+            if not status.stdout.strip():
+                head = await run_command(["git", "rev-parse", "HEAD"])
+                ahead = await run_command(
+                    ["git", "rev-list", "--count", f"origin/{normalized_base}..HEAD"]
+                )
+                if int(ahead.stdout.strip()) > 0:
+                    # An agent can push HEAD to a PR branch without checking
+                    # it out. Local branch names cannot identify that effect.
+                    remote = await run_command(
+                        ["git", "ls-remote", "--heads", "origin"]
+                    )
+                    candidates = {
+                        fields[1].removeprefix("refs/heads/")
+                        for line in remote.stdout.splitlines()
+                        if len(fields := line.split()) == 2
+                        and fields[0] == head.stdout.strip()
+                        and fields[1].startswith("refs/heads/")
+                        and fields[1] != f"refs/heads/{normalized_base}"
+                    }
+                    matches = []
+                    for candidate_branch in sorted(candidates):
+                        pull_request = (
+                            await GitHubService().resolve_pull_request_selector(
+                                repo=repository,
+                                selector=candidate_branch,
+                                github_token=token,
+                                expected_head_sha=head.stdout.strip(),
+                                expected_base_branch=normalized_base,
+                                expected_draft=False,
+                                **(
+                                    {"endpoint": github_endpoint}
+                                    if github_endpoint != "https://github.com"
+                                    else {}
+                                ),
+                            )
+                        )
+                        if pull_request.resolved and pull_request.pr_url:
+                            matches.append((candidate_branch, pull_request.pr_url))
+                        elif pull_request.reason_code != "pull_request_not_found":
+                            raise HarnessPlatformError(
+                                "existing pull request could not be reconciled: "
+                                + pull_request.summary,
+                                code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                            )
+                    if len(matches) > 1:
+                        raise HarnessPlatformError(
+                            "multiple open pull requests hold the publication candidate",
+                            code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                        )
+                    if matches:
+                        candidate_branch, reconciled_pr_url = matches[0]
+                        # A concurrent move during the API lookup cannot turn
+                        # the old candidate into verified publication evidence.
+                        await self._verified_no_commit_publication(
+                            run_command=run_command, base_branch=candidate_branch
+                        )
+                        published = PublishResult(
+                            mode="branch",
+                            status="published",
+                            reason="Reconciled the candidate's existing pull request.",
+                            branch_name=candidate_branch,
+                            base_branch=normalized_base,
+                            head_sha=head.stdout.strip(),
+                            branch_pushed=True,
+                            remote_verified=True,
+                            commits_ahead_of_base=int(ahead.stdout.strip()),
+                        )
         if published is None:
             published = await PublishService().publish(
                 job_id=uuid5(NAMESPACE_URL, publication_identity),
@@ -950,7 +1029,9 @@ class OmnigentWorkspacePublicationService:
             and accepted_published_head.get("branch") == result["push_branch"]
             and accepted_published_head.get("headSha") == result["push_head_sha"]
         )
-        if normalized_mode == "pr" and repository and token and candidate_owned:
+        if reconciled_pr_url:
+            result["pull_request_url"] = reconciled_pr_url
+        elif normalized_mode == "pr" and repository and token and candidate_owned:
             pull_request = await GitHubService().resolve_pull_request_selector(
                 repo=str(repository).strip(),
                 selector=result["push_branch"],

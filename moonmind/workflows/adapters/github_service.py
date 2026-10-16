@@ -2567,21 +2567,25 @@ class GitHubService:
                 )
 
         data = response.json()
+        if not isinstance(data, list):
+            return PullRequestSelectorResult(
+                selectorType="branch",
+                reasonCode="github_response_invalid",
+                summary="GitHub PR lookup returned an invalid pull-request inventory.",
+            )
         matches = []
-        if isinstance(data, list):
-            for item in data:
-                if not isinstance(item, Mapping):
-                    continue
-                head = item.get("head")
-                head = head if isinstance(head, Mapping) else {}
-                head_repo = head.get("repo")
-                head_repo = head_repo if isinstance(head_repo, Mapping) else {}
-                if (
-                    str(head.get("ref") or "") == candidate
-                    and str(head_repo.get("full_name") or "").lower()
-                    == repository.lower()
-                ):
-                    matches.append(item)
+        for item in data:
+            if not isinstance(item, Mapping):
+                continue
+            head = item.get("head")
+            head = head if isinstance(head, Mapping) else {}
+            head_repo = head.get("repo")
+            head_repo = head_repo if isinstance(head_repo, Mapping) else {}
+            if (
+                str(head.get("ref") or "") == candidate
+                and str(head_repo.get("full_name") or "").lower() == repository.lower()
+            ):
+                matches.append(item)
 
         if not matches:
             return PullRequestSelectorResult(
