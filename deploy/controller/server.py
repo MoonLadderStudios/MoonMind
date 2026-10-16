@@ -20,6 +20,7 @@ import os
 import re
 import socketserver
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
@@ -66,6 +67,11 @@ TEMPORAL_WORKER_INSPECT_FORMAT = (
     '"OneOff":{{json (index .Config.Labels "com.docker.compose.oneoff")}}}'
 )
 ROUTING_CUTOVER_CHECK = "temporal-unversioned-cutover"
+# Temporal or the new pollers can be briefly unavailable right after Compose
+# recreates the fleet. A terminal operation is not resumed, so transient
+# outcomes are retried before the operation is left partially verified.
+ROUTING_CUTOVER_ATTEMPTS = 4
+ROUTING_CUTOVER_RETRY_SECONDS = 15
 # One-offs whose release helper may predate the step: the selected image
 # answers ``unsupported`` instead of failing when it lacks the function.
 CAPABILITY_STEPS = {
@@ -1222,7 +1228,9 @@ def require_routing_floor(store, operation, *, runner, overlay) -> None:
     Worker Deployment version, silently undoing the cutover. The staged image
     proves it is not one of them before any container changes.
     """
-    completed = store.completed_routing_cutover(stack=operation.get("stack"))
+    completed = store.routing_cutover(
+        stack=operation.get("stack"), statuses=("completed", "attention")
+    )
     if completed is None:
         return
     try:
@@ -1250,11 +1258,11 @@ def converge_routing_cutover(store, operation, *, runner, overlay) -> dict | Non
     operation is confirmed, so a lost controller resumes the same operation
     and the step rereads actual routing. Returns the verification check, or
     ``None`` when this operation installed no ordinary workers to route to.
-    Temporal problems never fail the container apply; they leave the
-    cutover pending and the operation partially verified.
+    Temporal problems never fail the container apply; after bounded retries
+    they leave the cutover pending and the operation partially verified.
     """
     operation_id = operation["operationId"]
-    completed = store.completed_routing_cutover(stack=operation.get("stack"))
+    completed = store.routing_cutover(stack=operation.get("stack"))
     if completed is not None:
         return {
             "name": ROUTING_CUTOVER_CHECK,
@@ -1264,6 +1272,25 @@ def converge_routing_cutover(store, operation, *, runner, overlay) -> dict | Non
                 "routing is not changed again"
             ),
         }
+    for attempt in range(1, ROUTING_CUTOVER_ATTEMPTS + 1):
+        state = _attempt_routing_cutover(
+            store, operation, runner=runner, overlay=overlay
+        )
+        if state is None:
+            return None
+        state = dict(state, attempts=attempt)
+        state["detail"] = redact_text(str(state.get("detail") or ""))[-2000:]
+        store.record_routing_cutover(operation_id, state)
+        # Another attempt cannot change a worker left on an older image.
+        if state.get("status") != "pending" or state.get("outcome") == "legacy_writers":
+            break
+        if attempt < ROUTING_CUTOVER_ATTEMPTS:
+            time.sleep(ROUTING_CUTOVER_RETRY_SECONDS)
+    return {"name": ROUTING_CUTOVER_CHECK, **_routing_cutover_check(state)}
+
+
+def _attempt_routing_cutover(store, operation, *, runner, overlay) -> dict | None:
+    """One cutover attempt's receipt; ``None`` when no ordinary workers run."""
     target = operation.get("target") or {}
     try:
         current, other = _temporal_worker_images(
@@ -1271,32 +1298,27 @@ def converge_routing_cutover(store, operation, *, runner, overlay) -> dict | Non
             operation["desired"]["image"],
         )
     except Exception as exc:  # noqa: BLE001 - recorded as an unverified outcome
-        state = {"status": "pending", "outcome": "writers_unobserved",
-                 "detail": f"Temporal worker containers could not be observed: {exc}"}
-    else:
-        if not current:
-            return None
-        if other:
-            # A worker left on an older image can still promote its own
-            # version and undo the transition.
-            state = {"status": "pending", "outcome": "legacy_writers",
-                     "detail": "workers still run an older image: " + ", ".join(other)}
-        else:
-            try:
-                state = run_omnigent_step(
-                    store, operation, runner=runner, overlay=overlay,
-                    phase="routing-cutover-apply",
-                )
-            except Exception as exc:  # noqa: BLE001 - recorded as an unverified outcome
-                state = {"status": "pending", "outcome": "step_failed",
-                         "detail": f"{exc} {getattr(exc, 'output', '')}".strip()}
-            if state.get("status") == "unsupported":
-                # The selected release still runs versioned workers itself.
-                return None
-    state = dict(state)
-    state["detail"] = redact_text(str(state.get("detail") or ""))[-2000:]
-    store.record_routing_cutover(operation_id, state)
-    return {"name": ROUTING_CUTOVER_CHECK, **_routing_cutover_check(state)}
+        return {"status": "pending", "outcome": "writers_unobserved",
+                "detail": f"Temporal worker containers could not be observed: {exc}"}
+    if not current:
+        return None
+    if other:
+        # A worker left on an older image can still promote its own
+        # version and undo the transition.
+        return {"status": "pending", "outcome": "legacy_writers",
+                "detail": "workers still run an older image: " + ", ".join(other)}
+    try:
+        state = run_omnigent_step(
+            store, operation, runner=runner, overlay=overlay,
+            phase="routing-cutover-apply",
+        )
+    except Exception as exc:  # noqa: BLE001 - recorded as an unverified outcome
+        return {"status": "pending", "outcome": "step_failed",
+                "detail": f"{exc} {getattr(exc, 'output', '')}".strip()}
+    if state.get("status") == "unsupported":
+        # The selected release still runs versioned workers itself.
+        return None
+    return state
 
 
 def _routing_cutover_check(state: dict) -> dict:
