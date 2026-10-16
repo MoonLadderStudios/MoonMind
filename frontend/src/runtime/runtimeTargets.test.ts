@@ -6,6 +6,7 @@ import {
   formatHarnessLabel,
   formatRolloutStateLabel,
   formatRuntimeLabel,
+  omnigentAllowedForHarness,
   resolveDefaultRuntimeId,
   runtimeUnavailableReason,
 } from './runtimeTargets';
@@ -205,6 +206,19 @@ describe('runtimeUnavailableReason', () => {
   it('returns null while a selectable target exists', () => {
     expect(runtimeUnavailableReason('omnigent', promotedCatalog)).toBeNull();
     expect(runtimeUnavailableReason('omnigent', undefined)).toBeNull();
+  });
+
+  it("judges Omnigent by the selected Harness's own target", () => {
+    // Codex via Omnigent is allowed, Claude via Omnigent is disabled.
+    expect(runtimeUnavailableReason('omnigent', promotedCatalog, 'codex-native')).toBeNull();
+    expect(runtimeUnavailableReason('omnigent', promotedCatalog, 'claude-native')).toContain(
+      'No qualified target is available',
+    );
+    // A Harness the catalog does not list is left to server admission.
+    expect(runtimeUnavailableReason('omnigent', promotedCatalog, 'opencode-native')).toBeNull();
+    expect(omnigentAllowedForHarness(promotedCatalog, 'codex-native')).toBe(true);
+    expect(omnigentAllowedForHarness(promotedCatalog, 'claude-native')).toBe(false);
+    expect(omnigentAllowedForHarness(promotedCatalog, undefined)).toBe(true);
   });
 });
 

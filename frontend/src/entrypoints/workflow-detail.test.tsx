@@ -6294,6 +6294,49 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('keeps recorded Provider metadata visible without a recorded Provider Profile', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      targetRuntime: 'claude_code',
+      title: 'Provider provenance task',
+      summary: 'Provider recorded without a Profile',
+      status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      providerId: 'anthropic',
+      providerLabel: 'Anthropic',
+      actions: { canSetTitle: false, canCancel: false, canRerun: false },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ direction: 'inbound', items: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('Anthropic');
+    });
+    expect(screen.queryByText('Provider Profile')).toBeNull();
+  });
+
   // MoonLadderStudios/MoonMind#3800 — historical detail must explain the
   // immutable launch-time tier resolution, not a later Provider Profile state.
   it('renders persisted model tier resolution and its concise fallback explanation', async () => {
