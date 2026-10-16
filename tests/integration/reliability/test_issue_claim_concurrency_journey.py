@@ -13,7 +13,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from api_service.db.models import GitHubIssueClaim
 from moonmind.workflows.temporal import story_output_tools as tools
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
-from tests.integration.reliability.test_release_routing_journey import connect
+from tests.integration.reliability.test_unversioned_cutover_journey import connect
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 from tests.unit.workflows.temporal.test_issue_claim_journey import (
     test_failed_brief_reads_release_only_unannounced_reservations as run_read_failure_journey,

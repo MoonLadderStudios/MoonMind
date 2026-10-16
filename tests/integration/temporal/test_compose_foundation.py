@@ -516,9 +516,9 @@ def test_workflow_worker_service_serves_every_workflow_lane_in_one_process():
     assert workflow_env["TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY"] == (
         "${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}"
     )
-    assert workflow_env["TEMPORAL_WORKER_VERSIONING_ENABLED"] == (
-        "${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}"
-    )
+    # Workers poll ordinary queues; no Worker Versioning switch remains.
+    assert "TEMPORAL_WORKER_VERSIONING_ENABLED" not in workflow_env
+    assert "TEMPORAL_WORKER_DEPLOYMENT_NAME" not in workflow_env
     assert workflow_env["MOONMIND_DEPLOYMENT_MODE"] == (
         "${MOONMIND_DEPLOYMENT_MODE:-auto}"
     )

@@ -332,6 +332,32 @@ class OperationStore:
         }
         return self._write(operation)
 
+    def record_routing_cutover(
+        self, operation_id: str, values: Mapping[str, Any]
+    ) -> dict:
+        """Keep the latest one-time unversioned routing cutover receipt."""
+        operation = self.load(operation_id)
+        operation["routingCutover"] = dict(values)
+        return self._write(operation)
+
+    def completed_routing_cutover(self, *, stack: str) -> dict | None:
+        """The operation whose cutover completed for ``stack``, if any.
+
+        Completion is durable stack state: later operations never change
+        routing again, and it sets the rollback floor.
+        """
+        if not self.operations_dir.is_dir():
+            return None
+        for path in sorted(self.operations_dir.glob("*.json")):
+            try:
+                operation = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            cutover = operation.get("routingCutover") or {}
+            if operation.get("stack") == stack and cutover.get("status") == "completed":
+                return operation
+        return None
+
     def confirm_installed(self, operation_id: str, *, image: str) -> dict:
         """Record a confirmed installation. Append-only: nothing clears it."""
         operation = self.load(operation_id)

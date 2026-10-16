@@ -687,7 +687,10 @@ def test_explicit_controller_without_request_identity_is_refreshed(
 
     def health(url, secret, method, path, *args, **kwargs):
         if refreshed:
-            return 200, {"capabilities": ["active-journal-transition", "request-identity"]}
+            return 200, {"capabilities": [
+                "active-journal-transition", "request-identity",
+                "unversioned-routing-cutover",
+            ]}
         return 200, {"capabilities": ["active-journal-transition"]}
 
     def run(command, **kwargs):

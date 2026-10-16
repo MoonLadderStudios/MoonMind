@@ -46,7 +46,11 @@ TARGET_NETWORK_KEY = "deployment-controller-network"
 CONTROLLER_ALIAS = "moonmind-controller"
 # Behavior submitters require of the running controller (server.py
 # CONTROLLER_CAPABILITIES). A controller lacking any of it is refreshed.
-REQUIRED_CAPABILITIES = ("active-journal-transition", "request-identity")
+REQUIRED_CAPABILITIES = (
+    "active-journal-transition",
+    "request-identity",
+    "unversioned-routing-cutover",
+)
 # `ensure --prefer-requested` reports whether the controller now runs a
 # different release, so a submitter retries only when the code changed.
 REFRESH_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
