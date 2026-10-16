@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserRouter } from 'react-router-dom';
 
 import { renderWithClient } from '../utils/test-utils';
+import { DashboardApp } from './dashboard-app';
 import OmnigentInventoryPage from './omnigent-inventory';
 
 describe('OmnigentInventoryPage', () => {
@@ -250,5 +251,42 @@ describe('OmnigentInventoryPage', () => {
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0]!.url).toBe('/api/omnigent/policies/codex-static/versions');
     expect(posted[0]!.body.document).toEqual({ host: { mode: 'static_compose' } });
+  });
+  it('keeps the filter field mounted and focused inside the dashboard shell (MoonMind#4559)', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const json = (value: unknown) => new Response(JSON.stringify(value), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (url === '/api/ui/info') {
+        return json({
+          app: 'moonmind', apiBase: '/api', features: { omnigentAgents: true },
+          endpoints: { omnigentAgents: '/api/omnigent/api/agents' }, settingsPermissions: [],
+        });
+      }
+      if (url.startsWith('/api/v1/provider-profiles')) return json([]);
+      if (url === '/api/omnigent/agent-profiles') return json(listResponse);
+      if (url === '/api/omnigent/api/agents') {
+        return json([{ id: 'agent-1', name: 'Codex', status: 'ready', description: 'Coding agent' }]);
+      }
+      return json({ items: [] });
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findAllByText('Codex');
+    const filter = screen.getByRole('searchbox');
+    filter.focus();
+    const requestsBefore = vi.mocked(fetch).mock.calls.length;
+
+    fireEvent.change(filter, { target: { value: 'co' } });
+
+    // Typing filters in place: the routed page is not remounted, so a phone
+    // keyboard stays open and the inventory is not requested again.
+    expect(screen.getByRole('searchbox')).toBe(filter);
+    expect(document.activeElement).toBe(filter);
+    expect(window.location.search).toContain('omnigent_agents_q=co');
+    fireEvent.change(filter, { target: { value: 'missing' } });
+    expect((await screen.findAllByText('No agents match this filter.')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('searchbox')).toBe(filter);
+    expect(vi.mocked(fetch).mock.calls.length).toBe(requestsBefore);
   });
 });
