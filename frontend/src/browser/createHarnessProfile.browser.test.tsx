@@ -123,7 +123,12 @@ describe('Create Harness and Provider Profile authoring', () => {
         { timeout: 10_000 },
       )) as HTMLTextAreaElement;
       const harness = screen.getByLabelText('Harness') as HTMLSelectElement;
-      const profile = screen.getByLabelText('Provider Profile') as HTMLSelectElement;
+      // The Provider Profile control appears once the authorized inventory loads.
+      const profile = (await screen.findByLabelText(
+        'Provider Profile',
+        {},
+        { timeout: 10_000 },
+      )) as HTMLSelectElement;
       const start = screen.getByRole('button', { name: 'Start Workflow' });
       await waitFor(() => expect(profile.value).toBe('codex-shared'));
       expect(screen.queryByLabelText('Runtime')).toBeNull();

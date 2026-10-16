@@ -954,6 +954,20 @@ export function resolveDefaultProviderProfileId(
   );
 }
 
+// The Omnigent route belongs to the selected Profile's execution
+// configuration; another account of the same Harness cannot supply it. Before
+// a Profile resolves, the Harness inventory is the only available evidence.
+function profileHasOmnigentRoute(
+  profile: ProviderProfile | undefined,
+  inventory: ProviderProfile[],
+  harnessRuntimeId: string,
+): boolean {
+  if (profile) return Boolean(profile.execution_selection);
+  return inventory.some(
+    (candidate) => candidate.runtime_id === harnessRuntimeId && Boolean(candidate.execution_selection),
+  );
+}
+
 export function resolveLoadedProviderProfileId({
   profiles,
   providerProfile,
@@ -6610,10 +6624,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ? activeProviderProfiles.filter((profile) => !profile.runtime_id || profile.runtime_id === harnessChoice)
       : activeProviderProfiles;
     if (providerProfilesQuery.isPending) return;
+    // The deployment default names one account; it is not another Harness's default.
+    const configuredDefaultRef = harnessChoice &&
+      !profiles.some((profile) => profile.profile_id === configuredDefaultProviderProfileRef)
+      ? null
+      : configuredDefaultProviderProfileRef;
     const resolvedProfileId = resolveLoadedProviderProfileId({
       profiles,
       providerProfile,
-      configuredDefaultRef: configuredDefaultProviderProfileRef,
+      configuredDefaultRef,
       preserveUnavailableProfile: Boolean(providerProfile),
     });
     if (providerProfile !== resolvedProfileId) {
@@ -7505,12 +7524,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     : providerOptions;
   const backendOptions = harness
     ? backendOptionsForHarness(harness, runtimeTargetCatalog, {
-        omnigentRoute: runtime === "omnigent" || activeProviderProfiles.some(
-          (profile) => profile.runtime_id === harness && Boolean(profile.execution_selection),
-        ),
+        omnigentRoute: runtime === "omnigent" ||
+          profileHasOmnigentRoute(
+            selectedConfiguredProfile?.runtime_id && selectedConfiguredProfile.runtime_id !== harness
+              ? undefined
+              : selectedConfiguredProfile,
+            activeProviderProfiles,
+            harness,
+          ),
       })
     : [];
-  const backendSelectable = backendOptions.length > 1;
+  // A current Backend that no option matches (for example a restored route the
+  // catalog no longer allows) stays repairable even with one replacement.
+  const backendSelectable = backendOptions.some((option) => option.runtimeId !== runtime);
   const selectHarness = (nextHarness: string) => {
     setHarnessChoice(nextHarness);
     if (!providerProfileAuthored) setProviderProfile("");
@@ -11849,11 +11875,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               const stepHarness = stepPreviewProfile?.runtime_id || harness;
               const stepBackendOptions = stepHarness
                 ? backendOptionsForHarness(stepHarness, runtimeTargetCatalog, {
-                    omnigentRoute: activeProviderProfiles.some(
-                      (profile) => profile.runtime_id === stepHarness && Boolean(profile.execution_selection),
-                    ),
+                    omnigentRoute: profileHasOmnigentRoute(stepPreviewProfile, activeProviderProfiles, stepHarness),
                   })
                 : [];
+              const stepInheritsUnservedBackend = !step.runtimeMode && stepBackendOptions.length > 0 &&
+                !stepBackendOptions.some((option) => option.runtimeId === runtime);
               const jiraTransitionState =
                 jiraTransitionStateByStep[step.localId] || null;
               const showJiraTransitionOptions =
@@ -12618,7 +12644,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           ))}
                         </select>
                       </label>
-                      {step.runtimeMode || stepBackendOptions.length > 1 ? (
+                      {step.runtimeMode || stepBackendOptions.some((option) => option.runtimeId !== runtime) ? (
                         <label>
                           {`Step ${index + 1} Backend`}
                           <select
@@ -12646,6 +12672,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             ))}
                           </select>
                         </label>
+                      ) : null}
+                      {stepInheritsUnservedBackend ? (
+                        <p className="small" role="status">
+                          The workflow Backend cannot serve this step&apos;s Provider Profile. Choose a Backend for this step.
+                        </p>
                       ) : null}
                       <ModelSelectionFields
                         scope={`Step ${index + 1}`}

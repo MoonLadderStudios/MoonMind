@@ -406,7 +406,11 @@ function RuntimeCommandDetail({
       {hasCommand ? (
         <div className="td-facts-grid">
           {commandName ? <Fact label="Command"><code>{commandName}</code></Fact> : null}
-          {runtime ? <Fact label="Runtime">{formatRuntimeLabel(runtime)}</Fact> : null}
+          {recordedHarnessLabel(runtime) ? (
+            <Fact label="Harness">{recordedHarnessLabel(runtime)}</Fact>
+          ) : runtime ? (
+            <Fact label="Backend">{recordedBackendLabel(runtime)}</Fact>
+          ) : null}
           {renderMode ? <Fact label="Render Mode">{formatStatusLabel(renderMode)}</Fact> : null}
           {status ? <Fact label="Status">{formatStatusLabel(status)}</Fact> : null}
           {hintCatalogVersion ? <Fact label="Hint Catalog Version">{hintCatalogVersion}</Fact> : null}
