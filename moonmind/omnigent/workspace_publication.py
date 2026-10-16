@@ -15,6 +15,8 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+import httpx
+
 from moonmind.auth.github_credentials import resolve_github_credential
 from moonmind.omnigent.git_identity import (
     publication_git_identity_projection,
@@ -900,19 +902,62 @@ class OmnigentWorkspacePublicationService:
                     ["git", "rev-list", "--count", f"origin/{normalized_base}..HEAD"]
                 )
                 if int(ahead.stdout.strip()) > 0:
-                    # An agent can push HEAD to a PR branch without checking
-                    # it out. Local branch names cannot identify that effect.
-                    remote = await run_command(
-                        ["git", "ls-remote", "--heads", "origin"]
+                    # Read complete PR identities rather than a truncated Git
+                    # ref listing or only branches still at the saved tip.
+                    try:
+                        observed_heads = await GitHubService().open_pull_request_heads(
+                            repo=repository,
+                            github_token=token,
+                            endpoint=github_endpoint,
+                        )
+                    except (httpx.HTTPError, ValueError) as exc:
+                        raise HarnessPlatformError(
+                            "existing PR inventory could not be read: "
+                            + redact_sensitive_text(str(exc))[:512],
+                            code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                            transient=(
+                                isinstance(exc, httpx.TransportError)
+                                or isinstance(exc, httpx.HTTPStatusError)
+                                and exc.response.status_code
+                                in {429, 500, 502, 503, 504}
+                            ),
+                        ) from exc
+                    candidates = []
+                    local_branch = await run_command(
+                        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+                        check=False,
                     )
-                    candidates = {
-                        fields[1].removeprefix("refs/heads/")
-                        for line in remote.stdout.splitlines()
-                        if len(fields := line.split()) == 2
-                        and fields[0] == head.stdout.strip()
-                        and fields[1].startswith("refs/heads/")
-                        and fields[1] != f"refs/heads/{normalized_base}"
-                    }
+                    for candidate_branch, observed_sha in observed_heads.items():
+                        # The saved local branch also identifies a PR whose
+                        # history was rewritten rather than fast-forwarded.
+                        if (
+                            observed_sha != head.stdout.strip()
+                            and candidate_branch != local_branch.stdout.strip()
+                        ):
+                            # A saved candidate may already be in an advanced
+                            # PR. Inspect its exact observed object without
+                            # adopting it or overwriting either revision.
+                            await run_command(
+                                ["git", "fetch", "--no-tags", "origin", observed_sha]
+                            )
+                            ancestry = await run_command(
+                                [
+                                    "git",
+                                    "merge-base",
+                                    "--is-ancestor",
+                                    head.stdout.strip(),
+                                    observed_sha,
+                                ],
+                                check=False,
+                            )
+                            if ancestry.returncode == 1:
+                                continue
+                            if ancestry.returncode != 0:
+                                raise HarnessPlatformError(
+                                    "existing PR ancestry could not be verified",
+                                    code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                                )
+                        candidates.append(candidate_branch)
                     matches = []
                     for candidate_branch in sorted(candidates):
                         pull_request = (
@@ -932,7 +977,7 @@ class OmnigentWorkspacePublicationService:
                         )
                         if pull_request.resolved and pull_request.pr_url:
                             matches.append((candidate_branch, pull_request.pr_url))
-                        elif pull_request.reason_code != "pull_request_not_found":
+                        else:
                             raise HarnessPlatformError(
                                 "existing pull request could not be reconciled: "
                                 + pull_request.summary,
