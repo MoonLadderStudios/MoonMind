@@ -6486,6 +6486,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
     if (!selected || pageMode.mode !== "create" || remediationDraft) return;
+    // A Profile kept across an incompatible Harness change does not route; once
+    // its Harness is chosen again it re-establishes its own Backend.
+    if (harnessChoice && selected.runtime_id && selected.runtime_id !== harnessChoice) return;
     const configuration = selected.execution_selection;
     if (configuration) {
       if (!runtimeAuthored) setRuntime("omnigent");
@@ -6496,7 +6499,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     } else if (!runtimeAuthored && !selected.execution_selection_error && selected.runtime_id) {
       setRuntime(selected.runtime_id);
     }
-  }, [providerProfilesQuery.data, providerProfile, pageMode.mode, remediationDraft, omnigentLaunchPolicyAuthored, runtimeAuthored]);
+  }, [providerProfilesQuery.data, providerProfile, pageMode.mode, remediationDraft, omnigentLaunchPolicyAuthored, runtimeAuthored, harnessChoice]);
 
   const modelTierPreviewSelections = useMemo<ModelTierPreviewSelection[]>(() => {
     if (providerProfilesQuery.isPlaceholderData) return [];
