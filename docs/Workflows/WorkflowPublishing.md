@@ -190,9 +190,13 @@ Batch coordinators (compiled `none`) produce enqueue evidence such as `batch_pr_
 Agents produce the candidate and description; the managed publisher performs commit/push/PR deterministically rather than relying on a prompt, using credentials from the admitted connection rather than ambient Git or `gh auth` state. It refreshes the exact remote base, uses compare-and-set or an exact lease, and verifies the live remote equals the candidate; an unavailable base, unexpected tip movement, or indeterminate comparison yields no evidence and no PR. Lost acknowledgements are reconciled before repeating, and persisted candidate and branch identity prevents duplicate commits or PRs.
 
 Before the first managed publication receipt, a clean Omnigent candidate may
-already have an open PR created by the agent. Publication reconciles remote
-branches holding that exact candidate against the admitted repository, base,
-and draft policy, then verifies the selected remote head again. A unique match
+already have an open PR created by the agent. Publication reads every page of
+the open PR inventory and checks the saved branch identity and whether each
+admitted repository head holds or descends from the saved candidate. An
+advanced or rewritten head blocks before another
+branch can be published, preserving both revisions. An exact candidate is
+validated against the admitted base and draft policy, then its remote head is
+verified again. A unique match
 retains the existing PR URL and head branch even when the local checkout uses
 another name. Multiple matches, unavailable lookup, conflicting policy, or a
 concurrent head change block publication with diagnostics; they do not justify
