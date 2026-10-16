@@ -275,6 +275,33 @@ async def omnigent_prepare_child_execution_plan_activity(
     return child_request
 
 
+@activity.defn(name="omnigent.admit_scheduled_occurrence_plan")
+async def omnigent_admit_scheduled_occurrence_plan_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind one Temporal-started schedule occurrence to the installed runtime."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowsService,
+    )
+
+    workflow_id = str(payload.get("workflowId") or "").strip()
+    if not workflow_id:
+        raise ValueError("workflowId is required")
+    initial_parameters = payload.get("initialParameters")
+    if not isinstance(initial_parameters, Mapping):
+        raise ValueError("initialParameters must be an object")
+    async with async_session_maker() as db_session:
+        return await RecurringWorkflowsService(
+            db_session,
+            artifact_service=_OnDemandTemporalArtifactService(async_session_maker),
+        ).admit_occurrence_execution_plan(
+            workflow_id=workflow_id,
+            initial_parameters=initial_parameters,
+        )
+
+
 def _checkpoint_branch_capable(recovery: dict[str, Any]) -> bool:
     """Return whether the checkpoint carries branch-capable evidence.
 

@@ -1,7 +1,8 @@
 """Replay #4379: default < latest-active deadlock wedges bootstrap auto-update.
 
-Minimized fixture: policy default v1 (old digest) + active non-default v2
-(same old digest) + resolved image advanced to a new digest. Pre-fix
+Minimized fixture: policy default v1 (old image) + active non-default v2
+(same old image) + resolved host moved to another image family, which still
+requires a bootstrap successor (a same-family digest move does not). Pre-fix
 ``seed_bootstrap_policies`` defers forever ("later policy version owns
 evolution") and creates nothing; post-fix it creates/activates v3 (or
 equivalent) without manual DB writes.
@@ -19,7 +20,9 @@ from tests.unit.api.test_omnigent_policy_service import policy_db
 OLD_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "a" * 64
 OLD_HOST = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64
 NEW_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "b" * 64
-NEW_HOST = "ghcr.io/example/omnigent-host@sha256:" + "b" * 64
+# Another host image family (as when a default leaves the upstream host for
+# the MoonMind shared host); a same-repository digest needs no new version.
+NEW_HOST = "ghcr.io/example/omnigent-host-moonmind@sha256:" + "b" * 64
 
 
 def _image_resolver_factory(server_ref: str, host_ref: str):

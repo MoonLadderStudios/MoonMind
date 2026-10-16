@@ -663,7 +663,8 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
     if moved == "policy":
         authority["policy"] = {**policy, "rollout": {"cohort": "next"}}
     elif moved == "server":
-        # A compatible server replacement still moves the exact build.
+        # An installed server is bound by each occurrence's own admission, so
+        # it does not re-plan the schedule.
         authority["server"] = "sha256:" + "6" * 64
     elif moved == "edit":
         definition.target["initialParameters"]["task"] = {"instructions": "Edited task"}
@@ -676,7 +677,7 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
     # The next reconcile pass, ~120 seconds later.
     refreshed = await service._refresh_managed_bootstrap_target(definition)
 
-    if moved is None:
+    if moved in {None, "server"}:
         assert refreshed is False
         assert len(compiled) == 1
         assert definition.target == published
