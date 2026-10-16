@@ -145,8 +145,17 @@ def _stack(client: TestClient) -> dict:
     return response.json()
 
 
+# A controller predating journal transition, and one predating request
+# identity: it answered a new `latest` request with the earlier success.
+_OLD_CONTROLLER_HEALTH = (
+    {"status": "ok"},
+    {"status": "ok", "capabilities": ["active-journal-transition"]},
+)
+
+
+@pytest.mark.parametrize("health", _OLD_CONTROLLER_HEALTH)
 def test_old_controller_is_refreshed_from_the_host_never_through_a_workflow(
-    controller_factory, monkeypatch
+    controller_factory, monkeypatch, health
 ):
     controller = controller_factory()
     request = controller_client._controller_request
@@ -154,7 +163,7 @@ def test_old_controller_is_refreshed_from_the_host_never_through_a_workflow(
         controller_client,
         "_controller_request",
         lambda endpoint, **kwargs: (
-            (200, {"status": "ok"})
+            (200, health)
             if kwargs["path"] == "/v1/healthz"
             else request(endpoint, **kwargs)
         ),
