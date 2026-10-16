@@ -1027,11 +1027,13 @@ jobs:
             var/artifacts/first-run-3938/*/resource-footprint-*.log
           if-no-files-found: warn
       - name: Collect row-owned integration report and diagnostics
-        # Each row collects only what its own owner wrote before teardown:
+        # Each row collects only what its own owners wrote before teardown:
         # the hermetic wrapper's JUnit report, streamed log and project
-        # diagnostics on every run, or a failed journey's log tree. Text is
-        # redacted before upload, failing closed. A hard job kill or runner
-        # loss can still prevent collection and upload.
+        # diagnostics on every run, or a failed journey's log tree plus, on
+        # controller-journey, the journal transition test's phase, ps and log
+        # evidence. Text is redacted before upload; if redaction errors, the
+        # unredacted files are removed. A hard job kill or runner loss can
+        # still prevent collection and upload.
         if: always() && (matrix.suite == 'hermetic' || failure() || cancelled())
         timeout-minutes: 2
         run: |
@@ -1040,19 +1042,23 @@ jobs:
           mkdir -p "$out"
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
           if [[ "${{ matrix.suite }}" == "hermetic" ]]; then
-            source_dir=artifacts/integration-ci
-            if [[ ! -f "$source_dir/pytest-integration-ci.xml" ]]; then
-              echo "missing $source_dir/pytest-integration-ci.xml (interrupted before pytest wrote it; not zero tests)" >> "$out/collection-status.txt"
+            source_dirs=(artifacts/integration-ci)
+            if [[ ! -f artifacts/integration-ci/pytest-integration-ci.xml ]]; then
+              echo "missing artifacts/integration-ci/pytest-integration-ci.xml (interrupted before pytest wrote it; not zero tests)" >> "$out/collection-status.txt"
             fi
+          elif [[ "${{ matrix.suite }}" == "controller-journey" ]]; then
+            source_dirs=(var/artifacts/first-run-3938 var/artifacts/journal-transition)
           else
-            source_dir=var/artifacts/first-run-3938
+            source_dirs=(var/artifacts/first-run-3938)
           fi
-          if [[ -d "$source_dir" ]]; then
-            timeout 60s cp -R "$source_dir" "$out/" \
-              || echo "copy $source_dir failed or timed out (exit=$?)" >> "$out/collection-status.txt"
-          else
-            echo "missing $source_dir (the row stopped before writing it)" >> "$out/collection-status.txt"
-          fi
+          for source_dir in "${source_dirs[@]}"; do
+            if [[ -d "$source_dir" ]]; then
+              timeout 40s cp -R "$source_dir" "$out/" \
+                || echo "copy $source_dir failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+            else
+              echo "missing $source_dir (the row stopped before writing it)" >> "$out/collection-status.txt"
+            fi
+          done
           if ! python3 tools/ci/redact_diagnostics.py --diagnostics-dir "$out" --status-file "$out/collection-status.txt"; then
             find "$out" -type f ! -name collection-status.txt -delete 2>/dev/null || true
             echo "redaction failed; unredacted diagnostics removed before upload" >> "$out/collection-status.txt"
