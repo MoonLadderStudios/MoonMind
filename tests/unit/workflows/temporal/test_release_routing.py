@@ -280,6 +280,53 @@ async def test_bootstrap_promotes_unversioned_sentinel_with_changed_time(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_waits_for_every_declared_workflow_fleet_queue(monkeypatch):
+    """Multi-queue workflow fleets must register every declared queue before promotion."""
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    _use_fake_clock(monkeypatch)
+    primary = "mm.workflow.user.v2"
+    secondary = "mm.workflow.merge_automation"
+    server = _FakeServer()
+    new = server.add_version(
+        "new",
+        queues={
+            (primary, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
+            (primary, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
+            (secondary, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
+        },
+    )
+    client = _FakeClient(server)
+    describe_version = client.workflow_service.describe_worker_deployment_version
+    calls = 0
+
+    async def staggered_registration(request):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            server.versions[new]["queues"].add(
+                (secondary, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY)
+            )
+        return await describe_version(request)
+
+    monkeypatch.setattr(
+        client.workflow_service,
+        "describe_worker_deployment_version",
+        staggered_registration,
+    )
+
+    result = await bootstrap_version_routing(
+        client, _spec("new", queues=(primary, secondary))
+    )
+
+    assert result == {"status": "current", "currentVersion": new}
+    assert server.current == new
+    assert server.set_current_calls == [new]
+    pinned = [entry for entry in server.canary_log if entry["pinned"]]
+    assert len(pinned) == 1
+    assert pinned[0]["taskQueues"] == [primary, secondary]
+
+
+@pytest.mark.asyncio
 async def test_steward_promotes_abandoned_current(monkeypatch):
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
     server, _old, new = _server_with_current_old_new()
