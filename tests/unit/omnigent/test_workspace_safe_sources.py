@@ -101,7 +101,9 @@ class FakeArtifactService:
         self.omit_digest = omit_digest
         self.calls: list[tuple] = []
 
-    async def get_metadata(self, *, artifact_id: str, principal: str):
+    async def get_metadata(
+        self, *, artifact_id: str, principal: str, admitted_principal=None
+    ):
         self.calls.append(("metadata", artifact_id, principal))
         payload = self.payloads[artifact_id]
         artifact = SimpleNamespace(
@@ -124,7 +126,7 @@ class FakeArtifactService:
 
     async def read_chunks(
         self, *, artifact_id: str, principal: str, allow_restricted_raw: bool,
-        chunk_size: int,
+        chunk_size: int, admitted_principal=None,
     ):
         assert allow_restricted_raw is True
         self.calls.append(("read", artifact_id, principal))
