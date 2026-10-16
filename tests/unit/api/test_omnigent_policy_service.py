@@ -863,6 +863,11 @@ async def test_codex_bootstrap_policies_launch_the_shared_tool_owning_host_image
         assert await bootstrap_policies_ready(session) is False
 
 
+# Another host image family: unlike a same-repository digest move, it requires
+# a bootstrap successor.
+_FOREIGN_HOST = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "4" * 64
+
+
 @pytest.mark.asyncio
 async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
     tmp_path, monkeypatch
@@ -912,10 +917,12 @@ async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
 
         assert profile_ref == "omnigent-opencode@1"
         assert policy_ref == "opencode-on-demand@1"
-        assert snapshot["policyRef"] == "opencode-on-demand@2"
+        # A rebuilt host of the same family needs no new version; admission
+        # binds the installed digest to each attempt.
+        assert snapshot["policyRef"] == "opencode-on-demand@1"
         assert snapshot["boundaries"]["execution"]["harness"] == "opencode-native"
         assert (
-            snapshot["boundaries"]["host"]["hostImageRef"] == next_opencode_host_digest
+            snapshot["boundaries"]["host"]["hostImageRef"] == first_opencode_host_digest
         )
 
 
@@ -990,14 +997,25 @@ async def test_opencode_kill_switch_does_not_add_policy_or_image_dependencies(
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("host_family", ["same", "foreign"])
+async def test_bootstrap_versions_image_authority_only_for_a_new_image_family(
+    tmp_path, monkeypatch, host_family
 ):
+    """A routine image update records no policy version or binding cutover.
+
+    The recorded version names the image family; admission binds the
+    installed digests. Moving to another host family still cuts a successor.
+    """
+
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
-    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+    next_host = (
+        "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+        if host_family == "same"
+        else _FOREIGN_HOST
+    )
     resolved = {"server": first_server, "host": first_host}
     deployment_shared_host_follows(monkeypatch, resolved)
 
@@ -1046,6 +1064,30 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
             live_server_image_resolver=live_server,
         )
 
+        if host_family == "same":
+            assert reconciled == []
+            policies = list((await session.execute(select(OmnigentPolicy))).scalars())
+            assert all(policy.default_version == 1 for policy in policies)
+            versions = list(
+                (await session.execute(select(OmnigentPolicyVersion))).scalars()
+            )
+            assert len(versions) == 6
+            assert all(
+                row.document_json["host"]["serverImageRef"] == first_server
+                and row.document_json["host"]["hostImageRef"] == first_host
+                for row in versions
+            )
+            binding = await session.get(
+                OmnigentOAuthHostBindingRecord, "bootstrap-binding"
+            )
+            assert binding.launch_policy_ref == "codex-on-demand@1"
+            event_types = set(
+                (
+                    await session.execute(select(OmnigentPolicyEvent.event_type))
+                ).scalars()
+            )
+            assert "bootstrap_authority_cutover" not in event_types
+            return
         assert set(reconciled) == {
             "omnigent-codex",
             "codex-static",
@@ -1143,7 +1185,7 @@ async def test_bootstrap_revisits_image_binding_after_active_lease_drains(
     first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
-    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+    next_host = _FOREIGN_HOST
     resolved = {"server": first_server, "host": first_host}
     deployment_shared_host_follows(monkeypatch, resolved)
 
@@ -1242,7 +1284,8 @@ async def test_bootstrap_server_authority_follows_live_container_before_tag(
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
-    next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
+    # Only another server family versions the policy.
+    next_server = "ghcr.io/moonladderstudios/omnigent-server@sha256:" + "3" * 64
     next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
     resolved = {"server": first_server, "host": first_host}
     deployment_shared_host_follows(monkeypatch, resolved)
@@ -1302,7 +1345,7 @@ async def test_bootstrap_advances_stale_interrupted_draft_lineage(
     stale_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
     stale_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "5" * 64
-    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "6" * 64
+    next_host = _FOREIGN_HOST
     resolved = {"server": first_server, "host": first_host}
     deployment_shared_host_follows(monkeypatch, resolved)
 
@@ -1451,7 +1494,7 @@ async def test_bootstrap_successor_retires_historical_retrieval_without_rewritin
     first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
     next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
-    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+    next_host = _FOREIGN_HOST
     resolved = {"server": first_server, "host": first_host}
 
     async def resolver(image_ref: str) -> str:

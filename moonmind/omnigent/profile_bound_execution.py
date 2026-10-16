@@ -420,28 +420,54 @@ class OmnigentProfileBoundExecutionCoordinator:
         *,
         policy_snapshot: Mapping[str, Any],
         effective_launch: Mapping[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
+        """Return the admitted plan's launch, proven from its policy snapshot.
+
+        Admission binds the installed host and server images to the plan, so
+        a launch recompiled from the unchanged policy snapshot may name the
+        images that policy version recorded. Binding it to the plan's host and
+        the installed server must then reproduce the admitted digest exactly;
+        anything else is drift from the admitted plan.
+        """
+
         plan = self._execution_plan
         if plan is None:
-            return
+            return dict(effective_launch)
         payload = plan.payload
+        recorded = effective_launch
+        if (
+            payload.effectiveLaunchSnapshotDigest is not None
+            and self._canonical_digest(effective_launch)
+            != payload.effectiveLaunchSnapshotDigest
+        ):
+            from moonmind.omnigent.host_image_drift import (
+                installed_server_image_ref,
+                reconcile_effective_launch_to_selected_host,
+            )
+
+            recorded = (
+                reconcile_effective_launch_to_selected_host(
+                    effective_launch,
+                    str(payload.hostImageRef or ""),
+                    selected_server_image_ref=installed_server_image_ref(),
+                )
+                or effective_launch
+            )
         if (
             payload.policySnapshotDigest is None
             or payload.effectiveLaunchSnapshotDigest is None
-            or self._canonical_digest(policy_snapshot)
-            != payload.policySnapshotDigest
-            or self._canonical_digest(effective_launch)
-            != payload.effectiveLaunchSnapshotDigest
-            or str(effective_launch.get("launchPolicyRef") or "")
-            != payload.launchPolicyRef
-            or str(effective_launch.get("harness") or "") != payload.harnessId
-            or str(effective_launch.get("hostImageRef") or "")
+            or self._canonical_digest(policy_snapshot) != payload.policySnapshotDigest
+            or self._canonical_digest(recorded) != payload.effectiveLaunchSnapshotDigest
+            or str(recorded.get("launchPolicyRef") or "") != payload.launchPolicyRef
+            or str(recorded.get("harness") or "") != payload.harnessId
+            or str(recorded.get("hostImageRef") or "")
             != str(payload.hostImageRef or "")
         ):
             raise HarnessPlatformError(
                 "Codex launch authority has drifted from the admitted plan",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
+        return dict(recorded)
 
     async def _write_plan_runtime_evidence(
         self,
@@ -1151,7 +1177,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             # legacy coordinator may resolve mutable catalog rows only to prove
             # that they still equal that authority, and must do so before lease
             # acquisition or any host/provider mutation.
-            self._require_recorded_launch(
+            effective_launch = self._require_recorded_launch(
                 policy_snapshot=policy_snapshot,
                 effective_launch=effective_launch,
             )

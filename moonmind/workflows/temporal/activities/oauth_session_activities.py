@@ -50,6 +50,7 @@ async def _create_oauth_validation_binding(
     from api_service.db.models import ManagedAgentProviderProfile
     from api_service.services.omnigent_policies import OmnigentPolicyService
     from moonmind.omnigent.execution_profiles import PROFILES
+    from moonmind.omnigent.host_image_drift import bind_installed_shared_host_launch
     from moonmind.omnigent.profile_bound_execution import (
         _compile_persisted_effective_launch,
     )
@@ -82,8 +83,10 @@ async def _create_oauth_validation_binding(
                 policy_id = execution_profile.default_policy_ref.rsplit("@", 1)[0]
             policy_snapshot = await policies.resolve_default_runtime_snapshot(policy_id)
         policy_ref = policy_snapshot["policyRef"]
-        effective_launch = _compile_persisted_effective_launch(
-            policy_snapshot, provider_profile_id=profile_id
+        effective_launch = bind_installed_shared_host_launch(
+            _compile_persisted_effective_launch(
+                policy_snapshot, provider_profile_id=profile_id
+            )
         )
         if binding:
             expected_mode = (

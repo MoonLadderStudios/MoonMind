@@ -586,6 +586,11 @@ RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
 RUN_UPDATE_INPUTS_VISIBILITY_REFRESH_PATCH = "run-update-inputs-visibility-refresh-v1"
 RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
+# A schedule-started occurrence binds the installed Omnigent runtime at its own
+# admission; histories started before this keep the schedule's recorded plan.
+RUN_SCHEDULED_OCCURRENCE_PLAN_ADMISSION_PATCH = (
+    "run-scheduled-occurrence-plan-admission-v1"
+)
 RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH = (
     "run-canonical-git-repository-projection-v1"
 )
@@ -11886,6 +11891,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return {"status": "canceled"}
 
         try:
+            if (
+                self._remediation_loop_continuation is None
+                and self._has_recurrence_metadata(parameters)
+                and isinstance(parameters.get("omnigentExecutionPlan"), Mapping)
+                and temporal_scheduled_start_time(workflow.info()) is not None
+                and workflow.patched(RUN_SCHEDULED_OCCURRENCE_PLAN_ADMISSION_PATCH)
+            ):
+                await self._admit_scheduled_occurrence_plan(parameters)
             resolved_plan_ref = await self._run_planning_stage(
                 parameters=parameters,
                 input_ref=input_ref,
@@ -12334,6 +12347,57 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    async def _admit_scheduled_occurrence_plan(
+        self, parameters: dict[str, Any]
+    ) -> None:
+        """Bind a fresh schedule occurrence to the installed Omnigent runtime.
+
+        The schedule action carries the plan compiled when the schedule was
+        last planned. This occurrence's admission compiles the same frozen
+        inputs against the installed host and server, so a release needs no
+        schedule re-plan. The admitted plan is written into the carried input:
+        Continue-As-New and interrupted-step successors keep it. A ``recorded``
+        disposition keeps the schedule's plan and its reason is logged.
+        """
+
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "omnigent.admit_scheduled_occurrence_plan"
+        )
+        admitted = await workflow.execute_activity(
+            "omnigent.admit_scheduled_occurrence_plan",
+            {
+                "workflowId": workflow.info().workflow_id,
+                "initialParameters": parameters,
+            },
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(admitted, Mapping):
+            raise ValueError("scheduled occurrence admission returned no decision")
+        if admitted.get("disposition") != "admitted":
+            self._get_logger().warning(
+                "Scheduled occurrence keeps its recorded execution plan: %s",
+                admitted.get("reason"),
+            )
+            return
+        binding = admitted.get("omnigentExecutionPlan")
+        skillset_ref = str(admitted.get("resolvedSkillsetRef") or "").strip()
+        if not isinstance(binding, Mapping) or not skillset_ref:
+            raise ValueError(
+                "scheduled occurrence admission omitted plan or Skill authority"
+            )
+        admitted_fields = {
+            "omnigentExecutionPlan": dict(binding),
+            "resolvedSkillsetRef": skillset_ref,
+        }
+        parameters.update(admitted_fields)
+        for key in ("initialParameters", "initial_parameters"):
+            original = self._original_input_payload.get(key)
+            if isinstance(original, Mapping):
+                self._original_input_payload[key] = {
+                    **original,
+                    **admitted_fields,
+                }
 
     def _record_integration_from_parameters(
         self,

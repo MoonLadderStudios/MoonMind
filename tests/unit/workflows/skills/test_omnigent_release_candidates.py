@@ -154,7 +154,6 @@ def test_production_update_reads_operator_pin_not_generated_overlay(
     drivers = release_module.production_drivers(
         runner=SimpleNamespace(local_project_dir=str(tmp_path)),
         moonmind_image="moonmind:updated",
-        actor="release",
     )
     inputs = asyncio.run(drivers.deployment_inputs())
     assert inputs["OMNIGENT_SHARED_HOST_IMAGE_REF"] == UPSTREAM_HOST
@@ -192,7 +191,6 @@ def test_first_updater_from_previous_compose_resolves_default_image_inputs(
     drivers = release_module.production_drivers(
         runner=SimpleNamespace(local_project_dir=str(tmp_path)),
         moonmind_image="moonmind:updated",
-        actor="release",
     )
     inputs = asyncio.run(drivers.deployment_inputs())
     assert inputs == {
@@ -284,7 +282,6 @@ def test_compose_updater_supplies_refreshable_image_inputs(
     drivers = release_module.production_drivers(
         runner=SimpleNamespace(local_project_dir=str(tmp_path)),
         moonmind_image="moonmind:updated",
-        actor="release",
     )
     inputs = asyncio.run(drivers.deployment_inputs())
     assert {key: inputs.get(key) for key in expected} == expected
@@ -312,14 +309,21 @@ def test_release_refreshes_only_active_static_host_profiles(release_module):
             }
 
     drivers = release_module.production_drivers(
-        runner=Runner(), moonmind_image="moonmind:updated", actor="release"
+        runner=Runner(), moonmind_image="moonmind:updated"
     )
     asyncio.run(drivers.restart_server({"shared": UPSTREAM_HOST}))
     assert commands[0][-1] == "omnigent"
-    assert commands[1][-2:] == ("api", "temporal-worker-agent-runtime")
-    assert commands[2][-1] == "omnigent-host-codex"
-    assert "--no-deps" not in commands[2]
+    assert commands[1][-1] == "omnigent-host-codex"
+    assert "--no-deps" not in commands[1]
     assert all("omnigent-host-claude" not in command for command in commands)
+    # Consumers read the installed record and resolved state, so the release
+    # does not recreate the API or the agent runtime worker.
+    assert len(commands) == 2
+    assert all(
+        service not in command
+        for command in commands
+        for service in ("api", "temporal-worker-agent-runtime")
+    )
 
 
 def _load_image_resolution_module(monkeypatch):

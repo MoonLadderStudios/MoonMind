@@ -213,6 +213,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `oauth_session.verify_cli_fingerprint` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `oauth_session.verify_volume` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `omnigent.admit_generic_host_capacity` | `agent_runtime` | `mm.activity.agent_runtime.control` |
+| `omnigent.admit_scheduled_occurrence_plan` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `omnigent.ensure_host` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `omnigent.ensure_provider_profile_lease` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `omnigent.ensure_provider_session` | `agent_runtime` | `mm.activity.agent_runtime` |
