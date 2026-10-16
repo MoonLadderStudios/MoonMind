@@ -4630,7 +4630,9 @@ async def test_edit_cleared_repository_source_runs_as_scratch(
                 },
             },
             idempotency_key=None,
+            repository="octo/repo",
         )
+        assert created.search_attributes["mm_repo"] == "octo/repo"
         if path == "terminal_rerun":
             await service.record_terminal_state(
                 workflow_id=created.workflow_id,
@@ -4664,9 +4666,51 @@ async def test_edit_cleared_repository_source_runs_as_scratch(
         assert result.parameters["workflow"]["instructions"] == "Ship it."
         assert result.parameters["workflow"]["publish"] == {"mode": "none"}
         assert "git" not in result.parameters["workflow"]
+        # Repository-filtered lists must not keep returning a scratch run.
+        assert "mm_repo" not in result.search_attributes
         if path == "terminal_rerun":
             assert result.workflow_id != created.workflow_id
-            assert not result.search_attributes.get("mm_repo")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+async def test_edit_changed_repository_updates_repository_search_attribute(
+    tmp_path, mock_client_adapter, update_name
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "repository": "octo/repo",
+                "workflow": {"instructions": "Ship it."},
+            },
+            idempotency_key=None,
+            repository="octo/repo",
+        )
+
+        await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name=update_name,
+            parameters_patch={
+                "repository": {
+                    "provider": "git",
+                    "repository": {"name": "octo/other"},
+                    "branch": {"name": "main"},
+                },
+                "workflow": {"instructions": "Ship it elsewhere."},
+            },
+            idempotency_key=f"change-{update_name}",
+        )
+        result = await service.describe_execution(created.workflow_id)
+
+        assert result.search_attributes["mm_repo"] == "octo/other"
 
 
 async def _insert_historical_cloud_execution(session, *, runtime_recorded):
