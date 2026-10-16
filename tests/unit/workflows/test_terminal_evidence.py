@@ -576,6 +576,62 @@ def test_pr_resolver_terminal_rejects_unsuccessful_dispositions(
     assert result.metadata["prResolverNextStep"] == "run_full_remediation"
 
 
+_IDENTITY_RECEIPT = {
+    "phase": "commit",
+    "kind": "identity_missing",
+    "gitError": "fatal: no email was given and auto-detection is disabled",
+    "headBefore": "a" * 40,
+    "stagedTree": "b" * 40,
+    "attempts": 1,
+    "exhausted": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("receipt", "expected"),
+    [
+        (_IDENTITY_RECEIPT, "retry_step_execution"),
+        # The repaired attempt was refused again: preparation cannot fix it.
+        ({**_IDENTITY_RECEIPT, "attempts": 2}, None),
+        ({**_IDENTITY_RECEIPT, "exhausted": True}, None),
+        ({**_IDENTITY_RECEIPT, "kind": "signing_failed"}, None),
+        ({**_IDENTITY_RECEIPT, "kind": "hook_rejected"}, None),
+        ({**_IDENTITY_RECEIPT, "kind": "other"}, None),
+    ],
+    ids=["first-identity", "repeat", "exhausted", "signing", "hook", "other"],
+)
+def test_pr_resolver_verdict_requests_step_retry_only_for_host_identity(
+    tmp_path: Path, receipt: dict[str, object], expected: str | None
+) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "failed",
+                "executionRef": "step-1",
+                "status": "blocked",
+                "reason": "local_commit_failed",
+                "final_reason": "local_commit_failed",
+                "next_step": "provide_commit_identity",
+                "localCommit": receipt,
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "executionRef": "step-1",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.failure_code == "PR_RESOLVER_FAILED"
+    assert result.metadata["prResolverReason"] == "local_commit_failed"
+    assert result.metadata.get("retryRecommendation") == expected
+
+
 def test_pr_resolver_verdict_metadata_is_absent_when_the_skill_wrote_none(
     tmp_path: Path,
 ) -> None:
