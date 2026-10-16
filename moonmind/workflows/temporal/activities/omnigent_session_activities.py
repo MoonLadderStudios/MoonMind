@@ -3266,17 +3266,25 @@ async def _bind_cached_host_launch(
         effective_launch.get("snapshotRef")
     ):
         return binding, bound_effective_launch
-    if await hosts.list_active_host_leases_for_profile(profile_id):
-        raise ValueError("durable host binding conflicts with planned launch authority")
-    binding = await hosts.create_or_update_static_binding(
-        profile_id=profile_id,
-        endpoint_ref=binding.endpoint_ref,
-        static_host_id=binding.static_host_id,
-        host_launch_profile_ref=binding.host_launch_profile_ref,
-        execution_profile_ref=execution_profile_ref,
-        launch_policy_ref=launch_policy_ref,
-        effective_launch_snapshot=effective_launch,
-    )
+    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+
+    try:
+        binding = await hosts.create_or_update_static_binding(
+            profile_id=profile_id,
+            endpoint_ref=binding.endpoint_ref,
+            static_host_id=binding.static_host_id,
+            host_launch_profile_ref=binding.host_launch_profile_ref,
+            execution_profile_ref=execution_profile_ref,
+            launch_policy_ref=launch_policy_ref,
+            effective_launch_snapshot=effective_launch,
+            require_idle=True,
+        )
+    except OmnigentOAuthHostError as exc:
+        if exc.code != "OMNIGENT_HOST_BINDING_LEASED":
+            raise
+        raise ValueError(
+            "durable host binding conflicts with planned launch authority"
+        ) from exc
     return binding, effective_launch
 
 

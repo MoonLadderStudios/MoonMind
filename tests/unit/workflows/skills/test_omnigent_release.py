@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from moonmind.workflows.skills.deployment_execution import FileDesiredStateStore
@@ -209,6 +211,9 @@ def _drivers(calls, *, candidates=None, live=None, running=None):
         # running="" models no running omnigent container.
         return server_ref if running is None else (running or None)
 
+    async def publish_resolution(_target):
+        calls.append("publish-resolution")
+
     return OmnigentReleaseDrivers(
         deployment_inputs=deployment_inputs,
         resolve_candidates=resolve_candidates,
@@ -216,6 +221,7 @@ def _drivers(calls, *, candidates=None, live=None, running=None):
         restart_server=restart_server,
         await_resolution=await_resolution,
         verify_live_container=verify_live_container,
+        publish_resolution=publish_resolution,
     )
 
 
@@ -247,6 +253,7 @@ async def test_migrate_noop_reruns_post_steps(tmp_path, monkeypatch):
         "live",
         "await-resolution",
         "verify-live",
+        "publish-resolution",
     ]
 
 
@@ -286,6 +293,7 @@ async def test_migrate_advances_0_13_to_0_14_and_converges_after(tmp_path, monke
         "restart",
         "await-resolution",
         "verify-live",
+        "publish-resolution",
     ]
     env_entries, record_doc = store.read()
     assert env_entries["OMNIGENT_IMAGE_REF"] == NEW_SERVER
@@ -306,6 +314,7 @@ async def test_migrate_advances_0_13_to_0_14_and_converges_after(tmp_path, monke
         "live",
         "await-resolution",
         "verify-live",
+        "publish-resolution",
     ]
 
 
@@ -607,7 +616,7 @@ async def test_release_installs_and_verifies_without_the_application_database(
 
     assert receipt["status"] == "migrated"
     assert receipt["serverImageRef"] == NEW_SERVER
-    assert calls[-2:] == ["await-resolution", "verify-live"]
+    assert calls[-3:] == ["await-resolution", "verify-live", "publish-resolution"]
 
 
 @pytest.mark.asyncio
@@ -638,6 +647,68 @@ async def test_unverified_runtime_leaves_the_release_incomplete(tmp_path, monkey
     # The record keeps the selected revision so a rerun converges toward it.
     stored = read_omnigent_release(*store.read())
     assert stored is not None and stored.revision == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("running", ["", OLD_SERVER])
+async def test_failed_live_verification_never_publishes_resolved_state(
+    tmp_path, monkeypatch, running
+):
+    """Fresh admission binds the resolved state, so only a verified install publishes it."""
+
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release()
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    calls: list[str] = []
+    with pytest.raises(OmnigentReleaseError) as exc:
+        await migrate_omnigent_release(
+            store=store,
+            runner=object(),
+            owner="test",
+            drivers=_drivers(
+                calls,
+                candidates=_refs(server=NEW_SERVER, host=NEW_HOST),
+                live=_refs(),
+                running=running,
+            ),
+        )
+    assert exc.value.step == "verify"
+    assert calls[-2:] == ["await-resolution", "verify-live"]
+    assert "publish-resolution" not in calls
+
+
+@pytest.mark.asyncio
+async def test_default_resolution_publishes_only_on_request(monkeypatch):
+    """Awaiting the recorded images observes them; publishing is a separate step."""
+    from moonmind.omnigent.bootstrap import image_resolution, store
+    from moonmind.workflows.skills import omnigent_release
+
+    state = SimpleNamespace(
+        server_image_ref=NEW_SERVER,
+        opencode_host_image_ref="",
+        shared_host_image_ref=NEW_HOST,
+        pi_host_image_ref="",
+        details={},
+    )
+
+    async def resolve(_env):
+        return state
+
+    saved: list = []
+    monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
+    monkeypatch.setattr(store, "save_resolved_state", saved.append)
+    target = {"server": NEW_SERVER, "shared": NEW_HOST}
+
+    observed = await omnigent_release._default_await_resolution(target, attempts=1)
+    assert observed == target
+    assert saved == []
+
+    await omnigent_release._default_publish_resolution(target)
+    assert saved == [state]
 
 
 def test_store_merge_preserves_unrelated_entries(tmp_path):
