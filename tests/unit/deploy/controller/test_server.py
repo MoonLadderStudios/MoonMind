@@ -795,6 +795,41 @@ def test_journal_oneoff_runs_recorded_source_with_controller_transport(
         phase="journal-prepare", helper_image="sha256:recorded-source") == {"status": "prepared"}
 
 
+def test_failed_selection_leads_with_helper_error_not_pull_progress(
+    controller_path, tmp_path
+):
+    record = load("record")
+    server = load("server")
+    engine = server.engine
+    store = record.OperationStore(tmp_path / "state")
+    target = {"project": "moonmind-test", "projectDir": str(tmp_path),
+              "composeFiles": ["docker-compose.yaml"], "services": ["omnigent"]}
+    op = _begin_op(record, store, target)
+    refusal = ("RuntimeError: Refusing Omnigent select: the installed controller "
+               "does not provide unversioned-routing-cutover.")
+    seen = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            seen.append(args)
+            progress = "\n".join(f" {i:012x} Pull complete 0B" for i in range(300))
+            raise engine.CommandError(args[2], 1, f"{progress}\nTraceback:\n{refusal}")
+
+    with pytest.raises(engine.StageError) as failure:
+        server.production_apply(store, op, omnigent_selector=lambda operation:
+            server.run_omnigent_step(store, operation, runner=Runner(),
+                                     overlay="overlay", phase="select"))
+
+    assert "--quiet-pull" in seen[0]
+    error = store.load(op["operationId"])["errorSummary"]
+    assert error.startswith(
+        f"attempt 1: Omnigent selection failed: omnigent-select failed (exit 1) {refusal}"
+    )
+    assert refusal in str(failure.value.output)[:2000]
+
+
 def _begin_op(record, store, target):
     return store.begin(
         stack="moonmind",

@@ -983,6 +983,20 @@ def omnigent_channels_for_target(target: dict) -> list:
     return channels
 
 
+def _omnigent_step_error(phase: str, exit_status: int, output: str) -> engine.CommandError:
+    """Lead with the helper's final line, which states why the step failed.
+
+    Bounded summaries keep the head of the error; the output before that line
+    is Compose and traceback context.
+    """
+    output = redact_text(output)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    reason = lines[-1] if lines else "no output"
+    return engine.CommandError(
+        f"omnigent-{phase}", exit_status, f"{reason}\n{output[-2000:]}"
+    )
+
+
 def run_omnigent_step(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1091,6 +1105,8 @@ def run_omnigent_step(
                 "-T",
                 "--pull",
                 "always" if phase == "select" else "never",
+                # Layer progress would fill the bounded diagnostic tail.
+                "--quiet-pull",
                 "--label",
                 f"{OMNIGENT_OPERATION_LABEL}={operation_id}",
                 "--entrypoint",
@@ -1100,13 +1116,13 @@ def run_omnigent_step(
             ),
             timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
         )
+    except engine.CommandError as exc:
+        raise _omnigent_step_error(phase, exc.exit_status, exc.output) from exc
     finally:
         store.record_omnigent_step(operation_id, None)
     output = str(result.get("output") or "")
     if int(result.get("exit", 0)) != 0:
-        raise engine.CommandError(
-            f"omnigent-{phase}", int(result.get("exit", 1)), redact_text(output)[-2000:]
-        )
+        raise _omnigent_step_error(phase, int(result.get("exit", 1)), output)
     for line in reversed(output.splitlines()):
         if line.startswith(OMNIGENT_RESULT_PREFIX):
             receipt = json.loads(line[len(OMNIGENT_RESULT_PREFIX) :])
