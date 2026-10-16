@@ -486,14 +486,28 @@ async def steward_abandoned_routing(
         return _parked(current, target)
     if observation is not None:
         workflow_queues = tuple(
-            item["queue"]
-            for item in observation["queues"]
-            if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW
+            dict.fromkeys(
+                (
+                    *spec.task_queues,
+                    *(
+                        item["queue"]
+                        for item in observation["queues"]
+                        if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW
+                    ),
+                )
+            )
         )
         activity_queues = tuple(
-            item["queue"]
-            for item in observation["queues"]
-            if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+            dict.fromkeys(
+                (
+                    *spec.task_queues,
+                    *(
+                        item["queue"]
+                        for item in observation["queues"]
+                        if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+                    ),
+                )
+            )
         )
         # The starting fleet must explicitly declare the complete serving
         # surface it intends to converge. When the recorded current version
@@ -547,7 +561,7 @@ async def steward_abandoned_routing(
                     sorted(declared),
                 )
     else:
-        workflow_queues = ()
+        workflow_queues = tuple(spec.task_queues)
         activity_queues = tuple(spec.task_queues)
     logger.warning(
         "Release routing current version %s has no live pollers; "
@@ -646,6 +660,8 @@ async def bootstrap_version_routing(client, spec):
                     build_id=spec.build_id,
                     expected_current=current,
                     task_queue=spec.task_queues[0],
+                    task_queues=tuple(spec.task_queues),
+                    workflow_queues=tuple(spec.task_queues),
                 )
             except ValueError:
                 continue  # Another startup won initialization; observe it.
