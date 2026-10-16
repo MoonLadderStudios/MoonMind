@@ -766,10 +766,22 @@ class OmnigentWorkspacePublicationService:
             candidate_tip = await run_command(
                 ["git", "rev-parse", f"origin/{normalized_base}"]
             )
-            if (
-                re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", accepted_sha) is None
-                or candidate_tip.stdout.strip() != accepted_sha
-            ):
+            lease_sha = candidate_tip.stdout.strip()
+            extends_accepted = (
+                re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", accepted_sha)
+                is not None
+            )
+            if extends_accepted and lease_sha != accepted_sha:
+                # The operator may fast-forward the run's PR branch between
+                # steps. A checkout already built on that tip extends it; a
+                # rewrite, or a move this workspace lacks, is never absorbed.
+                for older, newer in ((accepted_sha, lease_sha), (lease_sha, "HEAD")):
+                    ancestry = await run_command(
+                        ["git", "merge-base", "--is-ancestor", older, newer],
+                        check=False,
+                    )
+                    extends_accepted = extends_accepted and ancestry.returncode == 0
+            if not extends_accepted:
                 raise HarnessPlatformError(
                     "accepted publication candidate no longer matches its remote head",
                     code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
@@ -787,7 +799,7 @@ class OmnigentWorkspacePublicationService:
             extended = await PublishService().publish(
                 job_id=uuid5(NAMESPACE_URL, publication_identity),
                 instruction="Publish completed Omnigent repository work",
-                # Retain the accepted SHA through the publisher's remote read
+                # Retain the admitted tip through the publisher's remote read
                 # and lease, including a move after the admission check above.
                 publish_mode="branch",
                 publish_base_branch=normalized_base,
@@ -800,7 +812,7 @@ class OmnigentWorkspacePublicationService:
                 bound_credential=bound_credential,
                 publish_existing_commits=True,
                 verify_remote=True,
-                expected_remote_head_sha=accepted_sha,
+                expected_remote_head_sha=lease_sha,
             )
             if extended is not None and extended.status == "skipped":
                 # Unchanged candidate: reuse requires the exact remote tip.
