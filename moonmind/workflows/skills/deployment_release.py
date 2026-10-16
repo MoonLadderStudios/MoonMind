@@ -881,7 +881,7 @@ def _omnigent_release_store():
     )
 
 
-async def select_omnigent(runner, owner, image, *, actor="release"):
+async def select_omnigent(runner, owner, image):
     """Record the Omnigent release before the main pass renders it.
 
     Called from the executor's ``before_compose`` hook, which holds the
@@ -898,15 +898,11 @@ async def select_omnigent(runner, owner, image, *, actor="release"):
     return await select_omnigent_release(
         store=store,
         owner=owner,
-        drivers=production_drivers(
-            runner=runner, moonmind_image=image, actor=actor
-        ),
+        drivers=production_drivers(runner=runner, moonmind_image=image),
     )
 
 
-async def migrate_omnigent(
-    runner, owner, image, *, actor="release", selected_revision=None
-):
+async def migrate_omnigent(runner, owner, image, *, selected_revision=None):
     """Advance the singular Omnigent release; no-op when already aligned.
 
     Runs inside the primary success path so an omnigent migration failure
@@ -928,10 +924,7 @@ async def migrate_omnigent(
         runner=runner,
         owner=owner,
         moonmind_image=image,
-        drivers=production_drivers(
-            runner=runner, moonmind_image=image, actor=actor
-        ),
-        actor=actor,
+        drivers=production_drivers(runner=runner, moonmind_image=image),
         selected_revision=selected_revision,
     )
 
@@ -1024,7 +1017,7 @@ async def run_controller_omnigent_step(phase, payload):
                     },
                 }
             else:
-                selection = await select_omnigent(runner, owner, image, actor=owner)
+                selection = await select_omnigent(runner, owner, image)
             write_record(selection_file, selection)
             return selection
     if not selection_file.is_file():
@@ -1035,9 +1028,7 @@ async def run_controller_omnigent_step(phase, payload):
         raise ValueError("Controller migration differs from its durable selection")
     if selection.get("status") == "skipped":
         return selection
-    return await migrate_omnigent(
-        runner, owner, image, actor=owner, selected_revision=revision
-    )
+    return await migrate_omnigent(runner, owner, image, selected_revision=revision)
 
 
 async def controller_omnigent_cli(phase, payload):

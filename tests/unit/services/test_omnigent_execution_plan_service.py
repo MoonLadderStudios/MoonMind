@@ -1192,16 +1192,78 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("generic_admitted", [False, True])
-async def test_codex_admission_rejects_conflicting_policy_image_before_persistence(
+async def test_codex_admission_binds_installed_images_without_a_policy_version(
     monkeypatch, generic_admitted
 ) -> None:
+    """A routine update reaches fresh Codex attempts without a policy cut.
+
+    The policy version still records the images current when it was written;
+    the attempt binds the installed same-repository host and server, and the
+    persisted launch artifact agrees with the plan.
+    """
+    installed_host = "ghcr.io/example/omnigent-host@sha256:" + "8" * 64
+    installed_server = "ghcr.io/example/omnigent-server@sha256:" + "9" * 64
     monkeypatch.setenv(
         "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", str(generic_admitted)
     )
     monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", installed_host)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", installed_server)
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="codex-native", policy="codex-on-demand@1")
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    artifacts = _ArtifactService()
+    result = await service.compile_and_persist_execution_plan(
+        session_factory=object(),
+        artifact_service=artifacts,
+        principal="user-1",
+        workflow_id="mm:codex-installed-host-image",
+        agent_profile_snapshot=_snapshot(
+            harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
+        ),
+        provider_profile=SimpleNamespace(
+            profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+        ),
+        initial_parameters={
+            "targetRuntime": "omnigent",
+            "publishMode": "none",
+            "workflow": {"instructions": "Use the installed host."},
+        },
+        authored_request_ref="art_request_1",
+        authored_request_digest="sha256:" + "1" * 64,
+        task_input_snapshot_ref="art_request_1",
+        task_input_snapshot_digest="sha256:" + "1" * 64,
+        execution_plan_store=_PlanStore(object()),
+    )
+
+    payload = result.envelope.payload
+    assert payload.launchPolicyRef == "codex-on-demand@1"
+    assert payload.hostImageRef == installed_host
+    launch = json.loads(
+        artifacts.payloads[payload.effectiveLaunchSnapshotRef.removeprefix("artifact:")]
+    )
+    assert launch["hostImageRef"] == installed_host
+    assert launch["serverImageRef"] == installed_server
+    assert launch["boundaries"]["host"]["serverImageRef"] == installed_server
+    # The policy evidence keeps the bytes that version recorded.
+    policy_host = launch["policyAuthority"]["boundaries"]["host"]
+    assert policy_host["hostImageRef"].endswith("f" * 64)
+    assert policy_host["serverImageRef"].endswith("a" * 64)
+
+
+@pytest.mark.asyncio
+async def test_codex_admission_rejects_a_foreign_host_family_before_persistence(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
     monkeypatch.setenv(
         "OMNIGENT_SHARED_HOST_IMAGE_REF",
-        "ghcr.io/example/omnigent-host@sha256:" + "8" * 64,
+        "ghcr.io/example/other-host@sha256:" + "8" * 64,
     )
     monkeypatch.setattr(
         service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")

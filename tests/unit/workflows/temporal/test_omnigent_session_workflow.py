@@ -2498,3 +2498,86 @@ async def test_signal_continuation_claims_through_the_canonical_command_service(
         ) == 2
 
     await engine.dispose()
+
+
+class _HostBindings:
+    def __init__(self, *, active_leases=()):
+        self.active_leases = list(active_leases)
+        self.updates: list[dict] = []
+
+    async def list_active_host_leases_for_profile(self, profile_id):
+        assert profile_id == "codex"
+        return self.active_leases
+
+    async def create_or_update_static_binding(self, **kwargs):
+        self.updates.append(kwargs)
+        return SimpleNamespace(
+            binding_ref="omnigent-oauth:codex",
+            effective_launch_snapshot=kwargs["effective_launch_snapshot"],
+        )
+
+
+def _cached_binding():
+    return SimpleNamespace(
+        binding_ref="omnigent-oauth:codex",
+        endpoint_ref="default",
+        static_host_id=None,
+        host_launch_profile_ref="codex-on-demand@16",
+        effective_launch_snapshot={"snapshotRef": "omnigent-launch:sha256:old"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_admitted_plan_replaces_an_idle_binding_launch() -> None:
+    """A plan bound to newly installed images is not blocked by an old cache."""
+
+    hosts = _HostBindings()
+    planned = {"snapshotRef": "omnigent-launch:sha256:installed"}
+
+    binding, launch = await omnigent_session_activities._bind_cached_host_launch(
+        hosts,
+        _cached_binding(),
+        profile_id="codex",
+        execution_profile_ref="omnigent-codex@1",
+        launch_policy_ref="codex-on-demand@16",
+        effective_launch=planned,
+        planned=True,
+    )
+
+    assert launch == planned
+    assert binding.effective_launch_snapshot == planned
+    assert hosts.updates[0]["launch_policy_ref"] == "codex-on-demand@16"
+    assert hosts.updates[0]["host_launch_profile_ref"] == "codex-on-demand@16"
+
+
+@pytest.mark.asyncio
+async def test_leased_binding_keeps_its_launch_against_a_newer_plan() -> None:
+    """A host still running the cached launch keeps its actual binding."""
+
+    hosts = _HostBindings(active_leases=[SimpleNamespace(lease_id="lease-1")])
+
+    with pytest.raises(ValueError, match="conflicts with planned launch authority"):
+        await omnigent_session_activities._bind_cached_host_launch(
+            hosts,
+            _cached_binding(),
+            profile_id="codex",
+            execution_profile_ref="omnigent-codex@1",
+            launch_policy_ref="codex-on-demand@16",
+            effective_launch={"snapshotRef": "omnigent-launch:sha256:installed"},
+            planned=True,
+        )
+    assert hosts.updates == []
+
+    # Without an admitted plan the cached launch stays authority.
+    binding = _cached_binding()
+    same, launch = await omnigent_session_activities._bind_cached_host_launch(
+        hosts,
+        binding,
+        profile_id="codex",
+        execution_profile_ref="omnigent-codex@1",
+        launch_policy_ref="codex-on-demand@16",
+        effective_launch={"snapshotRef": "omnigent-launch:sha256:installed"},
+        planned=False,
+    )
+    assert same is binding
+    assert launch == binding.effective_launch_snapshot
