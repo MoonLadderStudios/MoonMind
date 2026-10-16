@@ -4127,6 +4127,72 @@ def test_pr_resolver_local_commit_failure_reports_the_local_condition(
     )
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (
+            {
+                "reason": "local_commit_failed",
+                "next_step": "provide_commit_identity",
+                "localCommit": {"kind": "identity_missing", "attempts": 1},
+            },
+            "retry_step_execution",
+        ),
+        (
+            {
+                "reason": "local_commit_failed",
+                "next_step": "provide_commit_identity",
+                "localCommit": {"kind": "identity_missing", "attempts": 2},
+            },
+            None,
+        ),
+        (
+            {
+                "reason": "local_commit_failed",
+                "next_step": "provide_commit_signing",
+                "localCommit": {"kind": "signing_failed", "attempts": 1},
+            },
+            None,
+        ),
+        (
+            {
+                "reason": "local_commit_failed",
+                "next_step": "address_commit_hook_failure",
+                "localCommit": {
+                    "kind": "hook_rejected",
+                    "attempts": 3,
+                    "exhausted": True,
+                },
+            },
+            None,
+        ),
+        ({"reason": "publish_unavailable", "next_step": "manual_review"}, None),
+    ],
+    ids=["identity", "identity-repeat", "signing", "hook-exhausted", "publish"],
+)
+def test_pr_resolver_metadata_retries_only_host_repairable_commit_identity(
+    tmp_path: Path, payload: dict[str, Any], expected: str | None
+) -> None:
+    import json
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    disposition = (
+        "manual_review" if payload["reason"] == "publish_unavailable" else "failed"
+    )
+    (resolver / "result.json").write_text(
+        json.dumps(
+            {"status": "blocked", "mergeAutomationDisposition": disposition, **payload}
+        ),
+        encoding="utf-8",
+    )
+
+    metadata = _derive_pr_resolver_metadata(str(tmp_path), merge_gate_owned=True)
+
+    assert metadata["mergeAutomationDisposition"] == disposition
+    assert metadata.get("retryRecommendation") == expected
+
+
 async def test_fetch_result_clears_generic_failed_exit_for_human_approval_gate(
     tmp_path: Path,
 ):

@@ -714,6 +714,11 @@ RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH = (
 RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH = (
     "run-adapter-resolver-verdict-retry-decision-v1"
 )
+# A failed resolver verdict whose producer asks for ``retry_step_execution``
+# (the first commit refused for missing identity, which the next attempt's
+# workspace preparation supplies) gets the existing bounded step retry instead
+# of stopping as final. Earlier histories recorded that verdict as final.
+RUN_RESOLVER_HOST_REPAIR_RETRY_PATCH = "run-resolver-host-repair-retry-v1"
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
@@ -16339,6 +16344,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if failure_message in {"user_error", "permanent"}:
             return False
 
+        host_repair_retry = bool(
+            explicit_step_retry
+            and str(outputs.get("mergeAutomationDisposition") or "").strip().lower()
+            == "failed"
+            and self._workflow_patch_enabled(RUN_RESOLVER_HOST_REPAIR_RETRY_PATCH)
+        )
+
         # A validated resolver terminal disposition belongs to the selected
         # Skill, not generic provider recovery. Retrying manual-review or failed
         # terminal evidence can repeat mutations. A rejected typed continuation
@@ -16346,7 +16358,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # the authoritative failure; real provider failures keep their existing
         # bounded retry classification. Missing or malformed terminal evidence
         # also stays retryable so the repair path can recover it.
-        if self._workflow_patch_enabled(RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH):
+        if not host_repair_retry and self._workflow_patch_enabled(
+            RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH
+        ):
             if self._workflow_patch_enabled(
                 RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH
             ):
@@ -16381,7 +16395,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             ):
                 return False
 
-        if self._workflow_patch_enabled(
+        if not host_repair_retry and self._workflow_patch_enabled(
             RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH
         ):
             # Artifact fields alone only say a valid verdict exists; the run
