@@ -743,7 +743,9 @@ component/style owners — not a parallel mobile tree:
 - Tables that compare on desktop become stacked records on phones (at the
   `720px` breakpoint): the label renders as a caption above a full-width
   value. Shared `DataTable` mirrors loading/error/empty states into its
-  card fallback so hiding the table never hides the state.
+  card fallback so hiding the table never hides the state, and drops the
+  desktop slab's bounded height so tall cards cannot spill over the content
+  that follows.
 - Long machine identifiers wrap (`overflow-wrap: anywhere`); human prose
   wraps naturally. Action groups wrap into full-width buttons instead of
   compressing into tall pills. On phones, inventory and Settings controls
@@ -751,15 +753,16 @@ component/style owners — not a parallel mobile tree:
   `2.75rem` minimum height; form text stays at 16px.
 - Overlays stay viewport-bounded (`100dvh`-based max height with internal
   scroll) with reachable close/save actions and preserved focus behavior.
-- Genuinely two-dimensional technical content (policy JSON, diffs, worker
-  health tables) may use a bounded local scroll region or wrap; ordinary
-  fields and actions never require sideways page panning.
+- Genuinely two-dimensional technical content (policy JSON, diffs) may use
+  a bounded local scroll region or wrap; ordinary fields and actions never
+  require sideways page panning.
 
 Prove repairs with `frontend/src/browser/mobileOverflow.browser.test.tsx`,
-which renders the production Agents and Providers & Secrets pages in the
-dashboard shell at phone, short-landscape, tablet, and desktop sizes plus
-200% text in the dark theme, and drives their real filter/retry/refresh and
-Provider edit/save journeys; `frontend/src/browser/settingsMobileGutters.browser.test.tsx`
+which renders the production Agents, Policies, Providers & Secrets,
+Instance and Operations settings, and Artifacts pages in the dashboard shell
+at phone, short-landscape, tablet, and desktop sizes plus 200% text in the
+dark theme, and drives their real filter/retry/refresh, policy
+detail/editor, Provider edit/save, and enrollment-drawer journeys; `frontend/src/browser/settingsMobileGutters.browser.test.tsx`
 covers phone gutters. `npm run ui:test:browser` runs them across the
 Chromium/Firefox matrix and the WebKit leg. Workflow list/detail/chat, collection rails,
 sidebars, and native chat composition are out of scope for shared-selector

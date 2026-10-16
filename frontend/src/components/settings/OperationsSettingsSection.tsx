@@ -1394,8 +1394,8 @@ export function OperationsSettingsSection({
                       {(shardHealthError as Error).message}
                     </p>
                   ) : workerShards.length > 0 ? (
-                    <div className="mt-3 overflow-x-auto">
-                      <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
+                    <div className="stacked-records-wrap mt-3 overflow-x-auto">
+                      <table className="stacked-records min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-800">
                         <thead className="text-xs uppercase text-slate-500 dark:text-slate-400">
                           <tr>
                             <th scope="col" className="px-3 py-2 font-semibold">
@@ -1418,10 +1418,10 @@ export function OperationsSettingsSection({
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                           {workerShards.map((shard) => (
                             <tr key={shard.queueName}>
-                              <td className="px-3 py-3 align-top font-medium text-slate-900 dark:text-white">
+                              <td data-label="Worker" className="px-3 py-3 align-top font-medium text-slate-900 dark:text-white">
                                 {workerDisplayName(shard)}
                               </td>
-                              <td className="px-3 py-3 align-top">
+                              <td data-label="Status" className="px-3 py-3 align-top">
                                 <span
                                   className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${workerStatusTone(
                                     shard.status,
@@ -1430,7 +1430,7 @@ export function OperationsSettingsSection({
                                   {formatStatusLabel(shard.status)}
                                 </span>
                               </td>
-                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                              <td data-label="Queue" className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
                                 <div>{shard.queueName}</div>
                                 {shard.hashModulo ? (
                                   <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -1438,7 +1438,7 @@ export function OperationsSettingsSection({
                                   </div>
                                 ) : null}
                               </td>
-                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                              <td data-label="Auth volume" className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
                                 <div>{shard.volumeName || 'No auth volume'}</div>
                                 {shard.volumeStatus ? (
                                   <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -1449,7 +1449,7 @@ export function OperationsSettingsSection({
                                   </div>
                                 ) : null}
                               </td>
-                              <td className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
+                              <td data-label="Latest run" className="px-3 py-3 align-top text-slate-600 dark:text-slate-300">
                                 <div>
                                   {shard.latestRunStatus
                                     ? formatStatusLabel(shard.latestRunStatus)

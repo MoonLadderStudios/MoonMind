@@ -3167,8 +3167,8 @@ tbody tr:hover {
   }
 
   /* MoonMind#4559: comparison tables marked .stacked-records (saved Provider
-   * Profiles, Managed Secrets, evidence collections) become stacked records
-   * on phones. Each cell's data-label sits above its value so status,
+   * Profiles, Managed Secrets, evidence collections, worker shard health)
+   * become stacked records on phones. Each cell's data-label sits above its value so status,
    * metadata, and actions use the full record width instead of competing
    * with a label column or needing sideways scrolling. */
   .stacked-records td::before {
@@ -10247,7 +10247,10 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 @media (max-width: 720px) {
+  /* Stacked cards grow with their content; the desktop slab's bounded
+   * height would let tall cards spill over the content that follows. */
   .data-table-slab[data-responsive="on"] {
+    max-height: none;
     overflow: visible;
     border: 0;
     background: transparent;
