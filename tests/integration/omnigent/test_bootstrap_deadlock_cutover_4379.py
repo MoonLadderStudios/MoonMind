@@ -2,8 +2,8 @@
 
 Exercises the policy/bootstrap/schedule boundaries together on disposable
 SQLite storage (no production execution, no registry): default v1 (old
-digest) + active non-default v2 + advanced resolved image must yield default
-@3 with the new image, an auto-advanced Agent Profile admitting @3, and
+image) + active non-default v2 + a resolved host of another image family must
+yield default @3 with the new image, an auto-advanced Agent Profile admitting @3, and
 preserved v1/v2 history — without manual DB writes or manual
 profile/schedule edits. In-flight usages keep their pinned version.
 """
@@ -41,7 +41,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 OLD_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "a" * 64
 OLD_HOST = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64
 NEW_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "b" * 64
-NEW_HOST = "ghcr.io/example/omnigent-host@sha256:" + "b" * 64
+# Another host image family; a same-repository digest needs no new version.
+NEW_HOST = "ghcr.io/example/omnigent-host-moonmind@sha256:" + "b" * 64
 
 
 def _image_resolver_factory(server_ref: str, host_ref: str):
