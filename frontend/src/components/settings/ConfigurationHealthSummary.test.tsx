@@ -84,7 +84,9 @@ describe('summarizeConfigurationHealth', () => {
 
     expect(summary.level).toBe('warning');
     expect(summary.hasDefaultProfile).toBe(false);
-    expect(summary.warnings.map((w) => w.id)).toContain('no-default-profile');
+    expect(summary.warnings.find((w) => w.id === 'no-default-profile')?.message).toBe(
+      'No default provider profile is set. Workflows without an explicit profile have no provider profile to fall back to.',
+    );
   });
 
   it('blocks on broken secret references bound by an enabled profile', () => {

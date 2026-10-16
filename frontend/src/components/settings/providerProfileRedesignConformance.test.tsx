@@ -512,7 +512,7 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
       // Standard identity and capacity controls stay visible.
       expect(screen.getByLabelText(/Account label/)).toBeTruthy();
       expect(screen.getByLabelText(/Max parallel runs/)).toBeTruthy();
-      expect(screen.getByLabelText('Runtime default')).toBeTruthy();
+      expect(screen.getByLabelText('Harness default')).toBeTruthy();
       expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(false);
 
       // MoonLadderStudios/MoonMind#4002: the action agrees with the actual
