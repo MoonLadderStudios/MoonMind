@@ -71,7 +71,9 @@ class FakeArtifactService:
         self.status = status
         self.redaction_level = redaction_level
 
-    async def get_metadata(self, *, artifact_id: str, principal: str):
+    async def get_metadata(
+        self, *, artifact_id: str, principal: str, admitted_principal=None
+    ):
         payload = self.payloads[artifact_id]
         artifact = SimpleNamespace(
             artifact_id=artifact_id,
@@ -91,7 +93,7 @@ class FakeArtifactService:
 
     async def read_chunks(
         self, *, artifact_id: str, principal: str, allow_restricted_raw: bool,
-        chunk_size: int,
+        chunk_size: int, admitted_principal=None,
     ):
         assert allow_restricted_raw is True
         return SimpleNamespace(), iter((self.payloads[artifact_id],))

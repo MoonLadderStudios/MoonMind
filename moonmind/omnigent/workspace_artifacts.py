@@ -187,6 +187,10 @@ def _artifact_digest(artifact: Any) -> str | None:
     return None
 
 
+def _admitted_scope(admitted_principal: str | None) -> dict[str, str]:
+    return {"admitted_principal": admitted_principal} if admitted_principal else {}
+
+
 def _check_workflow_family_link(
     links: tuple[Any, ...], required_workflow_id: str
 ) -> None:
@@ -275,6 +279,7 @@ class WorkspaceArtifactProjector:
                 workspace,
                 checkpoint_ref,
                 expected_digest=checkpoint_digest,
+                admitted_workflow_id=workflow_id,
                 required_workflow_id=workflow_id if strict_admission else None,
                 strict_metadata=strict_admission,
                 overlay_policy=overlay_policy,
@@ -296,6 +301,10 @@ class WorkspaceArtifactProjector:
             refs=restore_refs,
             subdir="restore",
             principal=RESTORE_PRINCIPAL,
+            # The restore service is not itself a read grant: the service
+            # still requires each input to be owned by or linked to the
+            # admitted execution before it releases bytes.
+            admitted_principal=f"workflow:{workflow_id}",
             noun="restore inputs",
             runtime_uid=runtime_uid,
             runtime_gid=runtime_gid,
@@ -395,6 +404,7 @@ class WorkspaceArtifactProjector:
         artifact_ref: str,
         *,
         expected_digest: str | None = None,
+        admitted_workflow_id: str | None = None,
         required_workflow_id: str | None = None,
         strict_metadata: bool = False,
         overlay_policy: str = "authoritative_restore",
@@ -408,6 +418,9 @@ class WorkspaceArtifactProjector:
             )
         artifact_id = self._artifact_id(artifact_ref, noun="workspace checkpoint")
         service = self._require_service("workspace checkpoint")
+        admitted_principal = (
+            f"workflow:{admitted_workflow_id}" if admitted_workflow_id else None
+        )
         # Historical alias payloads without an authored workspaceSource pass
         # required_workflow_id=None and keep the legacy-tolerant admission so
         # in-flight runs retain deterministic meaning; the authored path
@@ -417,6 +430,7 @@ class WorkspaceArtifactProjector:
             artifact_id=artifact_id,
             budget_bytes=min(MAX_CHECKPOINT_BYTES, MAX_COMPRESSED_BYTES),
             principal=RESTORE_PRINCIPAL,
+            admitted_principal=admitted_principal,
             required_workflow_id=required_workflow_id,
             expected_digest=expected_digest,
             strict_metadata=strict_metadata,
@@ -447,6 +461,7 @@ class WorkspaceArtifactProjector:
                 target=archive_path,
                 budget_bytes=min(MAX_CHECKPOINT_BYTES, MAX_COMPRESSED_BYTES),
                 principal=RESTORE_PRINCIPAL,
+                admitted_principal=admitted_principal,
                 expected_digest=admitted.digest or expected_digest,
             )
             staging.mkdir(mode=0o700, parents=False, exist_ok=False)
@@ -1522,6 +1537,7 @@ class WorkspaceArtifactProjector:
         refs: tuple[str, ...],
         subdir: str,
         principal: str,
+        admitted_principal: str | None = None,
         noun: str,
         required_workflow_id: str | None = None,
         runtime_uid: int,
@@ -1560,6 +1576,7 @@ class WorkspaceArtifactProjector:
                 artifact_id=artifact_id,
                 budget_bytes=budget,
                 principal=principal,
+                admitted_principal=admitted_principal,
                 required_workflow_id=required_workflow_id,
             )
             target = root / hashlib.sha256(ref.encode("utf-8")).hexdigest()[:24]
@@ -1581,6 +1598,7 @@ class WorkspaceArtifactProjector:
                     target=staging,
                     budget_bytes=budget,
                     principal=principal,
+                    admitted_principal=admitted_principal,
                     expected_digest=admitted.digest,
                 )
                 self._make_runtime_readable(
@@ -1658,6 +1676,7 @@ class WorkspaceArtifactProjector:
         artifact_id: str,
         budget_bytes: int,
         principal: str,
+        admitted_principal: str | None = None,
         required_workflow_id: str | None = None,
         expected_digest: str | None = None,
         strict_metadata: bool = False,
@@ -1685,7 +1704,11 @@ class WorkspaceArtifactProjector:
                 redaction_level=None,
             )
         try:
-            metadata = await get_metadata(artifact_id=artifact_id, principal=principal)
+            metadata = await get_metadata(
+                artifact_id=artifact_id,
+                principal=principal,
+                **_admitted_scope(admitted_principal),
+            )
         except WorkspaceArtifactProjectionError:
             raise
         except Exception as exc:
@@ -1754,6 +1777,7 @@ class WorkspaceArtifactProjector:
         target: Path,
         budget_bytes: int,
         principal: str,
+        admitted_principal: str | None = None,
         expected_digest: str | None = None,
     ) -> int:
         want = expected_digest.strip().lower() if expected_digest else None
@@ -1763,6 +1787,7 @@ class WorkspaceArtifactProjector:
                 _artifact, chunks = await read_chunks(
                     artifact_id=artifact_id,
                     principal=principal,
+                    **_admitted_scope(admitted_principal),
                     allow_restricted_raw=True,
                     chunk_size=STREAM_CHUNK_BYTES,
                 )
@@ -1816,6 +1841,7 @@ class WorkspaceArtifactProjector:
             _artifact, payload = await service.read(
                 artifact_id=artifact_id,
                 principal=principal,
+                **_admitted_scope(admitted_principal),
                 allow_restricted_raw=True,
             )
         except WorkspaceArtifactProjectionError:

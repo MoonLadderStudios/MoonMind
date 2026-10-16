@@ -7918,6 +7918,7 @@ class _StreamingArtifactService:
         principal: str,
         allow_restricted_raw: bool = False,
         chunk_size: int = 1024,
+        admitted_principal: str | None = None,
     ):
         assert allow_restricted_raw is True
         assert principal == "service:omnigent_workspace_restore"

@@ -63,6 +63,7 @@ from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
     materialize_run_skill_snapshot,
     prepend_skill_activation_summary,
+    step_execution_read_principal,
     verify_skill_projection,
 )
 from moonmind.workflows.temporal.jira_tool_hints import (
@@ -2299,8 +2300,11 @@ class ManagedRuntimeLauncher:
         from moonmind.config.settings import settings as _mm_settings
 
         run_root = Path(resolved_workspace_path).absolute().parent
+        admitted_principal = step_execution_read_principal(request)
         resolved_skillset = await load_resolved_skillset(
-            self._artifact_service, skillset_ref
+            self._artifact_service,
+            skillset_ref,
+            admitted_principal=admitted_principal,
         )
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         from moonmind.workflows.agent_skills.selection import selected_agent_skill
@@ -2332,6 +2336,7 @@ class ManagedRuntimeLauncher:
             projection_owner_uid=1000,
             projection_owner_gid=1000,
             project_adapter_aliases=selected_skill_name != "moonspec-verify",
+            admitted_principal=admitted_principal,
         )
 
         await verify_skill_projection(
