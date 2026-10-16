@@ -86,6 +86,8 @@
 #                                       binding (MOONMIND_API_PUBLISH_HOST /
 #                                       MOONMIND_API_HOST_PORT)
 #   FIRST_RUN_3938_LOG_DIR              default var/artifacts/first-run-3938
+#   MOONMIND_TEST_CLEANUP_TIMEOUT       seconds each teardown or diagnostics
+#                                       Compose command may take (default 120)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -154,8 +156,19 @@ done
 DEPLOY_DIR="$REPO_ROOT"
 COMPOSE_OVERRIDES=()
 
+# Teardown and failure diagnostics pass a leading time bound in seconds so a
+# stuck daemon cannot hold the run open. It applies when coreutils timeout
+# exists; stock macOS lacks it, so there the command stays unbounded.
+CLEANUP_TIMEOUT="${MOONMIND_TEST_CLEANUP_TIMEOUT:-120}"
 compose() {
-  "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" \
+  local -a bound=()
+  if [[ "$1" =~ ^[0-9]+$ ]]; then
+    if command -v timeout >/dev/null 2>&1; then
+      bound=(timeout --kill-after=10s "$1s")
+    fi
+    shift
+  fi
+  ${bound[@]+"${bound[@]}"} "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" \
     -f "$DEPLOY_DIR/docker-compose.yaml" ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} \
     --project-directory "$DEPLOY_DIR" "$@"
 }
@@ -170,12 +183,12 @@ ENV_STASH_DIR=""
 cleanup() {
   if [[ "$JOURNEY_FAILED" != "0" ]]; then
     mkdir -p "$LOG_DIR"
-    compose logs --no-color --tail 300 2>/dev/null | redact \
+    compose "$CLEANUP_TIMEOUT" logs --no-color --tail 300 2>/dev/null | redact \
       > "$LOG_DIR/compose-logs-tail.log" 2>/dev/null || true
-    compose ps -a 2>/dev/null > "$LOG_DIR/compose-ps.log" || true
+    compose "$CLEANUP_TIMEOUT" ps -a 2>/dev/null > "$LOG_DIR/compose-ps.log" || true
     echo "Journey failed; bounded redacted logs are in $LOG_DIR." >&2
   fi
-  compose down --remove-orphans >/dev/null 2>&1 || true
+  compose "$CLEANUP_TIMEOUT" down --remove-orphans >/dev/null 2>&1 || true
   if [[ "$DEPLOY_DIR" != "$REPO_ROOT" ]]; then
     # Containers may leave root-owned state behind; remove what this user
     # can and let git forget the worktree.
