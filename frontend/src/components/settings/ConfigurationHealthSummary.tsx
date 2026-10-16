@@ -120,7 +120,7 @@ export function summarizeConfigurationHealth(
       id: 'no-default-profile',
       level: 'warning',
       message:
-        'No default provider profile is set. Workflows without an explicit profile have no runtime to fall back to.',
+        'No default provider profile is set. Workflows without an explicit profile have no provider profile to fall back to.',
     });
   }
 

@@ -20200,7 +20200,7 @@ describe("Task Create runtime command previews", () => {
     expect(await screen.findByText("Unsupported runtime command: /review")).toBeTruthy();
     expect(
       screen.getByText(
-        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text.",
+        "This Harness does not pass through slash commands. Choose a slash-command capable Harness or escape the slash for literal text.",
       ),
     ).toBeTruthy();
   });

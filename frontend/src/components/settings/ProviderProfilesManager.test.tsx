@@ -1273,7 +1273,7 @@ describe('ProviderProfilesManager form controls', () => {
         provider_id: 'unknown-provider',
         supported: false,
         authentication_methods: [],
-        diagnostics: ['No validated creation preset exists for this runtime and provider.'],
+        diagnostics: ['No validated creation preset exists for this Harness and provider.'],
       }),
     } as Response);
     const { onNotice } = renderProviderProfilesManager();
@@ -1283,7 +1283,7 @@ describe('ProviderProfilesManager form controls', () => {
     });
     // A projected pair whose capability lookup reports no supported method.
     await chooseHarnessAndProvider('codex_cli', 'openrouter');
-    await screen.findByText('No validated creation preset exists for this runtime and provider.');
+    await screen.findByText('No validated creation preset exists for this Harness and provider.');
     // MoonLadderStudios/MoonMind#4002: missing valid choices disable the
     // action with the specific reason instead of submitting.
     const action = screen.getByRole('button', { name: 'Create profile' });
@@ -1295,6 +1295,27 @@ describe('ProviderProfilesManager form controls', () => {
 
     expect(onNotice).not.toHaveBeenCalled();
     expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('names the Harness when an unsupported pair arrives without a diagnostic', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        version: 'provider-profile-creation-v1',
+        runtime_id: 'unknown-runtime',
+        provider_id: 'unknown-provider',
+        supported: false,
+        authentication_methods: [],
+        diagnostics: [],
+      }),
+    } as Response);
+    renderProviderProfilesManager();
+
+    fireEvent.change(screen.getByLabelText(/Profile ID/), {
+      target: { value: 'codex-default' },
+    });
+    await chooseHarnessAndProvider('codex_cli', 'openrouter');
+    await screen.findByText('No validated creation preset exists for this Harness and provider.');
   });
 
   it('starts a Codex OAuth session from the profile OAuth action', async () => {
@@ -3536,6 +3557,14 @@ describe('MoonLadderStudios/MoonMind#4002 truthful creation actions', () => {
     });
     expect(unsupported.disabled).toBe(true);
     expect(unsupported.reason).toBe('Use the authorized manual profile path.');
+    const unsupportedWithoutDiagnostic = resolveCreationAction({
+      ...base,
+      presetSupported: false,
+      presetDiagnostic: null,
+    });
+    expect(unsupportedWithoutDiagnostic.reason).toBe(
+      'This Harness, provider, and authentication combination is unsupported.',
+    );
     const noWrite = resolveCreationAction({ ...base, canWrite: false });
     expect(noWrite.disabled).toBe(true);
     expect(noWrite.reason).toContain('permission');

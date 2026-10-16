@@ -2081,7 +2081,7 @@ function deriveRuntimeCommandPreview({
       messageSeverity: "warning",
       label: `Unsupported runtime command: /${command}`,
       description:
-        "This runtime does not pass through slash commands. Choose a slash-command capable runtime or escape the slash for literal text." +
+        "This Harness does not pass through slash commands. Choose a slash-command capable Harness or escape the slash for literal text." +
         warningSuffix,
       source,
     };

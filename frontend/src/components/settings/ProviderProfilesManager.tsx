@@ -509,7 +509,7 @@ export function resolveCreationAction(input: CreationActionInput): CreationActio
       disabled: true,
       reason:
         input.presetDiagnostic ??
-        'This runtime, provider, and authentication combination is unsupported.',
+        'This Harness, provider, and authentication combination is unsupported.',
     };
   }
   if (input.setupContinuationAvailable) {
@@ -1792,7 +1792,7 @@ function buildSavePayload(
     throw new Error('Profile ID is required.');
   }
   if (!payload.runtime_id) {
-    throw new Error('Runtime ID is required.');
+    throw new Error('Harness is required.');
   }
   if (!payload.provider_id) {
     throw new Error('Provider ID is required.');
@@ -1841,7 +1841,7 @@ function buildSavePayload(
   if (!preset.supported) {
     throw new Error(
       preset.diagnostics[0]?.message ??
-        'This runtime, provider, and authentication combination is unsupported.',
+        'This Harness, provider, and authentication combination is unsupported.',
     );
   }
   payload.authentication_method = authenticationMethod;
@@ -2291,7 +2291,7 @@ export function ProviderProfilesManager({
         if (!capabilities.supported) {
           setCreationCapabilitiesError(
             capabilities.diagnostics[0] ??
-              'No validated creation preset exists for this runtime and provider.',
+              'No validated creation preset exists for this Harness and provider.',
           );
         }
       })

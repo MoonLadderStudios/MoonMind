@@ -78,6 +78,9 @@ def test_credential_free_method_requires_authoritative_backend_capability(
 
     assert unsupported["supported"] is False
     assert unsupported["authentication_methods"] == []
+    assert unsupported["diagnostics"] == [
+        "No validated creation preset exists for this Harness and provider."
+    ]
     assert [method["id"] for method in authorized["authentication_methods"]] == ["none"]
     assert authorized["authentication_methods"][0]["label"] == "No credentials"
 
