@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { useUrlSearchText } from '../lib/urlSearchText';
 
 type Category = 'artifacts' | 'reports' | 'observability';
 type CollectionRow = {
@@ -46,7 +47,7 @@ function EvidenceSection({ category, apiBase }: { category: Category; apiBase: s
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const queryKey = `${category}_q`;
   const pageKey = `${category}_page`;
-  const query = params.get(queryKey) ?? '';
+  const [query, setSearch] = useUrlSearchText(queryKey, [pageKey]);
   const page = Math.max(1, Number(params.get(pageKey) || '1') || 1);
   const limit = 25;
   const offset = (page - 1) * limit;
@@ -60,12 +61,6 @@ function EvidenceSection({ category, apiBase }: { category: Category; apiBase: s
       return response.json() as Promise<CollectionResponse>;
     },
   });
-  const setSearch = (next: string) => {
-    const search = new URLSearchParams(location.search);
-    if (next) search.set(queryKey, next); else search.delete(queryKey);
-    search.delete(pageKey);
-    navigate({ pathname: location.pathname, search: search.toString() }, { replace: true });
-  };
   const setPage = (next: number) => {
     const search = new URLSearchParams(location.search);
     if (next > 1) search.set(pageKey, String(next)); else search.delete(pageKey);
@@ -87,13 +82,13 @@ function EvidenceSection({ category, apiBase }: { category: Category; apiBase: s
       {result.isError ? <div role="alert"><p>{result.error.message}</p><button type="button" onClick={() => void result.refetch()}>Try again</button></div> : null}
       {result.data && result.data.items.length === 0 ? <p>{query ? `No ${definition.label.toLowerCase()} match this filter.` : `No authorized ${definition.label.toLowerCase()} are available.`}</p> : null}
       {result.data?.items.length ? (
-        <div className="evidence-collection__table-wrap"><table><thead><tr><th>Evidence</th><th>Provenance</th><th>Freshness</th><th>Size</th><th>Actions</th></tr></thead>
+        <div className="evidence-collection__table-wrap stacked-records-wrap"><table className="stacked-records"><thead><tr><th>Evidence</th><th>Provenance</th><th>Freshness</th><th>Size</th><th>Actions</th></tr></thead>
           <tbody>{result.data.items.map((row) => <tr key={row.artifact_id}>
-            <td><code>{row.artifact_id}</code><small>{row.content_type || 'Unknown type'} · {row.status}</small></td>
-            <td>{row.workflow_id ? <Link to={`/workflows/${encodeURIComponent(row.workflow_id)}`}>{row.label || row.link_type || 'Workflow'}</Link> : (row.label || row.link_type || 'Unlinked')}</td>
-            <td><time dateTime={row.created_at}>{new Date(row.created_at).toLocaleString()}</time></td>
-            <td>{formatBytes(row.size_bytes)}</td>
-            <td><a href={row.download_url}>Download</a></td>
+            <td data-label="Evidence"><code>{row.artifact_id}</code><small>{row.content_type || 'Unknown type'} · {row.status}</small></td>
+            <td data-label="Provenance">{row.workflow_id ? <Link to={`/workflows/${encodeURIComponent(row.workflow_id)}`}>{row.label || row.link_type || 'Workflow'}</Link> : (row.label || row.link_type || 'Unlinked')}</td>
+            <td data-label="Freshness"><time dateTime={row.created_at}>{new Date(row.created_at).toLocaleString()}</time></td>
+            <td data-label="Size">{formatBytes(row.size_bytes)}</td>
+            <td data-label="Actions"><a href={row.download_url}>Download</a></td>
           </tr>)}</tbody></table></div>
       ) : null}
       {result.data ? <footer className="evidence-collection__pagination"><span>{result.data.total} total · refreshed <time dateTime={result.data.refreshed_at}>{new Date(result.data.refreshed_at).toLocaleTimeString()}</time></span><div><button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button><button type="button" disabled={offset + limit >= result.data.total} onClick={() => setPage(page + 1)}>Next</button></div></footer> : null}

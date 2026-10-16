@@ -1680,8 +1680,8 @@ jobs:
       fail-fast: false
       # MoonMind#4559: the matrix keeps the Chromium/Firefox coverage and adds
       # a WebKit leg. That leg runs the whole browser suite, which includes
-      # the reported form, fieldset, and overlay cases in
-      # mobileOverflow4559.browser.test.tsx, so no separate WebKit job reruns
+      # the real-page form, fieldset, and overlay cases in
+      # mobileOverflow.browser.test.tsx, so no separate WebKit job reruns
       # them. The Playwright container image provisions all three engines;
       # WebKit automation is useful coverage, not a claim of testing physical
       # iOS Safari.
