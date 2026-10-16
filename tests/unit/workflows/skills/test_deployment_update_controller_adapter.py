@@ -369,15 +369,6 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     async def await_resolution(selected):
         return dict(selected)
 
-    async def catalog():
-        return {"catalogRef": "catalog:selected"}
-
-    async def policies(selected):
-        return {"cut": [], "skipped": []}
-
-    async def schedules():
-        return {"refreshed": 0, "failures": []}
-
     async def running_server(expected):
         return live["server"]
 
@@ -390,9 +381,6 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
             read_live_refs=read_live,
             restart_server=restart,
             await_resolution=await_resolution,
-            sync_catalog=catalog,
-            cut_policy_versions=policies,
-            refresh_schedules=schedules,
             verify_live_container=running_server,
         )
 

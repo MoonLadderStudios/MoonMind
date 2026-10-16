@@ -680,7 +680,15 @@ def operator_image_configuration(
     Callers that resolve or acquire images must read this instead of the live
     environment so tag refresh keeps working across passes. Callers that only
     consume an already-resolved identity should keep reading the environment.
+
+    When the deployment release controller has installed a release, its record
+    is the image configuration: Compose layers the release-owned refs over the
+    operator ``.env`` (which the release already honored), and the record is
+    read on every call because this process can outlive the release it
+    started with.
     """
+
+    from moonmind.omnigent.bootstrap.store import load_installed_release_image_env
 
     global _operator_image_baseline
 
@@ -695,6 +703,8 @@ def operator_image_configuration(
             merged[key] = value
         else:
             merged.pop(key, None)
+    if env is None:
+        merged.update(load_installed_release_image_env())
     return merged
 
 

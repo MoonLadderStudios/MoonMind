@@ -35,10 +35,6 @@ from api_service.services.omnigent_agent_profile_selection import (
     advance_agent_profiles_for_policy_cutover,
 )
 from moonmind.omnigent.policies import PolicyDocument, PolicyState
-from moonmind.workflows.skills.omnigent_release import (
-    raise_for_release_policy_drift,
-    release_policy_drift_dispositions,
-)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -201,12 +197,6 @@ async def test_deadlock_reconcile_advances_policy_and_profile(tmp_path, monkeypa
         )
         await session.commit()
 
-        # Pre-fix shape: drift is a compatible same-repo rebuild.
-        pre = release_policy_drift_dispositions(
-            {policy_id: OLD_HOST}, {"opencode": NEW_HOST}
-        )
-        assert len(pre) == 1 and pre[0]["compatibleRebuild"] is True
-
         reconciled = await policies.seed_bootstrap_policies(
             session,
             image_resolver=_image_resolver_factory(NEW_SERVER, NEW_HOST),
@@ -249,13 +239,6 @@ async def test_deadlock_reconcile_advances_policy_and_profile(tmp_path, monkeypa
         )
         assert usage.version == 1
         assert usage.effective_snapshot == {"launchPolicyRef": f"{policy_id}@1"}
-
-        # Post-cut: no drift remains, promotion unfenced.
-        post = release_policy_drift_dispositions(
-            {policy_id: NEW_HOST}, {"opencode": NEW_HOST}
-        )
-        assert post == []
-        assert raise_for_release_policy_drift(post) is None
 
         # History preserved: v1 and v2 still resolve on the old image.
         for version in (1, 2):

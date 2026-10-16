@@ -327,9 +327,11 @@ def resolve_policy_image_refs(policy: OmnigentLaunchPolicy) -> tuple[str, str]:
 
         resolved = load_resolved_state()
         if server_ref.startswith("bootstrap://"):
+            # The resolved state is the installed server; this process's
+            # environment may still carry a release that predates it.
             server_ref = (
-                os.getenv("OMNIGENT_IMAGE_REF", "").strip()
-                or str(getattr(resolved, "server_image_ref", "") or "").strip()
+                str(getattr(resolved, "server_image_ref", "") or "").strip()
+                or os.getenv("OMNIGENT_IMAGE_REF", "").strip()
             )
         if host_ref.startswith("bootstrap://"):
             if policy.policy_id.startswith(_SHARED_HOST_POLICY_PREFIXES):
