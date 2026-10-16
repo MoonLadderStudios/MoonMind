@@ -71,6 +71,13 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
         "if fault == 'probe_error' and attempt == 1:\n"
         "    sys.stderr.write('private provider diagnostic')\n"
         "    sys.exit(1)\n"
+        "if fault == 'model_mismatch_probe_error' and attempt > 1:\n"
+        "    sys.stderr.write('private provider diagnostic')\n"
+        "    sys.exit(1)\n"
+        "if fault.startswith('model_'):\n"
+        "    sys.stdout.write('opencode-go/gemini-4-argon-contributor\\n' "
+        "+ 'opencode/gemini-4-argon-contributor-free\\n')\n"
+        "    sys.exit(0)\n"
         f"catalogs = {catalogs!r}\n"
         "sys.stderr.write(catalogs['stderr'])\n"
         "sys.stdout.write(catalogs['bundled'] if fault in {'exhausted', 'artifact_error'} or "
@@ -111,7 +118,17 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
             ],
             ["codex-native", "claude-native", "pi-native"],
         )
-    ),
+    )
+    # The actual failure used a different ID from the host's published model.
+    # A corrected explicit selection is served; a nearby name is never an alias.
+    + [
+        (fault, "opencode-native")
+        for fault in (
+            "model_mismatch",
+            "model_mismatch_probe_error",
+            "model_corrected",
+        )
+    ],
 )
 async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness_id: str, fault: str
@@ -126,6 +143,10 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
     image_ref = "example/host@sha256:" + "1" * 64
     build_digest = "sha256:" + "2" * 64
     selected_model = manifest["selectedModel"]
+    if fault.startswith("model_"):
+        selected_model = "opencode-go/gemini-4-argon"
+        if fault == "model_corrected":
+            selected_model += "-contributor"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     candidate = workspace / "candidate.txt"
@@ -255,7 +276,12 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         async def cleanup(self, **kwargs):
             events.append("cleanup")
             assert kwargs["container_name"] == "replay-host"
-            if fault in {"exhausted", "probe_exhausted"}:
+            if fault in {
+                "exhausted",
+                "probe_exhausted",
+                "model_mismatch",
+                "model_mismatch_probe_error",
+            }:
                 assert (tmp_path / "generic-host-model-options.json").exists()
             return {"containerRemoved": True}
 
@@ -363,7 +389,13 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         prepared=prepared,
         credential_handles=[],
     )
-    catalog_exhausted = fault in {"exhausted", "artifact_error", "probe_exhausted"}
+    catalog_exhausted = fault in {
+        "exhausted",
+        "artifact_error",
+        "probe_exhausted",
+        "model_mismatch",
+        "model_mismatch_probe_error",
+    }
     terminal_http_error = fault.startswith("http_")
     if (
         catalog_exhausted
@@ -391,6 +423,11 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         assert len(attempts) == (manifest["maxAttempts"] if catalog_exhausted else 1)
         if catalog_exhausted:
             assert "after 3 catalog reads" in str(exc.value)
+        if fault.startswith("model_mismatch"):
+            assert "opencode-go/gemini-4-argon-contributor" in str(exc.value)
+            assert "opencode/gemini-4-argon-contributor-free" not in str(exc.value)
+            assert "Select an exact model ID" in str(exc.value)
+            assert "private provider diagnostic" not in str(exc.value)
     else:
         result = await operation
         assert (
@@ -398,7 +435,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             == "artifact:generic-host-model-options.json"
         )
         assert "cleanup" not in events
-        assert len(attempts) == (1 if fault == "none" else 2)
+        assert len(attempts) == (1 if fault in {"none", "model_corrected"} else 2)
     assert events.count("launch") == 1
     assert set(attempts) == {"replay-host"}
     assert candidate.read_text() == "preserved edits"
@@ -424,4 +461,6 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             "probe_exhausted",
         }:
             assert evidence["attempts"][0]["errorCode"] == "OMNIGENT_MODEL_UNAVAILABLE"
+        if fault == "model_mismatch_probe_error":
+            assert evidence["attempts"][-1]["errorCode"] == "OMNIGENT_MODEL_UNAVAILABLE"
         assert "private provider diagnostic" not in json.dumps(evidence)

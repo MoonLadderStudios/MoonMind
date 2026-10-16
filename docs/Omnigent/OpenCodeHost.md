@@ -504,8 +504,9 @@ OpenCode Zen. It does not request a new key. Discovery freshness is advisory for
 or failed background probe never removes a configured Profile from authoring or
 revokes previously established credential readiness. The existing durable launch
 phase reports preparation progress while the actual host verifies the selected
-model and credential materialization. Missing models produce an actionable failure
-without substituting a model or account.
+model and credential materialization. Missing-model errors name related exact IDs
+from the last successful host read. Selecting one is explicit; retries never
+substitute a model or account.
 
 Revalidation attempts are bounded per image and credential generation. Failure to acquire the maintenance lease does not spend a provider probe attempt because no probe occurred.
 
