@@ -34,7 +34,11 @@ LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
-CONTROLLER_CAPABILITIES = ("active-journal-transition",)
+# Behavior submitters require before trusting an answer. ``request-identity``:
+# a completed operation answers only its own identity, so a new request for a
+# mutable tag such as ``latest`` applies again instead of returning an earlier
+# success.
+CONTROLLER_CAPABILITIES = ("active-journal-transition", "request-identity")
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
 # complete stdout, never its bounded diagnostic tail.
