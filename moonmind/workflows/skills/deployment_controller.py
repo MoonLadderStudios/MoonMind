@@ -57,6 +57,9 @@ CONTROLLER_STATUS_TIMEOUT_SECONDS: float = 10
 CONTROLLER_SUBMIT_ATTEMPTS = 2
 # Pause before asking an unconfirmed Retry again (e.g. a just-recreated controller).
 CONTROLLER_RETRY_PAUSE_SECONDS: float = 2
+# A controller handing an operation to its requested release's controller is
+# briefly unreachable; a submission keeps observing through that restart.
+CONTROLLER_RESTART_GRACE_SECONDS: float = 30
 CONTROLLER_RECENT_LIMIT = 10
 # The independent repair route: it installs, refreshes, or restores the
 # controller from the host without a healthy API, worker, or Temporal.
@@ -67,7 +70,9 @@ CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 # A controller without request identity answers a new update to `latest` with
 # an earlier success, so its 202 would not mean this request was applied. One
 # without the routing cutover would install unversioned workers while Temporal
-# still routes to the old Worker Deployment version.
+# still routes to the old Worker Deployment version. Later releases' needs
+# arrive with their own controller through handoff; requiring them here would
+# refuse the update that installs them, leaving only a host repair.
 REQUIRED_CONTROLLER_CAPABILITIES = (
     "active-journal-transition",
     "request-identity",
@@ -400,11 +405,18 @@ def submit_controller_update(
             )
         except ControllerTransportError as exc:
             last_error = str(exc)
-            try:
-                observed = observe_controller_operation(endpoint, operation_id)
-            except ControllerTransportError as observe_exc:
-                last_error = str(observe_exc)
-                break
+            deadline = time.monotonic() + CONTROLLER_RESTART_GRACE_SECONDS
+            while True:
+                try:
+                    observed = observe_controller_operation(endpoint, operation_id)
+                    break
+                except ControllerTransportError as observe_exc:
+                    last_error = str(observe_exc)
+                    if time.monotonic() >= deadline:
+                        raise unavailable_controller_error(
+                            last_error, operation_id=operation_id
+                        ) from None
+                    time.sleep(CONTROLLER_RETRY_PAUSE_SECONDS)
             if observed is not None:
                 return observed
             continue
