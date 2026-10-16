@@ -640,8 +640,6 @@ class DockerOmnigentHostAttestor:
             ],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
-        import logging
-
         logging.getLogger(__name__).info(
             "omnigent --version probe: expected=%r got=%r",
             host_class.omnigentVersion,
@@ -951,8 +949,6 @@ class DockerOmnigentHostAttestor:
                         code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                     )
                 if expected_digests and not digest_verified:
-                    import logging
-
                     expected_version = str(tool.get("version") or "").strip()
                     probe_text = f"{observed}\n{err}".strip()
                     if expected_version and expected_version != "container-v1":
@@ -1394,9 +1390,23 @@ class DockerOmnigentHostAttestor:
             )
 
         if not model_evidence["attempts"][-1]["selectedModelPresent"]:
+            # Show exact observed suffix variants as choices, never aliases.
+            # Keep the last successful observation if a later probe failed.
+            related = [
+                model
+                for model in model_evidence.get("availableModels", [])
+                if model.startswith(selected_model + "-")
+            ][:3]
+            selection_hint = (
+                ". Related IDs reported by this host: "
+                + ", ".join(repr(model) for model in related)
+                + ". Select an exact model ID explicitly."
+                if related
+                else ""
+            )
             failure = HarnessPlatformError(
                 f"selected model {selected_model} could not be confirmed on the exact host "
-                f"after {_MODEL_ATTESTATION_MAX_ATTEMPTS} catalog reads",
+                f"after {_MODEL_ATTESTATION_MAX_ATTEMPTS} catalog reads{selection_hint}",
                 code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
             )
             try:

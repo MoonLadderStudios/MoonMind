@@ -12,7 +12,7 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
   loading?: boolean;
   error?: string | null;
   preview?: ModelSelectionPreview | undefined;
-  capabilities?: Pick<ProviderProfileTierCapabilities, "model" | "effort" | "diagnostics"> | undefined;
+  capabilities?: (Pick<ProviderProfileTierCapabilities, "model" | "effort" | "diagnostics"> & Partial<Pick<ProviderProfileTierCapabilities, "evidence">>) | undefined;
   modelList?: string;
   effortList?: string;
 }) {
@@ -27,6 +27,10 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
   const effortIncompatible = selectedEffort && !isTierEffortOptionAvailable(selectedEffort, display.model ?? capabilities?.model.runtime_default ?? null);
   const selectedModel = capabilities?.model?.options?.find((option) => option.value === display.model);
   const modelIncompatible = selectedModel?.status === "unavailable" || (display.model && capabilities?.model.allow_custom === false && !selectedModel);
+  const modelUnobserved = display.model && !selectedModel && !modelIncompatible
+    && capabilities?.evidence?.source === "profile_catalog_evidence" && !capabilities.evidence.stale
+    && capabilities.model.options.length > 0;
+  const relatedModels = modelUnobserved ? capabilities.model.options.filter((option) => option.status !== "unavailable" && option.value.startsWith(`${display.model}-`)).slice(0, 3) : [];
 
   const source = inheritedSelection ? "Inherited from workflow" : !hasModelSelection(value) ? "Profile default" : partialSaved ? (inherited != null ? "Saved selection with workflow inheritance" : "Saved selection") : display.mixed ? `Tier ${display.requested ?? profile?.default_model_tier ?? "default"} with saved overrides` : display.selected === "custom" ? "Custom" : `Requested Tier ${display.requested}`;
   return <div className="model-selection" aria-label={`${scope} model selection`}>
@@ -54,6 +58,7 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
       <datalist id={`${inputId}-models`}>{(capabilities.model?.options || []).filter((option) => option.status !== "unavailable").map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</datalist>
       <datalist id={`${inputId}-efforts`}>{(capabilities.effort?.options || []).filter((option) => isTierEffortOptionAvailable(option, display.model ?? capabilities.model.runtime_default)).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</datalist>
       {modelIncompatible ? <p className="small" role="alert">Model {display.model} is unavailable for this profile. The saved value is preserved.</p> : null}
+      {modelUnobserved ? <p className="small" role="status">Model {display.model} is not in this profile’s observed catalog. Custom values remain available for launch-time validation.{relatedModels.length > 0 ? ` Similar available IDs: ${relatedModels.map((option) => option.value).join(", ")}.` : " Choose an exact ID from the model suggestions."}</p> : null}
       {effortIncompatible ? <p className="small" role="alert">Effort {display.effort} is unavailable for model {display.model ?? "Runtime default"}. The saved value is preserved.</p> : null}
       {["not_supported", "metadata_only"].includes(capabilities.effort?.application) ? <p className="small">Effort application: {capabilities.effort.application}. The value is retained.</p> : null}
       {(capabilities.diagnostics || []).map((diagnostic) => <p className="small" key={diagnostic.code}>{diagnostic.message}</p>)}
