@@ -880,7 +880,47 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
         async with sessions.kw["bind"].begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         monkeypatch.setattr("api_service.db.base.async_session_maker", sessions)
-        await DbExecutionPlanStore(sessions).persist(plan)
+
+        async def put(payload: bytes, metadata=None) -> str:
+            async with sessions() as session:
+                service = TemporalArtifactService(TemporalArtifactRepository(session))
+                artifact, _ = await service.create(
+                    principal="operator",
+                    content_type="application/json",
+                    size_bytes=len(payload),
+                    metadata_json=metadata,
+                )
+                await service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="operator",
+                    payload=payload,
+                    content_type="application/json",
+                )
+            return artifact.artifact_id
+
+        # Admission links the plan's exact inputs to each Step Execution, so
+        # they are durable artifacts here, as planning produces them.
+        skills = b'{"skills":[]}'
+        payload = plan.payload.model_dump(mode="json", by_alias=True)
+        payload["resolvedSkills"] = {
+            **payload["resolvedSkills"],
+            "resolvedSkillSetRef": "artifact:" + await put(skills),
+            "resolvedSkillSetDigest": "sha256:" + hashlib.sha256(skills).hexdigest(),
+        }
+        plan = await DbExecutionPlanStore(sessions).persist(
+            create_execution_plan_envelope(payload)
+        )
+        plan_artifact_ref = "artifact:" + await put(
+            json.dumps(
+                plan.model_dump(mode="json", by_alias=True),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode(),
+            {"artifact_class": "omnigent.execution_plan"},
+        )
+        task_input = b'{"task":"interrupted step journey"}'
+        task_input_ref = "artifact:" + await put(task_input)
         artifacts = TemporalOmnigentArtifactGateway(sessions)
 
         def build_realizer():
@@ -1135,9 +1175,10 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
                                 "planRef": plan.planRef,
                                 "planDigest": "sha256:"
                                 + plan.planRef.rsplit(":", 1)[-1],
-                                "planArtifactRef": "artifact:journey-plan",
-                                "taskInputSnapshotRef": "artifact:journey-input",
-                                "taskInputSnapshotDigest": "sha256:" + "2" * 64,
+                                "planArtifactRef": plan_artifact_ref,
+                                "taskInputSnapshotRef": task_input_ref,
+                                "taskInputSnapshotDigest": "sha256:"
+                                + hashlib.sha256(task_input).hexdigest(),
                             },
                         },
                     },
