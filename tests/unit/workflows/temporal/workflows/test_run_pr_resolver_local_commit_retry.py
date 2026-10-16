@@ -2,9 +2,10 @@
 
 The chain runs on a real repository: the portable ``pr_resolve_commit.py``
 helper writes the ``local_commit_failed`` receipt, the managed adapter
-validates it, ``MoonMind.Run`` decides the step retry, the managed-session
-controller's preparation of the reused checkout reapplies the admitted
-identity, and the resumed helper commits the preserved staged work once.
+validates it, ``MoonMind.UserWorkflow`` decides the step retry, the
+managed-session controller's preparation of the reused checkout reapplies
+the admitted identity, and the resumed helper commits the preserved staged
+work once.
 Only the GitHub push/finalize that would follow is synthetic. An Omnigent
 attempt runs in its own sandbox, restored without the ignored receipt, so
 there the verdict stays final.
