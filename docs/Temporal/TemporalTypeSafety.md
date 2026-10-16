@@ -65,7 +65,7 @@ The desired default is:
 
 ### 3.5 Compatibility outranks tidiness
 
-A cleaner model is not enough reason to break replay or in-flight executions. Evolve contracts additively; when non-additive change is unavoidable, use explicit compatibility shims, Worker Versioning and/or patching, and replay testing.
+A cleaner model is not enough reason to break replay or in-flight executions. Evolve contracts additively; when non-additive change is unavoidable, use explicit compatibility shims, patching, and replay testing.
 
 ### 3.6 Determinism remains the workflow rule
 
@@ -251,7 +251,7 @@ Unsafe changes requiring explicit migration planning:
 
 ### 10.2 Workflow code changes need deployment integrity
 
-When workflow code changes affect replay-visible behavior, protect rollout with Worker Versioning or patching. Type-safety refactors are not exempt from determinism rules.
+When workflow code changes affect replay-visible behavior, protect rollout with patching or a narrowly controlled migration, proven by replay tests. Type-safety refactors are not exempt from determinism rules.
 
 ### 10.3 Compatibility logic stays at the edge
 
