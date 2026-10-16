@@ -582,6 +582,32 @@ def test_host_repairable_commit_verdict_gets_a_step_retry(
         result,
         failure_message="execution_error",
         tool_type="agent_runtime",
+        reuses_step_workspace=True,
+    )
+
+
+@pytest.mark.parametrize("shape", ["adapter", "terminal_contract"])
+def test_host_repairable_commit_verdict_stays_final_in_a_fresh_attempt_workspace(
+    monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """Without the reused checkout the next attempt cannot resume the commit."""
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = (
+        _adapter_verdict_result(workflow, **_HOST_REPAIRABLE_COMMIT_VERDICT)
+        if shape == "adapter"
+        else _terminal_contract_verdict_result(workflow)
+    )
+
+    assert (
+        workflow._activity_result_retryable(
+            result,
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+            reuses_step_workspace=False,
+        )
+        is False
     )
 
 
