@@ -211,7 +211,7 @@ def test_refresh_preserves_installed_bind_sources_and_uses_linux_container_paths
     monkeypatch.setattr(
         update,
         "_controller_call",
-        lambda *args, **kwargs: (200, {"capabilities": ["active-journal-transition"]}),
+        lambda *args, **kwargs: (200, {"capabilities": list(update._REQUIRED_CONTROLLER_CAPABILITIES)}),
     )
 
     def run(command, **kwargs):
@@ -675,6 +675,37 @@ def test_host_repairs_the_controller_with_the_requested_source_when_installed_fa
     )
     assert attempted == ["# sha256:installed lifecycle", f"# {IMAGE} lifecycle"]
     assert len(controller.applied) == 1
+
+
+def test_explicit_controller_without_request_identity_is_refreshed(
+    installed, monkeypatch
+):
+    # A controller predating request identity answers a new `latest` request
+    # with an earlier success, so journal transition alone is not enough.
+    repo, controller = installed()
+    refreshed = []
+
+    def health(url, secret, method, path, *args, **kwargs):
+        if refreshed:
+            return 200, {"capabilities": ["active-journal-transition", "request-identity"]}
+        return 200, {"capabilities": ["active-journal-transition"]}
+
+    def run(command, **kwargs):
+        if command[:2] == ["docker", "ps"]:
+            return ""
+        if command[:2] == ["docker", "run"] and "ensure" not in command:
+            return json.dumps({"bootstrap.py": "# lifecycle"})
+        assert "ensure" in command
+        refreshed.append(command)
+        return ""
+
+    monkeypatch.setattr(update, "_controller_call", health)
+    monkeypatch.setattr(update, "run", run)
+    update._ensure_controller_journal_transition(
+        {"project": "moonmind", "image": IMAGE}, repo, controller.url, SECRET
+    )
+    assert len(refreshed) == 1
+    assert controller.applied == []
 
 
 def test_host_reports_the_prerequisite_failure_when_no_source_repairs_it(
