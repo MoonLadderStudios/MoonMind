@@ -4,8 +4,12 @@ import { render, screen as rtlScreen, within } from '@testing-library/react';
 
 import { DataTable, type Column } from '../components/tables/DataTable';
 import { DashboardApp } from '../entrypoints/dashboard-app';
-import { renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { configure, renderWithClient, screen, waitFor } from '../utils/test-utils';
 import '../styles/dashboard.css';
+
+// The first render of each lazily loaded route waits for Vite to transform
+// its chunk, which can outlast the 1s default on a cold WebKit start.
+configure({ asyncUtilTimeout: 5_000 });
 
 // Real-browser phone guardrail for MoonLadderStudios/MoonMind#4559. The
 // production Agents inventory and Providers & Secrets pages render inside the
@@ -148,12 +152,248 @@ const tierCapabilities = {
   diagnostics: [],
 };
 
+// Policies kind of the same inventory page: a long policy id, three
+// immutable versions, failing validation diagnostics, dependents with long
+// references and a normalized diff from an older version.
+const POLICIES_ENDPOINT = '/api/omnigent/api/policies';
+const POLICY_ID = 'synthetic-policy-with-a-very-long-unbroken-identifier-that-must-wrap-0123456789';
+const POLICY_DOCUMENT = {
+  host: { mode: 'static_compose', profileRef: `host-profile-${LONG_ID}` },
+  network: { egress: 'restricted', allowedHosts: ['registry.example.test', 'packages.example.test'] },
+  retention: { artifactsDays: 30, summary: LONG_TEXT },
+};
+const POLICY_DIAGNOSTICS = [
+  { code: 'host_profile_missing', path: '/host/profileRef', message: `No deployment host profile matches ${LONG_ID}.` },
+  { code: 'retention_too_long', path: '/retention/artifactsDays', message: 'Retention exceeds the deployment maximum.' },
+];
+
+function policyVersion(version: number, state: string, valid: boolean) {
+  return {
+    policyId: POLICY_ID,
+    version,
+    ref: `${POLICY_ID}@${version}`,
+    state,
+    digest: DIGEST,
+    document: { ...POLICY_DOCUMENT, revision: version },
+    validation: valid ? { valid: true, diagnostics: [] } : { valid: false, diagnostics: POLICY_DIAGNOSTICS },
+  };
+}
+
+const policyVersions = [policyVersion(3, 'active', false), policyVersion(2, 'superseded', true), policyVersion(1, 'superseded', true)];
+
+function policyResponse(url: URL, method: string, init?: RequestInit): Response {
+  const path = url.pathname.slice(POLICIES_ENDPOINT.length);
+  if (path === '') {
+    return json({ items: [{
+      id: POLICY_ID, name: 'Synthetic static Codex policy', status: 'active', defaultVersion: 3, summary: LONG_TEXT,
+      updatedAt: '2026-10-01T00:00:00Z', version: { validation: policyVersions[0]!.validation, document: policyVersions[0]!.document },
+    }] });
+  }
+  if (method === 'POST') {
+    api.policySaves.push({ url: url.pathname, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+    return json(policyVersion(4, 'draft', true), 201);
+  }
+  if (path.endsWith('/versions')) return json({ items: policyVersions });
+  if (path.endsWith('/audit')) {
+    return json({ items: [3, 2, 1].map((version) => ({
+      eventId: `event-${version}`, version, type: 'default_changed', actor: `operator-${LONG_ID}`, createdAt: '2026-10-01T00:00:00Z',
+    })) });
+  }
+  if (path.endsWith('/usage')) {
+    const active = path.includes('/versions/3/');
+    return json({
+      policyRef: `${POLICY_ID}@3`,
+      default: active,
+      dependents: {
+        hostBindings: [`host-binding-${LONG_ID}`], hostBindingCount: 1,
+        providerProfiles: [`provider-profile-${LONG_ID}`], providerProfileCount: 1,
+        workflows: [`mm:workflow-${LONG_ID}`], workflowCount: 1,
+        bridgeSessions: ['bridge-1', 'bridge-2'], bridgeSessionCount: 2,
+        activeBridgeSessions: ['bridge-1'], activeBridgeSessionCount: 1,
+      },
+      activationImpact: { willSwitchDefault: !active, compatible: false, diagnostics: [] },
+      unavailabilityBlockers: active ? ['Switch the policy default before disabling or deprecating this version.'] : [],
+    });
+  }
+  if (path.endsWith('/diff')) {
+    return json({ diff: `--- ${POLICY_ID}@1\n+++ ${POLICY_ID}@3\n-  "revision": 1\n+  "revision": 3\n+  "summary": "${LONG_TEXT.trim()}"` });
+  }
+  return json({ detail: `No synthetic policy fixture for ${method} ${url.pathname}` }, 404);
+}
+
+// Saved profiles whose credential actions open the Anthropic and OpenCode
+// API-key enrollment drawers. They carry no secret values.
+const CLAUDE_PROFILE_ID = 'claude-team-api-key-profile-with-a-long-unbroken-identifier-0123456789';
+const OPENCODE_PROFILE_ID = 'opencode-go-api-key-profile-with-a-long-unbroken-identifier-0123456789';
+const enrollmentProfiles = [
+  {
+    ...savedProfile([{ label: 'Default', model: null, effort: null }], 1),
+    profile_id: CLAUDE_PROFILE_ID,
+    runtime_id: 'claude_code',
+    provider_id: 'anthropic',
+    is_default: false,
+    auth_state: 'not_configured',
+  },
+  {
+    ...savedProfile([{ label: 'Default', model: null, effort: null }], 1),
+    profile_id: OPENCODE_PROFILE_ID,
+    runtime_id: 'opencode',
+    provider_id: 'opencode-go',
+    provider_label: 'OpenCode Go',
+    runtime_materialization_mode: 'composite',
+    is_default: false,
+    auth_state: 'not_configured',
+    creation_capabilities: {
+      version: 'provider-profile-creation-v1',
+      runtime_id: 'opencode',
+      provider_id: 'opencode-go',
+      supported: true,
+      authentication_methods: [{
+        id: 'api_key', label: 'API key', setup_action: 'api_key', launch_ready_after_setup: true, fields: {},
+        secret_roles: [{ role: 'opencode_api_key', label: 'OpenCode API key', required: true, compatible_schemes: ['db', 'env'] }],
+        imported_volume: { supported: false, mount_path: null, source: 'runtime_provider_strategy', lock_reason: null },
+      }],
+      diagnostics: [],
+    },
+  },
+];
+
+// Instance and Operations settings: the generated workspace catalog with
+// every ordinary control type, a failing diagnostic and long values, plus the
+// worker, shard and deployment state the Operations cards read.
+function settingDescriptor(overrides: Record<string, unknown>) {
+  return {
+    description: LONG_TEXT, category: 'Workflow', section: 'user-workspace', scopes: ['workspace'],
+    default_value: null, override_value: null, source: 'config_or_default',
+    source_explanation: 'Resolved from application settings.', apply_mode: 'next_task',
+    activation_state: 'active', active: true, pending_value: null, affected_process_or_worker: 'task_creation',
+    completion_guidance: 'New tasks will use this value when they are created.', options: null, constraints: null,
+    sensitive: false, secret_role: null, read_only: false, read_only_reason: null, requires_reload: false,
+    requires_worker_restart: false, requires_process_restart: false, applies_to: ['task_creation'], depends_on: [],
+    audit: { store_old_value: true, store_new_value: true, redact: false }, value_version: 1, diagnostics: [],
+    ...overrides,
+  };
+}
+
+const workspaceCatalog = {
+  section: 'user-workspace',
+  scope: 'workspace',
+  categories: {
+    Workflow: [
+      settingDescriptor({
+        key: 'workflow.default_publish_mode', title: 'Default Publish Mode', type: 'enum', ui: 'select', order: 10,
+        effective_value: 'pr', options: [{ value: 'none', label: 'None' }, { value: 'pr', label: 'Pull Request' }],
+      }),
+      settingDescriptor({
+        key: 'skills.canary_percent', title: 'Skills Canary Percent', type: 'integer', ui: 'number', order: 20,
+        effective_value: 25, constraints: { minimum: 0, maximum: 100 },
+        diagnostics: [{ code: 'out_of_range', message: 'The stored override is outside the allowed range.', severity: 'error' }],
+      }),
+      settingDescriptor({
+        key: 'workflow.branch_prefix', title: 'Branch prefix', type: 'string', ui: 'text', order: 30,
+        effective_value: LONG_ID,
+      }),
+      settingDescriptor({
+        key: 'workflow.auto_publish', title: 'Publish automatically', type: 'boolean', ui: 'toggle', order: 40,
+        effective_value: true,
+      }),
+      settingDescriptor({
+        key: 'workflow.deployment_root', title: 'Deployment root', type: 'string', ui: 'readonly', order: 50,
+        effective_value: `/srv/${LONG_ID}`, read_only: true, read_only_reason: 'Owned by the deployment environment.',
+      }),
+    ],
+  },
+};
+
+const workerSnapshot = {
+  system: { workersPaused: false, mode: null, version: 1, updatedAt: '2026-10-01T00:00:00Z', reason: LONG_TEXT },
+  metrics: { queued: 1, running: 2, staleRunning: 0, isDrained: true, metricsSource: 'temporal' },
+  commands: [
+    {
+      id: 'pause-workers', label: 'Pause Workers', target: 'workers', impact: 'Blocks new worker claims or quiesces active workers.',
+      requiresConfirmation: true, requiredPermission: 'operations.invoke', available: true, rollbackAction: 'resume-workers',
+    },
+    {
+      id: 'enable-maintenance-mode', label: 'Enable Maintenance Mode', target: 'scheduler',
+      impact: 'Prevents normal launch scheduling while maintenance is active.', requiresConfirmation: true,
+      requiredPermission: 'operations.invoke', available: false, unavailableReason: 'Maintenance mode subsystem is not connected.',
+    },
+  ],
+  audit: { latest: [{
+    action: 'pause', target: 'workers', mode: 'drain', reason: LONG_TEXT, actorUserId: '00000000-0000-0000-0000-000000000001',
+    resultStatus: 'succeeded', signalStatus: 'succeeded', idempotencyKey: `worker-pause-${LONG_ID}`, createdAt: '2026-10-01T00:01:00Z',
+  }] },
+};
+
+const DEPLOYMENT_REPOSITORY = 'ghcr.io/example/moonmind';
+const failedUpdate = {
+  id: 'ctl-synthetic', kind: 'update', status: 'FAILED', owner: 'controller', operationId: `op-${LONG_ID}`,
+  requestedImage: `${DEPLOYMENT_REPOSITORY}:20261001.1200`, installedImage: null,
+  errorSummary: `Image pull failed for ${DEPLOYMENT_REPOSITORY}@${DIGEST}`,
+  attempts: [{ attempt: 1, error: `manifest unknown: ${DIGEST}`, at: '2026-10-01T00:02:00Z' }],
+  attemptGroup: 1, verification: [], retryAllowed: true, startedAt: '2026-10-01T00:00:00Z', completedAt: '2026-10-01T00:03:00Z',
+  runDetailUrl: null, logsArtifactUrl: null, rollbackEligibility: null,
+};
+
+function settingsResponse(url: URL): Response | null {
+  switch (url.pathname) {
+    case '/api/v1/settings/catalog':
+      return json(workspaceCatalog);
+    case '/api/v1/settings/audit':
+      return json({ items: [{
+        id: 'audit-1', event_type: 'setting_updated', key: 'workflow.branch_prefix', scope: 'workspace',
+        actor_user_id: '00000000-0000-0000-0000-000000000001', old_value: 'mm/', new_value: LONG_ID, redacted: false,
+        reason: LONG_TEXT, validation_outcome: 'valid', affected_systems: ['task_creation'], created_at: '2026-10-01T00:00:00Z',
+      }] });
+    case '/api/workers':
+      return json(workerSnapshot);
+    case '/api/v1/operations/codex/shards':
+      return json({ shards: [{
+        queueName: `codex-shard-${LONG_ID}`, status: 'offline', hashModulo: 4, workerHostname: `codex-worker-${LONG_ID}`,
+        volumeName: 'codex-auth-0', volumeStatus: 'missing', latestRunId: '00000000-0000-0000-0000-000000000010',
+        latestRunStatus: 'failed', latestPreflightStatus: 'failed', latestPreflightMessage: 'Auth volume missing',
+        latestPreflightCheckedAt: '2026-10-01T00:02:00Z',
+      }] });
+    case '/api/v1/operations/deployment/stacks/moonmind':
+      return json({
+        stack: 'moonmind', projectName: 'moonmind', buildId: '20260930.0900',
+        currentImage: {
+          requestedImage: `${DEPLOYMENT_REPOSITORY}:latest`, deployedImage: `${DEPLOYMENT_REPOSITORY}:latest`,
+          repository: DEPLOYMENT_REPOSITORY, reference: 'latest', resolvedDigest: DIGEST, evidence: 'desired_state',
+        },
+        latestAction: failedUpdate,
+        recentActions: [failedUpdate],
+        controller: { installed: true, reachable: true, message: null },
+        policy: {
+          repository: DEPLOYMENT_REPOSITORY, defaultReference: 'latest', allowedReferences: ['latest'],
+          recentTags: ['20261001.1200'], mutableReferences: ['latest'], allowedModes: ['changed_services', 'force_recreate'],
+        },
+      });
+    case '/api/v1/operations/deployment/image-targets':
+      return json({ stack: 'moonmind', repositories: [{
+        repository: DEPLOYMENT_REPOSITORY, allowedReferences: ['latest'], recentTags: ['20261001.1200'],
+        digestPinningRecommended: true, allowedModes: ['changed_services', 'force_recreate'],
+      }] });
+    default:
+      return null;
+  }
+}
+
+const settingsUiInfo = {
+  ...uiInfo,
+  settingsPermissions: [...uiInfo.settingsPermissions, 'settings.catalog.read', 'settings.audit.read', 'operations.read', 'operations.invoke'],
+  workerPause: { get: '/api/workers', post: '/api/worker-action', shardHealth: '/api/v1/operations/codex/shards', pollIntervalMs: 60_000 },
+};
+
 interface ApiState {
+  uiInfo: Record<string, unknown>;
   agentResponses: Array<() => Promise<Response> | Response>;
   agentRequests: number;
   profile: ReturnType<typeof savedProfile>;
+  enrollmentProfiles: Array<Record<string, unknown>>;
   patchResponses: Array<(body: Record<string, unknown>) => Response>;
   patches: Array<Record<string, unknown>>;
+  policySaves: Array<{ url: string; body: Record<string, unknown> }>;
 }
 
 let api: ApiState;
@@ -171,22 +411,28 @@ beforeEach(async () => {
   window.sessionStorage.clear();
   window.history.replaceState({}, '', '/omnigent/agents');
   api = {
+    uiInfo,
     agentResponses: [],
     agentRequests: 0,
     profile: savedProfile(INITIAL_TIERS, 2),
+    enrollmentProfiles: [],
     patchResponses: [],
     patches: [],
+    policySaves: [],
   };
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), window.location.origin);
     const method = init?.method ?? 'GET';
-    if (url.pathname === '/api/ui/info') return json(uiInfo);
+    if (url.pathname === '/api/ui/info') return json(api.uiInfo);
     if (url.pathname === '/api/omnigent/api/agents') {
       api.agentRequests += 1;
       const next = api.agentResponses.shift();
       return next ? next() : json(agentRows);
     }
     if (url.pathname === '/api/omnigent/agent-profiles') return json(executionConfigurations);
+    if (url.pathname.startsWith(POLICIES_ENDPOINT)) return policyResponse(url, method, init);
+    const settingsFixture = settingsResponse(url);
+    if (settingsFixture) return settingsFixture;
     if (url.pathname === '/api/v1/secrets') return json({ items: [] });
     if (url.pathname === '/api/artifacts/collection') {
       const query = url.searchParams.get('q') ?? '';
@@ -213,7 +459,9 @@ beforeEach(async () => {
       api.profile = { ...api.profile, ...body } as ReturnType<typeof savedProfile>;
       return json(api.profile);
     }
-    if (url.pathname === '/api/v1/provider-profiles' && method === 'GET') return json([api.profile]);
+    if (url.pathname === '/api/v1/provider-profiles' && method === 'GET') {
+      return json([api.profile, ...api.enrollmentProfiles]);
+    }
     return json({ detail: `No synthetic fixture for ${method} ${url.pathname}` }, 404);
   });
 });
@@ -310,7 +558,9 @@ function layoutProblems(root: Element): string[] {
       problems.add(`activation area below 44px: ${describeElement(element)}`);
     }
     element.scrollIntoView({ block: 'center', inline: 'nearest' });
-    const centred = element.getBoundingClientRect();
+    // A link that wraps onto two lines is hit-tested on its first line box:
+    // the centre of its bounding box can fall between the line fragments.
+    const centred = element.getClientRects()[0] ?? element.getBoundingClientRect();
     const hit = document.elementFromPoint(centred.left + centred.width / 2, centred.top + centred.height / 2);
     if (!hit || !(hit === element || element.contains(hit) || hit.contains(element) && hit.tagName === 'LABEL')) {
       problems.add(`covered by ${describeElement(hit)}: ${describeElement(element)}`);
@@ -510,6 +760,163 @@ describe('Providers & Secrets in the dashboard shell (MoonMind#4559)', () => {
     );
     await settle();
     expect(api.patches).toHaveLength(2);
+  });
+});
+
+const OVERLAY_LAYOUTS = [
+  { name: 'narrow phone', width: 320, height: 568 },
+  { name: 'short landscape phone', width: 844, height: 390 },
+] as const;
+
+describe('Policies inventory detail and editor in the dashboard shell (MoonMind#4559)', () => {
+  const POLICY_LAYOUTS = [LAYOUTS[0], LAYOUTS[2], LAYOUTS[4]] as const;
+
+  async function inspectPolicy(): Promise<HTMLElement> {
+    window.history.replaceState({}, '', '/omnigent/policies');
+    renderDashboard();
+    const inspect = await waitFor(() => {
+      const buttons = visible(screen.queryAllByRole('button', { name: 'Inspect' }));
+      expect(buttons).toHaveLength(1);
+      return buttons[0]!;
+    });
+    await userEvent.click(inspect);
+    const detail = screen.getByRole('region', { name: 'Immutable policy version' });
+    await within(detail).findByRole('button', { name: `${POLICY_ID}@1 · superseded` });
+    await within(detail).findByText('Dependent host profiles: 1');
+    return detail;
+  }
+
+  it.each(POLICY_LAYOUTS)('keeps version history, diagnostics, lifecycle actions, diff and editor usable on a $name ($width x $height)', async ({ width, height }) => {
+    await useLayout(width, height);
+    const detail = await inspectPolicy();
+    expect(within(detail).getAllByRole('alert').map((alert) => alert.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining('host_profile_missing')]),
+    );
+    expect((within(detail).getByRole('button', { name: `Disable ${POLICY_ID}@3` }) as HTMLButtonElement).disabled).toBe(true);
+    expectUsableLayout(`Policy detail at ${width}x${height}`);
+
+    // An older version shows its normalized diff and the rollback action.
+    await userEvent.click(within(detail).getByRole('button', { name: `${POLICY_ID}@1 · superseded` }));
+    await within(detail).findByRole('heading', { name: 'Normalized diff to current default' });
+    expect(within(detail).getByRole('button', { name: `Roll back default to ${POLICY_ID}@1` })).toBeTruthy();
+    expectUsableLayout(`Policy diff and rollback at ${width}x${height}`);
+
+    await userEvent.click(within(detail).getByRole('button', { name: 'Edit as new version' }));
+    const editor = await screen.findByRole('heading', { name: 'Edit as immutable new version' });
+    const document = screen.getByLabelText('Complete policy document (JSON)') as HTMLTextAreaElement;
+    expect(JSON.parse(document.value)).toMatchObject({ revision: 1 });
+    expectUsableLayout(`Policy editor at ${width}x${height}`);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Validate and save draft' }));
+    await waitFor(() => expect(api.policySaves).toHaveLength(1));
+    expect(api.policySaves[0]).toEqual({
+      url: `${POLICIES_ENDPOINT}/${encodeURIComponent(POLICY_ID)}/versions`,
+      body: { expectedParentRef: `${POLICY_ID}@3`, document: { ...POLICY_DOCUMENT, revision: 1 } },
+    });
+    await waitFor(() => expect(editor.isConnected).toBe(false));
+  });
+});
+
+describe('Provider enrollment drawers in the dashboard shell (MoonMind#4559)', () => {
+  const DRAWERS = [
+    { name: 'Anthropic', profileId: CLAUDE_PROFILE_ID, opener: 'Use Anthropic API key', credential: 'Anthropic API key' },
+    { name: 'OpenCode', profileId: OPENCODE_PROFILE_ID, opener: 'Use OpenCode API key', credential: 'OpenCode API key' },
+  ] as const;
+
+  /** Scroll containers inside the drawer other than the drawer itself. */
+  function nestedScrollRegions(drawer: HTMLElement): string[] {
+    return Array.from(drawer.querySelectorAll<HTMLElement>('*'))
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        return /auto|scroll/.test(`${style.overflowY} ${style.overflowX}`)
+          && (element.scrollHeight > element.clientHeight + TOLERANCE_PX || element.scrollWidth > element.clientWidth + TOLERANCE_PX);
+      })
+      .map(describeElement);
+  }
+
+  function expectReachable(drawer: HTMLElement, name: string, label: string): void {
+    const action = within(drawer).getByRole('button', { name });
+    action.scrollIntoView({ block: 'nearest' });
+    const rect = action.getBoundingClientRect();
+    expect(rect.top, `${label}: ${name} top`).toBeGreaterThanOrEqual(-TOLERANCE_PX);
+    expect(rect.bottom, `${label}: ${name} bottom`).toBeLessThanOrEqual(window.innerHeight + TOLERANCE_PX);
+    expect(rect.left, `${label}: ${name} left`).toBeGreaterThanOrEqual(-TOLERANCE_PX);
+    expect(rect.right, `${label}: ${name} right`).toBeLessThanOrEqual(window.innerWidth + TOLERANCE_PX);
+  }
+
+  for (const drawerCase of DRAWERS) {
+    it.each(OVERLAY_LAYOUTS)(`keeps the ${drawerCase.name} drawer reachable, dismissible and the profile draft intact on a $name ($width x $height)`, async ({ width, height }) => {
+      api.enrollmentProfiles = enrollmentProfiles;
+      await openProviders();
+      await useLayout(width, height);
+      const label = `${drawerCase.name} drawer at ${width}x${height}`;
+
+      // An unsaved edit in the profile form survives the enrollment detour.
+      const edit = visible(screen.getAllByRole('button')).filter((button) => button.textContent?.trim() === 'Edit');
+      await userEvent.click(edit[0]!);
+      await screen.findByRole('heading', { name: `Edit Profile: ${LONG_ID}` });
+      await userEvent.click(screen.getByLabelText('Tier 1 label'));
+      await userEvent.keyboard('{End} (draft)');
+      const editedLabel = `${INITIAL_TIERS[0]!.label} (draft)`;
+
+      const opener = screen.getByRole('button', { name: `${drawerCase.opener} ${drawerCase.profileId}` });
+      await userEvent.click(opener);
+      const drawer = await screen.findByRole('dialog', { name: `${drawerCase.credential} enrollment for ${drawerCase.profileId}` });
+      await waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true));
+      await settle();
+
+      expect(nestedScrollRegions(drawer), `${label}: nested scroll regions`).toEqual([]);
+      expect(layoutProblems(drawer), `${label}:\n${layoutProblems(drawer).join('\n')}`).toEqual([]);
+      within(drawer).getByRole('heading', { name: `${drawerCase.credential} enrollment for ${drawerCase.profileId}` }).scrollIntoView({ block: 'nearest' });
+      expect(within(drawer).getByRole('heading', { level: 4 }).getBoundingClientRect().top, `${label}: title reachable`).toBeGreaterThanOrEqual(-TOLERANCE_PX);
+      expectReachable(drawer, 'Cancel API key enrollment', label);
+
+      // The paste step keeps its field and footer save action reachable in
+      // the drawer's one scroll container.
+      await userEvent.click(within(drawer).getByRole('button', { name: 'Continue to API key paste' }));
+      await within(drawer).findByLabelText(drawerCase.credential);
+      expect(nestedScrollRegions(drawer), `${label} paste step: nested scroll regions`).toEqual([]);
+      const pasteProblems = layoutProblems(drawer);
+      expect(pasteProblems, `${label} paste step:\n${pasteProblems.join('\n')}`).toEqual([]);
+      expectReachable(drawer, `Validate and save ${drawerCase.credential}`, label);
+      expectReachable(drawer, 'Cancel API key enrollment', label);
+
+      // Escape dismisses the drawer and focus returns to the opening action.
+      await userEvent.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(document.activeElement, `${label}: focus returns to ${drawerCase.opener}`).toBe(opener);
+      expect((screen.getByLabelText('Tier 1 label') as HTMLInputElement).value).toBe(editedLabel);
+      expect(api.patches).toHaveLength(0);
+    });
+  }
+});
+
+describe('Instance and Operations settings in the dashboard shell (MoonMind#4559)', () => {
+  const SETTINGS_LAYOUTS = [LAYOUTS[0], LAYOUTS[1], LAYOUTS[2]] as const;
+
+  it.each(SETTINGS_LAYOUTS)('keeps Instance settings controls, diagnostics and audit usable on a $name ($width x $height)', async ({ width, height }) => {
+    api.uiInfo = settingsUiInfo;
+    window.history.replaceState({}, '', '/settings/instance');
+    renderDashboard();
+    await screen.findByText('Skills Canary Percent');
+    await screen.findByText('The stored override is outside the allowed range.');
+    await screen.findByRole('button', { name: 'Reset dashboard preferences' });
+    await useLayout(width, height);
+    expectUsableLayout(`Instance settings at ${width}x${height}`);
+  });
+
+  it.each(SETTINGS_LAYOUTS)('keeps Operations worker, shard and update cards usable on a $name ($width x $height)', async ({ width, height }) => {
+    api.uiInfo = settingsUiInfo;
+    window.history.replaceState({}, '', '/settings/operations');
+    renderDashboard();
+    const workers = await screen.findByRole('region', { name: /worker operations/i });
+    await within(workers).findByText(`codex-worker-${LONG_ID}`);
+    await within(workers).findByText('Pause Workers');
+    const update = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(update).findByLabelText(/update to/i);
+    await within(update).findByRole('button', { name: /retry/i });
+    await useLayout(width, height);
+    expectUsableLayout(`Operations settings at ${width}x${height}`);
   });
 });
 
