@@ -20644,6 +20644,84 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
   });
 
+  function mixedRouteInventory(fallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+    return (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "codex-configured", account_label: "Codex Configured", runtime_id: "codex_cli", is_default: true,
+            execution_selection: { profileId: "team-codex", version: 1, digest: `sha256:${"a".repeat(64)}`, providerProfileRef: "codex-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "codex-native" } },
+          { profile_id: "codex-native-only", account_label: "Codex Native Only", runtime_id: "codex_cli" },
+          { profile_id: "claude-native-only", account_label: "Claude Native Only", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      if (String(input) === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return fallback(input, init);
+    };
+  }
+
+  it("offers step Backends from the selected step Profile, not other accounts of its Harness", async () => {
+    fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
+    fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: "codex-native-only" } });
+    const stepBackend = await screen.findByLabelText("Step 1 Backend") as HTMLSelectElement;
+    expect(Array.from(stepBackend.options).map((option) => option.textContent)).toEqual([
+      "Inherit workflow Backend",
+      "Direct Codex compatibility",
+    ]);
+  });
+
+  it("shows a step Profile's sole Backend when the inherited workflow Backend cannot serve it", async () => {
+    fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Run this step on Claude." } });
+    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
+    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+    fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: "claude-native-only" } });
+    const stepBackend = await screen.findByLabelText("Step 1 Backend") as HTMLSelectElement;
+    expect(Array.from(stepBackend.options).map((option) => option.value)).toEqual(["", "claude_code"]);
+    expect(screen.getByText(/The workflow Backend cannot serve this step's Provider Profile/)).toBeTruthy();
+    fireEvent.change(stepBackend, { target: { value: "claude_code" } });
+    expect(screen.queryByText(/The workflow Backend cannot serve this step's Provider Profile/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.steps[0].runtime).toMatchObject({ mode: "claude_code", profileId: "claude-native-only" });
+  });
+
+  it("scopes the configured default Profile to a deliberately chosen Harness", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { profile_id: "native-codex", account_label: "Native Codex", runtime_id: "codex_cli" },
+          { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
+        ] } as Response);
+      }
+      return fallback(input, init);
+    });
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: {
+          ...mockDashboardConfig.system,
+          providerProfiles: { ...mockDashboardConfig.system.providerProfiles, defaultProfileRef: "native-codex" },
+        },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
+    await waitFor(() => expect(profile.value).toBe("native-codex"));
+    fireEvent.change(screen.getByLabelText("Harness"), { target: { value: "claude_code" } });
+    await waitFor(() => expect(profile.value).toBe("native-claude"));
+    expect(screen.queryByText(/Choose a Claude Code Provider Profile/)).toBeNull();
+  });
+
   it("keeps steps inherited until a step Provider Profile is explicitly chosen", async () => {
     fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -21233,5 +21311,47 @@ describe('removed target drafts (#4644)', () => {
     expect(runtime.value).toBe('codex_cli');
     expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step');
     expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST' || init?.method === 'PATCH')).toBe(false);
+  });
+  it('keeps a Backend replacement control for a restored Backend the catalog no longer allows', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      const data = url.startsWith('/api/executions/mm%3Aold-cloud') ? {
+        workflowId: 'mm:old-cloud', workflowType: 'MoonMind.UserWorkflow', state: 'executing', actions: { canUpdateInputs: true },
+        inputParameters: { workflow: {
+          instructions: 'Keep the saved Profile',
+          runtime: { mode: 'codex_cli', profileId: 'codex-configured' },
+          publish: { mode: 'none' },
+        } },
+      } : url.startsWith('/api/v1/provider-profiles') ? [
+        { profile_id: 'codex-configured', account_label: 'Codex Configured', runtime_id: 'codex_cli', is_default: true,
+          execution_selection: { profileId: 'team-codex', version: 1, digest: `sha256:${'a'.repeat(64)}`, providerProfileRef: 'codex-configured', launchPolicyRef: null, defaultForRuntime: true, harnessId: 'codex-native' } },
+      ] : url.startsWith('/api/skills') ? { items: { worker: [] } } : { items: [] };
+      return Promise.resolve({ ok: true, json: async () => data } as Response);
+    });
+    const catalog = mockDashboardConfig.system.runtimeTargetCatalog;
+    const payload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: {
+        ...mockDashboardConfig,
+        system: {
+          ...mockDashboardConfig.system,
+          runtimeTargetCatalog: {
+            ...catalog,
+            targets: catalog.targets.map((target) => target.targetId === 'codex.direct' ? { ...target, explicitSelectionAllowed: false, rolloutState: 'disabled' } : target),
+          },
+        },
+      } },
+    } as BootPayload;
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+    await waitFor(() => expect((screen.getByLabelText('Provider Profile') as HTMLSelectElement).value).toBe('codex-configured'));
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('codex_cli');
+    expect(screen.getAllByText(/No qualified target is available/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByLabelText('Advanced mode'));
+    const backend = screen.getByLabelText('Backend') as HTMLSelectElement;
+    expect(backend.value).toBe('');
+    fireEvent.change(backend, { target: { value: 'omnigent' } });
+    expect(backend.value).toBe('omnigent');
+    expect(screen.queryByText(/No qualified target is available/)).toBeNull();
+    expect((screen.getByLabelText('Provider Profile') as HTMLSelectElement).value).toBe('codex-configured');
   });
 });

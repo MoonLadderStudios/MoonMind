@@ -4121,6 +4121,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByText('Runtime Command')).toBeTruthy();
     expect(screen.getByText('/review')).toBeTruthy();
     expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
+    const commandBlock = screen.getByText('Runtime Command').closest('.td-summary-block') as HTMLElement;
+    expect(Array.from(commandBlock.querySelectorAll('dt')).map((term) => term.textContent)).toContain('Harness');
+    expect(within(commandBlock).queryByText('Runtime')).toBeNull();
     expect(screen.getByText('prompt prefix')).toBeTruthy();
     expect(screen.getByText('detected')).toBeTruthy();
     expect(screen.getAllByText('2026-05-13').length).toBeGreaterThanOrEqual(1);
