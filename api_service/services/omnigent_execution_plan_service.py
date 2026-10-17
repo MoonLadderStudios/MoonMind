@@ -2195,6 +2195,7 @@ async def compile_frozen_execution_plan(
     provider_profile: Any,
     initial_parameters: Mapping[str, Any],
     binding: OmnigentExecutionPlanBinding,
+    parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile an admitted workflow's frozen inputs again through this owner."""
 
@@ -2224,6 +2225,64 @@ async def compile_frozen_execution_plan(
         task_input_snapshot_ref=binding.task_input_snapshot_ref,
         task_input_snapshot_digest=binding.task_input_snapshot_digest,
         db_session=db_session,
+        parent_repository_plan=parent_repository_plan,
+    )
+
+
+async def _resolver_child_frozen_inputs(
+    *,
+    artifact_service: Any,
+    principal: str,
+    binding: OmnigentExecutionPlanBinding,
+    recorded_plan: OmnigentExecutionPlanEnvelope,
+) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+    """Return a resolver child's frozen Profile, Provider Profile and inputs.
+
+    Merge automation compiles its resolver child from the parent's plan, so the
+    child workflow carries no Agent Profile snapshot. The child's own task-input
+    snapshot and recorded plan hold the same authority. Returns ``None`` for
+    any other workflow.
+    """
+
+    from moonmind.omnigent.harness_platform.credential_bindings import model_bindings_of
+
+    def artifact_id(ref: str) -> str:
+        return ref.removeprefix("artifact://").removeprefix("artifact:")
+
+    _artifact, body = await artifact_service.read(
+        artifact_id=artifact_id(binding.task_input_snapshot_ref),
+        principal=principal,
+        allow_restricted_raw=True,
+    )
+    if _sha256(body) != binding.task_input_snapshot_digest:
+        raise ValueError("frozen task-input snapshot digest mismatch")
+    task_snapshot = json.loads(body)
+    if (task_snapshot.get("source") or {}).get("kind") != (
+        "merge_automation_resolver_child"
+    ):
+        return None
+    profile_ref = str(recorded_plan.payload.agentProfileSnapshotRef or "")
+    if not profile_ref.startswith("artifact:"):
+        raise ValueError("recorded execution plan lacks Agent Profile authority")
+    _artifact, profile_body = await artifact_service.read(
+        artifact_id=artifact_id(profile_ref),
+        principal=principal,
+        allow_restricted_raw=True,
+    )
+    provider_profile_refs = {
+        model_binding.providerProfileRef
+        for model_binding in model_bindings_of(
+            recorded_plan.payload.credentialBindings
+        ).values()
+    }
+    if len(provider_profile_refs) != 1:
+        raise ValueError(
+            "recorded execution plan has ambiguous Provider Profile authority"
+        )
+    return (
+        json.loads(profile_body),
+        next(iter(provider_profile_refs)),
+        dict(task_snapshot["target"]["initialParameters"]),
     )
 
 
@@ -2288,7 +2347,9 @@ async def readmit_frozen_execution_plan(
     The frozen inputs (task input, Agent Profile snapshot, Provider Profile,
     model and Skills) compile again, so the new plan binds the installed
     same-repository host and server; an explicitly requested Host Class stays
-    exact and a foreign host family fails closed. Plans that attempts already
+    exact and a foreign host family fails closed. A merge-automation resolver
+    child recompiles from its own frozen task input and recorded plan, within
+    its recorded repository authority. Plans that attempts already
     used are never rewritten. With ``preserve_recorded_intent`` the new plan
     is refused when it would change the recorded request intent.
 
@@ -2319,16 +2380,8 @@ async def readmit_frozen_execution_plan(
     except Exception as exc:
         raise ValueError("Omnigent execution-plan authority is invalid") from exc
     snapshot = initial_parameters.get("agentProfileSnapshot")
-    if not isinstance(snapshot, Mapping):
-        return recorded("the workflow has no Agent Profile snapshot")
-    provider_profile = await db_session.get(
-        ManagedAgentProviderProfile,
-        str(snapshot.get("providerProfileRef") or "").strip(),
-    )
-    if provider_profile is None:
-        return recorded("the admitted Provider Profile is unavailable")
     recorded_plan = None
-    if preserve_recorded_intent:
+    if preserve_recorded_intent or not isinstance(snapshot, Mapping):
         recorded_plan = await SessionExecutionPlanStore(db_session).load(
             binding.plan_ref
         )
@@ -2336,6 +2389,28 @@ async def readmit_frozen_execution_plan(
             return recorded("the recorded execution plan is unavailable")
     try:
         principal = await frozen_task_input_principal(db_session, binding)
+        compilation_parameters = initial_parameters
+        parent_repository_plan = None
+        if isinstance(snapshot, Mapping):
+            provider_profile_ref = str(snapshot.get("providerProfileRef") or "")
+        else:
+            child_inputs = await _resolver_child_frozen_inputs(
+                artifact_service=artifact_service,
+                principal=principal,
+                binding=binding,
+                recorded_plan=recorded_plan,
+            )
+            if child_inputs is None:
+                return recorded("the workflow has no Agent Profile snapshot")
+            snapshot, provider_profile_ref, compilation_parameters = child_inputs
+            # The child's recorded repository authority bounds its successor,
+            # as the parent's bounded the child when it was first compiled.
+            parent_repository_plan = recorded_plan
+        provider_profile = await db_session.get(
+            ManagedAgentProviderProfile, provider_profile_ref.strip()
+        )
+        if provider_profile is None:
+            return recorded("the admitted Provider Profile is unavailable")
         persisted_plan = await compile_frozen_execution_plan(
             db_session=db_session,
             artifact_service=artifact_service,
@@ -2343,8 +2418,9 @@ async def readmit_frozen_execution_plan(
             principal=principal,
             snapshot=snapshot,
             provider_profile=provider_profile,
-            initial_parameters=initial_parameters,
+            initial_parameters=compilation_parameters,
             binding=binding,
+            parent_repository_plan=parent_repository_plan,
         )
         changed = (
             changed_admitted_intent(

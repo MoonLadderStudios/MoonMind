@@ -5836,3 +5836,49 @@ def test_generic_host_gh_reader_observes_same_owner_refresh_over_ambient_token(
     )
     # No entrypoint rerun: the live reader sees the complete new issuance.
     assert host_gh_token() == "selected-token-B2"
+
+
+@pytest.mark.asyncio
+async def test_revoked_delivery_stops_a_turn_that_absorbed_its_cancellation(
+    monkeypatch,
+):
+    """Worker shutdown ends the Activity even when one cancel is absorbed.
+
+    anyio's ``connect_tcp`` can absorb a native cancel that coincides with its
+    own happy-eyeballs cancellation, so a driver polling the Omnigent server
+    over fresh connections may survive a single cancel. A stopping worker
+    waits for every Activity, so one absorbed cancel must not keep the turn
+    running.
+    """
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _plan("opencode-go/model")
+    started = asyncio.Event()
+    absorbed: list[str] = []
+
+    async def polling_driver(request, **_kwargs):
+        started.set()
+        while True:
+            try:
+                await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                if absorbed:
+                    raise
+                absorbed.append("cancel")
+
+    harness.realizer._session_driver = polling_driver
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: True
+    )
+    execution = asyncio.create_task(
+        harness.realizer._execute_lifecycle(harness.publish_request, plan)
+    )
+    await asyncio.wait_for(started.wait(), 10)
+    execution.cancel()
+    done, _pending = await asyncio.wait({execution}, timeout=10)
+
+    assert execution in done, "the revoked delivery kept its absorbed turn running"
+    assert absorbed == ["cancel"]
+    with pytest.raises(asyncio.CancelledError):
+        execution.result()
+    assert "host-cleaned" not in harness.events

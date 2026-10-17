@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import time
-from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -44,6 +43,7 @@ from moonmind.omnigent.runtime_bindings import (
     StableRuntimeBinding,
     stable_binding_id,
 )
+from moonmind.omnigent.task_cancellation import cancel_and_wait
 from moonmind.schemas.agent_runtime_models import (
     AgentAdmissionRecovery,
     AgentExecutionRequest,
@@ -1998,9 +1998,7 @@ class GenericOmnigentHostRealizer:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if heartbeat_task in done and not driver_task.done():
-                driver_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await driver_task
+                await cancel_and_wait(driver_task)
                 await heartbeat_task
                 raise HarnessPlatformError(
                     "generic host heartbeat stopped before session completion",
@@ -2012,16 +2010,9 @@ class GenericOmnigentHostRealizer:
             return result
         finally:
             stop.set()
-            for task in (
-                driver_task,
-                heartbeat_task,
-                renewal_task,
-                github_renewal_task,
-            ):
-                if not task.done():
-                    task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task
+            await cancel_and_wait(
+                driver_task, heartbeat_task, renewal_task, github_renewal_task
+            )
 
     async def _inspect_terminal(self, request):
         return await self._workspace_publisher.inspect_request_terminal(request)
