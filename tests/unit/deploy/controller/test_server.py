@@ -936,6 +936,7 @@ def test_restart_resumes_handed_off_work_after_the_previous_oneoff_exits(
         def run(self, args, timeout_seconds):
             assert args[:3] == ("docker", "ps", "--quiet")
             assert args[-1] == f"label={server.OMNIGENT_OPERATION_LABEL}={op['operationId']}"
+            assert "label=com.docker.compose.project=moonmind-test" in args
             polls.append(args)
             return {"exit": 0, "output": "handoff-oneoff\n" if len(polls) < 3 else ""}
 
@@ -974,6 +975,7 @@ def test_restart_recovery_never_competes_or_crash_loops(
         raise ValueError("journal consumer inventory is incomplete")
 
     if case == "submission-owns-stack":
+        monkeypatch.setattr(server, "STACK_LOCK_WAIT_SECONDS", 0)
         with lock.StackLock(store.state_dir, "moonmind").acquire():
             server.resume_open_operations(store, applier, runner=Runner())
         assert store.load(op["operationId"])["attempts"] == []
@@ -981,6 +983,44 @@ def test_restart_recovery_never_competes_or_crash_loops(
     server.resume_open_operations(store, applier, runner=Runner())
     error = store.load(op["operationId"])["attempts"][-1]["error"]
     assert error == "restart recovery failed: journal consumer inventory is incomplete"
+
+
+def test_restart_recovery_waits_for_the_restore_that_started_it(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    lock = server.lock_mod
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+    acquire = lock.StackLock.acquire
+    busy = []
+
+    def held_by_restore(self):
+        # A bootstrap restore holds the stack until `compose up --wait` returns,
+        # after the controller it started has already begun recovery.
+        if len(busy) < 2:
+            busy.append(self.stack)
+            raise lock.LockBusyError("restore owns the stack")
+        return acquire(self)
+
+    monkeypatch.setattr(lock.StackLock, "acquire", held_by_restore)
+    monkeypatch.setattr(server, "ONEOFF_EXIT_POLL_SECONDS", 0)
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            return {"exit": 0, "output": ""}
+
+    applied = []
+
+    def applier(operation):
+        applied.append(operation["operationId"])
+        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+
+    server.resume_open_operations(store, applier, runner=Runner())
+    assert busy == ["moonmind", "moonmind"]
+    assert applied == [op["operationId"]]
+    assert store.load(op["operationId"])["status"] == "succeeded"
 
 
 def _begin_op(record, store, target):
@@ -2108,13 +2148,13 @@ def test_apply_never_starts_beside_a_previous_owners_release_step(
     class Runner:
         def run(self, args, timeout_seconds):
             commands.append(tuple(args))
-            if args[:2] == ("docker", "ps") and observation == "running":
+            if args[:2] != ("docker", "ps"):
+                pytest.fail(f"a writer started beside the previous owner: {args}")
+            if observation == "running":
                 return {"exit": 0, "output": "abc123\n", "stdout": "abc123\n"}
-            if args[:2] == ("docker", "ps") and observation == "failed-exit":
+            if observation == "failed-exit":
                 return {"exit": 1, "output": "daemon unavailable"}
-            if args[:2] == ("docker", "ps"):
-                raise server.engine.CommandError("ps", 1, "daemon unavailable")
-            pytest.fail(f"a writer started beside the previous owner: {args}")
+            raise server.engine.CommandError("ps", 1, "daemon unavailable")
 
     monkeypatch.setattr(server.engine, "subprocess_runner", lambda: Runner())
     # A handed-off or interrupted owner's one-off may still run: an observed
@@ -2122,8 +2162,11 @@ def test_apply_never_starts_beside_a_previous_owners_release_step(
     with pytest.raises(server.engine.StageError):
         server.production_apply(store, op)
     assert all(command[:2] == ("docker", "ps") for command in commands)
+    # Operation identities are caller-supplied; only this deployment's
+    # project can hold its previous owner.
     assert any(
         f"label={server.OMNIGENT_OPERATION_LABEL}={op['operationId']}" in command
+        and "label=com.docker.compose.project=moonmind-test" in command
         for command in commands
     )
     attempt = store.load(op["operationId"])["attempts"][-1]["error"]
@@ -2167,7 +2210,9 @@ class _RetiredControllerDocker:
             raise OSError("docker unavailable")
         if args[1] == "ps":
             return {"exit": 0, "output": self.listed, "stdout": self.listed}
-        if args[1] == "exec":
+        if args[1] == "inspect":
+            return {"exit": 0, "output": "", "stdout": "sha256:retired\n"}
+        if args[1] == "run":
             return {"exit": 0, "output": self.state, "stdout": self.state + "\n"}
         return {"exit": 0, "output": ""}
 
@@ -2178,10 +2223,23 @@ def test_idle_retired_shell_controller_is_stopped_with_its_state_kept(controller
     assert server.reconcile_retired_shell_controller(docker) is False
     assert docker.commands[0][:3] == ("docker", "ps", "--quiet")
     assert f"volume={server.RETIRED_CONTROLLER_VOLUME}" in docker.commands[0]
-    assert docker.commands[1][:3] == ("docker", "exec", "retired1")
-    # Stopped, never removed: its container, logs, volume and secret remain.
-    assert docker.commands[2] == ("docker", "stop", "retired1")
-    assert len(docker.commands) == 3
+    # Frozen before it is inspected, so no request it accepts can start work
+    # between the idle answer and the stop.
+    assert docker.commands[1] == ("docker", "pause", "retired1")
+    assert docker.commands[2][:2] == ("docker", "inspect")
+    check = docker.commands[3]
+    assert check[:3] == ("docker", "run", "--rm")
+    assert ("--network", "none") == check[check.index("--network"):][:2]
+    volume = check[check.index("--volume") + 1]
+    assert volume == (
+        f"{server.RETIRED_CONTROLLER_VOLUME}:{server.RETIRED_CONTROLLER_STATE_DIR}:ro"
+    )
+    assert "sha256:retired" in check
+    assert check[-1] == server.RETIRED_CONTROLLER_STATE_DIR
+    # Killed while frozen, never removed: its container, logs, volume and
+    # secret remain.
+    assert docker.commands[4] == ("docker", "kill", "retired1")
+    assert len(docker.commands) == 5
 
 
 @pytest.mark.parametrize("state", ["unfinished", "locked", "unreadable", ""])
@@ -2191,10 +2249,11 @@ def test_busy_or_unreadable_retired_shell_controller_defers_the_controller(
     server = load("server")
     docker = _RetiredControllerDocker(state=state)
     assert server.reconcile_retired_shell_controller(docker) is True
-    assert not any(command[1] == "stop" for command in docker.commands)
+    assert not any(command[1] in ("stop", "kill") for command in docker.commands)
+    assert docker.commands[-1] == ("docker", "unpause", "retired1")
 
 
-@pytest.mark.parametrize("step", ["ps", "exec", "stop"])
+@pytest.mark.parametrize("step", ["ps", "pause", "inspect", "run", "kill"])
 @pytest.mark.parametrize("how", ["error", "exit"])
 def test_uninspectable_retired_shell_controller_is_never_assumed_absent(
     controller_path, step, how
@@ -2206,6 +2265,9 @@ def test_uninspectable_retired_shell_controller_is_never_assumed_absent(
     )
     with pytest.raises(server.LegacyWriterUnknown):
         server.reconcile_retired_shell_controller(docker)
+    if step in ("inspect", "run", "kill"):
+        # A frozen controller is never left frozen by a failed reconciliation.
+        assert docker.commands[-1] == ("docker", "unpause", "retired1")
 
 
 def test_no_retired_shell_controller_needs_no_transition(controller_path):
