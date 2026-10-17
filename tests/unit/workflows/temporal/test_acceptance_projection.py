@@ -257,6 +257,7 @@ async def test_ready_activity_checks_published_report_bytes(
             "prNumber": 42,
             "gateResultRef": "art_complete_report",
             "evidenceSetDigest": binding["evidenceSetDigest"],
+            "baseRef": "main",
             "reportDigest": (
                 digest
                 if digest_state == "match"
@@ -266,6 +267,8 @@ async def test_ready_activity_checks_published_report_bytes(
     )
     assert result["status"] == ("ready" if digest_state == "match" else "blocked")
     assert ready.await_count == (1 if digest_state == "match" else 0)
+    if digest_state == "match":
+        assert ready.await_args.kwargs["base_ref"] == "main"
     assert service.read.await_args.kwargs["admitted_principal"] == "workflow:owner"
 
 
