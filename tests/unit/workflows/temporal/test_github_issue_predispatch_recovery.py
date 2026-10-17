@@ -256,6 +256,8 @@ def _closed_capacity_wait(
         "missing_terminal",
         "capacity_timeout",
         "capacity_timeout_permanent",
+        "lease_unavailable_before_launch",
+        "lease_unavailable_after_capacity_request",
     ],
 )
 async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
@@ -322,9 +324,15 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
         failure_message=(
             "Invalid profile or adapter"
             if fault in {"permanent_profile", "permanent_adapter"}
-            else "GitHub issue claim lease expired"
+            else (
+                "GitHub issue claim lease unavailable before launch"
+                if fault.startswith("lease_unavailable")
+                else "GitHub issue claim lease expired"
+            )
         ),
-        capacity_request=fault != "missing_capacity_request",
+        # Exhausted pre-launch renewals end before any capacity request.
+        capacity_request=fault
+        not in {"missing_capacity_request", "lease_unavailable_before_launch"},
         failed_admission=fault == "failed_admission",
         nested_failure=fault in {"nested_permanent", "capacity_timeout_permanent"},
         capacity_acknowledged=fault != "request_not_acknowledged",
@@ -343,6 +351,7 @@ async def test_expired_capacity_wait_is_recovered_from_history(journey, fault):
         "lost_ack",
         "manager_started",
         "capacity_timeout",
+        "lease_unavailable_before_launch",
     }:
         assert result["released"] == 0
         assert result["results"][0]["reasonCode"] == (
