@@ -269,8 +269,8 @@ POST /api/executions
 1. User navigates to **New Workflow** from the dashboard sidebar or header.
 2. The submit form offers:
  - **Instructions** text area
- - **Runtime** selector (Codex, Claude, Jules when enabled)
- - **Model** and **Effort** selection (runtime-specific defaults auto-populated)
+ - **Harness** and **Provider Profile** selectors
+ - **Tier**, **Model**, and **Effort** selection (Provider Profile defaults pre-populated)
  - **Repository** field
  - **Publish mode** (PR, direct commit, etc.)
  - **Attachments** (images, context files)

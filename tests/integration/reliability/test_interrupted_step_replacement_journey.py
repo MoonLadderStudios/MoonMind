@@ -248,7 +248,6 @@ class InterruptedStepUpdateJourney:
         run = MoonMindRunWorkflow()
         run._owner_id = payload["ownerId"]
         run._repo = None
-        run._integration = None
         await run._run_execution_stage(
             parameters=payload["parameters"], plan_ref=payload["planRef"]
         )

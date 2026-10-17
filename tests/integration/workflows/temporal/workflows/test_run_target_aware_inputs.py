@@ -186,9 +186,9 @@ def test_agent_run_child_input_scope_is_parent_selected() -> None:
         ),
     ):
         request = wf._build_agent_execution_request(
-            node_inputs={"runtime": {"mode": "jules"}},
+            node_inputs={"runtime": {"mode": "openclaw"}},
             node_id="second-step",
-            tool_name="jules",
+            tool_name="openclaw",
             workflow_parameters={
                 "task": {
                     "inputAttachments": [{"artifactId": "objective-artifact"}],
@@ -243,11 +243,11 @@ def test_external_runtime_receives_raw_refs_without_context_refs() -> None:
     ):
         request = wf._build_agent_execution_request(
             node_inputs={
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "openclaw"},
                 "inputRefs": ["artifact://explicit-node-input"],
             },
             node_id="second-step",
-            tool_name="jules",
+            tool_name="openclaw",
             workflow_parameters={"task": task_payload},
         )
 

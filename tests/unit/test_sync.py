@@ -775,8 +775,10 @@ def test_merged_parameters_for_projection_combines_canonical_with_memo_payload()
     assert merged["model"] == "gpt-5"
 
 def test_merged_parameters_for_projection_without_canonical_returns_memo_only():
-    payload = {"parameters": {"targetRuntime": "jules"}}
-    assert merged_parameters_for_projection(payload, None) == {"targetRuntime": "jules"}
+    payload = {"parameters": {"targetRuntime": "claude_code"}}
+    assert merged_parameters_for_projection(payload, None) == {
+        "targetRuntime": "claude_code"
+    }
 
 # --- merged_memo_for_projection tests ---
 

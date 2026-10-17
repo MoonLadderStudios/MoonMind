@@ -1020,9 +1020,8 @@ class ManagedRuntimeLauncher:
         - ``MOONMIND_ARTIFACTS_DIR`` -> the per-step durable artifact area
         - ``CI``                     -> ``"1"``
 
-        Paths follow the ``/work/agent_jobs/<run_id>/...`` workspace convention
-        (``docs/ManagedAgents/DockerSidecarRuntime.md`` §5.2). Values are
-        derived from the resolved workspace so they always point at the real
+        Paths follow the ``/work/agent_jobs/<run_id>/...`` workspace
+        convention. Values are derived from the resolved workspace so they always point at the real
         directories, and carry no engine- or project-specific values so
         behavior is identical across project types.
         """

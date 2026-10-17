@@ -29,7 +29,7 @@ links that reach an external target through an excluded projection. Runtime Skil
 materialization owns projection validation; checkpoint capture never follows or
 repairs those excluded trees.
 
-The **Codex via Omnigent** product path (canonical identity `agentKind=external`, `agentId=omnigent`, nested harness `codex-native`) applies this authority contract as specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) and reconciled end-to-end by [`docs/Omnigent/NormalCodexProductPathReconciliation.md`](../Omnigent/NormalCodexProductPathReconciliation.md). Workflow Create never authors absolute paths or daemon bind sources.
+The Codex harness path (canonical identity `agentKind=external`, `agentId=omnigent`, nested harness `codex-native`) applies this authority contract as specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) and reconciled end-to-end by [`docs/Omnigent/NormalCodexProductPathReconciliation.md`](../Omnigent/NormalCodexProductPathReconciliation.md). Workflow Create never authors absolute paths or daemon bind sources.
 
 Durable workflow payloads identify workspaces with the discriminated
 `workspaceLocator` contract. A sandbox locator carries `workspaceId` and a relative

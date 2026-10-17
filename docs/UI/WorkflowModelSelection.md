@@ -75,7 +75,7 @@ runtime:
   modelTier: 2
 ```
 
-This example represents an explicitly authored tier choice. The populated Model and Effort fields are previews. Do not add their concrete values to the request as overrides. Future launches continue to follow Tier 2's policy. A default-derived numbered display has no authored `modelTier` and remains omitted until the user changes the selection.
+This example represents an explicitly authored tier choice. The Tier select already names it, so no supporting source text repeats it. The populated Model and Effort fields are previews. Do not add their concrete values to the request as overrides. Future launches continue to follow Tier 2's policy. A default-derived numbered display has no authored `modelTier` and remains omitted until the user changes the selection.
 
 ### Custom
 
@@ -113,7 +113,7 @@ It is not the same as omitting model selection. Do not strip these fields, refil
 
 Restore the original saved model-selection fields, including omission versus null, on load and unrelated saves. For example, `modelTier: 2` plus only `effort: high` keeps following the Tier 2 model while retaining the effort override; saving a title must not freeze the displayed model into a full Custom pair.
 
-Show the effective pair with concise source text such as `Tier 2 with saved effort override`. If the saved shape has no canonical numbered-tier or Custom value, use a nonselectable `Saved selection` placeholder; configured numbers and Custom remain the only selectable choices. Display and preview refresh do not convert the payload. An explicit tier selection, Custom selection, or field edit replaces it under the new authoring rules. Preserve the companion field only when its authored/runtime-default meaning is known; do not guess a missing value from historical launch diagnostics.
+Show the effective pair with concise source text such as `Tier 2 with saved overrides`. If the saved shape has no canonical numbered-tier or Custom value, use a nonselectable `Saved selection` placeholder; configured numbers and Custom remain the only selectable choices. Display and preview refresh do not convert the payload. An explicit tier selection, Custom selection, or field edit replaces it under the new authoring rules. Preserve the companion field only when its authored/runtime-default meaning is known; do not guess a missing value from historical launch diagnostics.
 
 ### Inheritance
 
@@ -171,7 +171,7 @@ Reuse existing profile data, capabilities, preview queries, and backend validati
 
 Ignore delayed responses for an old profile or selection. A tier preview that started before the user typed must not later restore tier mode or overwrite Custom values. Refresh failure leaves current values visible with a scoped warning.
 
-A null tier field must be displayed honestly as Runtime default with any known backend-resolved value in supporting text. Do not call a value Runtime default when the backend reports a legacy profile-default source. Close that resolver gap with the implementation rather than disguising it with UI copy.
+A null tier field must be displayed honestly as Runtime default with any known backend-resolved value in supporting text. Do not call a value Runtime default when the backend reports a legacy profile-default source.
 
 ## 7. Shared Implementation Boundaries
 

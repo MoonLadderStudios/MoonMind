@@ -326,9 +326,6 @@ Branches use a separate session and isolated candidate workspace. RAG and
 remediation remain host-independent artifact contracts and use the cumulative
 workspace head exactly as they do for Codex.
 
-Direct Claude remains available for compatibility and rollback until
-credentialed static and on-demand conformance has passed, no direct histories
-are in flight, historical Workflow Detail and mixed-version replay checks pass,
-and cleanup/failure telemetry meets the published support gate. Changing the
-default does not rewrite historical provenance or silently fall back between
-direct Claude, Claude-through-Omnigent, and Codex.
+Direct Claude remains a compatibility Backend under Advanced. Claude on
+Omnigent, direct Claude, and Codex never silently fall back to one another, and
+historical provenance is never rewritten.

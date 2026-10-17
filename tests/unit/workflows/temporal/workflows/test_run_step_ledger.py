@@ -2074,12 +2074,11 @@ def test_run_missing_step_ledger_updates_do_not_raise(
     assert progress["pending"] == 1
     assert progress["executing"] == 0
 
-def test_plan_dependency_map_rewrites_bundled_dependencies(
+def test_plan_dependency_map_keeps_declared_edges_between_known_nodes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
-    bundle_id = "wf-run-1:jules-bundle:step-1:step-2"
 
     dependency_map = workflow._plan_dependency_map(
         ordered_nodes=[
@@ -2088,9 +2087,8 @@ def test_plan_dependency_map_rewrites_bundled_dependencies(
                 "tool": {"type": "skill", "name": "repo.prepare"},
             },
             {
-                "id": bundle_id,
-                "tool": {"type": "agent_runtime", "name": "jules"},
-                "inputs": {"bundledNodeIds": ["step-1", "step-2"]},
+                "id": "implement",
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
             },
             {
                 "id": "publish",
@@ -2098,16 +2096,18 @@ def test_plan_dependency_map_rewrites_bundled_dependencies(
             },
         ],
         edges=(
-            SimpleNamespace(from_node="prepare", to_node="step-1"),
-            SimpleNamespace(from_node="step-1", to_node="step-2"),
-            SimpleNamespace(from_node="step-2", to_node="publish"),
+            SimpleNamespace(from_node="prepare", to_node="implement"),
+            SimpleNamespace(from_node="implement", to_node="publish"),
+            SimpleNamespace(from_node="prepare", to_node="publish"),
+            SimpleNamespace(from_node="implement", to_node="implement"),
+            SimpleNamespace(from_node="missing", to_node="publish"),
         ),
     )
 
     assert dependency_map == {
         "prepare": [],
-        bundle_id: ["prepare"],
-        "publish": [bundle_id],
+        "implement": ["prepare"],
+        "publish": ["implement", "prepare"],
     }
 
 def test_run_queries_remain_available_after_completion(
@@ -2647,7 +2647,7 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
         ordered_nodes=[
             {
                 "id": "delegate-external",
-                "tool": {"type": "agent_runtime", "name": "jules"},
+                "tool": {"type": "agent_runtime", "name": "openclaw"},
                 "inputs": {"title": "Delegate external agent"},
             }
         ],
@@ -2748,7 +2748,7 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
         ordered_nodes=[
             {
                 "id": "delegate-external",
-                "tool": {"type": "agent_runtime", "name": "jules"},
+                "tool": {"type": "agent_runtime", "name": "openclaw"},
                 "inputs": {"title": "Delegate external agent"},
             }
         ],
@@ -4176,7 +4176,7 @@ def test_run_records_capability_snapshot_without_identity_checkpoint_default(
         "implement",
         {
             "agentKind": "external",
-            "agentId": "jules",
+            "agentId": "openclaw",
             "workspaceRoot": "/provider/workspace",
             "baseCommit": "abc123",
             "checkpointKind": "git_patch",
@@ -4187,7 +4187,7 @@ def test_run_records_capability_snapshot_without_identity_checkpoint_default(
     capture = workflow._step_workspace_capture_inputs["implement"]
     assert capture["captureAuthority"] == "external_provider"
     assert capture["criticality"] == "unsupported"
-    assert capture["runtimeCapabilities"]["runtimeId"] == "jules"
+    assert capture["runtimeCapabilities"]["runtimeId"] == "openclaw"
     assert capture["kind"] == "git_patch"
 
 
@@ -4823,7 +4823,7 @@ async def test_run_keeps_non_omnigent_and_legacy_checkpoint_capture_defaults(
         "external-control",
         {
             "agentKind": "external",
-            "agentId": "jules",
+            "agentId": "openclaw",
             "workspaceRoot": "/work/agent_jobs/run-1/repo",
             "baseCommit": "abc123",
         },
@@ -6424,9 +6424,9 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     plan_payload["nodes"] = [
         {
             "id": "delegate-agent",
-            "tool": {"type": "agent_runtime", "name": "jules"},
+            "tool": {"type": "agent_runtime", "name": "openclaw"},
             "inputs": {
-                "targetRuntime": "jules",
+                "targetRuntime": "openclaw",
                 "instructions": "Implement the requested change.",
             },
             "options": {},

@@ -1,24 +1,24 @@
-# Omnigent Primary Agent Backend Strategy
+# Omnigent Agent Backend Strategy
 
-**Status:** Canonical desired state; implementation and deployment evidence remain separate  
+**Status:** Current strategy  
 **Document Class:** System / Product Architecture  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-10-14\
-**Authority:** Long-term agent-backend direction under reliability-first simplification
+**Last updated:** 2026-10-16  
+**Authority:** Agent-backend direction under reliability-first simplification
 
 ## Related documents
 
-[AGENTS.md](../../AGENTS.md), [Harness, Provider Profile, and Backend Selection](../UI/HarnessProfileBackendSelection.md), [Single-User Application Design](../SingleUserApplicationDesign.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Shared Host Image](SharedHostImage.md), [runtime selection and transition](RuntimeProviderRollout.md), [Provider Profiles](../Security/ProviderProfiles.md), [Workflow Chat](../UI/WorkflowChatPanel.md), [repository access and durable work](../RepositoryAccessAndWorkspaceDesign.md), and [deployment updates](../Steps/DockerComposeUpdateSystem.md).
+[AGENTS.md](../../AGENTS.md), [Harness, Provider Profile, and Backend Selection](../UI/HarnessProfileBackendSelection.md), [Single-User Application Design](../SingleUserApplicationDesign.md), [Omnigent module entrypoint](README.md), [Contract Ownership](ContractOwnership.md), [Harness Platform](OmnigentHarnessPlatformDesign.md), [Shared Host Image](SharedHostImage.md), [selection and rollout controls](RuntimeProviderRollout.md), [Provider Profiles](../Security/ProviderProfiles.md), [Workflow Chat](../UI/WorkflowChatPanel.md), [repository access and durable work](../RepositoryAccessAndWorkspaceDesign.md), and [deployment updates](../Steps/DockerComposeUpdateSystem.md).
 
 ## Advance organizer
 
-Omnigent is the destination for one agent-backend lifecycle behind Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
+Omnigent is MoonMind's single agent backend: one lifecycle behind the Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
 
-This strategy revises the earlier exact-combination promotion and staged-retirement requirements. The staged-retirement machinery (removal stages, retirement criteria, drain census, and removal plans) has been removed; retirement is now class-based new-admission control with owner-specific removal checks, described in `OmnigentModuleArchitecture.md` §5. New-work admission no longer reads Codex phase switches, and ordinary admission is certificate independent. Explicit strict certification and surviving selection/rollout controls remain implemented; [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence) and [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration) own those boundaries. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for historical interpretation, without restoring superseded requirements. Further simplification in this strategy is a target, not a claim that remaining controls or deployed migrations have already been removed.
+Retirement of remaining alternatives is class-based new-admission control with owner-specific removal checks (`OmnigentModuleArchitecture.md` §5). Ordinary admission is certificate independent; explicit strict certification and the selection/rollout controls still in code are owned by [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence) and [selection and rollout controls](RuntimeProviderRollout.md).
 
 ## 1. Decision
 
-**Omnigent becomes the single normal agent backend.** Harness-specific behavior belongs in thin trusted adapters. Replacing direct/profile-bound paths must preserve supported behavior and actual active work, but narrow reliability fixes do not wait for every harness, static mode, connector, or migration to finish.
+**Omnigent is the single supported agent backend.** Harness-specific behavior belongs in thin trusted adapters. Retiring a direct or profile-bound path must preserve supported behavior and active work, but narrow reliability fixes do not wait for every harness, static mode, connector, or retirement to finish.
 
 ### 1.1 Seven required product outcomes
 
@@ -30,35 +30,31 @@ This strategy revises the earlier exact-combination promotion and staged-retirem
 | Retry, checkpoint, and artifact parity | Existing recovery and preservation owners handle interruption, continuation, restore, and saved output. Where the original host is unavailable, recovery uses actual durable evidence rather than restarting completed work. |
 | Shared implementation | One owner handles each launch, session/turn mutation, capture, publication, and cleanup responsibility. Persistent records support those owners instead of becoming parallel orchestrators. |
 | Reusable OAuth Provider Profiles | Existing Codex/Claude Profiles retain their identities, enrollment-owned homes, credential generation, and capacity ownership. No duplicate account, copied home, or second login is required. |
-| Harness and one Provider Profile | Ordinary authoring uses Harness and Provider Profile. Backend is normally Omnigent and is not a required ordinary selector. Only a genuine supported alternative appears under Advanced. The workflows list shows Provider Profile instead of Runtime. Internal configuration/Host Class/materializer/realizer identities do not become additional required selectors. |
+| Harness and one Provider Profile | Ordinary authoring uses Harness and Provider Profile; Backend is not an ordinary selector (§9). |
 
-These are required outcomes, not a claim of current support or a fixed test inventory. Prove the relevant production boundaries and reuse shared evidence. Do not silently relabel unfinished required capability as unsupported to close the program.
+These outcomes are the acceptance contract for each claimed harness, not a fixed test inventory. Do not relabel unfinished required capability as unsupported to close the work.
 
 ## 2. What the agent backend owns
 
 Omnigent provides the host/runner protocol, harness execution, live provider sessions, and native interactions. MoonMind's existing Temporal and module owners retain admission, workflow/step identity, selected Profile/model policy, credentials/capacity, workspace and context authority, Skills/tools, durable evidence, recovery, publication, and cleanup.
 
-A durable event store and the lifecycle consuming it are not necessarily competing systems. Remove duplicate independent mutations, not persistence that keeps transcripts, commands, artifacts, and historical diagnostics useful after a host disappears. The bridge is not replaced by another session engine.
+A durable event store and the lifecycle consuming it are not competing systems. Remove duplicate independent mutations, not persistence that keeps transcripts, commands, artifacts, and historical diagnostics useful after a host disappears. The bridge is not replaced by another session engine.
 
-One operator per instance can use multiple accounts and concurrent workflows. Independent deployments do not share a database, rollout decision, or drain observation by assumption. No tenant or human-role system is required.
+One operator per instance can use multiple accounts and concurrent workflows. Independent deployments do not share a database, rollout decision, or drain observation by assumption.
 
 ## 3. Stable product identity
 
 Omnigent-backed execution keeps `agentKind=external` and `agentId=omnigent`. The selected harness has its own nested identity, such as `codex-native`, `claude-native`, or `opencode-native`.
 
-Use **Harness** for Codex, Claude Code, and OpenCode; **Provider Profile** for the existing configured connection and defaults; and **Backend** for Omnigent. Use **agent backend** in architecture prose when distinguishing it from the MoonMind API. Reserve **Container** and **Host** for actual execution resources. [The selection design](../UI/HarnessProfileBackendSelection.md) owns product presentation and the mapping from existing serialized names.
+Use **Harness** for Codex, Claude Code, and OpenCode; **Provider Profile** for the configured connection and defaults; and **Backend** for Omnigent. Use **agent backend** in architecture prose when distinguishing it from the MoonMind API. Reserve **Container** and **Host** for actual execution resources. [The selection design](../UI/HarnessProfileBackendSelection.md) owns product presentation and the mapping from serialized names.
 
-Product family, harness, Provider Profile `runtime_id`, and vendor command/display names remain different domains. Existing profile runtime values retain their harness-ownership meaning, not Backend identity. Reuse the existing pure harness registry for registration-level consumers and the existing resolver for executable choices. Registry membership is not permission, while temporary lack of capacity is not loss of registration.
+Product family, harness, Provider Profile `runtime_id`, and vendor command/display names remain different domains. Profile runtime values keep their harness-ownership meaning, not Backend identity. Reuse the pure harness registry for registration-level consumers and the resolver for executable choices. Registry membership is not permission, and temporary lack of capacity is not loss of registration.
 
-New producers use one canonical runtime-input boundary. Known legacy values can be converted by an identified migration/ingress owner without changing their meaning. Unknown or conflicting explicit input never becomes another runtime. Keep original historical decoding where required, not duplicate alias maps throughout the core or a global ban on vendor names.
+New producers use one canonical runtime-input boundary. Known legacy values can be converted by an identified migration/ingress owner without changing their meaning. Unknown or conflicting explicit input never becomes another runtime. Keep original historical decoding where required, not duplicate alias maps throughout the core.
 
-## 4. Current transition state
+## 4. Remaining alternatives
 
-At the September 21 review baseline `6fdaab848e8f9fd9c5279ea36186482cab05733d`, the repository contains direct compatibility paths, Codex profile-bound supervision, generic realizer routing, runtime-provider rollout rules, and a code-owned retirement inventory. The static-Claude module already declares a retained optional path. These are source observations, not deployed support claims.
-
-The desired steady state does not preserve the old Codex phase machine, per-combination canaries, six rollback switches, nine ordered removal stages, or a permanent inventory of deleted components. Simplify them through their existing consumers. Do not just set every gate true, install another policy facade, or strip an active resource owner without a safe transition.
-
-The existing shared selection boundary remains the integration point. [RuntimeProviderRollout.md](RuntimeProviderRollout.md) distinguishes the target from currently readable legacy fields and controls.
+Code still carries the direct `codex_cli` and `claude_code` compatibility Backends, the retained profile-bound Codex realizer (the Codex default until generic Codex is promoted), runtime-provider rollout rules, and the code-owned retirement inventory in `moonmind/omnigent/legacy_retirement.py`. Simplify them through their consumers. Do not set every gate true, install another policy facade, or strip an active resource owner without a safe transition. [RuntimeProviderRollout.md](RuntimeProviderRollout.md) describes the controls as they exist.
 
 ## 5. Governing principles
 
@@ -70,110 +66,98 @@ Reuse existing plans, runtime bindings, Profile capacity, workspace, session/tur
 
 Use the deployment's installed managed host image, shared across harnesses where practical. Images are built from trusted inputs, contain no provider secrets, and have recorded immutable provenance. Sharing binaries does not share credentials, OAuth homes, sessions, or launch permission.
 
-One deployment owner resolves and updates the needed server/host artifacts. A changed SHA, digest, or patch version is not itself incompatibility. Do not introduce a replacement all-fields compatibility fingerprint. Integrity of a selected artifact and compatibility between components are separate checks.
+One deployment owner resolves and updates the needed server/host artifacts. A changed SHA, digest, or patch version is not itself incompatibility. Do not introduce an all-fields compatibility fingerprint. Integrity of a selected artifact and compatibility between components are separate checks.
 
 ### 5.3 Separate Host Classes may share one image
 
-Retain Host Class distinctions only for genuine launch, isolation, or capability needs. A separate class for every harness/image/model combination is not a strategic requirement. Reuse existing descriptors rather than adding another support catalog. Preserve explicitly selected policy and supported host behavior.
+Retain Host Class distinctions only for genuine launch, isolation, or capability needs. A separate class for every harness/image/model combination is not required. Reuse existing descriptors rather than adding another support catalog.
 
 ### 5.4 Runtime differences belong in a trusted runtime pack
 
-Trusted descriptors/adapters contain genuine CLI, credential-path, environment, and protocol differences. Workflows cannot supply arbitrary commands, mounts, or environment allowlists through them. Reuse the existing registry and generation path. Do not fetch live model catalogs during schema import or mirror registry data into a second authority.
+Trusted descriptors/adapters contain genuine CLI, credential-path, environment, and protocol differences. Workflows cannot supply arbitrary commands, mounts, or environment allowlists through them. Do not fetch live model catalogs during schema import or mirror registry data into a second authority.
 
 ### 5.5 Credential materialization remains runtime-specific and minimal
 
-The existing materializer owns the selected credential format and lifecycle. Run-owned material is cleaned after its consumers stop. Profile-owned OAuth homes are released, not deleted by ordinary run cleanup. Host-owned credentials are not copied or silently claimed. Credentialless execution creates no dummy secret and does not inherit keyed credentials or billing policy.
-
-Materialization, renewal, and cleanup use existing operation/ownership records. Do not create another generation service or universal token-file mechanism. Preserve the actual process boundary, not only a label claiming isolation.
+The materializer owns the selected credential format and lifecycle. Run-owned material is cleaned after its consumers stop. Profile-owned OAuth homes are released, not deleted by ordinary run cleanup. Host-owned credentials are not copied or silently claimed. Credentialless execution creates no dummy secret and does not inherit keyed credentials or billing policy. Materialization, renewal, and cleanup use existing operation/ownership records, not another generation service or universal token-file mechanism.
 
 ### 5.6 MoonMind owns OAuth enrollment
 
-Existing Settings/Profile enrollment supplies the admitted account. Corresponding Omnigent execution reuses it without a second login or new Profile type. Codex and Claude Profiles retain their underlying `codex_cli` and `claude_code` identities. Concurrent direct, static, and on-demand consumers cannot write the same mutable OAuth home without its existing exclusive authority.
+Settings/Profile enrollment supplies the admitted account. Omnigent execution reuses it without a second login or new Profile type. Codex and Claude Profiles retain their underlying `codex_cli` and `claude_code` identities. Concurrent direct, static, and on-demand consumers cannot write the same mutable OAuth home without its exclusive authority.
 
 ### 5.7 Credential isolation is stricter than image isolation
 
-A host receives only its admitted model/repository credentials. Scrub conflicting ambient selectors through existing trusted delivery. Managed-publisher destination credentials stay outside the agent. Read-only token files or a helper returning a broad token are not confinement against arbitrary code. Preserve explicit exposure/high-security policy without building a new proxy merely to claim support.
+A host receives only its admitted model/repository credentials. Scrub conflicting ambient selectors through trusted delivery. Managed-publisher destination credentials stay outside the agent. Read-only token files or a helper returning a broad token are not confinement against arbitrary code. Preserve explicit exposure/high-security policy without building a new proxy merely to claim support.
 
 ### 5.8 Support is exact and evidence-gated
 
-Evidence identifies the actual code, image, harness, credential boundary, model, and operations exercised. Compatibility depends on required interfaces and behavior. Evidence for one adapter does not prove a different credential or session protocol, but common production mechanisms can share representative tests instead of independently repeating the full cross-product.
+Evidence identifies the actual code, image, harness, credential boundary, model, and operations exercised. Evidence for one adapter does not prove a different credential or session protocol, but common production mechanisms can share representative tests instead of repeating the full cross-product.
 
-Use existing current-candidate CI and focused real-boundary tests. Keep live-provider qualification separately authorized and honestly limited. Neither an installed binary nor a success flag qualifies a product journey. Conversely, absent live access for an unrelated deleted alias is not a reason to prohibit safe repository cleanup or burn implementation retries.
+Use current-candidate CI and focused real-boundary tests. Keep live-provider qualification separately authorized and honestly limited. Neither an installed binary nor a success flag qualifies a product journey. Absent live access for an unrelated deleted alias is not a reason to block safe repository cleanup.
 
 ### 5.9 No silent fallback
 
-Preserve admitted harness, account, model/cost/privacy, source, host-mode constraints, and publication intent. Failure cannot silently select a direct path, another realizer, or broader authority. Recover using the existing bounded owner, distinguishing capacity waits, unavailable observations, and actual incompatibility.
+Preserve admitted harness, account, model/cost/privacy, source, host-mode constraints, and publication intent. Failure cannot silently select a direct path, another realizer, or broader authority. Recover using the bounded owner, distinguishing capacity waits, unavailable observations, and actual incompatibility.
 
-A compatible installation update for future work is not an unrequested account/harness change. Already-started attempts retain their actual provenance. A genuinely changed execution objective or authority uses existing fresh admission, not a rewritten old plan.
+A compatible installation update for future work is not an unrequested account/harness change. Already-started attempts retain their actual provenance. A changed execution objective or authority uses fresh admission, not a rewritten old plan.
 
-### 5.10 Replay and historical truth outlive cutover
+### 5.10 Replay and historical truth outlive path retirement
 
-Recorded inputs, digests, results, and histories keep their meaning. Preserve executable compatibility only for actual active, pending, replay/reset, or cleanup consumers. Read-only historical access need not keep an old launcher or supervisor running forever.
-
-A maintenance window can stop incompatible writers but cannot make incompatible recorded histories safe. Use relevant replay evidence or a controlled transition. No history deletion, arbitrary retention reduction, or permanent retained fleet is implied by simplification.
+Recorded inputs, digests, results, and histories keep their meaning. Preserve executable compatibility only for actual active, pending, replay/reset, or cleanup consumers. Read-only historical access need not keep an old launcher or supervisor running. A maintenance window can stop incompatible writers but cannot make incompatible recorded histories safe; use replay evidence or a controlled transition.
 
 ### 5.11 Recovery and preservation parity
 
 Reconcile the recorded attempt, session/turn effects, phase receipts, and saved results before retrying. Live-session continuation and restoration into a fresh execution are different operations. Restoring files does not revive credentials, leases, approvals, or permission to repeat remote effects.
 
-Persist confirmed compute and required saved-content evidence before later publication/reporting or destructive cleanup. A failed publication does not erase a valid save. Successful saving does not upgrade failed/canceled compute. Verified artifact storage can supply save-only durability without a GitHub identity; a remote recovery push still needs admitted destination authority. A local path or incomplete upload is not a durable saved result.
+Persist confirmed compute and required saved-content evidence before later publication/reporting or destructive cleanup. A failed publication does not erase a valid save, and successful saving does not upgrade failed/canceled compute. Verified artifact storage can supply save-only durability without a GitHub identity; a remote recovery push still needs admitted destination authority. A local path or incomplete upload is not a durable saved result.
 
-The existing finalization and janitor owners share a durable preservation decision across restart. Retain failed saves only under bounded quota/recovery policy and report incompleteness. Release model capacity and credentials after their consumers are confirmed stopped under existing authority, independently of non-sensitive content retention. No second finalizer or permanent live host is required merely to retain files.
+The finalization and janitor owners share a durable preservation decision across restart. Retain failed saves only under bounded quota/recovery policy and report incompleteness. Release model capacity and credentials after their consumers are confirmed stopped, independently of non-sensitive content retention. No second finalizer or permanent live host is required merely to retain files.
 
 ## 6. Target topology
 
 Ordinary authoring resolves one meaningful selection into an existing plan, workspace, and attempt-owned Omnigent host. The canonical session/turn boundary serves interactions and records evidence. Existing capture, publisher, recovery, and cleanup owners finish the operation.
 
-Reduce idle services first by removing unused/default-on work. Combine worker responsibilities only when trust, resource, and restart requirements actually permit it. Reuse fleet-specific dependencies and the existing worker lifecycle. Queue names alone do not establish process isolation or aggregate concurrency. Preserve responsive cancellation and cleanup without another worker supervisor or service-count quota.
+Reduce idle services by removing unused/default-on work. Combine worker responsibilities only when trust, resource, and restart requirements permit it. Queue names alone do not establish process isolation or aggregate concurrency. Preserve responsive cancellation and cleanup without another worker supervisor.
 
 ## 7. Shared image contract
 
-[SharedHostImage.md](SharedHostImage.md) owns build and artifact details. Keep trusted build-time tools, immutable selected artifacts, architecture support, and relevant SBOM/provenance. Its descriptions of old exact-combination promotion are transition context, not an obligation to reconstruct this strategy's retired rollout machinery. Reconcile providing implementations as they change.
+[SharedHostImage.md](SharedHostImage.md) owns build and artifact details: trusted build-time tools, immutable selected artifacts, architecture support, and SBOM/provenance.
 
 ## 8. Runtime-pack contract
 
-The existing pack/materializer owners define executable interfaces. Keep descriptors small, trusted, secret-free, and versioned where their actual wire behavior requires it. Tool-version inspection must not require provider authentication. Runtime readiness still checks the real capabilities and credentials that the requested operation needs.
+The pack/materializer owners define executable interfaces ([SharedHostImage.md](SharedHostImage.md) §2). Keep descriptors small, trusted, secret-free, and versioned where their wire behavior requires it. Tool-version inspection must not require provider authentication. Runtime readiness still checks the real capabilities and credentials the requested operation needs.
 
 ## 9. Product selection and defaults
 
-Ordinary authoring uses **Harness and one Provider Profile**, with the same server-side agreement checks. The selected/default profile establishes a compatible initial harness. Changing Harness filters profiles without silently substituting an explicitly selected account. Provider Profile retains account, model policy, and supported explicit configuration. Advisory discovery/capacity failures preserve valid inventory and drafts rather than selecting another account.
+Ordinary authoring uses **Harness and one Provider Profile**, with the same server-side agreement checks. The selected/default profile establishes a compatible initial harness. Changing Harness filters profiles without silently substituting an explicitly selected account. Advisory discovery/capacity failures preserve valid inventory and drafts rather than selecting another account.
 
-**Backend** is normally Omnigent. A selector appears under Advanced only for a genuine supported alternative, and a nondefault choice stays visible when Advanced is collapsed. With only one backend, remove the selector and keep recorded Backend in execution details. Do not keep obsolete paths merely to populate a dropdown. Internal Target, Agent Profile, Host Class, materializer, and realizer identities are not another required selection chain.
+**Backend** is Omnigent and is not shown on the ordinary form. The Advanced Backend selector appears only while a supported direct compatibility Backend serves the selected Harness, and a non-Omnigent choice stays summarized when Advanced is collapsed. When no alternative remains, remove the selector and keep recorded Backend in execution details. Do not keep obsolete paths merely to populate a dropdown. Internal Agent Profile, Host Class, materializer, and realizer identities are not another selection chain.
 
-The workflows list leads with Provider Profile instead of Runtime, with optional secondary Harness text. Its data comes from recorded workflow selection, not today's default. [The selection design](../UI/HarnessProfileBackendSelection.md) defines pending, unknown, multiple-profile, history, and filter semantics.
+The workflows list leads with recorded Provider Profile, with optional secondary Harness text, not today's default. [The selection design](../UI/HarnessProfileBackendSelection.md) defines pending, unknown, multiple-profile, history, and filter semantics.
 
 ### One shared selection boundary
 
-`runtime_target_selection.py` remains the integration point for Create, presets, schedules, edits/reruns, fresh retries, branches, remediation, continuation, API/MCP, and worker normalization. Compose it with existing Profile/configuration resolution at admission. Normal omitted/default-equivalent requests must resolve to the same supported Omnigent backend policy without an accidental direct fallback. Preserve authored versus defaulted intent. Simplify its providers and remove redundant defaults with their callers. Do not add a parallel selector or duplicate frontend policy.
+`resolve_runtime_target_selection` in `moonmind/workflows/executions/runtime_target_selection.py` is the integration point for Create, presets, schedules, edits/reruns, fresh retries, branches, remediation, continuation, API/MCP, and worker normalization. Admission composes it with Profile/configuration resolution. Omitted and default-equivalent requests resolve to the same Omnigent policy without an accidental direct fallback. Preserve authored versus defaulted intent. Simplify its providers and remove redundant defaults with their callers rather than adding a parallel selector or frontend policy.
 
-### Default promotion is per combination
+### Installed runtime selection
 
-This former heading is retained for existing references, not as a requirement for per-combination promotion. The target has one installed managed runtime selection with actual capability/authority checks. Independent canary policy, qualification booleans, rollout generations, and display ordering must not compete to choose it. Unknown or incompatible explicit selections remain actionable.
+Default selection follows the installed managed runtime, checked against actual capability and authority. Rollout rows, qualification switches, and canary cohorts that remain in code are transition controls, not additional authorities to grow. Unknown or incompatible explicit selections remain actionable.
 
 ### Preserved identity on continuation
 
-Already-started work retains its recorded meaning and evidence. New launches, including recurring occurrences, follow installed runtime selection while preserving authored harness/Profile, model/cost/privacy, source, and publication intent. Schedules do not independently pin image digests or runtime-provider rollout versions. Preserve schedule identity, cadence, paused state, and meaningful choices during migration. A patch update alone must not require recreating or reapproving every schedule.
+Already-started work retains its recorded meaning and evidence. New launches, including recurring occurrences, follow installed runtime selection while preserving authored harness/Profile, model/cost/privacy, source, and publication intent. Schedules do not pin image digests or runtime-provider rollout versions, and a patch update must not require recreating or reapproving schedules.
 
-## 10. Migration stages
+## 10. Retiring an alternative path
 
-There is no mandatory six-phase product migration or nine-stage deletion sequence. Use one bounded transition through existing deployment ownership: establish the replacement behavior, stop incompatible new admissions, reconcile actual old work and retained-history requirements, switch the existing selection, and remove the obsolete path with its consumers. This is an operational dependency, not another persisted state machine.
+Use one bounded transition through existing deployment ownership: establish the replacement behavior, stop incompatible new admissions, reconcile actual old work and retained-history requirements, switch the selection, and remove the obsolete path with its consumers. This is an operational dependency, not another persisted state machine.
 
-Use current records and scoped observation tools for the affected deployment. Missing visibility is unknown, not clean drainage. An unused config alias needs appropriate caller/serialization evidence, not a live provider canary. An active OAuth consumer or history-visible command needs its actual safety evidence. Do not apply every product criterion to every file.
-
-Fresh installs without old consumers should not perform a permanent retirement census. Independent deployments are updated and observed independently. Preserve operator URLs, settings, data, credentials, and the only recoverable work. Recovery uses the same portable controller, with rollback only where schema/data/history compatibility permits it.
+Use current records and scoped observation for the affected deployment; missing visibility is unknown, not clean drainage. An unused config alias needs caller/serialization evidence, not a live provider canary. An active OAuth consumer or history-visible command needs its actual safety evidence. Fresh installs without old consumers need no retirement census. Preserve operator URLs, settings, data, credentials, and the only recoverable work.
 
 ## 11. Required acceptance gates
 
-The shared normal path must demonstrate launch, usable session/chat, correctly scoped credentials, saved results, and relevant retry/cancel/recovery behavior. Existing Profile enrollment and canonical command delivery must work through actual consumers. Required source and publication behavior remains with its existing owners, not a new umbrella test suite.
+The shared normal path must demonstrate launch, usable session/chat, correctly scoped credentials, saved results, and relevant retry/cancel/recovery behavior through actual consumers. Use common-path CI plus tests for genuinely different credential, storage, or protocol boundaries, and validate replay changes with appropriate histories. Report source inspection, fixtures, current CI, live observations, and deployed state separately. Missing required evidence cannot become success, while unrelated qualification is not a blanket gate on simplification.
 
-Use common-path CI plus tests for genuinely different credential, storage, or protocol boundaries. Validate real replay changes with appropriate histories. Report source inspection, fixtures, current CI, live observations, and deployed state separately. Missing required evidence cannot become success, while unrelated qualification is not a blanket gate on simplification.
-
-The change must remove competing mechanisms, not just hide them or rename a registry. No fixed class/phase/metric count, whole-catalog conformance ledger, or documentation-wording test is required.
+A change must remove competing mechanisms, not hide them or rename a registry.
 
 ## 12. Non-goals
 
 No new rollout service, retirement inventory, compatibility fingerprint, session orchestrator, shared raw-credential home, account/tenant model, or mandatory static vendor host. No arbitrary workflow-authored image or privileged mount. No weakening of real security, active-work, data-integrity, or historical interpretation requirements.
-
-## 13. Documentation rule
-
-Distinguish desired primary behavior, actual supported paths, and temporary compatibility. A design change is not a live cutover. Remove conflicting old requirements rather than append more validators or exceptions. Keep operational instructions with existing issues/update owners and concise providing contracts. The historical strategy remains in Git, not another permanent active checklist.

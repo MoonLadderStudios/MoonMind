@@ -270,7 +270,7 @@ def _scheduled_activities(history):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "runtime", [None, "omnigent", "codex_cli", "claude_code", "jules", "openclaw"]
+    "runtime", [None, "omnigent", "codex_cli", "claude_code", "openclaw"]
 )
 async def test_canonical_dependencies_block_planning_and_child_launch(runtime):
     payload = _canonical_dependency_input()

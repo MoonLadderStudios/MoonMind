@@ -1,6 +1,6 @@
 # Provider Profiles
 
-**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Provider Profile Model and Effort Tiers](./ProviderProfileModelEffortTiers.md), [Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md), [Provider Profile Creation](../UI/ProviderProfileCreation.md)
+**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Provider Profile Model and Effort Tiers](./ProviderProfileModelEffortTiers.md), [Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md), [Provider Profile Creation](../UI/ProviderProfileCreation.md)
 
 Omnigent compatibility and capacity are governed by an
 [immutable policy version](../Omnigent/PolicyAuthority.md). The Codex product path

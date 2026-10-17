@@ -1,467 +1,103 @@
-# Technical Design: External Agent Integration System
+# External Agent Integration System
 
-Status: **Implemented in core architecture** (provider coverage and helper surfaces continue to expand)
-Last updated: 2026-03-30
+Status: Current
 Related:
 - [`../Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`../Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
 - [`./AddingExternalProvider.md`](./AddingExternalProvider.md)
+- [`./OpenClawAgentAdapter.md`](./OpenClawAgentAdapter.md)
 - [`../Temporal/ErrorTaxonomy.md`](../Temporal/ErrorTaxonomy.md)
 
 ---
 
 ## 1. Objective
 
-Define one canonical architecture for MoonMind external-agent integrations.
+Every external agent provider is an implementation of one shared system, not its own architecture:
 
-The goal is to stop describing each provider as its own mini-architecture and instead treat providers such as Jules and future BYOA integrations as implementations of one shared external-agent system with:
-
-- one generic orchestration lifecycle
+- one generic orchestration lifecycle in `MoonMind.AgentRun`
 - one canonical `AgentAdapter` contract
-- one shared external-adapter base pattern for poll-based providers
+- one shared adapter base, `BaseExternalAgentAdapter`
 - provider-specific transport and status mapping behind that boundary
-- canonical runtime contracts crossing the workflow boundary
+- only canonical runtime contracts crossing the workflow boundary
 
-For the full execution model covering both managed and external agents, see [`ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md).
-
----
-
-## 2. Canonical mental model
-
-Older docs drifted because they described different slices of the same system:
-
-- one document described external execution as a compact stack
-- provider-specific docs described transport, tooling, and orchestration as if they were separate architectures
-
-They are not competing designs. They are different views of one system.
-
-MoonMind should describe every external-agent integration using the same five concerns.
+The registered external adapters are Omnigent, MoonMind's agent backend, and OpenClaw. `build_default_registry()` in `moonmind/workflows/adapters/external_adapter_registry.py` registers each only when its runtime gate is satisfied. Omnigent's harness lifecycle is owned by the [Omnigent docs](../Omnigent/README.md); this document covers the adapter boundary they share.
 
 ---
 
-## 3. The universal external-agent stack
+## 2. The external-agent stack
 
-MoonMind should describe every external provider using the same five layers.
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| Configuration and runtime gate | Enablement, endpoints, auth references, transport and timeout defaults, gate helpers such as `is_openclaw_enabled()` | Workflow lifecycle |
+| Provider transport | Native request/response shapes, auth headers, transport retries, scrubbed transport errors | MoonMind lifecycle or canonical contracts |
+| External agent adapter | Request validation, correlation metadata, idempotency, status normalization, canonical result shaping, truthful cancel | Durable waiting or workflow state |
+| `MoonMind.AgentRun` orchestration | Start, durable wait, callbacks, polling, timeouts, cancellation cleanup, artifact publication, result handoff | Provider payload parsing |
+| Optional tooling | MCP tools, REST helpers, dashboard and debugging surfaces | Provider lifecycle semantics |
 
-## 3.1 Layer 1: configuration and runtime gate
+Tooling consumes the same transport and adapter boundaries rather than redefining provider behavior.
 
-This layer answers:
+---
 
-> Is this provider enabled, configured, and safe to use?
+## 3. Adapter contract
 
-Responsibilities:
-
-- provider enablement
-- endpoints
-- auth references
-- feature flags
-- transport defaults
-- timeout/retry defaults
-- runtime-gate checks
-
-Examples:
-
-- provider settings modules
-- runtime gate helpers such as `is_jules_runtime_enabled()`
-
-This layer does **not** own workflow lifecycle semantics.
-
-## 3.2 Layer 2: provider transport
-
-This layer owns the provider’s native protocol.
-
-Responsibilities:
-
-- REST/RPC request and response shapes
-- provider auth headers
-- transport retries and timeout handling
-- scrubbed transport errors
-
-Examples:
-
-- provider schema modules
-- provider client code such as:
-  - `jules_client.py`
-
-This layer does **not** own MoonMind lifecycle or canonical workflow contracts.
-
-## 3.3 Layer 3: universal external agent adapter
-
-This is the key standardization point.
-
-Every external provider plugs into one generic adapter contract:
+Every external provider implements:
 
 - `start(request: AgentExecutionRequest) -> AgentRunHandle`
 - `status(run_id) -> AgentRunStatus`
 - `fetch_result(run_id) -> AgentRunResult`
 - `cancel(run_id) -> AgentRunStatus`
 
-This layer owns:
+The boundary lives in `moonmind/workflows/adapters/agent_adapter.py`, `external_adapter_registry.py`, and `base_external_agent_adapter.py`.
 
-- request validation for external-agent requests
-- correlation metadata injection
-- idempotency behavior
-- provider status normalization
-- canonical result shaping
-- truthful cancel semantics
-- compact metadata enrichment
+`BaseExternalAgentAdapter` supplies the rules that repeat across providers: validating that a request targets the expected provider, injecting correlation metadata, stable idempotency, common metadata fields (`providerStatus`, `normalizedStatus`, `externalUrl`, callback hints), normalized handle/status/result construction, and best-effort cancel when the provider lacks hard cancellation.
 
-In the current codebase, this boundary is represented by:
+Provider subclasses own only provider-specific work: translating `AgentExecutionRequest` into native payloads, mapping provider states to canonical states, extracting result summaries and artifact-worthy outputs, provider cancel behavior, and declaring capabilities.
 
-- `moonmind/workflows/adapters/agent_adapter.py`
-- `moonmind/workflows/adapters/external_adapter_registry.py`
-- `moonmind/workflows/adapters/base_external_agent_adapter.py`
-- provider adapters such as:
-  - `jules_agent_adapter.py`
+### 3.1 Normalize at the boundary
 
-### Canonical contract rule
+Provider-native payloads become MoonMind runtime contracts at the adapter or integration activity boundary, never in workflow code. Workflows receive only `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`.
 
-The adapter boundary is where provider-native payloads become MoonMind runtime contracts.
+Provider details such as URLs, raw status labels, PR URLs, callback support, and tracking references belong in canonical `metadata`. Provider-shaped top-level payloads (`{external_id, tracking_ref}`, provider-specific status strings, result dicts that the workflow must repair) are rejected at the boundary; unknown provider states fail there rather than in workflow coercion glue.
 
-That means provider-specific response shapes must be normalized **before** they reach workflow code.
+### 3.2 `ProviderCapabilityDescriptor`
 
-Workflow code should receive only canonical contracts such as:
-
-- `AgentRunHandle`
-- `AgentRunStatus`
-- `AgentRunResult`
-
-Provider-specific details belong in canonical `metadata`, not provider-shaped top-level response dicts.
-
-## 3.4 Layer 4: workflow orchestration
-
-`MoonMind.AgentRun` owns the generic execution lifecycle for all true agent runs.
-
-This layer owns:
-
-- start via integration activity
-- durable waiting
-- callback handling
-- polling fallback
-- timeout handling
-- cancellation cleanup
-- artifact publication
-- normalized result return to the parent workflow
-
-This layer should remain provider-neutral apart from:
-
-- adapter selection
-- execution-style branching where the provider capability requires it
-
-It should not contain provider-specific transport parsing logic.
-
-## 3.5 Layer 5: optional tooling and operator surfaces
-
-These surfaces are useful, but they are not the core execution architecture.
-
-Examples:
-
-- MCP tooling
-- REST helper endpoints
-- dashboard widgets
-- provider-specific debugging/admin surfaces
-
-These should consume the same transport and adapter boundaries rather than redefine provider lifecycle semantics.
+Each adapter declares `provider_name`, `supports_callbacks`, `supports_cancel`, `supports_result_fetch`, `default_poll_hint_seconds`, and `execution_style`. The descriptor lets `MoonMind.AgentRun` stay provider-neutral while choosing the right execution path. The helper activity `integration.resolve_adapter_metadata` performs registry inspection outside workflow code and returns this metadata; it is a workflow-support helper, not a provider lifecycle surface.
 
 ---
 
-## 4. Target shape in code
+## 4. Execution styles
 
-The external-agent stack is implemented as:
+### 4.1 Streaming gateway
 
-- shared `AgentAdapter` protocol
-- `MoonMind.AgentRun` child workflow
-- `ExternalAdapterRegistry` and `build_default_registry()`
-- provider-specific transport clients and schemas
-- `BaseExternalAgentAdapter` for poll-oriented providers
-- provider-specific Temporal integration activities
-- helper activity `integration.resolve_adapter_metadata` for execution-style and adapter validation
+Omnigent and OpenClaw declare `execution_style="streaming_gateway"`. `MoonMind.AgentRun` runs one execute-style activity that returns a canonical `AgentRunResult`:
 
-This gives MoonMind one common architecture across providers instead of a separate orchestration model per provider.
+- `integration.openclaw.execute`
+- `integration.omnigent.execute` and `integration.omnigent.profile_bound_execute`
 
----
+### 4.2 Polling
 
-## 5. Universal external adapter base
+`MoonMind.AgentRun` also keeps the generic poll lifecycle for providers that run work asynchronously behind an external id:
 
-`BaseExternalAgentAdapter` is the standard extension point for poll-oriented external providers.
+1. `integration.<provider>.start(...) -> AgentRunHandle`
+2. durable wait on callbacks with a polling timer as fallback
+3. `integration.<provider>.status(...) -> AgentRunStatus`
+4. `integration.<provider>.fetch_result(...) -> AgentRunResult`
+5. `integration.<provider>.cancel(...) -> AgentRunStatus` when needed
 
-It supplies:
+No registered provider currently uses this style. A provider that does extends `BaseExternalAgentAdapter` and registers the activity family on the integrations fleet.
 
-- provider capability descriptor integration
-- shared helpers for correlation metadata
-- idempotency-oriented behavior
-- normalized `AgentRunHandle` construction
-- normalized `AgentRunStatus` construction
-- normalized `AgentRunResult` construction
-- best-effort cancel fallback when hard cancel is unavailable
+### 4.3 Callback ingress
 
-## 5.1 Base class responsibilities
-
-The base implementation should own the generic external-agent rules that repeat across providers:
-
-1. validate that the request is an external-agent request for the expected provider
-2. inject MoonMind correlation metadata consistently
-3. apply stable idempotency behavior
-4. centralize common metadata fields such as:
-   - `providerStatus`
-   - `normalizedStatus`
-   - `externalUrl`
-   - callback hints
-5. centralize best-effort cancel semantics when the provider lacks hard cancellation
-6. keep workflow-facing contracts compact and artifact-ref-based
-
-## 5.2 Subclass responsibilities
-
-Provider subclasses should own only the provider-specific parts:
-
-1. translate `AgentExecutionRequest` into provider-native transport payloads
-2. map provider lifecycle states into canonical MoonMind states
-3. extract provider result summaries and artifact-worthy outputs
-4. implement provider-specific cancel behavior
-5. advertise capabilities such as:
-   - callbacks
-   - cancel support
-   - result fetch support
-   - execution style
+Poll-style providers that support callbacks post to `POST /api/integrations/{integrationName}/callbacks/{callbackCorrelationKey}`; `GET /api/integrations/callbacks` describes the contract. The API checks the optional shared token, payload size, and rate limit (`MOONMIND_INTEGRATION_CALLBACK_*` settings), resolves the target through a durable correlation record rather than a Visibility scan (so the target survives Continue-As-New), optionally captures the raw payload as an artifact, and signals the execution with `ExternalEvent`. Callbacks for an execution already in a terminal state are accepted without a signal. Polling remains armed as the fallback when callbacks are absent or late.
 
 ---
 
-## 6. Canonical runtime contract boundary
-
-The most important rule for external integrations is:
-
-> Normalize at the adapter or activity boundary, not in workflow code.
-
-External integrations must present canonical lifecycle contracts to the rest of MoonMind.
-
-## 6.1 Required contract surface
-
-For standard poll-based providers:
-
-- `integration.<provider>.start(...) -> AgentRunHandle`
-- `integration.<provider>.status(...) -> AgentRunStatus`
-- `integration.<provider>.fetch_result(...) -> AgentRunResult`
-- `integration.<provider>.cancel(...) -> AgentRunStatus`
-
-## 6.2 What is allowed in metadata
-
-Provider-specific fields may be included inside canonical `metadata`, for example:
-
-- provider URLs
-- callback support flags
-- provider tracking references
-- raw provider status labels
-- PR URLs
-- provider-side summary identifiers
-
-## 6.3 What is not allowed
-
-Do not rely on provider-shaped workflow-facing top-level payloads such as:
-
-- `{external_id, tracking_ref}`
-- `{status: "provider_specific_state"}`
-- arbitrary dicts that the workflow must coerce into `AgentRunStatus`
-- provider-specific result dicts that the workflow must repair into `AgentRunResult`
-
-Contract-shape enforcement belongs at the adapter or integration activity boundary.
-
----
-
-## 7. Execution styles
-
-External providers may not all execute the same way, so capability metadata must declare the execution style.
-
-## 7.1 Polling
-
-This is the default style.
-
-Pattern:
-
-1. start external run
-2. wait durably
-3. poll status or process callbacks
-4. fetch final result
-5. cancel if needed
-
-This is the standard model for providers such as Jules.
-
-## 7.2 Streaming gateway
-
-Some providers may use a one-shot execution path rather than a start/status/fetch loop.
-
-Current example:
-
-- OpenClaw-style execution
-
-In this style, the provider may expose a single activity path like:
-
-- `integration.<provider>.execute(...) -> AgentRunResult`
-
-This style still fits the same architectural model:
-
-- transport is provider-specific
-- capability declaration is provider-specific
-- orchestration remains centralized
-- the returned payload must still be canonical
-
-The main difference is that the orchestration branch in `MoonMind.AgentRun` chooses an execute-style path instead of a poll loop.
-
----
-
-## 8. Workflow orchestration behavior
-
-`MoonMind.AgentRun` should remain the single lifecycle owner for external agent execution.
-
-It owns:
-
-- the durable wait
-- callback vs polling choice
-- timeout enforcement
-- cancellation cleanup
-- result handoff to the parent workflow
-
-It should not own:
-
-- provider-native request shape parsing
-- provider-native status normalization
-- provider-specific result schema repair
-
-Those belong in adapters and integration activities.
-
-### 8.1 Helper activity note
-
-`integration.resolve_adapter_metadata` exists to keep certain nondeterministic adapter/registry inspection logic out of workflow code.
-
-Its role is limited:
-
-- validate adapter availability
-- expose execution metadata such as execution style
-
-It is a workflow-support helper, not a provider-lifecycle contract surface.
-
----
-
-## 9. Jules in the standard model
-
-Under this model, Jules is not “a separate architecture.”
-
-Jules is:
-
-- one provider configuration/runtime gate
-- one provider transport client and schema set
-- one provider-specific adapter subclass
-- one set of integration activities
-- one optional set of tooling/operator surfaces
-
-The correct description is:
-
-> Jules is a reference provider implementation for the universal external-agent adapter pattern.
-
-Not:
-
-> Jules defines its own separate execution architecture.
-
-The same framing applies to future providers.
-
----
-
-## 10. Tooling boundaries and reference integrations
-
-Tooling surfaces such as MCP, dashboards, or provider-specific admin helpers should consume the same centralized provider boundaries rather than redefining provider behavior.
-
-## 10.1 `ProviderCapabilityDescriptor`
-
-`ProviderCapabilityDescriptor` describes runtime behavior such as:
-
-- `supports_callbacks`
-- `supports_cancel`
-- `supports_result_fetch`
-- `provider_name`
-- `default_poll_hint_seconds`
-- `execution_style`
-
-This descriptor is what lets MoonMind orchestration remain mostly provider-neutral while still choosing the right execution path.
-
-## 10.2 Poll-based providers
-
-Poll-based providers:
-
-- extend `BaseExternalAgentAdapter`
-- use the standard start/status/fetch/cancel activity family
-- normalize provider statuses into canonical MoonMind runtime states
-
-Examples:
-
-- Jules
-
-## 10.3 Streaming providers
-
-Streaming-style providers:
-
-- advertise `execution_style="streaming_gateway"`
-- use a dedicated execute-style activity path
-- still return canonical `AgentRunResult`
-
-Example:
-
-- OpenClaw
-
-## 10.4 Adding a new provider
-
-For the step-by-step provider addition flow, see [`AddingExternalProvider.md`](./AddingExternalProvider.md).
-
-That guide covers:
-
-- runtime gate
-- client
-- adapter
-- activity catalog registration
-- worker registration
-- canonical contract requirements
-
----
-
-## 11. Architectural benefits
-
-This architecture gives MoonMind:
-
-1. one mental model for all external agents
-2. one place to define canonical runtime contracts
-3. provider-specific transport isolated from workflow orchestration
-4. provider addition as adapter/activity work rather than workflow redesign
-5. clearer test boundaries
-6. less doc drift across providers
-7. better alignment with thin, replaceable adapter boundaries
-
----
-
-## 12. Design rules for new external providers
-
-When adding a new provider, the design rules are:
-
-1. keep transport provider-specific
-2. keep orchestration provider-neutral
-3. return canonical runtime contracts only
-4. keep provider-specific details inside canonical `metadata`
-5. reject unknown provider states at the adapter/activity boundary
-6. do not add workflow-side coercion glue for provider payloads
-7. prefer the standard polling/callback contract family unless a true streaming-gateway path is required
-
----
-
-## 13. Summary
-
-The standard MoonMind model for external agents is:
-
-1. configuration/runtime gate
-2. provider transport
-3. universal external adapter
-4. `MoonMind.AgentRun` orchestration
-5. optional tooling/operator surfaces
-
-The key boundary is the adapter/activity contract boundary:
-
-- provider-native payloads are allowed below it
-- only canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` are allowed above it
-
-Jules remains the primary reference poll-based provider, while OpenClaw and future providers follow the same core architecture rather than inventing separate execution models.
+## 5. Design rules for new providers
+
+1. Keep transport provider-specific and orchestration provider-neutral.
+2. Return canonical runtime contracts only, with provider details in `metadata`.
+3. Reject unknown provider states at the adapter or activity boundary.
+4. Do not add workflow-side coercion for provider payloads.
+5. Use the polling family for asynchronous external jobs and a streaming-gateway `execute` activity only when the provider completes through one long-running call.
+
+[`AddingExternalProvider.md`](./AddingExternalProvider.md) covers the step-by-step addition: runtime gate, client, adapter, activity catalog and worker registration, and contract requirements.

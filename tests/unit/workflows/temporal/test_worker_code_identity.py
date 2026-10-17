@@ -369,7 +369,7 @@ def test_base_adapter_builders_stamp_worker_code_revision(
     monkeypatch.setenv("MOONMIND_BUILD_SHA", "worker-rev")
     handle = BaseExternalAgentAdapter.build_handle(
         run_id="r",
-        agent_id="jules",
+        agent_id="openclaw",
         status="running",
         provider_status="ACTIVE",
         normalized_status="running",
@@ -382,7 +382,7 @@ def test_base_adapter_builders_stamp_worker_code_revision(
 
     status = BaseExternalAgentAdapter.build_status(
         run_id="r",
-        agent_id="jules",
+        agent_id="openclaw",
         status="running",
         provider_status="ACTIVE",
         normalized_status="running",
@@ -393,7 +393,7 @@ def test_base_adapter_builders_stamp_worker_code_revision(
         run_id="r",
         provider_status="COMPLETE",
         normalized_status="completed",
-        provider_name="Jules",
+        provider_name="OpenClaw",
     )
     assert str(result.worker_code_revision).startswith("worker-rev")
     assert str(result.metadata["workerCodeRevision"]).startswith("worker-rev")

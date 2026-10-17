@@ -52,6 +52,15 @@ describe('#4636 shared production selector', () => {
     fireEvent.change(screen.getByLabelText('Workflow Tier'), { target: { value: '2' } });
     expect(payload()).toEqual({ modelTier: 2 });
   });
+  it('does not repeat an ordinary tier choice as status text', () => {
+    render(<Form initial={{ modelTier: 1 }} />);
+    expect((screen.getByLabelText('Workflow Tier') as HTMLSelectElement).value).toBe('1');
+    expect(screen.queryByText(/Requested Tier/)).toBeNull();
+  });
+  it('explains an unavailable tier without restating the request', () => {
+    render(<Form initial={{ modelTier: 7 }} />);
+    expect(screen.getByText('Tier 7 is not configured for this profile. Using Tier 2.')).toBeTruthy();
+  });
   it('retains strict intent without claiming a lower effective tier', () => {
     render(<Form initial={{ modelTier: 7, tierFallback: 'strict' }} />);
     expect(screen.getByText(/No configured tier satisfies/)).toBeTruthy();

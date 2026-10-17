@@ -163,7 +163,7 @@ def test_result_cannot_override_workflow_checkpoint_capabilities(monkeypatch, ke
     workflow._step_workspace_capture_inputs["execute"] = {
         "runtimeCapabilities": trusted
     }
-    forged = resolve_runtime_execution_capabilities("jules").model_dump(
+    forged = resolve_runtime_execution_capabilities("openclaw").model_dump(
         by_alias=True, mode="json"
     )
     workflow._record_step_workspace_capture_input("execute", {key: forged})
@@ -176,7 +176,7 @@ def test_result_cannot_override_workflow_checkpoint_capabilities(monkeypatch, ke
 def test_initial_capture_uses_canonical_runtime_capabilities(monkeypatch, runtime_id):
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
     workflow = run_module.MoonMindRunWorkflow()
-    forged = resolve_runtime_execution_capabilities("jules").model_dump(
+    forged = resolve_runtime_execution_capabilities("openclaw").model_dump(
         by_alias=True, mode="json"
     )
     workflow._record_step_workspace_capture_input(
@@ -316,7 +316,7 @@ def test_retained_capture_history_keeps_recorded_capability_decision(monkeypatch
         lambda name: name == run_module.RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     )
     workflow = run_module.MoonMindRunWorkflow()
-    historical = resolve_runtime_execution_capabilities("jules").model_dump(
+    historical = resolve_runtime_execution_capabilities("openclaw").model_dump(
         by_alias=True, mode="json"
     )
     workflow._record_step_workspace_capture_input(

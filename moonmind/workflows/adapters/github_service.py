@@ -1,8 +1,7 @@
 """General-purpose GitHub REST API service.
 
 Provides provider-agnostic pull-request operations used by the ``repo.*``
-Temporal activity family.  Extracted from `JulesClient` to decouple core
-workflow orchestration from Jules-specific adapters (Constitution §I, §III, §VIII).
+Temporal activity family and merge automation.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ from pr_resolver_core.review_providers import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Result models (provider-agnostic replacements for Jules-prefixed models)
+# Result models
 # ---------------------------------------------------------------------------
 
 class CreatePRResult(BaseModel):
@@ -57,7 +56,7 @@ class CreatePRResult(BaseModel):
     retry_after_seconds: int | None = Field(None, alias="retryAfterSeconds", gt=0)
 
 class MergePRResult(BaseModel):
-    """Result from ``repo.merge_pr``."""
+    """Result from a pull-request merge."""
 
     model_config = ConfigDict(populate_by_name=True)
 

@@ -622,7 +622,7 @@ def test_runtime_command_unsupported_runtime_does_not_require_recognition() -> N
     snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/review\nCheck external runtime behavior.",
-            "runtime": {"mode": "jules"},
+            "runtime": {"mode": "openclaw"},
         }
     )
 
@@ -2765,17 +2765,6 @@ def test_runtime_aliases_canonicalize_at_admission_boundary() -> None:
     )
     assert spec.runtime.mode == "claude_code"
 
-    canonical = build_canonical_workflow_view(
-        job_type="task",
-        payload={
-            "repository": "MoonLadderStudios/MoonMind",
-            "targetRuntime": "jules_api",
-            "workflow": {"instructions": "Run."},
-        },
-    )
-    assert canonical["targetRuntime"] == "jules"
-    assert canonical["workflow"]["runtime"]["mode"] == "jules"
-
     with pytest.raises(WorkflowContractError, match="must be one of"):
         build_canonical_workflow_view(
             job_type="task",
@@ -2814,23 +2803,27 @@ def test_runtime_aliases_do_not_shadow_harness_identities() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"targetRuntime": "codex_cloud", "workflow": {"instructions": "Keep the task"}},
-        {
-            "workflow": {
-                "instructions": "Keep the task",
-                "runtime": {"mode": "codex_cloud"},
-            }
-        },
-        {
-            "workflow": {
-                "instructions": "Keep the task",
-                "steps": [{**skill_step(), "runtime": {"mode": "codex_cloud"}}],
-            }
-        },
+        shape
+        for runtime_id in ("codex_cloud", "jules", "jules_api")
+        for shape in (
+            {"targetRuntime": runtime_id, "workflow": {"instructions": "Keep the task"}},
+            {
+                "workflow": {
+                    "instructions": "Keep the task",
+                    "runtime": {"mode": runtime_id},
+                }
+            },
+            {
+                "workflow": {
+                    "instructions": "Keep the task",
+                    "steps": [{**skill_step(), "runtime": {"mode": runtime_id}}],
+                }
+            },
+        )
     ],
 )
-def test_removed_cloud_is_rejected_without_default_substitution(payload):
-    """MoonLadderStudios/MoonMind#4644: explicit retired work is never retargeted."""
+def test_removed_runtime_is_rejected_without_default_substitution(payload):
+    """Explicit retired Codex Cloud or Jules work is never retargeted."""
     with pytest.raises(WorkflowContractError):
         build_canonical_workflow_view(job_type="task", payload=payload)
 

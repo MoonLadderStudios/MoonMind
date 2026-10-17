@@ -1018,7 +1018,6 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "MoonLadderStudios/MoonMind"
-    workflow._integration = None
     child_calls: list[str] = []
     step_execution_artifact_ids = count(1)
 
@@ -2513,39 +2512,6 @@ async def test_run_execution_stage_skips_registry_read_for_unpatched_histories(
         if activity_type == "artifact.read"
     ]
     assert artifact_reads == ["art_plan_1"]
-
-def test_build_agent_execution_request_includes_bundle_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workflow = MoonMindRunWorkflow()
-    workflow_info = type(
-        "WorkflowInfo",
-        (),
-        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
-    )
-    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-
-    request = workflow._build_agent_execution_request(
-        node_inputs={
-            "instructions": "Bundled work",
-            "repository": "org/repo",
-            "startingBranch": "main",
-            "publishMode": "branch",
-            "bundleId": "bundle-1",
-            "bundledNodeIds": ["node-1", "node-2"],
-            "bundleManifestRef": "artifact://bundle/1",
-            "bundleStrategy": "one_shot_jules",
-        },
-        node_id="bundle-1",
-        tool_name="jules",
-    )
-
-    moonmind_meta = request.parameters["metadata"]["moonmind"]
-    assert moonmind_meta["bundleId"] == "bundle-1"
-    assert moonmind_meta["bundledNodeIds"] == ["node-1", "node-2"]
-    assert moonmind_meta["bundleManifestRef"] == "artifact://bundle/1"
-    assert moonmind_meta["bundleStrategy"] == "one_shot_jules"
-
 
 def test_build_agent_execution_request_enforces_read_repository_operation(
     monkeypatch: pytest.MonkeyPatch,
@@ -4355,7 +4321,6 @@ def test_blocked_outcome_message_detects_nested_json_code_fence() -> None:
 
 def test_publish_completion_reports_blocked_outcome_without_pr_failure() -> None:
     workflow = MoonMindRunWorkflow()
-    workflow._integration = None
     workflow._publish_status = "not_required"
     workflow._publish_reason = "Workflow blocked by plan step: blocked upstream."
     workflow._plan_blocked_message = (
@@ -5169,7 +5134,6 @@ async def test_run_execution_stage_reopens_pr_gate_after_later_push(
 
 def test_authoritative_pr_requirement_prefers_commits_over_stale_story_output() -> None:
     workflow = MoonMindRunWorkflow()
-    workflow._integration = None
     workflow._publish_status = "published"
     workflow._publish_context = {
         "storyOutputMode": "github",
@@ -6142,119 +6106,7 @@ async def test_dynamic_remediation_final_pass_replaces_prior_blocking_verdict(
 
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workflow = MoonMindRunWorkflow()
-    workflow._owner_id = "owner-1"
-    create_pr_called = False
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: dict[str, object],
-        **_kwargs: object,
-    ) -> object:
-        nonlocal create_pr_called
-        if activity_type == "repo.create_pr":
-            create_pr_called = True
-
-        if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "artifact://registry/1":
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "jules",
-                                "description": "Jules",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.tool.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 1},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
-            return json.dumps(
-                {
-                    "plan_version": "1.0",
-                    "metadata": {
-                        "title": "Publish Plan",
-                        "created_at": "2026-03-12T00:00:00Z",
-                        "registry_snapshot": {
-                            "digest": "reg:sha256:" + ("a" * 64),
-                            "artifact_ref": "artifact://registry/1",
-                        },
-                    },
-                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                    "nodes": [
-                        {
-                            "id": "step-1",
-                            "tool": {
-                                "type": "agent_runtime",
-                                "name": "jules",
-                            },
-                            "inputs": {"repo_ref": "git:org/repo#branch", "runtime": {"mode": "jules"}},
-                            "options": {},
-                        }
-                    ],
-                    "edges": [],
-                }
-            ).encode("utf-8")
-        return {
-            "status": "COMPLETED",
-            "outputs": {
-                "stdout_tail": "Skipped PR native creation.",
-            },
-        }
-
-    async def fake_execute_child_workflow(
-        workflow_type: str,
-        args: object,
-        **_kwargs: object,
-    ) -> object:
-        return {
-            "summary": "Agent finished",
-            "metadata": {"jules_session_id": "session-123", "branch": "jules-test-branch"},
-            "output_refs": []
-        }
-
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
-    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "upsert_search_attributes",
-        lambda _attributes: None,
-    )
-    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    workflow_info = type(
-        "WorkflowInfo",
-        (),
-        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
-    )
-    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
-
-    await workflow._run_execution_stage(
-        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
-        plan_ref="art_plan_1",
-    )
-
-    assert not create_pr_called, "repo.create_pr should not have been called"
-
-
-@pytest.mark.asyncio
-async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
+async def test_run_execution_stage_external_pr_extracts_url_from_diagnostics_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
@@ -6278,7 +6130,7 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
             )
             if artifact_ref == "diag-1":
                 return (
-                    "Jules completed and created "
+                    "External agent completed and created "
                     "https://github.com/MoonLadderStudios/MoonMind/pull/679"
                 )
             if artifact_ref == "artifact://registry/1":
@@ -6286,8 +6138,8 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
                     {
                         "skills": [
                             {
-                                "name": "jules",
-                                "description": "Jules",
+                                "name": "openclaw",
+                                "description": "OpenClaw",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
                                 "executor": {
@@ -6323,11 +6175,11 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
                             "id": "step-1",
                             "tool": {
                                 "type": "agent_runtime",
-                                "name": "jules",
+                                "name": "openclaw",
                             },
                             "inputs": {
                                 "repo_ref": "git:org/repo#branch",
-                                "runtime": {"mode": "jules"},
+                                "runtime": {"mode": "openclaw"},
                             },
                             "options": {},
                         }
@@ -6345,7 +6197,7 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
         return {
             "summary": "Agent finished",
             "diagnostics_ref": "diag-1",
-            "metadata": {"jules_session_id": "session-123"},
+            "metadata": {"session_id": "session-123"},
             "output_refs": [],
         }
 
@@ -6389,18 +6241,10 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
 
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_non_jules_agent_with_session_id_creates_native_pr(
+async def test_run_execution_stage_managed_agent_with_session_id_creates_native_pr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression test: a non-Jules agent_runtime (e.g. Claude) that returns
-    jules_session_id in result metadata must NOT suppress native PR creation.
-
-    Root cause: agent_run.py unconditionally injected jules_session_id into
-    every AgentRunResult.metadata, and run.py used ``or jules_session_id`` to
-    skip PR creation.  This test ensures the fix works: the PR-skip guard
-    should NOT trigger for non-Jules agents even when the metadata contains
-    a jules_session_id.
-    """
+    """A managed agent result carrying a provider session id still gets a native PR."""
     wf = MoonMindRunWorkflow()
     wf._owner_id = "owner-1"
     wf._repo = "MoonLadderStudios/MoonMind"
@@ -6479,15 +6323,13 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
         args: object,
         **_kwargs: object,
     ) -> object:
-        # Simulates a Claude agent result that spuriously includes
-        # jules_session_id (the old bug).
         return {
             "summary": "Completed with status completed",
             "metadata": {
                 "push_status": "pushed",
                 "push_branch": "auto-0526d401",
                 "branch": "auto-0526d401",
-                "jules_session_id": "cb4cca35-fake-session-id",
+                "session_id": "cb4cca35-fake-session-id",
             },
             "output_refs": [],
         }
@@ -6515,8 +6357,8 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
     )
 
     assert create_pr_called, (
-        "repo.create_pr SHOULD have been called for a non-Jules agent "
-        "even when child result metadata contains jules_session_id"
+        "repo.create_pr SHOULD have been called for a managed agent "
+        "even when child result metadata contains a session id"
     )
 
 

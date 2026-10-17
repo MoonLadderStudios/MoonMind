@@ -1,18 +1,15 @@
 # Harness, Provider Profile, and Backend Selection
 
-**Status:** Accepted
-**Implementation and deployment:** Tracked separately; acceptance of this design does not certify shipped behavior.
+**Status:** Current
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Product and Platform
-**Updated:** 2026-10-01
+**Updated:** 2026-10-16
 **Authority:** Product terminology, ordinary agent selection, advanced Backend disclosure, and identity presentation across authoring and workflow views. Existing admission, credential, persistence, and lifecycle owners remain authoritative for their mechanisms.
-**Related:** [Create Page](CreatePage.md), [Workflows List](WorkflowsListPage.md), [Provider Profiles](../Security/ProviderProfiles.md), [Execution Configurations](../Omnigent/AgentProfiles.md), [Primary Backend Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md), [Selection and Transition](../Omnigent/RuntimeProviderRollout.md), [Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md).
+**Related:** [Create Page](CreatePage.md), [Workflows List](WorkflowsListPage.md), [Workflow Model Selection](WorkflowModelSelection.md), [Provider Profiles](../Security/ProviderProfiles.md), [Execution Configurations](../Omnigent/AgentProfiles.md), [Primary Backend Strategy](../Omnigent/PrimaryRuntimeProviderStrategy.md), [Selection and Transition](../Omnigent/RuntimeProviderRollout.md), [Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md).
 
 ## Decision and scope
 
-Ordinary agent authoring uses **Harness** and one **Provider Profile**. **Backend** identifies the system that launches and manages the harness, normally Omnigent. Backend is not an ordinary required choice. The Workflows list replaces its Runtime column and mobile field with **Provider Profile**, optionally showing Harness as secondary text in the same cell.
-
-This adopts and replaces the deferred Harness-first authoring proposal. It does not certify that the UI has shipped, promote an unsupported execution path, or retire an active launcher merely by renaming it. Implementation follows the existing owners and proportional automated tests, not another rollout framework or manual approval gate.
+Ordinary agent authoring uses **Harness** and one **Provider Profile**. **Backend** identifies the system that launches and manages the harness. Omnigent is the single normal Backend, so ordinary authoring neither asks for it nor describes it. The Workflows list shows **Provider Profile** where it once showed Runtime, optionally with Harness as secondary text in the same cell.
 
 ## Vocabulary
 
@@ -21,24 +18,24 @@ This adopts and replaces the deferred Harness-first authoring proposal. It does 
 | Harness | Agent software performing the work. | Codex, Claude Code, OpenCode | Ordinary authoring, Provider Profile setup, workflow details. |
 | Provider | Upstream model service. | OpenAI, Anthropic, OpenRouter | Provider Profile setup and relevant diagnostics. |
 | Provider Profile | The existing configured harness/provider connection, credential references, model policy, and capacity identity. | A friendly account/profile name | Ordinary selection and primary workflow-list identity. |
-| Backend | System that launches and manages the harness. | Omnigent | Advanced only when a meaningful supported alternative exists, otherwise execution details. |
+| Backend | System that launches and manages the harness. | Omnigent | Advanced only when a supported alternative exists; otherwise execution details. |
 | Host | The actual machine or host service used for execution. | An acquired Omnigent host | Authorized diagnostics. |
 | Container | An actual execution container, image, or container identifier. | Recorded container name and image | Authorized infrastructure diagnostics. |
-| Execution configuration | Existing reusable behavior and restrictions represented internally by an Agent Profile. | A selected immutable configuration | Automatically resolved, with exceptional configuration in Settings. |
+| Execution configuration | Reusable behavior and restrictions represented internally by an Agent Profile. | A selected immutable configuration | Automatically resolved, with exceptional configuration in Settings. |
 
 Use **Backend**, not **Execution backend**, as the UI label. In architecture prose, **agent backend** distinguishes this concept from the **MoonMind API**. Container, Runner, Engine, and Host are not alternate product labels for Omnigent. Use **Claude Code**, not Claude, for the harness.
 
-Provider Profile remains the current object. This change does not create a generic multi-harness account object, duplicate account enrollment, or another profile family. Profiles retain their actual harness compatibility even when several harnesses share the same upstream provider.
+Provider Profile is the existing object, not a generic multi-harness account or another profile family. Profiles keep their actual harness compatibility even when several harnesses share one upstream provider.
 
-### Existing serialized names are not UI terminology
+### Serialized names are not UI terminology
 
-There is no global `Runtime` search-and-replace. Classify each occurrence by its actual meaning:
+There is no global `Runtime` rename. Classify each occurrence by its actual meaning:
 
-- Provider Profile `runtime_id` values such as `codex_cli`, `claude_code`, and `opencode` represent harness ownership for this product vocabulary. They are not renamed to `omnigent`.
-- An Omnigent execution target represents the Backend, with its existing nested harness identity. Preserve `agentKind=external`, `agentId=omnigent`, and existing supported nested identifiers.
-- `task.runtime`, model/effort runtime-intent envelopes, language runtimes, worker runtime modules, container-job backends, historical errors, and recorded target identifiers retain their existing meanings unless their actual schema owner makes a necessary change.
+- Provider Profile `runtime_id` values such as `codex_cli`, `claude_code`, and `opencode` represent harness ownership. They are not renamed to `omnigent`.
+- An Omnigent execution target represents the Backend, with its nested harness identity. `agentKind=external`, `agentId=omnigent`, and the nested identifiers keep their meaning.
+- `task.runtime`, model/effort runtime-intent envelopes, language runtimes, worker runtime modules, container-job backends, historical errors, and recorded target identifiers keep their existing meanings.
 
-Use the existing registry, serializers, and ingress normalization. Improve internal names at touched boundaries where useful, but do not require a database-wide rename, new compatibility fingerprint, alias registry, or parallel resolver to ship the UI. Necessary retained aliases need identified consumers and a removal condition. Original history and digests remain unchanged.
+Use the existing registry, serializers, and ingress normalization. A retained alias needs identified consumers and a removal condition. Original history and digests remain unchanged.
 
 ## Ordinary authoring
 
@@ -52,98 +49,54 @@ Model               <selected tier value or Custom input>
 Effort              <selected tier value or Custom input>
 ```
 
-The default Provider Profile and compatible execution configuration establish the initial Harness. There is one consistent selection, not two independent sources of truth. The Harness control filters compatible profiles through the existing backend projection. A profile selected through a deep link, saved draft, preset, or another supported entrypoint establishes its compatible harness without being replaced by a global default.
+The default Provider Profile and compatible execution configuration establish the initial Harness, so there is one selection rather than two sources of truth. The Harness control filters compatible profiles through the existing backend projection. A profile arriving from a deep link, saved draft, preset, or other entrypoint establishes its compatible harness without being replaced by a global default.
 
-A genuinely new unconfigured draft may display an authorized default or sole compatible profile. After a deliberate Harness change, retain the selected profile only when compatible. Otherwise show that a compatible Provider Profile must be selected and preserve recoverable draft values. Do not silently select a different account, credential route, or billing policy to repair the mismatch.
+A new unconfigured draft may show an authorized default or sole compatible profile. After a deliberate Harness change, the selected profile stays only when compatible; otherwise the form asks for a compatible Provider Profile and keeps recoverable draft values. It never silently selects a different account, credential route, or billing policy to repair the mismatch.
 
-Use supported catalog data, not page-local enum lists or combined primary options such as Omnigent Codex and Direct Codex. Registration alone is not launch permission. Settings may display disabled or disconnected profiles with their setup state. Unavailable capacity, failed advisory discovery, and revoked credentials have different meanings and cannot silently select a different identity.
+Choices come from supported catalog data, not page-local enums or combined options such as Omnigent Codex and Direct Codex. Registration alone is not launch permission. Settings may show disabled or disconnected profiles with their setup state. Unavailable capacity, failed advisory discovery, and revoked credentials mean different things and never select a different identity.
 
-### Model controls remain one existing owner
-
-The selected profile supplies its configured tier choices and actual default tier. The approved Tier/Custom interaction is owned by the model-selection and tier contracts, not a second policy inside the Harness control: numbered Tier selection populates Model and Effort, editing either field selects Custom while preserving the other field, and selecting Custom directly leaves both fields unchanged. Do not restore the Tier fallback selector, including under Advanced.
-
-Saved, preset, inherited, and Custom choices survive reconstruction and compatible profile/harness changes. A genuinely incompatible explicit value remains visible for correction. Stale asynchronous responses cannot overwrite newer input or convert derived previews into authored overrides. The Tier/Custom implementation is reused rather than duplicated here.
-
-Steps inherit workflow selection unless explicitly specialized through the existing supported override boundary. Viewing or saving an inherited value does not pin it as a new override. Tools and container jobs without an agent do not invent a Harness or Provider Profile.
+The selected profile supplies its configured tiers and actual default tier. [Workflow Model Selection](WorkflowModelSelection.md) owns the Tier/Model/Effort interaction; the Harness control adds no second model policy. Steps inherit the workflow selection unless explicitly specialized through the supported override boundary, and viewing or saving an inherited value does not pin it. Tools and container jobs without an agent get no Harness or Provider Profile.
 
 ## Backend disclosure
 
-Omnigent is the normal backend policy for new agent authoring. Removing the former Runtime dropdown and dropping its value is insufficient if that reactivates an old direct-path fallback. Resolve omitted and documented default-equivalent input at the existing shared admission boundary.
+Omitted and default-equivalent input resolve to Omnigent at the shared admission boundary, never to a direct-path fallback. Because Omnigent is the expected route, the page shows no selector or summary line for it.
 
-Offer a Backend selector under Advanced only while the selected Provider Profile has a genuine supported alternative to the current Backend, including the replacement for a restored Backend that is no longer allowed. Another account of the same Harness never adds a route to the selected profile. An explicitly selected nondefault backend remains visible in the collapsed summary and workflow details. Opening or closing Advanced never changes its value. An explicitly configured alternative deployment default is also disclosed rather than presented as invisible Omnigent execution.
+The Advanced Backend selector appears only while the selected Harness has a supported alternative published by the runtime target catalog, such as the direct Codex and Claude Code compatibility Backends (`codex_cli`, `claude_code`), or while a restored Backend is no longer allowed and needs a replacement. Another account of the same Harness never adds a route. A nondefault Backend, including an explicitly configured alternative deployment default, stays visible as `Backend: <name>` when it is not being edited under Advanced, and in workflow details. Opening or closing Advanced never changes its value.
 
-When Omnigent is the only supported backend, remove the selector rather than showing a one-option dropdown or retaining dead launch paths behind a hidden flag. Recorded Backend remains inspectable in execution details. Host Classes, images, launch policies, materializers, realizer versions, and execution configurations do not become a mandatory selection chain.
+When Omnigent is the only supported backend for a Harness, there is no selector and no hidden flag keeping a dead launch path. Recorded Backend remains inspectable in execution details. Host Classes, images, launch policies, materializers, realizer versions, and execution configurations are not a mandatory selection chain.
 
-Direct means an existing supported integration without Omnigent, not necessarily execution on the operator's computer. Do not introduce Direct as a second implementation merely to populate this control. Retirement of actual alternative launchers remains with the existing consolidation owner and must preserve active work.
+Direct means an existing supported integration without Omnigent, not necessarily execution on the operator's computer. Retiring a direct launcher belongs to its consolidation owner and must preserve active work.
 
 ## One server-side selection contract
 
-Extend the existing composition of `runtime_target_selection.py`, `profile_execution_selection.py`, Provider Profile ownership validation, and the executions admission boundary. They already own target/default resolution, compatible configuration selection, and the final authoritative handoff. This product change does not create another owner.
+`runtime_target_selection.py`, `profile_execution_selection.py`, Provider Profile ownership validation, and the executions admission boundary own target/default resolution, compatible configuration selection, and the final handoff. Product changes extend them rather than adding another owner.
 
-For every supported new-work producer, reconcile authored Harness, Provider Profile, defaulted or explicit Backend, model intent, and compatible execution configuration before credential acquisition or host effects. A forged or contradictory combination fails at the API boundary even when the UI would never offer it. Preserve explicit pins, account, source, privacy/cost, and publication intent.
+For every new-work producer, authored Harness, Provider Profile, defaulted or explicit Backend, model intent, and compatible execution configuration are reconciled before credential acquisition or host effects. A forged or contradictory combination fails at the API boundary even when the UI would never offer it. Explicit pins, account, source, privacy/cost, and publication intent are preserved.
 
-Keep authored/defaulted/inherited intent distinct from resolved provenance. Use the existing expectation mechanism for consequential concurrent changes to the selected account, harness, backend, or pinned configuration. Do not add a stale-preview requirement or image/digest equality gate for harmless metadata refresh, display-name changes, compatible installed-image updates, or advisory model discovery.
+Authored, defaulted, and inherited intent stay distinct from resolved provenance. Consequential concurrent changes to the selected account, harness, backend, or pinned configuration use the existing expectation mechanism. Harmless metadata refresh, display-name changes, compatible installed-image updates, and advisory model discovery do not create a stale-preview or digest-equality gate.
 
-Create, presets, schedules, edits/reruns, fresh retries, checkpoint branches, remediation, continuations, API/CLI/MCP, and worker consumers use the same surviving selection owners. Adapters preserve intent rather than choosing their own defaults. Fresh schedule occurrences use the installed backend with authored choices intact. Already-started attempts retain their original identity and evidence. Reconnect/redelivery is not a fresh admission, and fresh admission is not permission to rewrite the source attempt.
+Create, presets, schedules, edits/reruns, fresh retries, checkpoint branches, remediation, continuations, API/CLI/MCP, and worker consumers use the same selection owners; adapters preserve intent rather than choosing their own defaults. Fresh schedule occurrences use the installed backend with authored choices intact. Already-started attempts keep their original identity and evidence. Reconnect or redelivery is not a fresh admission, and fresh admission is not permission to rewrite the source attempt.
 
-A supported-but-busy route waits through existing capacity handling. Missing setup, revoked authority, or an actual unsupported interface blocks the affected action with an actionable reason. An unavailable optional observation is not a fabricated pass or a blanket denial. No silent account, harness, backend, model, or paid-route fallback is introduced.
+A supported-but-busy route waits through existing capacity handling. Missing setup, revoked authority, or an unsupported interface blocks the affected action with an actionable reason. An unavailable optional observation is neither a fabricated pass nor a blanket denial. There is no silent account, harness, backend, model, or paid-route fallback.
 
 ## Provider Profile in the Workflows list
 
-[Workflows List](WorkflowsListPage.md) owns table interaction. This section owns the identity shown there, which is implemented through the admission-recorded projection described in [Workflows List §7.3](WorkflowsListPage.md#72-how-the-projection-is-recorded).
+[Workflows List](WorkflowsListPage.md) owns the column, projection, filters, facets, and URL state (sections 7, 9.3, 12, and 13.1). The identity rules it implements are:
 
-Replace the ordinary desktop Runtime column and mobile Runtime field with **Provider Profile**. Show its friendly recorded name, with Harness as optional secondary text in the same cell. Do not add ordinary Provider, Harness, Backend, Host, and Container columns alongside it. Execution details retain authorized provenance.
-
-The list summarizes the workflow's recorded selection and supported explicit step-profile variations. It is not a live “current agent” field. A retry using another implementation artifact does not change the selected profile summary. New attempt identity and actual use remain inspectable at their existing detail boundaries.
-
-| Recorded information | Presentation |
-| --- | --- |
-| One known profile | Recorded display name, or stable profile ID when no name was recorded. Harness may appear beneath it. |
-| Selection still unresolved | Pending selection. Do not substitute today's deployment default. |
-| Historical row without a recoverable profile association | Not recorded. Do not infer the profile from a runtime, provider, model, or today's profile inventory. |
-| No agent profile applies | Not applicable. Do not create a dummy profile. |
-| More than one recorded applicable profile | Multiple profiles, with a bounded summary and the individual step/attempt associations in details. |
-
-A known authored profile may be displayed before launch without implying successful acquisition. Distinguish authored selection from confirmed use in details. A disabled, disconnected, renamed, or removed live profile does not erase its historical identity. Capture an inexpensive display-name snapshot with existing admitted selection metadata where needed. When old evidence contains only the ID, show the ID rather than inventing the past name. Do not introduce a separate profile-history registry.
-
-Project this compact summary through the existing execution list/read model. No per-row detail, profile, step-ledger, or Temporal history requests and no browser enumeration of every page. Use existing persistence and batching. Exclude credentials, OAuth paths, raw provider payloads, and infrastructure handles from the ordinary list payload.
-
-### Filtering, sorting, and saved list state
-
-Provider Profile filters use stable profile IDs, not display labels or `targetRuntime`. Extend the existing list/facet query owner with the required profile summary and membership data. Desktop headers, mobile filters, active chips, URL/query serialization, saved column preferences, and list-to-detail return context all use the same semantics.
-
-For a multiple-profile workflow, an include filter matches any recorded applicable member and an exclude filter rejects any listed member. Unresolved, historical-unknown, and not-applicable states remain distinguishable in display and queries through `providerProfileStateIn` / `providerProfileStateNotIn` values `pending`, `not_recorded`, and `not_applicable`. [Workflows List sections 7.2, 9.3, 12.1, and 13.2](WorkflowsListPage.md#93-provider-profile) own the row state, ID/state union, aggregate blank shortcut, and state facet/count contract. Do not imply a missing projection proves a known absence.
-
-Facets describe authorized workflow records, not just currently enabled profiles or the currently loaded page. Retain recorded profiles that are no longer launchable. Deduplicate by stable ID and show a short ID when equal labels require disambiguation. Count and pagination semantics must agree with the list. Facet failure preserves the table and selected filter, with truthful partial/unavailable coverage.
-
-Keep the current-page-only sort notice until real server sorting exists. Do not fetch all rows to simulate global ordering. Profile label sorting, where supported, uses the same display projection with a deterministic ID tie-breaker.
-
-Old runtime filter URLs and saved views cannot be relabeled as profile filters. Preserve them with an explicitly labeled legacy runtime constraint while supported, or show an actionable unsupported-filter message before changing the query. Never silently broaden the result set or translate one runtime into today's profile inventory. The old Runtime column preference may become the replacement column preference without changing a query's meaning.
+- The column summarizes the workflow's recorded selection and explicit step-profile variations, not a live "current agent". A retry on another implementation artifact does not change it.
+- Unresolved, historical-unknown, and not-applicable states (`pending`, `not_recorded`, `not_applicable`) stay distinct from each other and from a recorded profile. A missing projection is unavailable information, not proof of absence.
+- The profile is never inferred from runtime, provider, model, or today's profile inventory, because that would misreport which account ran the work. A renamed or removed profile keeps its recorded identity; an old record with only an ID shows the ID.
+- Filters use stable profile IDs, not labels or `targetRuntime`. An old runtime filter stays a separately labeled legacy constraint and is never translated into profile filters.
+- The list payload carries only the compact summary: no per-row detail fetches, credentials, OAuth paths, provider payloads, or infrastructure handles.
 
 ## Consistency across other surfaces
 
-Provider setup, profile tables and filters, schedules, workflow details, step overrides, edit/rerun, remediation, help, and user-facing validation use the same vocabulary. Provider Profile stays distinct from the upstream Provider and internal execution configuration. Profile setup/filtering is Harness-scoped even while stored fields are still named `runtime_id`.
+Provider setup, profile tables and filters, schedules, workflow details, step overrides, edit/rerun, remediation, help, and validation messages use the same vocabulary. Provider Profile stays distinct from the upstream Provider and the internal execution configuration. Profile setup and filtering are Harness-scoped even though the stored field is `runtime_id`.
 
-Show the selected Harness, Provider Profile, and recorded Backend together in execution details. Container names/images and actual hosts belong in diagnostics. Errors identify the affected choice, for example a profile incompatible with the selected Harness or an unavailable Backend, without exposing secret material. Stable machine error codes can remain compatible while their readable messages improve.
+Execution details show the selected Harness, Provider Profile, and recorded Backend together. Container names, images, and hosts belong in diagnostics. Errors name the affected choice, such as a profile incompatible with the selected Harness or an unavailable Backend, without exposing secrets. Stable machine error codes can stay compatible while readable messages improve.
 
-## Preservation and implementation limits
+## Preservation limits
 
-Reuse existing OAuth enrollment, credential-home ownership, provider capacity, native-chat authorization, immutable plans, live bindings, and saved-work/recovery owners. Backend terminology does not move those responsibilities or permit copying OAuth homes, a second login, concurrent unauthorized credential writers, an unrestricted chat proxy, or credentialless-to-keyed fallback.
+Backend terminology does not move OAuth enrollment, credential-home ownership, provider capacity, native-chat authorization, immutable plans, live bindings, or saved-work and recovery ownership. It never permits copying OAuth homes, a second login, concurrent unauthorized credential writers, an unrestricted chat proxy, or credentialless-to-keyed fallback.
 
-Protect saved work, active attempts, historical decoders, and required Temporal replay when changing serialized producers/consumers. Resolve only demonstrated compatibility needs at existing boundaries. Do not build a migration dashboard, universal validation service, new lifecycle, cross-deployment registry, permanent legacy fleet, or new quota UI.
-
-## Automated acceptance
-
-Use focused failing executable tests followed by the smallest complete implementation and broader existing GitHub Actions. Documentation wording is not a unit-test target and manual visual signoff is not an acceptance dependency.
-
-Required evidence covers:
-
-- Production authoring/profile components and API admission agree on Harness, Provider Profile, defaulted/explicit Backend, and inherited versus authored model intent.
-- New omitted/default requests resolve consistently across form and representative non-form callers. Explicit mismatch, unavailable setup, delayed responses, and capacity waits preserve intent and useful errors.
-- Backend has no ordinary selector, appears in Advanced only for a real alternative, remains disclosed when exceptional, and is unchanged by disclosure toggles.
-- Existing OAuth and keyed/credentialless boundaries retain their actual credential and capacity guarantees through the surviving path.
-- Real list/read-model/facet integration displays and filters stable profile associations, including multiple, renamed/removed, unknown, pending, and no-agent records, without per-row fetches or guessed backfills.
-- Desktop/mobile controls, long labels, equal-name profiles, keyboard focus, filter chips, query round trips, saved preferences, and list/detail return state preserve the same meaning.
-- Historical payloads and active attempts retain their original IDs, interpretation, digests, and recorded evidence. Compatible installed-image changes do not become identity conflicts.
-
-Share tests for common behavior and add focused cases for genuine credential/protocol differences. An external-provider substitute proves only the stated integration boundary. Live support is separately observed or honestly unverified, never a universal prerequisite for a terminology or list change.
+Changes to serialized producers or consumers protect saved work, active attempts, historical decoders, and required Temporal replay at the existing boundaries, without a migration dashboard, universal validation service, cross-deployment registry, or permanent legacy fleet.

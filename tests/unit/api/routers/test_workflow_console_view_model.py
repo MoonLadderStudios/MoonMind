@@ -46,9 +46,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
-    monkeypatch.setattr(settings.jules, "jules_enabled", False)
-    monkeypatch.setattr(settings.jules, "jules_api_url", None)
-    monkeypatch.setattr(settings.jules, "jules_api_key", None)
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     monkeypatch.setattr(
         settings.temporal_dashboard, "temporal_workflow_editing_enabled", False
@@ -272,9 +269,6 @@ def test_build_runtime_config_default_matches_omitted_submission(monkeypatch) ->
 
 def test_build_runtime_config_uses_claude_from_runtime_override(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
-    monkeypatch.setattr(settings.jules, "jules_enabled", False)
-    monkeypatch.setattr(settings.jules, "jules_api_url", None)
-    monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
     config = dashboard_view_model.build_runtime_config(
         "/workflows", default_runtime_override="claude_code"
@@ -1201,9 +1195,6 @@ def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
 
 def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(settings.jules, "jules_enabled", False)
-    monkeypatch.setattr(settings.jules, "jules_api_url", None)
-    monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
@@ -1260,13 +1251,10 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     )
     assert "temporal" not in config["system"]["supportedRuntimes"]
 
-def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
-    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
-    monkeypatch.setattr(settings.jules, "jules_enabled", True)
-    monkeypatch.setattr(settings.jules, "jules_api_url", "https://jules.example.test")
-    monkeypatch.setattr(settings.jules, "jules_api_key", "test-key")
+def test_build_runtime_config_never_advertises_retired_jules(monkeypatch) -> None:
+    monkeypatch.setenv("JULES_ENABLED", "true")
+    monkeypatch.setenv("JULES_API_URL", "https://jules.example.test")
+    monkeypatch.setenv("JULES_API_KEY", "test-key")
 
     config = dashboard_view_model.build_runtime_config("/workflows")
 
@@ -1274,8 +1262,8 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
         "omnigent",
         "codex_cli",
         "claude_code",
-        "jules",
     ]
+    assert "jules" not in config["system"]["supportedWorkerRuntimes"]
 
 def test_build_runtime_config_log_streaming_enabled_by_default() -> None:
     config = dashboard_view_model.build_runtime_config("/workflows")
