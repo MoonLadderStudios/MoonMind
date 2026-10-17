@@ -149,6 +149,27 @@ def test_acceptance_survives_final_result_compaction(pressure: str) -> None:
     assert all(row["evidenceRefs"] == ["art-gate-result"] for row in evidence["evidence"])
 
 
+@pytest.mark.parametrize("pressure", ["annotations", "durable_refs"])
+def test_step_retry_recommendation_survives_published_result_compaction(
+    pressure: str,
+) -> None:
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    metadata = {
+        "mergeAutomationDisposition": "failed",
+        "retryRecommendation": "retry_step_execution",
+        "outputAgentResultRef": "art-full-result",
+    }
+    for index in range(24):
+        key = f"auxiliary{index}Ref" if pressure == "durable_refs" else f"annotation{index}"
+        metadata[key] = "x" * 900
+
+    compacted = compact_published_agent_run_result_payload({"metadata": metadata})
+
+    result = AgentRunResult.model_validate(compacted)
+    assert result.metadata["retryRecommendation"] == "retry_step_execution"
+
+
 def _write(workspace: Path, *, status: str, requested: int, queued: list[dict]) -> None:
     targets = workspace / "artifacts/batch-workflows-targets.json"
     targets.parent.mkdir(parents=True, exist_ok=True)
@@ -574,6 +595,62 @@ def test_pr_resolver_terminal_rejects_unsuccessful_dispositions(
     assert result.metadata["prResolverStatus"] == "blocked"
     assert result.metadata["prResolverReason"] == "ci_failures"
     assert result.metadata["prResolverNextStep"] == "run_full_remediation"
+
+
+_IDENTITY_RECEIPT = {
+    "phase": "commit",
+    "kind": "identity_missing",
+    "gitError": "fatal: no email was given and auto-detection is disabled",
+    "headBefore": "a" * 40,
+    "stagedTree": "b" * 40,
+    "attempts": 1,
+    "exhausted": False,
+}
+
+
+@pytest.mark.parametrize(
+    ("receipt", "expected"),
+    [
+        (_IDENTITY_RECEIPT, "retry_step_execution"),
+        # The repaired attempt was refused again: preparation cannot fix it.
+        ({**_IDENTITY_RECEIPT, "attempts": 2}, None),
+        ({**_IDENTITY_RECEIPT, "exhausted": True}, None),
+        ({**_IDENTITY_RECEIPT, "kind": "signing_failed"}, None),
+        ({**_IDENTITY_RECEIPT, "kind": "hook_rejected"}, None),
+        ({**_IDENTITY_RECEIPT, "kind": "other"}, None),
+    ],
+    ids=["first-identity", "repeat", "exhausted", "signing", "hook", "other"],
+)
+def test_pr_resolver_verdict_requests_step_retry_only_for_host_identity(
+    tmp_path: Path, receipt: dict[str, object], expected: str | None
+) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "failed",
+                "executionRef": "step-1",
+                "status": "blocked",
+                "reason": "local_commit_failed",
+                "final_reason": "local_commit_failed",
+                "next_step": "provide_commit_identity",
+                "localCommit": receipt,
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "executionRef": "step-1",
+    }
+
+    result = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+
+    assert result.failure_code == "PR_RESOLVER_FAILED"
+    assert result.metadata["prResolverReason"] == "local_commit_failed"
+    assert result.metadata.get("retryRecommendation") == expected
 
 
 def test_pr_resolver_verdict_metadata_is_absent_when_the_skill_wrote_none(

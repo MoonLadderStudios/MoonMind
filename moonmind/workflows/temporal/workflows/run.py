@@ -731,6 +731,12 @@ RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH = (
 RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH = (
     "run-adapter-resolver-verdict-retry-decision-v1"
 )
+# A failed resolver verdict whose producer asks for ``retry_step_execution``
+# (the first commit refused for missing identity, which the next attempt's
+# workspace preparation supplies) gets the existing bounded step retry instead
+# of stopping as final when that attempt reuses the checkout. Earlier histories
+# recorded that verdict as final.
+RUN_RESOLVER_HOST_REPAIR_RETRY_PATCH = "run-resolver-host-repair-retry-v1"
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
@@ -14416,6 +14422,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             failure_message=failure_message,
                         )
 
+                        omnigent_step = (
+                            tool_type == "agent_runtime"
+                            and _normalize_agent_runtime_id(
+                                self._agent_id_from_runtime_inputs(
+                                    node_inputs=node_inputs,
+                                    fallback_name=tool_name,
+                                )
+                            )
+                            == "omnigent"
+                        )
                         if workflow.patched(
                             RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH
                         ):
@@ -14423,6 +14439,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 execution_result,
                                 failure_message=failure_message,
                                 tool_type=tool_type,
+                                # Each Omnigent attempt gets its own sandbox.
+                                reuses_step_workspace=not omnigent_step,
                             )
                         else:
                             retryable = failure_message == "system_error" or (
@@ -14482,18 +14500,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             await self._wait_if_paused_at_safe_boundary()
                             if self._cancel_requested:
                                 return
-                            if (
-                                tool_type == "agent_runtime"
-                                and _normalize_agent_runtime_id(
-                                    self._agent_id_from_runtime_inputs(
-                                        node_inputs=node_inputs,
-                                        fallback_name=tool_name,
-                                    )
-                                )
-                                == "omnigent"
-                                and workflow.patched(
-                                    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
-                                )
+                            if omnigent_step and workflow.patched(
+                                RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
                             ):
                                 self._carry_interrupted_omnigent_step_workspace(
                                     node_id,
@@ -16322,6 +16330,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         *,
         failure_message: str,
         tool_type: str,
+        reuses_step_workspace: bool = False,
     ) -> bool:
         if failure_message == "system_error":
             return True
@@ -16380,6 +16389,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if failure_message in {"user_error", "permanent"}:
             return False
 
+        host_repair_retry = bool(
+            explicit_step_retry
+            and str(outputs.get("mergeAutomationDisposition") or "").strip().lower()
+            == "failed"
+            and self._workflow_patch_enabled(RUN_RESOLVER_HOST_REPAIR_RETRY_PATCH)
+        )
+        if host_repair_retry and not reuses_step_workspace:
+            # The repair resumes at the commit from the staged index and the
+            # ignored resolver receipt. A successor restored into a fresh
+            # sandbox has no receipt and would repeat the remediation, so the
+            # verdict and its next step stay final.
+            return False
+
         # A validated resolver terminal disposition belongs to the selected
         # Skill, not generic provider recovery. Retrying manual-review or failed
         # terminal evidence can repeat mutations. A rejected typed continuation
@@ -16387,7 +16409,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # the authoritative failure; real provider failures keep their existing
         # bounded retry classification. Missing or malformed terminal evidence
         # also stays retryable so the repair path can recover it.
-        if self._workflow_patch_enabled(RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH):
+        if not host_repair_retry and self._workflow_patch_enabled(
+            RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH
+        ):
             if self._workflow_patch_enabled(
                 RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH
             ):
@@ -16422,7 +16446,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             ):
                 return False
 
-        if self._workflow_patch_enabled(
+        if not host_repair_retry and self._workflow_patch_enabled(
             RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH
         ):
             # Artifact fields alone only say a valid verdict exists; the run
