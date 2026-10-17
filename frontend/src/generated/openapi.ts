@@ -5437,10 +5437,10 @@ export interface components {
             /** Items */
             items?: components["schemas"]["ArtifactCollectionRowModel"][];
             /**
-             * Total
-             * @default 0
+             * Has More
+             * @default false
              */
-            total: number;
+            has_more: boolean;
             /**
              * Offset
              * @default 0
