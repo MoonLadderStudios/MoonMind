@@ -362,3 +362,227 @@ async def test_step_successor_keeps_the_recorded_plan_it_cannot_compare(
         "reason": "the recorded execution plan is unavailable",
     }
     assert session.commits == 0
+
+
+class _ChildSuccessorSession:
+    """The real repository-connection database plus the rows admission reads."""
+
+    def __init__(self, session, provider, *, task_ref: str, task_digest: str):
+        self._session = session
+        self.provider = provider
+        self.task_ref = task_ref
+        self.task_digest = task_digest
+        self.commits = 0
+        self.rollbacks = 0
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    async def get(self, model, key):
+        if model is ManagedAgentProviderProfile:
+            return self.provider if key == self.provider.profile_id else None
+        if model is TemporalArtifact and key == self.task_ref:
+            return SimpleNamespace(
+                created_by_principal="user-1",
+                sha256=self.task_digest.removeprefix("sha256:"),
+            )
+        return await self._session.get(model, key)
+
+    async def commit(self):
+        self.commits += 1
+        await self._session.commit()
+
+    async def rollback(self):
+        self.rollbacks += 1
+        await self._session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_resolver_child_successor_binds_the_installed_runtime_with_its_authority(
+    monkeypatch, tmp_path
+) -> None:
+    """A merge-automation resolver child is admitted like any other Run.
+
+    Its plan was compiled from the parent's plan, so the child workflow carries
+    no Agent Profile snapshot of its own. Its successor still binds the
+    installed images and keeps the child's admitted repository authority.
+    """
+
+    from contextlib import asynccontextmanager
+
+    from api_service.db import base as db_base
+    from moonmind.workflows.temporal.activities import (
+        omnigent_activities,
+        omnigent_session_activities,
+    )
+    from tests.unit.services.test_omnigent_execution_plan_service import (
+        _compile_opencode_plan,
+        _configure_github_repository_plan_test,
+        _ReadableRepositoryPlanArtifacts,
+    )
+
+    _configure_ready_host_image_pair(monkeypatch)
+    monkeypatch.setattr(stores, "SessionExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(plan_service, "DbExecutionPlanStore", _PlanStore)
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch,
+        tmp_path,
+        operations=("read", "write", "branch_write", "review_request", "merge_request"),
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    provider = SimpleNamespace(
+        profile_id="provider-opencode-native",
+        runtime_id="opencode",
+        provider_id="opencode-go",
+    )
+    try:
+        parent = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("gh",),
+            extra_parameters={
+                "repository": repository,
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Resolve the existing pull request.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {"enabled": True, "finishMode": "merge"},
+                    },
+                },
+            },
+            workflow_id="mm:merge-parent",
+        )
+        current: dict = {}
+
+        @asynccontextmanager
+        async def session_maker():
+            async with sessions() as session:
+                current["session"] = _ChildSuccessorSession(
+                    session,
+                    provider,
+                    task_ref=current.get("taskRef", ""),
+                    task_digest=current.get("taskDigest", ""),
+                )
+                yield current["session"]
+
+        async def load_parent(binding, *, admitted_principal=None):
+            assert binding == parent.binding
+            return parent.envelope
+
+        async def read_json(ref, *, admitted_principal=None):
+            return json.loads(artifacts.payloads[ref])
+
+        monkeypatch.setattr(db_base, "async_session_maker", session_maker)
+        monkeypatch.setattr(
+            omnigent_activities,
+            "_OnDemandTemporalArtifactService",
+            lambda _f: artifacts,
+        )
+        monkeypatch.setattr(
+            omnigent_session_activities, "_load_verified_execution_plan", load_parent
+        )
+        monkeypatch.setattr(
+            omnigent_session_activities, "_read_json_artifact", read_json
+        )
+
+        # Merge automation prepares the resolver child through its owner.
+        child_request = (
+            await omnigent_activities.omnigent_prepare_child_execution_plan_activity(
+                {
+                    "principal": "user-1",
+                    "parentExecutionPlan": parent.binding.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    ),
+                    "childWorkflowId": "resolver:mm:merge-parent:1",
+                    "childWorkflowRequest": {
+                        "workflow_type": "MoonMind.UserWorkflow",
+                        "initial_parameters": {
+                            "repository": repository,
+                            "publishMode": "auto",
+                            "targetRuntime": "omnigent",
+                            "githubOperations": [
+                                "write",
+                                "branch_write",
+                                "review_request",
+                            ],
+                            "task": {"instructions": "Resolve PR #350."},
+                        },
+                    },
+                }
+            )
+        )
+        parameters = child_request["initial_parameters"]
+        assert "agentProfileSnapshot" not in parameters
+        recorded_plan = _PlanStore.plans[
+            parameters["omnigentExecutionPlan"]["planRef"]
+        ].payload
+        current["taskRef"] = parameters["omnigentExecutionPlan"]["taskInputSnapshotRef"]
+        current["taskDigest"] = parameters["omnigentExecutionPlan"][
+            "taskInputSnapshotDigest"
+        ]
+        recorded_launch = json.loads(
+            artifacts.payloads[
+                recorded_plan.effectiveLaunchSnapshotRef.removeprefix("artifact:")
+            ]
+        )
+
+        # An update replaced the host and server while the resolver Step ran.
+        monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", _REPO + "8" * 64)
+        monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER + "9" * 64)
+        admitted = (
+            await omnigent_activities.omnigent_admit_step_successor_plan_activity(
+                {
+                    "workflowId": "resolver:mm:merge-parent:1",
+                    "initialParameters": json.loads(json.dumps(parameters)),
+                }
+            )
+        )
+    finally:
+        await engine.dispose()
+
+    assert admitted["disposition"] == "admitted", admitted
+    plan = _PlanStore.persisted.payload
+    assert admitted["omnigentExecutionPlan"]["planRef"] == _PlanStore.persisted.planRef
+    assert admitted["omnigentExecutionPlan"]["planRef"] != (
+        parameters["omnigentExecutionPlan"]["planRef"]
+    )
+    launch = json.loads(
+        artifacts.payloads[plan.effectiveLaunchSnapshotRef.removeprefix("artifact:")]
+    )
+    assert plan.hostImageRef == _REPO + "8" * 64
+    assert launch["serverImageRef"] == _SERVER + "9" * 64
+    # Harness, Provider Profile, model, source, publication and the child's
+    # admitted repository connection and roles are the recorded ones.
+    assert plan_service.changed_admitted_intent(recorded_plan, plan) == []
+    assert plan.modelConfig == recorded_plan.modelConfig
+    assert plan.authority == recorded_plan.authority
+    assert set(plan.resolvedTools["repositoryAccess"]) == {"source", "collaboration"}
+    assert set(recorded_plan.resolvedTools["repositoryAccess"]) == {
+        "source",
+        "collaboration",
+    }
+    for slot in ("source", "collaboration"):
+        selection = json.loads(
+            artifacts.payloads[
+                plan.resolvedTools["repositoryAccess"][slot][
+                    "artifactRef"
+                ].removeprefix("artifact:")
+            ]
+        )["selection"]
+        recorded_selection = json.loads(
+            artifacts.payloads[
+                recorded_plan.resolvedTools["repositoryAccess"][slot][
+                    "artifactRef"
+                ].removeprefix("artifact:")
+            ]
+        )["selection"]
+        for key in ("connectionId", "role", "operations"):
+            assert selection[key] == recorded_selection[key]
+    # The interrupted attempt keeps the images it actually used.
+    assert recorded_plan.hostImageRef == _REPO + "7" * 64
+    assert recorded_launch["serverImageRef"] != _SERVER + "9" * 64
+    assert current["session"].commits == 1
