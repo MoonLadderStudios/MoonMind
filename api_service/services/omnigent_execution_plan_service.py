@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from moonmind.omnigent.harness_platform.credential_bindings import (
 from moonmind.omnigent.harness_platform.execution_plan import (
     AdmissionAuthority,
     OmnigentExecutionPlanEnvelope,
+    OmnigentExecutionPlanPayload,
     create_execution_plan_envelope,
 )
 from moonmind.omnigent.harness_platform.failures import (
@@ -85,11 +87,14 @@ from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.remediation_loop import (
     ToolDescriptor,
     tool_descriptor_selected_skill,
 )
 from pr_resolver_core import IMPLEMENTATION_CONTRACT
+
+logger = logging.getLogger(__name__)
 
 # Hermetic fixture digests for the approved harnesses. Every other product
 # authority ref comes from the one harness registration registry
@@ -2068,9 +2073,7 @@ async def compile_and_persist_execution_plan(
             # uncertified authority -- the same outcome as if the optional
             # certificate had been absent. The invalid/unpersisted report
             # authorizes nothing either way.
-            import logging
-
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "optional execution support evidence persistence failed; "
                 "admitting ordinary uncertified execution: %s",
                 exc,
@@ -2152,11 +2155,420 @@ async def compile_and_persist_execution_plan(
     )
 
 
+async def frozen_task_input_principal(
+    db_session: Any, binding: OmnigentExecutionPlanBinding
+) -> str:
+    """Return the principal that admitted a plan's original task input.
+
+    The original task input survives every plan compile. Its creator records
+    the admitted principal even when a service compiles the plan or a legacy
+    schedule owner no longer exists.
+    """
+
+    from api_service.db.models import TemporalArtifact
+
+    task_artifact = await db_session.get(
+        TemporalArtifact,
+        binding.task_input_snapshot_ref.removeprefix("artifact://").removeprefix(
+            "artifact:"
+        ),
+    )
+    principal = str(getattr(task_artifact, "created_by_principal", None) or "").strip()
+    if not principal or getattr(
+        task_artifact, "sha256", None
+    ) != binding.task_input_snapshot_digest.removeprefix("sha256:"):
+        raise ValueError(
+            "original task-input principal authority is unavailable or does not "
+            "match the frozen snapshot"
+        )
+    return principal
+
+
+async def compile_frozen_execution_plan(
+    *,
+    db_session: Any,
+    artifact_service: Any,
+    workflow_id: str,
+    principal: str,
+    snapshot: Mapping[str, Any],
+    provider_profile: Any,
+    initial_parameters: Mapping[str, Any],
+    binding: OmnigentExecutionPlanBinding,
+    parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
+) -> PersistedOmnigentExecutionPlan:
+    """Compile an admitted workflow's frozen inputs again through this owner."""
+
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    artifact_service = artifact_service or TemporalArtifactService(
+        TemporalArtifactRepository(db_session)
+    )
+    compilation_parameters = dict(initial_parameters)
+    compilation_parameters.pop("omnigentExecutionPlan", None)
+    compilation_parameters.pop("resolvedSkillsetRef", None)
+    return await compile_and_persist_execution_plan(
+        session_factory=None,
+        execution_plan_store=SessionExecutionPlanStore(db_session),
+        artifact_service=artifact_service,
+        principal=principal,
+        workflow_id=workflow_id,
+        agent_profile_snapshot=dict(snapshot),
+        provider_profile=provider_profile,
+        initial_parameters=compilation_parameters,
+        authored_request_ref=binding.task_input_snapshot_ref,
+        authored_request_digest=binding.task_input_snapshot_digest,
+        task_input_snapshot_ref=binding.task_input_snapshot_ref,
+        task_input_snapshot_digest=binding.task_input_snapshot_digest,
+        db_session=db_session,
+        parent_repository_plan=parent_repository_plan,
+    )
+
+
+async def _resolver_child_frozen_inputs(
+    *,
+    artifact_service: Any,
+    principal: str,
+    binding: OmnigentExecutionPlanBinding,
+    recorded_plan: OmnigentExecutionPlanEnvelope,
+) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
+    """Return a resolver child's frozen Profile, Provider Profile and inputs.
+
+    Merge automation compiles its resolver child from the parent's plan, so the
+    child workflow carries no Agent Profile snapshot. The child's own task-input
+    snapshot and recorded plan hold the same authority. Returns ``None`` for
+    any other workflow.
+    """
+
+    from moonmind.omnigent.harness_platform.credential_bindings import model_bindings_of
+
+    def artifact_id(ref: str) -> str:
+        return ref.removeprefix("artifact://").removeprefix("artifact:")
+
+    _artifact, body = await artifact_service.read(
+        artifact_id=artifact_id(binding.task_input_snapshot_ref),
+        principal=principal,
+        allow_restricted_raw=True,
+    )
+    if _sha256(body) != binding.task_input_snapshot_digest:
+        raise ValueError("frozen task-input snapshot digest mismatch")
+    task_snapshot = json.loads(body)
+    source = task_snapshot.get("source") if isinstance(task_snapshot, Mapping) else None
+    if not isinstance(source, Mapping) or source.get("kind") != (
+        "merge_automation_resolver_child"
+    ):
+        return None
+    try:
+        child_parameters = dict(task_snapshot["target"]["initialParameters"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "resolver child task input lacks its initial parameters"
+        ) from exc
+    profile_ref = str(recorded_plan.payload.agentProfileSnapshotRef or "")
+    if not profile_ref.startswith("artifact:"):
+        raise ValueError("recorded execution plan lacks Agent Profile authority")
+    _artifact, profile_body = await artifact_service.read(
+        artifact_id=artifact_id(profile_ref),
+        principal=principal,
+        allow_restricted_raw=True,
+    )
+    provider_profile_refs = {
+        model_binding.providerProfileRef
+        for model_binding in model_bindings_of(
+            recorded_plan.payload.credentialBindings
+        ).values()
+    }
+    if len(provider_profile_refs) != 1:
+        raise ValueError(
+            "recorded execution plan has ambiguous Provider Profile authority"
+        )
+    return (
+        json.loads(profile_body),
+        next(iter(provider_profile_refs)),
+        child_parameters,
+    )
+
+
+def changed_admitted_intent(
+    recorded: OmnigentExecutionPlanPayload,
+    admitted: OmnigentExecutionPlanPayload,
+) -> list[str]:
+    """Name the requested-outcome authority a re-admission would change.
+
+    Images, Host Class revision, harness implementation digest, Skill and
+    snapshot artifact refs, and time-bounded repository access snapshot refs
+    move with the installed runtime; ``changed_repository_selection`` compares
+    what those snapshots select. Harness, Provider Profile account, model and
+    effort, launch (cost/egress) and capture (privacy) policy, source, and
+    publication intent belong to the request and must not.
+    """
+
+    def intent(payload: OmnigentExecutionPlanPayload) -> dict[str, Any]:
+        model = payload.modelConfig
+        rollout = payload.runtimeProviderRollout
+        return {
+            "harnessId": payload.harnessId,
+            "endpointRef": payload.endpointRef,
+            "executionRealizerRef": payload.executionRealizerRef,
+            "launchPolicyRef": payload.launchPolicyRef,
+            "capturePolicy": (payload.capturePolicyRef, payload.capturePolicy),
+            "model": (
+                model.qualifiedId,
+                model.effort,
+                model.routeRef,
+                model.normalizedOptions,
+            ),
+            "credentialBindings": {
+                slot: {
+                    key: value
+                    for key, value in binding.model_dump(
+                        by_alias=True, mode="json"
+                    ).items()
+                    if key != "repositoryAccessSnapshotRef"
+                }
+                for slot, binding in payload.credentialBindings.items()
+            },
+            "authority": payload.authority,
+            "workspace": (payload.workspaceIntentRef, payload.workspaceMutation),
+            "runtimeProviderTarget": rollout.targetId if rollout else None,
+        }
+
+    before, after = intent(recorded), intent(admitted)
+    return [field for field in before if before[field] != after[field]]
+
+
+#: Repository selection fields that identify which repository authority a plan
+#: holds. Revisions and the authorization time refresh on every compile.
+_STABLE_REPOSITORY_SELECTION_KEYS = (
+    "endpoint",
+    "routeId",
+    "repositoryDisplay",
+    "connectionId",
+    "role",
+    "accessMode",
+)
+
+
+async def changed_repository_selection(
+    *,
+    artifact_service: Any,
+    principal: str,
+    recorded: OmnigentExecutionPlanPayload,
+    admitted: OmnigentExecutionPlanPayload,
+) -> list[str]:
+    """Name the repository slots whose selected authority would change.
+
+    Each slot's access snapshot carries the selected endpoint, route and
+    connection, which the binding's ``connectionRef`` and role alone do not.
+    """
+
+    async def selections(payload: OmnigentExecutionPlanPayload) -> dict[str, Any]:
+        result = {}
+        access = (payload.resolvedTools or {}).get("repositoryAccess") or {}
+        for slot, entry in access.items():
+            try:
+                artifact_ref, snapshot_ref = entry["artifactRef"], entry["snapshotRef"]
+            except (KeyError, TypeError) as exc:
+                raise ValueError(f"repository access {slot} is malformed") from exc
+            _artifact, body = await artifact_service.read(
+                artifact_id=str(artifact_ref).removeprefix("artifact:"),
+                principal=principal,
+                allow_restricted_raw=True,
+            )
+            if "repository-access-snapshot:" + _sha256(body) != snapshot_ref:
+                raise ValueError(f"repository access snapshot {slot} digest mismatch")
+            selection = json.loads(body).get("selection")
+            if not isinstance(selection, Mapping):
+                raise ValueError(f"repository access snapshot {slot} lacks a selection")
+            result[slot] = {
+                **{
+                    key: selection.get(key) for key in _STABLE_REPOSITORY_SELECTION_KEYS
+                },
+                "operations": sorted(selection.get("operations") or ()),
+            }
+        return result
+
+    before, after = await selections(recorded), await selections(admitted)
+    return [
+        f"repositoryAccess.{slot}"
+        for slot in sorted(before.keys() | after.keys())
+        if before.get(slot) != after.get(slot)
+    ]
+
+
+async def _retire_refused_plan_artifacts(
+    *, artifact_service: Any, principal: str, artifact_refs: tuple[str, ...]
+) -> None:
+    """Delete a refused candidate's artifacts; its plan row is rolled back.
+
+    Retirement is cleanup: a failure is logged and the recorded plan still
+    launches.
+    """
+
+    for ref in artifact_refs:
+        artifact_id = ref.removeprefix("artifact://").removeprefix("artifact:")
+        try:
+            await artifact_service.soft_delete(
+                artifact_id=artifact_id, principal=principal
+            )
+        except Exception as exc:  # noqa: BLE001 - cleanup must not mask refusal
+            logger.warning(
+                "refused execution-plan artifact %s was not retired: %s",
+                artifact_id,
+                redact_sensitive_text(str(exc))[:200],
+            )
+
+
+async def readmit_frozen_execution_plan(
+    *,
+    db_session: Any,
+    artifact_service: Any,
+    workflow_id: str,
+    initial_parameters: Mapping[str, Any],
+    subject: str,
+    preserve_recorded_intent: bool = False,
+) -> dict[str, Any]:
+    """Admit an already-planned workflow's frozen inputs on the installed runtime.
+
+    The frozen inputs (task input, Agent Profile snapshot, Provider Profile,
+    model and Skills) compile again, so the new plan binds the installed
+    same-repository host and server; an explicitly requested Host Class stays
+    exact and a foreign host family fails closed. A merge-automation resolver
+    child recompiles from its own frozen task input and recorded plan, within
+    its recorded repository authority. Plans that attempts already
+    used are never rewritten. With ``preserve_recorded_intent`` the new plan
+    is refused when it would change the recorded request intent.
+
+    Returns ``disposition`` ``admitted`` with the new plan binding and Skill
+    snapshot, or ``recorded`` with the reason when the frozen authority cannot
+    be admitted now; the recorded plan then launches under its own launch-time
+    checks.
+    """
+
+    from api_service.db.models import ManagedAgentProviderProfile
+    from api_service.services.omnigent_policies import PolicyConflict, PolicyNotFound
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactError,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    def recorded(reason: str) -> dict[str, Any]:
+        logger.warning(
+            "%s %s keeps its recorded execution plan: %s", subject, workflow_id, reason
+        )
+        return {
+            "disposition": "recorded",
+            "reason": redact_sensitive_text(reason)[:500],
+        }
+
+    try:
+        binding = OmnigentExecutionPlanBinding.model_validate(
+            initial_parameters.get("omnigentExecutionPlan")
+        )
+    except Exception as exc:
+        raise ValueError("Omnigent execution-plan authority is invalid") from exc
+    artifact_service = artifact_service or TemporalArtifactService(
+        TemporalArtifactRepository(db_session)
+    )
+    snapshot = initial_parameters.get("agentProfileSnapshot")
+    recorded_plan = None
+    persisted_plan = None
+    if preserve_recorded_intent or not isinstance(snapshot, Mapping):
+        recorded_plan = await SessionExecutionPlanStore(db_session).load(
+            binding.plan_ref
+        )
+        if recorded_plan is None:
+            return recorded("the recorded execution plan is unavailable")
+    try:
+        principal = await frozen_task_input_principal(db_session, binding)
+        compilation_parameters = initial_parameters
+        parent_repository_plan = None
+        if isinstance(snapshot, Mapping):
+            provider_profile_ref = str(snapshot.get("providerProfileRef") or "")
+        else:
+            child_inputs = await _resolver_child_frozen_inputs(
+                artifact_service=artifact_service,
+                principal=principal,
+                binding=binding,
+                recorded_plan=recorded_plan,
+            )
+            if child_inputs is None:
+                return recorded("the workflow has no Agent Profile snapshot")
+            snapshot, provider_profile_ref, compilation_parameters = child_inputs
+            # The child's recorded repository authority bounds its successor,
+            # as the parent's bounded the child when it was first compiled.
+            parent_repository_plan = recorded_plan
+        provider_profile = await db_session.get(
+            ManagedAgentProviderProfile, provider_profile_ref.strip()
+        )
+        if provider_profile is None:
+            return recorded("the admitted Provider Profile is unavailable")
+        persisted_plan = await compile_frozen_execution_plan(
+            db_session=db_session,
+            artifact_service=artifact_service,
+            workflow_id=workflow_id,
+            principal=principal,
+            snapshot=snapshot,
+            provider_profile=provider_profile,
+            initial_parameters=compilation_parameters,
+            binding=binding,
+            parent_repository_plan=parent_repository_plan,
+        )
+        changed = []
+        if recorded_plan is not None:
+            changed = changed_admitted_intent(
+                recorded_plan.payload, persisted_plan.envelope.payload
+            ) + await changed_repository_selection(
+                artifact_service=artifact_service,
+                principal=principal,
+                recorded=recorded_plan.payload,
+                admitted=persisted_plan.envelope.payload,
+            )
+        if changed:
+            raise ValueError(
+                "re-admission would change the recorded request intent: "
+                + ", ".join(changed)
+            )
+    except (
+        HarnessPlatformError,
+        PolicyConflict,
+        PolicyNotFound,
+        TemporalArtifactError,
+        ValueError,
+    ) as exc:
+        await db_session.rollback()
+        if persisted_plan is not None:
+            await _retire_refused_plan_artifacts(
+                artifact_service=artifact_service,
+                principal=principal,
+                artifact_refs=persisted_plan.artifact_refs,
+            )
+        return recorded(f"{type(exc).__name__}: {exc}")
+    await db_session.commit()
+    return {
+        "disposition": "admitted",
+        "omnigentExecutionPlan": persisted_plan.binding.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ),
+        "resolvedSkillsetRef": persisted_plan.resolved_skillset_ref,
+    }
+
+
 __all__ = [
     "PersistedOmnigentExecutionPlan",
+    "changed_admitted_intent",
+    "changed_repository_selection",
     "compile_and_persist_execution_plan",
+    "compile_frozen_execution_plan",
+    "frozen_task_input_principal",
     "json_artifact_digest",
     "persist_json_artifact",
+    "readmit_frozen_execution_plan",
     "selected_skill_names",
     "load_protected_execution_support_evidence",
 ]
