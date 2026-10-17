@@ -233,7 +233,9 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
         timedelta(seconds=10 if fault in short_lease else 60),
     )
     monkeypatch.setattr(leases, "RENEW_INTERVAL", timedelta(seconds=0.4))
-    monkeypatch.setattr(lease_workflow, "RENEW_SECONDS", 0.5)
+    # The pre-launch window bounds every observation, so it must still fit a
+    # retry plus a confirming round trip, as 300s does for 30s Activities.
+    monkeypatch.setattr(lease_workflow, "RENEW_SECONDS", 2)
     monkeypatch.setattr(lease_workflow, "RETRY_SECONDS", 0.2)
     monkeypatch.setattr(lease_workflow, "STOP_MARGIN_SECONDS", 2)
     brief = await tools.load_github_issue_preset_brief(

@@ -87,6 +87,20 @@ def _capacity_wait_expired(failure):
     )
 
 
+def _lease_unavailable_before_launch(failure):
+    """Recognize the lease owner's exit before any launch or capacity request.
+
+    Recorded histories raised it as retryable and current ones as
+    non-retryable; either way it is the owner's own cause-free failure.
+    """
+    return (
+        failure.HasField("application_failure_info")
+        and not failure.HasField("cause")
+        and failure.application_failure_info.type in {"", "ApplicationError"}
+        and failure.message == "GitHub issue claim lease unavailable before launch"
+    )
+
+
 def _repository_identity(value):
     """Compare canonical repository identities, not authored spellings."""
     slug = github_repository_name_from_value(value)
@@ -146,7 +160,8 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
     recorded its outcome (*outcome_recorded*) is left to that journey before
     any history is read. An undispatched agent has a complete initial-run
     history containing only known admission Activities and no child starts,
-    a confirmed capacity request with no grant, and a capacity-wait failure.
+    and either a confirmed capacity request with no grant and a capacity-wait
+    failure, or no capacity request and the lease owner's pre-launch failure.
     The workflow's existence or an absent runtime binding alone proves nothing.
     """
     namespace, workflow_id = receipt.owner.split("/", 1)
@@ -218,6 +233,7 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
         capacity_requested = False
         capacity_granted = False
         capacity_wait_expired = False
+        lease_unavailable_before_launch = False
 
         def _scheduled_id(attrs, *names):
             for name in names:
@@ -275,8 +291,10 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
                 ):
                     capacity_granted = True
             if event.HasField("workflow_execution_failed_event_attributes"):
-                capacity_wait_expired = _capacity_wait_expired(
-                    event.workflow_execution_failed_event_attributes.failure
+                failure = event.workflow_execution_failed_event_attributes.failure
+                capacity_wait_expired = _capacity_wait_expired(failure)
+                lease_unavailable_before_launch = _lease_unavailable_before_launch(
+                    failure
                 )
             if event.HasField("activity_task_failed_event_attributes"):
                 # Do not replace failed admission/configuration with a refund,
@@ -345,9 +363,10 @@ async def _closed_execution_tree(client, receipt, now, *, outcome_recorded=False
             and initial_run
             and admission_only
             and not initiated
-            and capacity_requested
-            and not capacity_granted
-            and capacity_wait_expired
+            and (
+                (capacity_requested and not capacity_granted and capacity_wait_expired)
+                or (not capacity_requests and lease_unavailable_before_launch)
+            )
         ):
             undispatched_agents.add((identity[0], described.run_id))
     return agents, completed, undispatched_agents

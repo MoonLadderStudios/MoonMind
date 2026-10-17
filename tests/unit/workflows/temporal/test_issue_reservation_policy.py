@@ -172,6 +172,11 @@ async def test_lease_is_not_renewed_while_queued_behind_unavailable_capacity():
         async def sleep(seconds):
             clock["now"] += timedelta(seconds=seconds)
 
+        @staticmethod
+        async def wait_condition(fn, timeout=None):
+            while not fn():
+                await asyncio.sleep(0)
+
     async def renew(payload):
         renewals.append(clock["now"])
         return {
@@ -230,6 +235,21 @@ class _LeaseClock:
     async def wait_condition(self, fn, timeout=None):
         while not fn():
             await asyncio.sleep(0)
+
+
+class _StallingClock(_LeaseClock):
+    """Honors wait timeouts so a stalled observation spends workflow time."""
+
+    async def wait_condition(self, fn, timeout=None):
+        for _ in range(10):
+            if fn():
+                return
+            await asyncio.sleep(0)
+        if timeout is None:
+            await super().wait_condition(fn)
+            return
+        self.now_value += timedelta(seconds=timeout)
+        raise asyncio.TimeoutError
 
 
 LEASE = {"owner": "default/claimed", "attemptId": "att-claimed"}
@@ -339,6 +359,58 @@ async def test_repeated_retry_before_launch_is_bounded_and_never_launches(
         await _run_owner(monkeypatch, clock, [_retry], execute=execute)
     assert caught.value.non_retryable and not launched
     assert clock.now_value - start <= timedelta(seconds=owner.RENEW_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_pre_launch_observations_never_outlive_the_recovery_window(
+    monkeypatch,
+):
+    """Slow transient observations cannot start or confirm after the window."""
+    clock = _LeaseClock()
+    window_ends = clock.now_value + timedelta(seconds=owner.RENEW_SECONDS)
+    launched = []
+    observed = []
+
+    def slow_retry(c):
+        observed.append(c.now_value)
+        c.now_value += timedelta(seconds=10)  # Activity latency
+        return _retry(c)
+
+    async def execute():
+        launched.append(True)
+
+    with pytest.raises(ApplicationError, match="unavailable before launch"):
+        await _run_owner(monkeypatch, clock, [slow_retry], execute=execute)
+    assert not launched
+    assert observed and all(start < window_ends for start in observed)
+    assert clock.now_value <= window_ends
+
+
+@pytest.mark.asyncio
+async def test_stalled_pre_launch_observation_ends_with_the_window(monkeypatch):
+    """A stalled observation is bounded by the window, never confirmation."""
+    clock = _StallingClock()
+    monkeypatch.setattr(owner, "workflow", clock)
+    start = clock.now_value
+    launched = []
+    calls = []
+
+    async def renew(_payload):
+        calls.append(clock.now_value)
+        if len(calls) > 1:
+            await asyncio.Event().wait()  # never confirms
+        return _retry(clock)
+
+    async def execute():
+        launched.append(True)
+
+    with pytest.raises(ApplicationError, match="unavailable before launch"):
+        await asyncio.wait_for(
+            owner.execute_with_issue_lease(lease=LEASE, execute=execute, renew=renew),
+            timeout=5,
+        )
+    assert not launched and len(calls) == 2
+    assert clock.now_value == start + timedelta(seconds=owner.RENEW_SECONDS)
 
 
 @pytest.mark.asyncio
