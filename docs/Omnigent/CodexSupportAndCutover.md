@@ -7,7 +7,7 @@ This owns Codex support evidence and retained cutover diagnostic contracts;
 selection and retirement controls stay with their providing code owners.
 “Supported” means repository evidence or a protected live
 artifact independently proves the row. Code presence alone is “implemented” or
-“unverified,” never “supported.” Codex via Omnigent is a first-class runtime in
+“unverified,” never “supported.” The Codex harness is a first-class choice in
 the normal Create catalog; readiness may steer an operator to connect OAuth or
 repair a live dependency. Missing optional release evidence does not hide or
 disable ordinary admission. Current defaults are resolved by the shared runtime-target selector and
@@ -56,7 +56,7 @@ phase vocabulary below. These original meanings decode existing observations;
 they no longer select current Create or schedule defaults. New-work selection
 uses the shared rollout boundary without these phase fields, and
 ordinary admission is certificate independent; see
-[Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration) and
+[Runtime Provider Rollout](RuntimeProviderRollout.md#9-configuration) and
 [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
 
 1. `opt_in`: Omnigent is normally available for explicit selection; direct Codex remains the preselected default.
@@ -398,5 +398,4 @@ SHA-256 digest and validated against the conformance profile. Apache-2.0 license
 and notice ownership remains as recorded in `README.md`, `LICENSE`, `NOTICE`, and
 the initialized `omnigent` submodule. Adding an architecture, image, protocol,
 or upstream version requires a new conformance artifact before the matrix can
-mark it supported. Claude-through-Omnigent parity is deferred and is not implied
-by this Codex matrix.
+mark it supported. This matrix says nothing about Claude Code support.

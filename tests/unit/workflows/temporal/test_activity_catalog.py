@@ -85,7 +85,7 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         catalog.resolve_activity("sandbox.run_tests").task_queue == SANDBOX_TASK_QUEUE
     )
     assert (
-        catalog.resolve_activity("integration.jules.start").task_queue
+        catalog.resolve_activity("integration.openclaw.execute").task_queue
         == INTEGRATIONS_TASK_QUEUE
     )
     omnigent_route = catalog.resolve_activity("integration.omnigent.execute")
@@ -237,7 +237,7 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
         _skill_definition(capabilities=["docker_workload"])
     )
     integration_route = catalog.resolve_skill(
-        _skill_definition(capabilities=["integration:jules"])
+        _skill_definition(capabilities=["integration:jira"])
     )
     omnigent_route = catalog.resolve_skill(
         _skill_definition(capabilities=["integration:omnigent"])
@@ -290,13 +290,13 @@ def test_resolve_explicit_activity_uses_catalog_binding():
     catalog = build_default_activity_catalog()
     route = catalog.resolve_skill(
         _skill_definition(
-            activity_type="integration.jules.fetch_result",
-            capabilities=["integration:jules"],
+            activity_type="integration.openclaw.execute",
+            capabilities=["integration:openclaw"],
             binding_reason="specialized_credentials",
         )
     )
 
-    assert route.activity_type == "integration.jules.fetch_result"
+    assert route.activity_type == "integration.openclaw.execute"
     assert route.fleet == INTEGRATIONS_FLEET
     assert route.task_queue == INTEGRATIONS_TASK_QUEUE
 
@@ -307,8 +307,8 @@ def test_resolve_explicit_activity_requires_binding_reason():
     with pytest.raises(ValueError, match="binding_reason"):
         catalog.resolve_skill(
             _skill_definition(
-                activity_type="integration.jules.fetch_result",
-                capabilities=["integration:jules"],
+                activity_type="integration.openclaw.execute",
+                capabilities=["integration:openclaw"],
             )
         )
 
@@ -323,6 +323,20 @@ def test_manifest_ingest_activity_routes_are_retired():
     assert "manifest.write_summary" not in {
         definition.activity_type for definition in catalog.activities
     }
+
+
+def test_removed_external_provider_activity_routes_are_retired():
+    """Codex Cloud and Jules were removed; their activity families stay gone."""
+    catalog = build_default_activity_catalog()
+    activity_types = {definition.activity_type for definition in catalog.activities}
+
+    assert not {
+        activity_type
+        for activity_type in activity_types
+        if activity_type.startswith(("integration.jules.", "integration.codex_cloud."))
+    }
+    for fleet in catalog.fleets:
+        assert "integration:jules" not in fleet.capabilities
 
 
 def test_checkpoint_activity_routes_stay_on_allowed_fleets():

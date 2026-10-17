@@ -104,7 +104,7 @@ def test_integration_provider_summary_rejects_large_provider_body() -> None:
 
 def test_external_event_provider_summary_accepts_compact_refs() -> None:
     signal = ExternalEventSignal(
-        source="jules",
+        source="openclaw",
         eventType="completed",
         observedAt=datetime.now(tz=UTC),
         providerSummary={"resultRef": "art-result", "status": "done"},

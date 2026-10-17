@@ -53,7 +53,6 @@ from moonmind.security.outbound_scan import (
     scan_outbound_bundle,
     scan_outbound_text,
 )
-from moonmind.jules.status import JulesStatusClassification, normalize_jules_status
 from moonmind.workflows.temporal.merge_automation_repository_access import (
     acquire_merge_automation_repository_credential,
 )
@@ -92,7 +91,6 @@ from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeStatusInput,
     AgentRuntimeTerminalCheckpointInput,
     AgentRuntimeTerminalCheckpointResult,
-    ExternalAgentRunInput,
     PlanGenerateInput,
 )
 from moonmind.schemas.temporal_models import (
@@ -158,8 +156,6 @@ from moonmind.utils.workspace_paths import (
     open_directory,
     read_regular_file,
 )
-from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
-from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.schemas.agent_skill_models import (
     AgentSkillSourceKind,
@@ -624,8 +620,6 @@ PlanGenerator = Callable[
     [Any, Mapping[str, Any], SkillRegistrySnapshot | None],
     Mapping[str, Any] | PlanDefinition | Awaitable[Mapping[str, Any] | PlanDefinition],
 ]
-JulesClientFactory = Callable[[], JulesClient]
-JulesAgentAdapterFactory = Callable[[], JulesAgentAdapter]
 SessionContractT = TypeVar("SessionContractT", bound=BaseModel)
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -885,15 +879,6 @@ def _docker_workflow_mode_forbidden_failure(*, workflow_docker_mode: str, tool_n
 CODEX_TRANSIENT_TURN_ERROR_TYPE = "CodexTransientTurnError"
 CODEX_PERMANENT_TURN_ERROR_TYPE = "CodexPermanentTurnError"
 CODEX_EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
-_PROVIDER_NATIVE_PR_AGENT_IDS = frozenset({"jules", "jules_api"})
-
-
-def _normalize_provider_native_pr_agent_id(agent_id: str | None) -> str:
-    if not isinstance(agent_id, str):
-        return ""
-    return agent_id.strip().lower().replace("-", "_")
-
-
 def _is_empty_assistant_recovery_failure(
     metadata: Mapping[str, Any] | None,
 ) -> bool:
@@ -967,38 +952,6 @@ class _SandboxFileSnapshotEntry:
     mtime_ns: int
     digest: str
     backup_path: Path | None = None
-
-@dataclass(frozen=True, slots=True)
-class IntegrationStartResult:
-    """Structured result from ``integration.jules.start``."""
-
-    external_id: str
-    status: str
-    tracking_ref: ArtifactRef | None
-    url: str | None = None
-    normalized_status: str = "unknown"
-    provider_status: str = "unknown"
-    callback_supported: bool = False
-
-    @property
-    def external_url(self) -> str | None:
-        return self.url
-
-@dataclass(frozen=True, slots=True)
-class IntegrationStatusResult:
-    """Structured result from ``integration.jules.status``."""
-
-    external_id: str
-    status: str
-    tracking_ref: ArtifactRef | None
-    url: str | None = None
-    normalized_status: str = "unknown"
-    provider_status: str = "unknown"
-    terminal: bool = False
-
-    @property
-    def external_url(self) -> str | None:
-        return self.url
 
 @dataclass(frozen=True, slots=True)
 class TemporalActivityBinding:
@@ -1083,17 +1036,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "oauth_session.verify_volume": ("agent_runtime", "oauth_session_verify_volume"),
     "oauth_session.verify_cli_fingerprint": ("agent_runtime", "oauth_session_verify_cli_fingerprint"),
     "oauth_session.register_profile": ("artifacts", "oauth_session_register_profile"),
-    "integration.jules.start": ("integrations", "integration_jules_start"),
-    "integration.jules.status": ("integrations", "integration_jules_status"),
-    "integration.jules.fetch_result": (
-        "integrations",
-        "integration_jules_fetch_result",
-    ),
-    "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
-    "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
-    "integration.jules.list_activities": ("integrations", "integration_jules_list_activities"),
-    "integration.jules.answer_question": ("integrations", "integration_jules_answer_question"),
-    "integration.jules.get_auto_answer_config": ("integrations", "integration_jules_get_auto_answer_config"),
     # General-purpose repo operations (provider-agnostic)
     "github_issue.collect_evidence": ("integrations", "github_issue_collect_evidence"),
     "repo.create_pr": ("integrations", "repo_create_pr"),
@@ -1101,7 +1043,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "repo_sync_pr_unverified_criteria",
     ),
-    "repo.merge_pr": ("integrations", "repo_merge_pr"),
     "publication_recovery.observe": ("integrations", "publication_recovery_observe"),
     "publication_recovery.publish": ("integrations", "publication_recovery_publish"),
     "publication_recovery.verify": ("integrations", "publication_recovery_verify"),
@@ -1230,6 +1171,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "omnigent.admit_scheduled_occurrence_plan": (
         "agent_runtime",
         "omnigent_admit_scheduled_occurrence_plan",
+    ),
+    "omnigent.admit_step_successor_plan": (
+        "agent_runtime",
+        "omnigent_admit_step_successor_plan",
     ),
     "omnigent.ensure_provider_profile_lease": (
         "agent_runtime",
@@ -1896,18 +1841,6 @@ def _send_execution_notification_email(
         if smtp_username:
             client.login(smtp_username, smtp_password or "")
         client.send_message(message)
-
-def _validate_external_agent_run_input(payload: Any) -> ExternalAgentRunInput:
-    """Validate external activity input, including scalar legacy histories."""
-
-    if isinstance(payload, str):
-        payload = {"runId": payload}
-    try:
-        return ExternalAgentRunInput.model_validate(payload)
-    except ValidationError as exc:
-        raise TemporalActivityRuntimeError(
-            f"external agent run payload is invalid: {exc}"
-        ) from exc
 
 def _validate_agent_runtime_status_input(payload: Any) -> AgentRuntimeStatusInput:
     if isinstance(payload, AgentRuntimeStatusInput):
@@ -4579,22 +4512,14 @@ async def _merge_automation_github_access(payload, *, repository, operation):
 
 
 class TemporalIntegrationActivities:
-    """Implementation helpers for ``integration.jules.*``."""
+    """Implementation helpers for the integrations activity fleet."""
 
     def __init__(
         self,
         *,
         artifact_service: TemporalArtifactService | None = None,
-        client_factory: JulesClientFactory | None = None,
-        adapter_factory: JulesAgentAdapterFactory | None = None,
     ) -> None:
         self._artifact_service = artifact_service
-        self._client_factory = client_factory or self._build_default_client
-        self._adapter = (
-            adapter_factory()
-            if adapter_factory is not None
-            else JulesAgentAdapter(client_factory=self._client_factory)
-        )
 
     async def github_issue_collect_evidence(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.github_issue_evidence import (
@@ -4646,6 +4571,7 @@ class TemporalIntegrationActivities:
             repository=request["repository"], pr_number=request["prNumber"],
             head_sha=request["headSha"], admitted_workflow_id=request["admittedWorkflowId"],
             observe_only=request.get("observeOnly") is True,
+            base_ref=str(request.get("baseRef") or "") or None,
         )
 
     async def publication_recovery_observe(self, payload, /, **kwargs):
@@ -4975,114 +4901,16 @@ class TemporalIntegrationActivities:
             gate_status=gate_status,
         )
 
-    @staticmethod
-    def _build_default_client() -> JulesClient:
-        gate = settings.jules_runtime_gate
-        if not gate.enabled:
-            raise TemporalActivityRuntimeError(gate.error_message)
-        return JulesClient(
-            base_url=settings.jules.jules_api_url,
-            api_key=settings.jules.jules_api_key,
-            timeout=settings.jules.jules_timeout_seconds,
-            retry_attempts=settings.jules.jules_retry_attempts,
-            retry_delay_seconds=settings.jules.jules_retry_delay_seconds,
-        )
-
-    @staticmethod
-    def _status_snapshot(raw_status: str | None) -> JulesStatusClassification:
-        return normalize_jules_status(raw_status)
-
-    @staticmethod
-    def _status_snapshot_from_provider_and_hint(
-        *,
-        provider_status: str | None,
-        normalized_hint: str | None,
-    ) -> JulesStatusClassification:
-        snapshot = normalize_jules_status(provider_status)
-        token = str(normalized_hint or "").strip().lower()
-        if token == "cancelled":
-            token = "canceled"
-        if token not in {"queued", "running", "completed", "failed", "canceled", "unknown", "awaiting_feedback"}:
-            return snapshot
-
-        terminal = token in {"completed", "failed", "canceled"}
-        return JulesStatusClassification(
-            provider_status=snapshot.provider_status,
-            provider_status_token=snapshot.provider_status_token,
-            normalized_status=token,  # type: ignore[arg-type]
-            terminal=terminal,
-            succeeded=token == "completed",
-            failed=token == "failed",
-            canceled=token == "canceled",
-            is_known=snapshot.is_known,
-            is_missing=snapshot.is_missing,
-        )
-
-    async def _write_failure_summary_artifact(
-        self,
-        *,
-        principal: str,
-        execution_ref: ExecutionRef | dict[str, Any] | None,
-        external_id: str,
-        status: IntegrationStatusResult,
-    ) -> ArtifactRef:
-        summary_message = (
-            f"Jules task '{external_id}' reached terminal status "
-            f"'{status.provider_status}' ({status.normalized_status})."
-        )
-        return await _write_json_artifact(
-            self._artifact_service,
-            principal=principal,
-            payload={
-                "externalId": external_id,
-                "providerStatus": status.provider_status,
-                "normalizedStatus": status.normalized_status,
-                "terminal": status.terminal,
-                "externalUrl": status.external_url,
-                "trackingRef": _artifact_locator(status.tracking_ref),
-                "summary": summary_message,
-            },
-            execution_ref=execution_ref,
-            metadata_json={
-                "name": "jules_failure_summary.json",
-                "producer": "activity:integration.jules.fetch_result",
-                "labels": ["integration", "jules", "failure", "summary"],
-            },
-        )
-
-    async def integration_jules_start(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_start_activity
-        return await jules_start_activity(request)
-
-    async def integration_jules_status(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_status_activity
-        request = _validate_external_agent_run_input(payload)
-        return await jules_status_activity(request.run_id)
-
-    async def integration_jules_fetch_result(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_fetch_result_activity
-        request = _validate_external_agent_run_input(payload)
-        return await jules_fetch_result_activity(request.run_id)
-
-    async def integration_jules_cancel(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_cancel_activity
-        request = _validate_external_agent_run_input(payload)
-        return await jules_cancel_activity(request.run_id)
-
     async def repo_create_pr(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+        from moonmind.workflows.temporal.activities.repo_activities import repo_create_pr_activity
         return await repo_create_pr_activity(payload)
 
     async def repo_sync_pr_unverified_criteria(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import (
+        from moonmind.workflows.temporal.activities.repo_activities import (
             repo_sync_pr_unverified_criteria_activity,
         )
 
         return await repo_sync_pr_unverified_criteria_activity(payload)
-
-    async def repo_merge_pr(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import repo_merge_pr_activity
-        return await repo_merge_pr_activity(payload)
 
     async def worker_verify_workflow_capability(self, payload, /, **kwargs):
         """Fail closed unless the deployed workflow fleet proves registration."""
@@ -6017,27 +5845,6 @@ class TemporalIntegrationActivities:
                 "source": "jira",
             },
         )
-
-    async def integration_jules_send_message(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_send_message_activity
-        return await jules_send_message_activity(payload)
-
-    async def integration_jules_list_activities(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_list_activities_activity
-        session_id = payload
-        if isinstance(payload, Mapping):
-            session_id = payload.get("session_id") or payload.get("sessionId")
-        if not session_id or not isinstance(session_id, str):
-            raise TemporalActivityRuntimeError("integration.jules.list_activities requires a non-empty session_id string")
-        return await jules_list_activities_activity(session_id.strip())
-
-    async def integration_jules_answer_question(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_answer_question_activity
-        return await jules_answer_question_activity(payload)
-
-    async def integration_jules_get_auto_answer_config(self, payload, /, **kwargs):
-        from moonmind.workflows.temporal.activities.jules_activities import jules_get_auto_answer_config_activity
-        return await jules_get_auto_answer_config_activity(payload)
 
     async def integration_openclaw_execute(self, request, /, **kwargs):
         from moonmind.workflows.temporal.activities.openclaw_activities import openclaw_execute_activity
@@ -7786,6 +7593,20 @@ class TemporalAgentRuntimeActivities:
             kwargs=kwargs,
         )
         return await omnigent_admit_scheduled_occurrence_plan_activity(payload)
+
+    async def omnigent_admit_step_successor_plan(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_admit_step_successor_plan_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="omnigent.admit_step_successor_plan",
+            kwargs=kwargs,
+        )
+        return await omnigent_admit_step_successor_plan_activity(payload)
 
     async def omnigent_ensure_host(
         self, request: Any = None, /, **kwargs: Any
@@ -13392,8 +13213,6 @@ class TemporalAgentRuntimeActivities:
                 and isinstance(request, AgentRuntimeFetchResultInput)
                 and request.terminal_checkpoint_publication_enabled
                 and publish_mode != "none"
-                and _normalize_provider_native_pr_agent_id(publish_agent_id)
-                not in _PROVIDER_NATIVE_PR_AGENT_IDS
             ):
                 existing = meta.get("terminalPublication")
                 existing = existing if isinstance(existing, Mapping) else {}
@@ -13441,8 +13260,6 @@ class TemporalAgentRuntimeActivities:
             elif (
                 result.failure_class is None
                 and publish_mode in {"branch", "pr"}
-                and _normalize_provider_native_pr_agent_id(publish_agent_id)
-                not in _PROVIDER_NATIVE_PR_AGENT_IDS
             ):
                 raw_commit_message = (
                     request.commit_message
@@ -17138,8 +16955,6 @@ def build_activity_bindings(
 __all__ = [
     "ArtifactCreateActivityResult",
     "HeartbeatCallback",
-    "IntegrationStartResult",
-    "IntegrationStatusResult",
     "PlanGenerateActivityResult",
     "SandboxCommandResult",
     "build_activity_execution_context",

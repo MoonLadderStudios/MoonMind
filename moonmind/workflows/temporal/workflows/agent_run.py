@@ -23,11 +23,6 @@ from temporalio.workflow import (
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from moonmind.workflows.temporal.jules_merge import continue_jules_merge
-    from moonmind.workflows.executions.repository_contract import (
-        repository_branch_from_value,
-        repository_name_from_value,
-    )
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
@@ -1272,10 +1267,6 @@ class MoonMindAgentRun:
         self._assigned_slot_fencing_generation: int | None = None
         self._external_agent_id: str | None = None
         self._omnigent_session_workflow_id: str | None = None
-        # Auto-answer state (Jules question auto-answer, spec 094)
-        self._answered_activity_ids: set[str] = set()
-        self._auto_answer_count: int = 0
-        self._pending_operator_messages: list[str] = []
         self._profile_snapshots: dict[str, dict[str, Any]] = {}
         self._awaiting_slot_reason_override: str | None = None
         self._slot_wait_timeout_override_seconds: int | None = None
@@ -2335,13 +2326,6 @@ class MoonMindAgentRun:
 
         agent_id = _normalize_agent_runtime_id(request.agent_id)
         if request.agent_kind == "external":
-            if agent_id in {"jules", "jules_api"}:
-                return {
-                    "runtime": agent_id,
-                    "noProgressTimeoutSeconds": 2400,
-                    "stuckAction": "request_intervention",
-                    "retryPolicy": "provider_polling_with_human_feedback_escalation",
-                }
             return {
                 "runtime": agent_id or request.agent_id,
                 "noProgressTimeoutSeconds": _DEFAULT_NO_PROGRESS_TIMEOUT_SECONDS,
@@ -6226,18 +6210,6 @@ class MoonMindAgentRun:
             self._pending_runtime_selection_update = update_payload
             self.runtime_selection_updated_event.set()
 
-    @workflow.signal
-    def operator_message(self, payload: dict[str, Any] | None = None) -> None:
-        payload = payload or {}
-        message = str(
-            payload.get("message")
-            or payload.get("clarification_response")
-            or payload.get("clarificationResponse")
-            or ""
-        ).strip()
-        if message:
-            self._pending_operator_messages.append(message)
-
     @staticmethod
     def _mapping_copy(value: Any) -> dict[str, Any]:
         return dict(value) if isinstance(value, Mapping) else {}
@@ -8498,24 +8470,6 @@ class MoonMindAgentRun:
                     # progress rearms for the next boundary.
                     budget_reconciled = False
                     while True:
-                        if (
-                            request.agent_kind == "external"
-                            and self._external_agent_id == "jules"
-                            and self.run_id
-                            and self._pending_operator_messages
-                        ):
-                            while self._pending_operator_messages:
-                                operator_message = self._pending_operator_messages.pop(0)
-                                await self._execute_routed_activity(
-                                    "integration.jules.send_message",
-                                    {
-                                        "session_id": self.run_id,
-                                        "prompt": operator_message,
-                                    },
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                )
-                            self.run_status = RunStatus.running
-
                         remaining_timeout = _budget_remaining_seconds()
                         if remaining_timeout <= 0:
                             break
@@ -8654,10 +8608,6 @@ class MoonMindAgentRun:
                         if (
                             workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID)
                             and status_obj.status == RunStatus.awaiting_feedback
-                            and not (
-                                request.agent_kind == "external"
-                                and self._external_agent_id == "jules"
-                            )
                         ):
                             self.run_status = "intervention_requested"
                             self.final_result = self._intervention_result(
@@ -8681,107 +8631,6 @@ class MoonMindAgentRun:
                                 "Agent requested human feedback.",
                             )
                             break
-
-                        # --- Jules auto-answer sub-flow (spec 094) ---
-                        # Only react when Jules explicitly signals
-                        # awaiting_user_feedback (normalized to
-                        # awaiting_feedback).  Probing during "running"
-                        # caused every progress message to be treated as
-                        # a question and spammed with auto-answers.
-                        if (
-                            getattr(status_obj, "status", None)
-                            == RunStatus.awaiting_feedback
-                            and request.agent_kind == "external"
-                            and self._external_agent_id == "jules"
-                        ):
-                            # Probe for an unanswered question first (cheap GET).
-                            activities_result = await self._execute_routed_activity(
-                                "integration.jules.list_activities",
-                                {"session_id": self.run_id},
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            )
-
-                            act_id = activities_result.get("activityId") if isinstance(activities_result, dict) else None
-                            question = activities_result.get("latestAgentQuestion") if isinstance(activities_result, dict) else None
-
-                            if question and act_id and act_id not in self._answered_activity_ids:
-                                # New question detected — read config via activity (determinism-safe)
-                                auto_answer_config = await self._execute_routed_activity(
-                                    "integration.jules.get_auto_answer_config",
-                                    [],
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                )
-                                aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
-                                aa_max = auto_answer_config.get("max_answers", 3) if isinstance(auto_answer_config, dict) else 3
-
-                                if not aa_enabled or self._auto_answer_count >= aa_max:
-                                    # Opt-out or max cycles exhausted → escalate
-                                    self.run_status = "intervention_requested"
-                                    auto_answer_reason = (
-                                        "jules_auto_answer_disabled"
-                                        if not aa_enabled
-                                        else "jules_auto_answer_exhausted"
-                                    )
-                                    self.final_result = self._intervention_result(
-                                        summary=(
-                                            "Jules requested human feedback; "
-                                            "operator intervention is required."
-                                        ),
-                                        request=request,
-                                        metadata={
-                                            "reason": "agent_requested_feedback",
-                                            "julesAutoAnswerReason": auto_answer_reason,
-                                            "julesAutoAnswerCount": self._auto_answer_count,
-                                            "julesAutoAnswerMax": aa_max,
-                                            "resiliencyPolicy": dict(resiliency_policy),
-                                            "lastStatus": status_obj.model_dump(
-                                                mode="json",
-                                                by_alias=True,
-                                            ),
-                                        },
-                                    )
-                                    self._get_logger().warning(
-                                        "Jules auto-answer %s for session %s (count=%d, max=%d)",
-                                        "disabled" if not aa_enabled else "exhausted",
-                                        self.run_id,
-                                        self._auto_answer_count,
-                                        aa_max,
-                                    )
-                                    await self._signal_parent_child_state_changed(
-                                        parent_info,
-                                        "intervention_requested",
-                                        "Jules requested human feedback.",
-                                    )
-                                    break
-
-                                # Dispatch question-answer cycle
-                                task_context = request.agent_id or ""
-                                answer_result = await self._execute_routed_activity(
-                                    "integration.jules.answer_question",
-                                    {
-                                        "session_id": self.run_id,
-                                        "question": question,
-                                        "task_context": task_context,
-                                    },
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                )
-                                if isinstance(answer_result, dict) and answer_result.get("answered"):
-                                    self._answered_activity_ids.add(act_id)
-                                    self._auto_answer_count += 1
-                                    self._get_logger().info(
-                                        "Jules auto-answer #%d sent for session %s (activity %s)",
-                                        self._auto_answer_count,
-                                        self.run_id,
-                                        act_id,
-                                    )
-                                else:
-                                    self._get_logger().warning(
-                                        "Jules auto-answer failed for session %s: %s",
-                                        self.run_id,
-                                        answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
-                                    )
-
-                        # --- end auto-answer sub-flow ---
 
                         if status_obj.status in _TERMINAL_RUN_STATUSES:
                             break
@@ -8829,133 +8678,6 @@ class MoonMindAgentRun:
                             uses_codex_session_adapter=uses_codex_session_adapter,
                             use_managed_status_activity=use_managed_status_activity,
                         )
-
-                if (
-                    request.agent_kind == "external"
-                    and self._external_agent_id in {"jules", "jules_api"}
-                    and self.final_result is not None
-                    and self.final_result.failure_class is None
-                ):
-                    publish_mode = str(
-                        (request.parameters or {}).get("publishMode") or "none"
-                    ).strip().lower()
-                    if publish_mode == "branch":
-                        result_meta = dict(self.final_result.metadata or {})
-                        pr_url = str(
-                            result_meta.get("pullRequestUrl")
-                            or result_meta.get("externalUrl")
-                            or ""
-                        ).strip()
-                        if not pr_url:
-                            self.final_result = self.final_result.model_copy(
-                                update={
-                                    "summary": "Jules branch publication failed: no pull request URL was available for merge.",
-                                    "failure_class": "execution_error",
-                                    "provider_error_code": "branch_publish_failed",
-                                    "metadata": {
-                                        **result_meta,
-                                        "publishOutcome": "publish_failed",
-                                    },
-                                }
-                            )
-                        else:
-                            workspace_spec = request.workspace_spec or {}
-                            starting_branch = str(
-                                workspace_spec.get("startingBranch")
-                                or workspace_spec.get("branch")
-                                or "main"
-                            ).strip() or "main"
-                            target_branch = str(
-                                (request.parameters or {}).get("targetBranch")
-                                or workspace_spec.get("targetBranch")
-                                or ""
-                            ).strip()
-                            expected_repository = (
-                                workspace_spec.get("repository")
-                                or workspace_spec.get("repo")
-                                or ""
-                            )
-                            merge_target_branch = target_branch or starting_branch
-                            # Preserve both authority fields in already-recorded
-                            # initial and continuation activity payloads.
-                            if workflow.patched("jules-merge-canonical-authority-v1"):
-                                repository_target = workspace_spec.get(
-                                    "repositoryTarget"
-                                )
-                                if repository_target is None:
-                                    repository_target = workspace_spec.get(
-                                        "repository"
-                                    ) or workspace_spec.get("repo")
-                                expected_repository = repository_name_from_value(
-                                    repository_target, provider="git"
-                                )
-                                merge_target_branch = (
-                                    target_branch
-                                    or repository_branch_from_value(repository_target)
-                                    or starting_branch
-                                )
-                            merge_payload: dict[str, Any] = {"pr_url": pr_url}
-                            if workflow.patched("jules-merge-target-authority-v1"):
-                                merge_payload["expected_repository"] = expected_repository
-                                merge_payload["target_branch"] = merge_target_branch
-                            elif target_branch and target_branch != starting_branch:
-                                merge_payload["target_branch"] = target_branch
-                            merge_result = await self._execute_routed_activity(
-                                "repo.merge_pr",
-                                merge_payload,
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            )
-                            merge_result = await continue_jules_merge(
-                                merge_result,
-                                authored_payload={
-                                    "pr_url": pr_url,
-                                    "expected_repository": expected_repository,
-                                    "target_branch": merge_target_branch,
-                                },
-                                execute_merge=lambda payload: self._execute_routed_activity(
-                                    "repo.merge_pr", payload,
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                ),
-                            )
-                            merged = bool(
-                                merge_result.get("merged")
-                                if isinstance(merge_result, dict)
-                                else False
-                            )
-                            merge_summary = (
-                                merge_result.get("summary")
-                                if isinstance(merge_result, dict)
-                                else ""
-                            ) or ""
-                            if merged:
-                                self.final_result = self.final_result.model_copy(
-                                    update={
-                                        "metadata": {
-                                            **result_meta,
-                                            "publishOutcome": "branch_merged",
-                                            "pullRequestUrl": pr_url,
-                                            "mergeSha": (
-                                                merge_result.get("mergeSha")
-                                                if isinstance(merge_result, dict)
-                                                else None
-                                            ),
-                                        }
-                                    }
-                                )
-                            else:
-                                self.final_result = self.final_result.model_copy(
-                                    update={
-                                        "summary": merge_summary
-                                        or "Jules branch publication failed during merge.",
-                                        "failure_class": "execution_error",
-                                        "provider_error_code": "branch_publish_failed",
-                                        "metadata": {
-                                            **result_meta,
-                                            "publishOutcome": "publish_failed",
-                                            "pullRequestUrl": pr_url,
-                                        },
-                                    }
-                                )
 
                 if self.final_result is not None:
                     if workflow.patched(

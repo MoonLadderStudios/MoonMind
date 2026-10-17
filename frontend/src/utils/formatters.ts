@@ -30,7 +30,6 @@ const RUNTIME_DISPLAY_NAMES: Record<string, string> = {
   codex: 'Codex CLI',
   claude_code: 'Claude Code',
   claude: 'Claude Code',
-  jules: 'Jules',
 };
 
 function titleizeRuntime(runtime: string): string {

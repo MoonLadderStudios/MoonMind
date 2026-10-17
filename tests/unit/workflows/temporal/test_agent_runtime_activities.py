@@ -1445,14 +1445,6 @@ async def test_cancel_accepts_typed_request_model() -> None:
     assert isinstance(result, AgentRunStatus)
     assert result.run_id == "external-run-1"
 
-async def test_external_agent_run_activity_wrapper_rejects_unknown_fields() -> None:
-    activities = TemporalAgentRuntimeActivities()
-
-    with pytest.raises(Exception):
-        await activities.integration_jules_status(
-            {"runId": "jules-1", "rawProviderPayload": {"status": "done"}}
-        )
-
 # ---------------------------------------------------------------------------
 # T2: agent_runtime_cancel — typed AgentRunStatus return (not None)
 # ---------------------------------------------------------------------------
@@ -3244,35 +3236,6 @@ async def test_fetch_result_preserves_legacy_pr_resolver_gate_ownership(
             pr_resolver_merge_gate_owned=True,
         )
         assert result.summary == "ok"
-
-
-async def test_fetch_result_skips_infrastructure_push_for_jules_runtime(
-    tmp_path: Path,
-) -> None:
-    from unittest.mock import patch
-
-    store = _make_store(tmp_path)
-    _save_record(store, run_id="fr-jules", status="completed", runtime_id="jules-api")
-
-    activities = TemporalAgentRuntimeActivities(run_store=store)
-    push_branch = AsyncMock(return_value={"push_status": "pushed"})
-    activities._push_workspace_branch = push_branch
-
-    with patch(
-        "moonmind.workflows.temporal.activity_runtime.ManagedAgentAdapter",
-        autospec=True,
-    ) as mock_adapter_cls:
-        adapter = mock_adapter_cls.return_value
-        adapter.fetch_result = AsyncMock(
-            return_value=AgentRunResult(summary="Jules completed")
-        )
-
-        result = await activities.agent_runtime_fetch_result(
-            {"run_id": "fr-jules", "publishMode": "pr"}
-        )
-
-    assert result.failure_class is None
-    push_branch.assert_not_awaited()
 
 
 async def test_fetch_result_reverifies_and_clears_pr_not_found_when_merged(

@@ -97,7 +97,7 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
         "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
     )
     assert "OPENAI_API_KEY" in topologies[LLM_FLEET].required_secrets
-    assert "JULES_API_KEY" in topologies[INTEGRATIONS_FLEET].required_secrets
+    assert topologies[INTEGRATIONS_FLEET].required_secrets == ()
     assert topologies[SANDBOX_FLEET].concurrency_limit == 2
     assert "mm.skill.execute" in topologies[ARTIFACTS_FLEET].activity_types
     assert "mm.skill.execute" in topologies[SANDBOX_FLEET].activity_types
@@ -333,7 +333,6 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     assert topology.concurrency_limit == 3
     assert topology.forbidden_capabilities == (
         "llm",
-        "integration:jules",
         "integration:openclaw",
         "integration:omnigent",
         "agent_runtime",
@@ -440,7 +439,6 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
-                    client_factory=lambda: None,
                 ),
                 agent_skills_activities=AgentSkillsActivities(),
             )
@@ -481,7 +479,6 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
-                    client_factory=lambda: None,
                 ),
                 agent_skills_activities=AgentSkillsActivities(),
             )
@@ -519,7 +516,6 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
-                    client_factory=lambda: None,
                 ),
                 agent_runtime_activities=TemporalAgentRuntimeActivities(),
                 agent_skills_activities=AgentSkillsActivities(),

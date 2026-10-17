@@ -122,13 +122,18 @@ class _ArtifactService:
 
 class _PlanStore:
     persisted = None
+    plans: dict = {}
 
     def __init__(self, _session_factory) -> None:
         pass
 
     async def persist(self, envelope):
         self.__class__.persisted = envelope
+        self.__class__.plans[envelope.planRef] = envelope
         return envelope
+
+    async def load(self, plan_ref):
+        return self.__class__.plans.get(plan_ref)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-# Codex via Omnigent Create-to-host contract
+# Codex Create-to-host contract
 
 ## Frozen hybrid capability
 
@@ -15,11 +15,11 @@ explains when only one plane has sufficient recovery evidence.
 **Status:** Accepted  
 **Owners:** MoonMind Platform  
 **Last updated:** 2026-07-22  
-**Authority:** Product selection, Workflow Create compilation, and acceptance contract for Codex via Omnigent
+**Authority:** Codex selection and Workflow Create compilation on Omnigent
 
 ## 1. Product identity and authority
 
-The normal `/workflows/new` choice is **Codex via Omnigent**. Workflow Create writes `runtime.mode = "omnigent"`; the trusted API compiler alone converts that selector to:
+The normal `/workflows/new` choice is the **Codex** Harness with a Codex Provider Profile; Backend is not selected. Workflow Create writes `runtime.mode = "omnigent"`; the trusted API compiler alone converts that selector to:
 
 ```text
 agentKind = external
@@ -27,7 +27,7 @@ agentId   = omnigent
 harness   = codex-native
 ```
 
-`codex-native` is a nested harness choice, never a second top-level agent identity. `omnigent_codex`, caller-authored `session.hostId`, and direct-Codex substitution are invalid.
+`codex-native` is a nested harness, never a top-level agent identity. `omnigent_codex`, caller-authored `session.hostId`, and direct-Codex substitution are invalid.
 
 This document owns the product-to-runtime compilation boundary. Detailed contracts remain owned by [Provider Profiles](../Security/ProviderProfiles.md), [Omnigent Host OAuth](./OmnigentHostOAuth.md), [Omnigent Bridge](./OmnigentBridge.md), [Workspace locators](../Workflows/WorkspaceLocators.md), [Settings System](../Security/SettingsSystem.md), and [Workflow Details Page](../UI/WorkflowDetailsPage.md). The single normative end-to-end sequence, complete failure matrix, and evidence-qualified support state across all of these owners are reconciled in [Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
 
@@ -146,7 +146,6 @@ There is deliberately no `session.hostId`; host and session identities are trust
 ```json
 {
   "schemaVersion": "omnigent-create-host/v1",
-  "runtimeLabel": "Codex via Omnigent",
   "identity": {"agentKind": "external", "agentId": "omnigent", "harness": "codex-native"},
   "safeRefs": {"executionProfileRef": "provider-profile:codex-primary:v7", "hostLeaseRef": "host-lease:01", "bridgeSessionRef": "bridge-session:01", "omnigentSessionRef": "omnigent-session:01", "launchSnapshotRef": "omnigent-launch-snapshot:run_01:v1"},
   "stage": {"code": "terminal", "status": "completed"},
@@ -202,7 +201,7 @@ sequenceDiagram
 
 Create owns intent; the compiler owns request construction; Profile Manager owns eligibility, credentials and capacity; the workspace owner owns checkout/mount resolution; the host owner owns policy realization, readiness and cleanup; the bridge owns authorization, session, first-message idempotency and events; the artifact owner owns evidence publication; Temporal owns ordering and retries. Provider capacity is released only after credential-consuming host cleanup or safe reconciliation.
 
-Workflow Detail labels the lane **Codex via Omnigent** and shows request validation, profile resolution/readiness/lease, workspace resolution, launch snapshot, host launch/binding, credential preflight, registration, harness readiness, bridge authorization, session creation, first-message post, running, harvest, evidence publication, cleanup, profile lease release, and terminal stages. Controls are capability-derived and server-authorized. Auxiliary cleanup/publication failures do not erase the primary outcome, but remain visibly unresolved.
+Workflow Detail records Backend Omnigent with the Codex harness and shows request validation, profile resolution/readiness/lease, workspace resolution, launch snapshot, host launch/binding, credential preflight, registration, harness readiness, bridge authorization, session creation, first-message post, running, harvest, evidence publication, cleanup, profile lease release, and terminal stages. Controls are capability-derived and server-authorized. Auxiliary cleanup/publication failures do not erase the primary outcome, but remain visibly unresolved.
 
 ## 6. Failure and no-fallback matrix
 

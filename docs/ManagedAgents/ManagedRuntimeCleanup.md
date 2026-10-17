@@ -10,7 +10,7 @@
 **Related:**
 
 - [`docs/ManagedAgents/ManagedAgentArchitecture.md`](./ManagedAgentArchitecture.md)
-- [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
+- [`docs/ManagedAgents/DockerBackendService.md`](./DockerBackendService.md)
 - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)

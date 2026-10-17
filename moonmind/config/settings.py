@@ -12,15 +12,8 @@ from moonmind.claude.runtime import (
 from moonmind.claude.runtime import (
     build_runtime_gate_state as build_claude_runtime_gate_state,
 )
-from moonmind.config.jules_settings import JulesSettings
 from moonmind.config.paths import ENV_FILE
 from moonmind.runtime_identity import normalize_runtime_id
-from moonmind.jules.runtime import (
-    JULES_RUNTIME_DISABLED_MESSAGE,
-)
-from moonmind.jules.runtime import (
-    build_runtime_gate_state as build_jules_runtime_gate_state,
-)
 from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -758,7 +751,6 @@ class WorkflowSettings(BaseSettings):
                     ("codex", "Codex"),
                     ("codex_cli", "Codex CLI"),
                     ("claude_code", "Claude Code"),
-                    ("jules", "Jules"),
                 ],
                 "applies_to": ["workflow_creation", "workflow_runtime"],
                 "order": 10,
@@ -1194,7 +1186,7 @@ class WorkflowSettings(BaseSettings):
         ``omnigent`` default.
         """
         normalized = normalize_runtime_id(value)
-        allowed = {"omnigent", "codex_cli", "claude_code", "jules"}
+        allowed = {"omnigent", "codex_cli", "claude_code"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_runtime must be one of: {supported}")
@@ -2244,7 +2236,6 @@ class AppSettings(BaseSettings):
     integration_callbacks: IntegrationCallbackSettings = Field(
         default_factory=IntegrationCallbackSettings
     )
-    jules: JulesSettings = Field(default_factory=JulesSettings)
     worker_stage_command_timeout_seconds: Optional[int] = Field(
         None,
         validation_alias=AliasChoices(
@@ -2468,18 +2459,6 @@ class AppSettings(BaseSettings):
             error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
         )
 
-    @property
-    def jules_runtime_gate(self):
-        """Return reusable Jules gate state for API surfaces."""
-
-        return build_jules_runtime_gate_state(
-            env=os.environ,
-            enabled=self.jules.jules_enabled,
-            api_url=self.jules.jules_api_url,
-            api_key=self.jules.jules_api_key,
-            error_message=JULES_RUNTIME_DISABLED_MESSAGE,
-        )
-
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Populate derived defaults after settings load."""
         super().model_post_init(__context)
@@ -2504,19 +2483,6 @@ class AppSettings(BaseSettings):
                     **self.workflow.model_dump(exclude={"github_repository"}),
                     github_repository=repo,
                 )
-        configured_default = (
-            str(self.workflow.default_runtime or "").strip().lower()
-        )
-        if configured_default == "jules":
-            default_runtime_gate = build_jules_runtime_gate_state(
-                env=os.environ,
-                enabled=self.jules.jules_enabled,
-                api_url=self.jules.jules_api_url,
-                api_key=self.jules.jules_api_key,
-                error_message="default_runtime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)",
-            )
-            if not default_runtime_gate.enabled:
-                raise ValueError(default_runtime_gate.error_message)
 
     model_config = SettingsConfigDict(
         populate_by_name=True,

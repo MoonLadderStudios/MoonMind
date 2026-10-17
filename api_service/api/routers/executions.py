@@ -358,7 +358,6 @@ _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _SUPPORTED_TASK_RUNTIMES = frozenset({
     "codex_cli",
     "claude_code",
-    "jules",
     "omnigent",
     # Legacy aliases accepted and normalized below.
     "codex",
@@ -9297,7 +9296,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                                 "Unsupported payload.workflow.steps"
                                 f"[{index}].runtime.mode: {value!r}. "
                                 "Must be one of: codex_cli, claude_code, "
-                                "jules."
+                                "omnigent."
                             )
                     if target_key == "modelTier":
                         normalized_runtime[target_key] = value
@@ -9705,7 +9704,7 @@ async def _resolve_step_runtime_selections(
                 raise _invalid_workflow_request(
                     f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
                     f"{raw_step_runtime!r}. Must be one of: codex_cli, "
-                    "claude_code, jules."
+                    "claude_code, omnigent."
                 )
             canonical_step_runtime = normalized_rt
             # A step override is new admission in its own right. The top-level
@@ -12820,7 +12819,7 @@ async def _create_execution_from_workflow_request(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, jules, omnigent."
+                "Must be one of: codex_cli, claude_code, omnigent."
             )
         canonical_target_runtime = normalized_rt
     if workspace_source_kind is not None:
@@ -13655,7 +13654,7 @@ async def _resolve_recurring_runtime_metadata(
         if normalized_rt not in _SUPPORTED_TASK_RUNTIMES:
             raise _invalid_workflow_request(
                 f"Unsupported targetRuntime: {raw_target_runtime!r}. "
-                "Must be one of: codex_cli, claude_code, jules, omnigent."
+                "Must be one of: codex_cli, claude_code, omnigent."
             )
         canonical_target_runtime = normalized_rt
 
@@ -13681,7 +13680,7 @@ async def _resolve_recurring_runtime_metadata(
                 raise _invalid_workflow_request(
                     f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
                     f"{raw_step_mode!r}. Must be one of: codex_cli, "
-                    "claude_code, jules, omnigent."
+                    "claude_code, omnigent."
                 )
             try:
                 from moonmind.omnigent.codex_cutover_drain import (

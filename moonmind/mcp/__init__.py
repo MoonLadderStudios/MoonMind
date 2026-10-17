@@ -4,10 +4,6 @@ from moonmind.mcp.jira_tool_registry import (
     JiraToolExecutionContext,
     JiraToolRegistry,
 )
-from moonmind.mcp.jules_tool_registry import (
-    JulesToolExecutionContext,
-    JulesToolRegistry,
-)
 from moonmind.mcp.skills_on_demand_registry import (
     SkillsOnDemandToolExecutionContext,
     SkillsOnDemandToolRegistry,
@@ -26,8 +22,6 @@ from moonmind.mcp.tool_registry import (
 __all__ = [
     "JiraToolExecutionContext",
     "JiraToolRegistry",
-    "JulesToolExecutionContext",
-    "JulesToolRegistry",
     "SkillsOnDemandToolExecutionContext",
     "SkillsOnDemandToolRegistry",
     "ResourceListResponse",

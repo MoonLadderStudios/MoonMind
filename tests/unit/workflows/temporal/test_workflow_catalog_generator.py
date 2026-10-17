@@ -361,16 +361,22 @@ def test_canonical_doc_has_no_duplicate_inventory_or_live_name_row():
     assert "119-moonmindmergeautomation-lifecycle" in anchors
 
 
+@pytest.mark.parametrize("provider", ["CODEX_CLOUD", "JULES"])
 @pytest.mark.parametrize("enabled", [None, "false", "true"])
-def test_removed_cloud_has_no_worker_activity_bindings(monkeypatch, enabled):
-    """#4644: test actual catalog/bindings, including obsolete enabled settings."""
+def test_removed_provider_has_no_worker_activity_bindings(
+    monkeypatch, enabled, provider
+):
+    """Test actual catalog/bindings, including obsolete enabled settings."""
     if enabled is None:
-        monkeypatch.delenv("CODEX_CLOUD_ENABLED", raising=False)
+        monkeypatch.delenv(f"{provider}_ENABLED", raising=False)
     else:
-        monkeypatch.setenv("CODEX_CLOUD_ENABLED", enabled)
-    monkeypatch.setenv("CODEX_CLOUD_API_URL", "https://obsolete.example.test")
-    monkeypatch.setenv("CODEX_CLOUD_API_KEY", "fake-unused-key")
+        monkeypatch.setenv(f"{provider}_ENABLED", enabled)
+    monkeypatch.setenv(f"{provider}_API_URL", "https://obsolete.example.test")
+    monkeypatch.setenv(f"{provider}_API_KEY", "fake-unused-key")
     rows = collect_activities()
     assert not any(
-        row.activity_type.startswith("integration.codex_cloud.") for row in rows
+        row.activity_type.startswith(
+            ("integration.codex_cloud.", "integration.jules.")
+        )
+        for row in rows
     )

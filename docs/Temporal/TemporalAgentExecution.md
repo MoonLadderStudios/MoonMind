@@ -1,9 +1,8 @@
 # Temporal Agent Execution
 
 **Document Class:** Module Architecture View
-**Status:** Active design
+**Status:** Current
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-19
 **Audience:** backend, workflow authors, operators
 
 ## 1. Purpose
@@ -88,10 +87,9 @@ class MoonMindRunWorkflow:
 ```
 
 The workflow also has signal/update handlers for `pause`, `resume`, `cancel`,
-`approve`, and `update_parameters`, plus an integration polling loop for
-external providers like Jules.
+`approve`, and `update_parameters`.
 
-### 2.3 Planning stage (implemented ✅)
+### 2.3 Planning stage
 
 ```
 _run_planning_stage()
@@ -118,7 +116,7 @@ Workflow stores plan_ref in memo for UI visibility
 The planning activity is fully implemented. If a `plan_artifact_ref` is already
 provided in the input payload (pre-planned job), this stage is skipped.
 
-### 2.4 Execution stage (implemented)
+### 2.4 Execution stage
 
 The execution stage dispatches plan steps using two paths depending on the
 step's `tool.type`:
@@ -143,7 +141,7 @@ _run_execution_stage()
   │   ▼
   │ workflow.execute_child_workflow("MoonMind.AgentRun", AgentExecutionRequest {
   │     agent_kind:    "managed" | "external",
-  │     agent_id:      "claude_code" | "codex_cli" | "jules" | ...,
+  │     agent_id:      "omnigent" | "codex_cli" | "claude_code" | ...,
   │     instruction_ref, input_refs, workspace_spec, parameters, ...
   │ })
   │   │
@@ -162,9 +160,9 @@ _run_execution_stage()
 
 For **generic LLM text instructions** (no specific tool), planning produces
 `tool = { type: "agent_runtime", name: "auto" }` and the workflow dispatches it
-as a `MoonMind.AgentRun` child workflow. The `runtime.mode` field (e.g. `codex`,
-`claude_code`, `jules`) determines which `AgentAdapter` implementation handles
-the run.
+as a `MoonMind.AgentRun` child workflow. The resolved runtime (normally
+`omnigent`; `codex_cli` or `claude_code` when a direct Backend is chosen)
+determines which `AgentAdapter` implementation handles the run.
 
 For the full agent execution model including managed runtime supervision, external
 agent callbacks, and auth-profile controls, see
@@ -206,10 +204,7 @@ agent callbacks, and auth-profile controls, see
 }
 ```
 
-Legacy compatibility note:
-
-- `task.skill` remains accepted during migration.
-- Canonical Temporal-era payloads should emit `task.tool`.
+Producers emit `task.tool`; `task.skill` is still accepted on input.
 
 ### 3.2 Step ToolInvocation contract (plan node level)
 
@@ -233,13 +228,14 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 | `plan.validate` | llm | `mm.activity.llm` | Plan validation against registry |
 | `agent_runtime.publish_artifacts` | agent_runtime | `mm.activity.agent_runtime` | Publish agent run outputs |
 | `agent_runtime.cancel` | agent_runtime | `mm.activity.agent_runtime` | Cancel managed/external agent run |
-| `integration.resolve_adapter_metadata`| integrations | `mm.activity.integrations` | Single-hop adapter validation and resolution |
+| `integration.resolve_adapter_metadata`| workflow | `mm.workflow` | Single-hop adapter validation and resolution |
 | `sandbox.run_command` | sandbox | `mm.activity.sandbox` | Shell command execution |
 | `sandbox.checkout_repo` | sandbox | `mm.activity.sandbox` | Git repo checkout |
 | `sandbox.apply_patch` | sandbox | `mm.activity.sandbox` | Patch application |
 | `sandbox.run_tests` | sandbox | `mm.activity.sandbox` | Test runner |
 | `artifact.*` | artifacts | `mm.activity.artifacts` | Artifact CRUD |
-| `integration.jules.*` | integrations | `mm.activity.integrations` | Jules integration |
+| `integration.omnigent.execute` | agent_runtime | `mm.activity.agent_runtime` | Omnigent agent execution |
+| `integration.openclaw.execute` | integrations | `mm.activity.integrations` | OpenClaw gateway execution |
 
 ### 3.4 Worker fleet topology
 
@@ -250,33 +246,11 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 | `sandbox` | `mm.activity.sandbox` | Shell exec, git, builds | CPU/memory heavy |
 | `agent_runtime` | `mm.activity.agent_runtime` | Managed runtime supervision, provider profiles | Provider rate-limited |
 | `artifacts` | `mm.activity.artifacts` | Artifact storage IO | IO-bound |
-| `integrations` | `mm.activity.integrations` | Jules, webhooks | Rate-limited |
+| `integrations` | `mm.activity.integrations` | External providers, webhooks | Rate-limited |
 
 ---
 
-## 4. Current Implementation Status
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| **Execution submission** → Temporal routing | ✅ Implemented | `POST /api/executions` |
-| **`TemporalExecutionService.create_execution`** | ✅ Implemented | Creates DB record + starts workflow |
-| **`MoonMind.UserWorkflow` workflow definition** | ✅ Implemented | Full lifecycle with signals/updates |
-| **Planning stage** (`plan.generate`) | ✅ Implemented | Activity + planner callback |
-| **Execution stage** (`_run_execution_stage`) | ✅ Implemented | Reads plan artifact, dispatches `agent_runtime` nodes as `MoonMind.AgentRun` child workflows, non-agent nodes as activities |
-| **`MoonMind.AgentRun` child workflow** | ✅ Implemented | Unified agent execution lifecycle for managed and external agents |
-| **`AgentAdapter` protocol** | ✅ Implemented | `ManagedAgentAdapter` + `JulesAgentAdapter` + `OmnigentExternalAdapter` |
-| **`SkillInvocation` contract** | ✅ Implemented | Validated dataclass in `skill_plan_contracts.py` |
-| **Activity catalog** | ✅ Implemented | 18 activities, 5 fleets, correct routing |
-| **Worker runtime bindings** | ✅ Implemented | `build_activity_bindings` wires handlers to catalog |
-| **Temporal↔DB state sync** | ✅ Implemented | Projection sync from Temporal visibility |
-| **Batch-PR-resolver payload** | ✅ Fixed | Now sends name-only `skill.name` + `inputs` |
-| **Integration polling** (Jules) | ✅ Implemented | Durable waiting loop with status polling |
-| **Pause/Resume/Cancel signals** | ✅ Implemented | Workflow signal handlers |
-| **`plan.validate` activity** | ✅ Implemented | Registry-aware plan validation |
-
----
-
-## 5. Architecture Diagram
+## 4. Architecture Diagram
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
@@ -307,7 +281,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 │   │                      ▼                                          │    │
 │   │               MoonMind.AgentRun                                 │    │
 │   │               ├─ ManagedAgentAdapter → Claude Code / Codex CLI   │    │
-│   │               └─ ExternalAgentAdapter → Jules / BYOA            │    │
+│   │               └─ ExternalAgentAdapter → Omnigent / OpenClaw     │    │
 │   └──────────────────────────────────────────────────────────────────┘    │
 │                                                                           │
 └───────────────────────────────────────────────────────────────────────────┘

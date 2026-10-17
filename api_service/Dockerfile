@@ -261,10 +261,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
-# pyproject.toml packages moonmind_controller, so the project install below
-# needs its source. No API or worker runtime path imports it: deployment
-# updates reach the deploy/controller endpoint over HTTP.
-COPY moonmind_controller /app/moonmind_controller/
 # The existing host-owned bootstrap can run this small stdlib controller
 # from the already-published application image before an update submission.
 COPY deploy/controller /app/deploy/controller/

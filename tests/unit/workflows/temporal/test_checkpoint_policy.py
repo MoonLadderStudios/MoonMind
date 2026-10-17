@@ -81,7 +81,7 @@ def test_resolve_checkpoint_policy_uses_canonical_external_capabilities() -> Non
     )
     control = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_EXECUTION,
-        capabilities=resolve_runtime_execution_capabilities("jules"),
+        capabilities=resolve_runtime_execution_capabilities("openclaw"),
     )
 
     assert policy.workspace_policy == "continue_from_previous_execution"

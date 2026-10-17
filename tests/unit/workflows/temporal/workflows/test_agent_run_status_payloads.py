@@ -8,6 +8,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID,
     MoonMindAgentRun,
     RunStatus,
+    _EXTERNAL_STATUS_TO_RUN_STATUS,
     _request_reserves_slot_for_immediate_followup,
 )
 
@@ -88,16 +89,16 @@ def test_coerce_external_status_payload_accepts_canonical_shape() -> None:
 
     status = workflow_instance._coerce_external_status_payload(
         status_payload={
-            "runId": "jules-task-001",
+            "runId": "openclaw-task-001",
             "agentKind": "external",
-            "agentId": "jules",
+            "agentId": "openclaw",
             "status": "running",
         },
-        fallback_agent_id="jules",
+        fallback_agent_id="openclaw",
     )
 
-    assert status.run_id == "jules-task-001"
-    assert status.agent_id == "jules"
+    assert status.run_id == "openclaw-task-001"
+    assert status.agent_id == "openclaw"
     assert status.status == RunStatus.running
 
 def test_request_reserves_slot_for_immediate_followup_reads_moonmind_metadata() -> None:
@@ -150,9 +151,9 @@ def test_resiliency_policy_is_runtime_specific() -> None:
         correlationId="run-1",
         idempotencyKey="run-1:step-1",
     )
-    jules_request = AgentExecutionRequest(
+    external_request = AgentExecutionRequest(
         agentKind="external",
-        agentId="jules",
+        agentId="openclaw",
         correlationId="run-2",
         idempotencyKey="run-2:step-1",
     )
@@ -164,19 +165,16 @@ def test_resiliency_policy_is_runtime_specific() -> None:
     )
 
     codex_policy = MoonMindAgentRun._resiliency_policy_for_request(codex_request)
-    jules_policy = MoonMindAgentRun._resiliency_policy_for_request(jules_request)
+    external_policy = MoonMindAgentRun._resiliency_policy_for_request(
+        external_request
+    )
     claude_policy = MoonMindAgentRun._resiliency_policy_for_request(claude_request)
 
     assert codex_policy["runtime"] == "codex_cli"
     assert codex_policy["retryPolicy"] == "session_turn_self_heal_then_cooldown_retry"
-    assert jules_policy["runtime"] == "jules"
-    assert (
-        jules_policy["retryPolicy"]
-        == "provider_polling_with_human_feedback_escalation"
-    )
-    assert codex_policy["noProgressTimeoutSeconds"] != jules_policy[
-        "noProgressTimeoutSeconds"
-    ]
+    assert external_policy["runtime"] == "openclaw"
+    assert external_policy["retryPolicy"] == "generic_external_polling"
+    assert external_policy["stuckAction"] == "request_intervention"
     assert claude_policy["runtime"] == "claude_code"
     assert claude_policy["noProgressTimeoutSeconds"] == 2400
     assert claude_policy["noProgressGraceSeconds"] == 900
@@ -290,22 +288,22 @@ def test_coerce_external_status_payload_maps_integration_shape() -> None:
 
     status = workflow_instance._coerce_external_status_payload(
         status_payload={
-            "external_id": "jules-task-002",
+            "external_id": "openclaw-task-002",
             "status": "QUEUED",
             "normalized_status": "queued",
             "provider_status": "QUEUED",
-            "url": "https://jules.google.com/session/jules-task-002",
+            "url": "https://openclaw.example.test/session/openclaw-task-002",
             "terminal": False,
         },
-        fallback_agent_id="jules",
+        fallback_agent_id="openclaw",
     )
 
-    assert status.run_id == "jules-task-002"
-    assert status.agent_id == "jules"
+    assert status.run_id == "openclaw-task-002"
+    assert status.agent_id == "openclaw"
     assert status.status == RunStatus.queued
     assert status.metadata.get("providerStatus") == "QUEUED"
     assert status.metadata.get("normalizedStatus") == "queued"
-    assert status.metadata.get("externalUrl") == "https://jules.google.com/session/jules-task-002"
+    assert status.metadata.get("externalUrl") == "https://openclaw.example.test/session/openclaw-task-002"
     assert status.metadata.get("terminal") is False
 
 def test_coerce_external_status_payload_maps_terminal_success() -> None:
@@ -313,16 +311,16 @@ def test_coerce_external_status_payload_maps_terminal_success() -> None:
 
     status = workflow_instance._coerce_external_status_payload(
         status_payload={
-            "external_id": "jules-task-003",
+            "external_id": "openclaw-task-003",
             "status": "COMPLETED",
             "normalized_status": "completed",
             "provider_status": "COMPLETED",
             "terminal": True,
         },
-        fallback_agent_id="jules",
+        fallback_agent_id="openclaw",
     )
 
-    assert status.run_id == "jules-task-003"
+    assert status.run_id == "openclaw-task-003"
     assert status.status == RunStatus.completed
     assert status.metadata.get("terminal") is True
 
@@ -331,20 +329,20 @@ def test_coerce_external_status_payload_handles_canonical_payload_with_provider_
 
     status = workflow_instance._coerce_external_status_payload(
         status_payload={
-            "runId": "jules-task-004",
+            "runId": "openclaw-task-004",
             "agentKind": "external",
-            "agentId": "jules",
+            "agentId": "openclaw",
             "status": "QUEUED",
             "metadata": {
                 "providerStatus": "QUEUED",
                 "normalizedStatus": "queued",
             },
         },
-        fallback_agent_id="jules",
+        fallback_agent_id="openclaw",
     )
 
-    assert status.run_id == "jules-task-004"
-    assert status.agent_id == "jules"
+    assert status.run_id == "openclaw-task-004"
+    assert status.agent_id == "openclaw"
     assert status.status == RunStatus.queued
     assert status.metadata.get("providerStatus") == "QUEUED"
     assert status.metadata.get("normalizedStatus") == "queued"
@@ -354,7 +352,7 @@ def test_coerce_external_start_status_maps_unknown_to_awaiting_callback() -> Non
 
     status, normalized = workflow_instance._coerce_external_start_status(
         {
-            "external_id": "jules-task-005",
+            "external_id": "openclaw-task-005",
             "normalized_status": "unknown",
             "provider_status": "STATE_UNSPECIFIED",
         }
@@ -368,7 +366,7 @@ def test_coerce_external_start_status_maps_succeeded_to_completed() -> None:
 
     status, normalized = workflow_instance._coerce_external_start_status(
         {
-            "external_id": "jules-task-006",
+            "external_id": "openclaw-task-006",
             "normalized_status": "completed",
             "provider_status": "completed",
         }
@@ -403,3 +401,18 @@ def test_canonical_waiting_reason_is_bounded_and_redacted() -> None:
     redacted = canonical_waiting_reason("mm:123:lease-abc")
     assert redacted == "awaiting_provider_capacity"
     assert "mm:" not in redacted and "lease" not in redacted
+
+
+def test_external_awaiting_feedback_status_maps_to_run_status() -> None:
+    assert (
+        _EXTERNAL_STATUS_TO_RUN_STATUS["awaiting_feedback"]
+        == RunStatus.awaiting_feedback
+    )
+    assert (
+        MoonMindAgentRun._normalize_external_status(
+            normalized_status="awaiting_feedback",
+            raw_status=None,
+            provider_status=None,
+        )
+        == RunStatus.awaiting_feedback
+    )

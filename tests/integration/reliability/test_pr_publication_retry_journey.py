@@ -13,7 +13,7 @@ import pytest
 from temporalio import workflow
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+from moonmind.workflows.temporal.activities.repo_activities import repo_create_pr_activity
 from moonmind.workflows.temporal.workflows.run import DEFAULT_ACTIVITY_RETRY_POLICY
 from tests.integration.reliability.test_unversioned_cutover_journey import connect
 

@@ -72,27 +72,6 @@ def build_default_registry(
 
     registry = ExternalAdapterRegistry()
 
-    # --- Jules ---
-    from moonmind.jules.runtime import is_jules_runtime_enabled
-
-    if is_jules_runtime_enabled(env=env):
-        import os
-
-        from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
-        from moonmind.workflows.adapters.jules_client import JulesClient
-
-        source = env if env is not None else dict(os.environ)
-        jules_url = str(source.get("JULES_API_URL", "")).strip() or "https://jules.googleapis.com/v1alpha"
-        jules_key = str(source.get("JULES_API_KEY", "")).strip()
-
-        def _jules_factory() -> AgentAdapter:
-            client = JulesClient(base_url=jules_url, api_key=jules_key)
-            return JulesAgentAdapter(client_factory=lambda: client)  # type: ignore[return-value]
-
-        registry.register("jules", _jules_factory)
-        registry.register("jules_api", _jules_factory)
-        logger.info("Registered Jules external adapter")
-
     # --- OpenClaw (streaming gateway) ---
     from moonmind.openclaw.settings import is_openclaw_enabled
 

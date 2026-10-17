@@ -945,18 +945,12 @@ async def test_paused_grant_records_identity_without_advancing_until_resume(
             resume_event.set()
         return True
 
-    async def operator_message(_payload):
-        return None
-
     class ParentHandle:
         async def signal(self, _name, args):
             parent.agent_run_progress(args[0])
             grant_sent.set()
 
     monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
-    monkeypatch.setattr(
-        parent, "_forward_operator_message_to_active_child", operator_message
-    )
     monkeypatch.setattr(
         workflow, "get_external_workflow_handle", lambda *args, **kwargs: ParentHandle()
     )
@@ -1044,11 +1038,7 @@ async def test_resume_drains_latest_progress_only_after_acknowledgement(
         assert parent._started_at is None
         return not (failed_first and attempts == 1)
 
-    async def no_op(_payload):
-        return None
-
     monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
-    monkeypatch.setattr(parent, "_forward_operator_message_to_active_child", no_op)
     if failed_first:
         with pytest.raises(RuntimeError, match="Failed to forward Resume"):
             await parent.resume()
@@ -1082,11 +1072,7 @@ async def test_resume_never_reopens_terminal_or_replaced_child(monkeypatch, chan
             parent._active_agent_child_workflow_id = "replacement-child"
         return True
 
-    async def no_op(_payload):
-        return None
-
     monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
-    monkeypatch.setattr(parent, "_forward_operator_message_to_active_child", no_op)
     await parent.resume()
     assert parent._state == STATE_AWAITING_SLOT
     assert parent._summary == "Paused before launch"

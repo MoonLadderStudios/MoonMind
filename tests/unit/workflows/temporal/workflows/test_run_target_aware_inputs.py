@@ -157,7 +157,7 @@ def _task_payload() -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "jules", "omnigent"])
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "openclaw", "omnigent"])
 @pytest.mark.parametrize("payload_key", ["workflow", "task"])
 @pytest.mark.parametrize("patched", [False, True])
 def test_prepared_inputs_survive_authored_and_retained_workflow_payloads(
@@ -191,7 +191,7 @@ def test_prepared_inputs_survive_authored_and_retained_workflow_payloads(
 def _build_request_for_step(
     step_id: str,
     *,
-    runtime_mode: str = "jules",
+    runtime_mode: str = "openclaw",
     model: str | None = None,
     effort: str | None = None,
 ):
@@ -563,7 +563,7 @@ def test_run_request_filters_prepared_context_to_current_step() -> None:
 
 
 def test_external_request_keeps_generated_context_out_of_adapter_input_refs() -> None:
-    request = _build_request_for_step("collect-evidence", runtime_mode="jules")
+    request = _build_request_for_step("collect-evidence", runtime_mode="openclaw")
 
     prepared_context = request.parameters["metadata"]["moonmind"]["preparedContext"]
 
