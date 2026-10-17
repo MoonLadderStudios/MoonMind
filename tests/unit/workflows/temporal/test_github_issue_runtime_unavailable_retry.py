@@ -521,6 +521,58 @@ def test_issue_claim_capacity_blocked_is_a_runtime_fault() -> None:
     )
 
 
+class _ChildFailure(Exception):
+    """Temporal's child-workflow wrapper shape: a generic message and a cause."""
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__("Child Workflow execution failed")
+        self.cause = cause
+
+
+def test_parent_reports_a_never_admitted_child_as_a_deferral() -> None:
+    """The AgentRun's capacity backoff is a deferral, not an implementation failure.
+
+    The parent keeps the failed close status that the recovery sweep reads as
+    evidence, so the reservation is released as ``runtime_unavailable`` with
+    the allowance intact; its own terminal record says no agent ran.
+    """
+    from moonmind.workflows.temporal.github_issue_claim_recovery import (
+        recovery_disposition_evidence,
+        runtime_provisioning_failure,
+    )
+    from moonmind.workflows.temporal.github_issue_lease_workflow import (
+        _capacity_blocked_error,
+    )
+    from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+
+    parent = MoonMindUserWorkflow()
+    parent._state = "executing"
+    failure = _ChildFailure(_capacity_blocked_error())
+
+    diagnostic = parent._record_failure_diagnostic(
+        failure,
+        step_id="implement",
+        source="child_workflow",
+        child_workflow_id="run-1:agent:implement",
+    )
+    assert diagnostic["reasonCode"] == "issue_claim_capacity_deferred"
+    assert diagnostic["agentExecutionLaunched"] is False
+    assert diagnostic["category"] == "system_error"
+    summary = parent._agent_runtime_failure_summary()
+    assert summary["reasonCode"] == "issue_claim_capacity_deferred"
+    assert summary["agentExecutionLaunched"] is False
+    assert summary["recommendedNextAction"] == "retry_after_capacity_cooldown"
+
+    # The same failure is what recovery reads from the closed parent.
+    assert runtime_provisioning_failure(f"{failure} {failure.cause}") is True
+    evidence = recovery_disposition_evidence(
+        agent_started=False, remaining=3, runtime_unavailable=True
+    )
+    assert evidence["runtimeUnavailable"] is True
+    assert evidence["retryRemaining"] == 3
+    assert choose_disposition(evidence)["reasonCode"] == "runtime_unavailable"
+
+
 def test_recovery_codes_stay_in_sync_with_the_failure_taxonomy() -> None:
     from moonmind.omnigent.harness_platform.failures import HarnessPlatformFailure
     from moonmind.workflows.temporal.github_issue_claim_recovery import (

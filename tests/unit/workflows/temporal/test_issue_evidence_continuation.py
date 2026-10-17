@@ -1,5 +1,6 @@
 """Delayed evidence resumes the existing publication owner, never a fresh issue."""
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -698,6 +699,13 @@ async def test_lost_issue_claim_stops_before_collecting_or_dispatching(
     owner._execute_kwargs_for_route = lambda _: {}
     renew = AsyncMock(return_value={"status": "lost"})
     monkeypatch.setattr(run_module.workflow, "execute_activity", renew)
+
+    async def wait_condition(fn, timeout=None):
+        # The bounded pre-launch observation waits on the renewal task.
+        while not fn():
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(run_module.workflow, "wait_condition", wait_condition)
     reader = AsyncMock()
     monkeypatch.setattr(continuation, "_activity", reader)
     verify = AsyncMock()

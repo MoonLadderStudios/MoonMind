@@ -15,9 +15,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from temporalio.exceptions import ApplicationError
 
 from api_service.db.models import GitHubIssueClaim
 from moonmind.workflows.temporal import github_issue_claim_lease as leases
+from moonmind.workflows.temporal import github_issue_lease_workflow as owner
 from moonmind.workflows.temporal import story_output_tools as tools
 from moonmind.workflows.temporal.activities.github_issue_finalization_activities import (
     finalize_failed_attempt,
@@ -170,6 +172,11 @@ async def test_lease_is_not_renewed_while_queued_behind_unavailable_capacity():
         async def sleep(seconds):
             clock["now"] += timedelta(seconds=seconds)
 
+        @staticmethod
+        async def wait_condition(fn, timeout=None):
+            while not fn():
+                await asyncio.sleep(0)
+
     async def renew(payload):
         renewals.append(clock["now"])
         return {
@@ -205,6 +212,290 @@ async def test_lease_is_not_renewed_while_queued_behind_unavailable_capacity():
     # being held to expiry.
     assert len(renewals) == 1
     assert clock["now"] - start <= timedelta(seconds=300)
+
+
+# -- One bounded renewal policy for every claimed caller ---------------------
+
+
+class _LeaseClock:
+    """Deterministic workflow time for the shared lease owner."""
+
+    def __init__(self, *, patched=None):
+        self.now_value = datetime(2026, 9, 14, tzinfo=UTC)
+        if patched is not None:
+            self.patched = patched
+
+    def now(self):
+        return self.now_value
+
+    async def sleep(self, seconds):
+        self.now_value += timedelta(seconds=seconds)
+        await asyncio.sleep(0)
+
+    async def wait_condition(self, fn, timeout=None):
+        while not fn():
+            await asyncio.sleep(0)
+
+
+class _StallingClock(_LeaseClock):
+    """Honors wait timeouts so a stalled observation spends workflow time."""
+
+    async def wait_condition(self, fn, timeout=None):
+        for _ in range(10):
+            if fn():
+                return
+            await asyncio.sleep(0)
+        if timeout is None:
+            await super().wait_condition(fn)
+            return
+        self.now_value += timedelta(seconds=timeout)
+        raise asyncio.TimeoutError
+
+
+LEASE = {"owner": "default/claimed", "attemptId": "att-claimed"}
+
+
+def _renewed(clock, **overrides):
+    return {
+        "status": "renewed",
+        "owner": LEASE["owner"],
+        "attemptId": LEASE["attemptId"],
+        "leaseExpiresAt": (clock.now_value + timedelta(minutes=30)).isoformat(),
+        **overrides,
+    }
+
+
+def _retry(_clock):
+    return {"status": "retry", "reasonCode": "claim_read_failure"}
+
+
+async def _run_owner(monkeypatch, clock, results, *, execute=None):
+    """Drive the production owner; each call takes the next scripted outcome.
+
+    The last outcome repeats, because the maintainer may observe once more
+    before the owner cancels it after a fast execution.
+    """
+    monkeypatch.setattr(owner, "workflow", clock)
+    calls = []
+
+    async def renew(payload):
+        assert payload is LEASE  # every observation keeps the same attempt
+        calls.append(clock.now_value)
+        outcome = results[min(len(calls), len(results)) - 1]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome(clock)
+
+    async def run_once():
+        return "accepted work"
+
+    result = await owner.execute_with_issue_lease(
+        lease=LEASE, execute=execute or run_once, renew=renew
+    )
+    return result, calls
+
+
+@pytest.mark.asyncio
+async def test_structured_retry_before_launch_is_retried_then_launches(monkeypatch):
+    """A normally returned retry is not a lost lease: the owner retries it."""
+    clock = _LeaseClock()
+    start = clock.now_value
+    launches = []
+
+    async def execute():
+        launches.append(clock.now_value)
+        return "accepted work"
+
+    results = [_retry, RuntimeError("activity timed out"), _renewed]
+    result, calls = await _run_owner(monkeypatch, clock, results, execute=execute)
+
+    assert result == "accepted work"
+    assert len(launches) == 1
+    # Launch waits for the confirmation; retries use the short cadence.
+    assert launches[0] == calls[2]
+    assert calls[1] - calls[0] == timedelta(seconds=owner.RETRY_SECONDS)
+    assert launches[0] - start <= timedelta(seconds=owner.RENEW_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_structured_retry_during_execution_keeps_the_same_attempt(monkeypatch):
+    """Retry then confirmation mid-run neither stops nor restarts accepted work."""
+    clock = _LeaseClock()
+    finished = asyncio.Event()
+    started = []
+
+    def confirm_and_finish(c):
+        finished.set()
+        return _renewed(c)
+
+    async def execute():
+        started.append(clock.now_value)
+        await finished.wait()
+        return "accepted work"
+
+    results = [_renewed, _retry, _retry, confirm_and_finish]
+    result, calls = await _run_owner(monkeypatch, clock, results, execute=execute)
+
+    assert result == "accepted work" and len(started) == 1
+    assert [b - a for a, b in zip(calls, calls[1:4])] == [
+        timedelta(seconds=owner.RENEW_SECONDS),
+        timedelta(seconds=owner.RETRY_SECONDS),
+        timedelta(seconds=owner.RETRY_SECONDS),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeated_retry_before_launch_is_bounded_and_never_launches(
+    monkeypatch,
+):
+    clock = _LeaseClock()
+    start = clock.now_value
+    launched = []
+
+    async def execute():
+        launched.append(True)
+
+    with pytest.raises(ApplicationError, match="unavailable before launch") as caught:
+        await _run_owner(monkeypatch, clock, [_retry], execute=execute)
+    assert caught.value.non_retryable and not launched
+    assert clock.now_value - start <= timedelta(seconds=owner.RENEW_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_pre_launch_observations_never_outlive_the_recovery_window(
+    monkeypatch,
+):
+    """Slow transient observations cannot start or confirm after the window."""
+    clock = _LeaseClock()
+    window_ends = clock.now_value + timedelta(seconds=owner.RENEW_SECONDS)
+    launched = []
+    observed = []
+
+    def slow_retry(c):
+        observed.append(c.now_value)
+        c.now_value += timedelta(seconds=10)  # Activity latency
+        return _retry(c)
+
+    async def execute():
+        launched.append(True)
+
+    with pytest.raises(ApplicationError, match="unavailable before launch"):
+        await _run_owner(monkeypatch, clock, [slow_retry], execute=execute)
+    assert not launched
+    assert observed and all(start < window_ends for start in observed)
+    assert clock.now_value <= window_ends
+
+
+@pytest.mark.asyncio
+async def test_stalled_pre_launch_observation_ends_with_the_window(monkeypatch):
+    """A stalled observation is bounded by the window, never confirmation."""
+    clock = _StallingClock()
+    monkeypatch.setattr(owner, "workflow", clock)
+    start = clock.now_value
+    launched = []
+    calls = []
+
+    async def renew(_payload):
+        calls.append(clock.now_value)
+        if len(calls) > 1:
+            await asyncio.Event().wait()  # never confirms
+        return _retry(clock)
+
+    async def execute():
+        launched.append(True)
+
+    with pytest.raises(ApplicationError, match="unavailable before launch"):
+        await asyncio.wait_for(
+            owner.execute_with_issue_lease(lease=LEASE, execute=execute, renew=renew),
+            timeout=5,
+        )
+    assert not launched and len(calls) == 2
+    assert clock.now_value == start + timedelta(seconds=owner.RENEW_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_repeated_retry_during_execution_stops_at_the_confirmed_deadline(
+    monkeypatch,
+):
+    """Unknown ownership is never renewal: writers stop at the stop margin."""
+    clock = _LeaseClock()
+    deadline = {}
+    preserved = []
+
+    def first(c):
+        result = _renewed(
+            c, leaseExpiresAt=(c.now_value + timedelta(minutes=10)).isoformat()
+        )
+        deadline["value"] = c.now_value + timedelta(minutes=10)
+        return result
+
+    async def execute():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # The runtime's ordered stop keeps the attempt's bytes.
+            preserved.append(clock.now_value)
+            raise
+
+    results = [first, _retry]
+    with pytest.raises(ApplicationError, match="lease expired") as caught:
+        await _run_owner(monkeypatch, clock, results, execute=execute)
+    assert caught.value.non_retryable
+    stop_at = deadline["value"] - timedelta(seconds=owner.STOP_MARGIN_SECONDS)
+    assert preserved == [stop_at]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "message"),
+    [
+        (lambda c: {"status": "lost", "reasonCode": "claim_lease_lost"}, "lease lost"),
+        (lambda c: _renewed(c, attemptId="att-successor"), "identity mismatch"),
+        (
+            RuntimeError("Activity task failed: claim_lease_owner_mismatch"),
+            "identity mismatch",
+        ),
+        (lambda c: _renewed(c, leaseExpiresAt=None), "deadline invalid"),
+        (lambda c: _renewed(c, leaseExpiresAt="soon"), "deadline invalid"),
+        (
+            lambda c: _renewed(c, leaseExpiresAt="2026-09-14T00:30:00"),
+            "deadline invalid",
+        ),
+    ],
+)
+@pytest.mark.parametrize("phase", ["before_launch", "during_execution"])
+async def test_confirmed_loss_mismatch_and_invalid_deadline_are_not_transient(
+    monkeypatch, outcome, message, phase
+):
+    clock = _LeaseClock()
+    launched = []
+    preserved = []
+
+    async def execute():
+        launched.append(True)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            preserved.append(True)
+            raise
+
+    # A transient observation first: confirmed failure still stops at once.
+    sequence = (
+        [_retry, outcome] if phase == "before_launch" else [_renewed, _retry, outcome]
+    )
+    with pytest.raises(ApplicationError, match=message) as caught:
+        await _run_owner(monkeypatch, clock, sequence, execute=execute)
+    assert caught.value.non_retryable
+    assert launched == preserved == ([] if phase == "before_launch" else [True])
+
+
+@pytest.mark.asyncio
+async def test_recorded_histories_keep_the_single_pre_launch_observation(monkeypatch):
+    """Unpatched histories replay their recorded command sequence."""
+    clock = _LeaseClock(patched=lambda _patch_id: False)
+    with pytest.raises(ApplicationError, match="unavailable before launch") as caught:
+        await _run_owner(monkeypatch, clock, [_retry, _renewed])
+    assert not caught.value.non_retryable
 
 
 # -- Relinquishment is independent of contention ----------------------------

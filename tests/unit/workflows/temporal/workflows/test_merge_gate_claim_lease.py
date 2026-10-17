@@ -45,6 +45,10 @@ async def test_merge_wait_renews_only_claimed_new_histories(
     async def sleep(_seconds):
         await asyncio.sleep(0)
 
+    async def wait_condition(fn, timeout=None):
+        while not fn():
+            await asyncio.sleep(0)
+
     async def merge(*_args, **_kwargs):
         if claimed and patched:
             renewed.clear()
@@ -53,6 +57,7 @@ async def test_merge_wait_renews_only_claimed_new_histories(
 
     monkeypatch.setattr(module.workflow, "execute_activity", renew)
     monkeypatch.setattr(module.workflow, "sleep", sleep)
+    monkeypatch.setattr(module.workflow, "wait_condition", wait_condition)
     monkeypatch.setattr(module.workflow, "execute_child_workflow", merge)
     await parent._maybe_start_merge_gate(
         parameters={"publishMode": "pr", "mergeAutomation": {"enabled": True}},
