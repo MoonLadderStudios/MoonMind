@@ -62,6 +62,19 @@ _RESERVED_INPUT_ATTACHMENT_PREFIXES = (
     "/.moonmind/inputs/",
 )
 _NORMALIZED_RESERVED_INPUT_ATTACHMENT_PREFIXES: frozenset[str]
+# Dashboard evidence collections, by link-type prefix. An artifact with any
+# report or observability link is listed there, not under "artifacts".
+COLLECTION_CATEGORY_LINK_PREFIXES: dict[str, tuple[str, ...]] = {
+    "artifacts": (),
+    "reports": ("report.",),
+    "observability": (
+        "output.logs",
+        "debug.",
+        "observability.",
+        "runtime.stderr",
+        "runtime.diagnostics",
+    ),
+}
 
 class TemporalArtifactError(Exception):
     """Base class for Temporal artifact service errors."""
@@ -1210,17 +1223,61 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())
 
-    async def list_collection_candidates(
-        self, *, offset: int, limit: int
+    async def list_collection_page(
+        self,
+        *,
+        category: str,
+        query: str | None,
+        offset: int,
+        limit: int,
     ) -> list[db_models.TemporalArtifact]:
-        """Return collection candidates; authorization is applied by the service."""
-        stmt: Select[tuple[db_models.TemporalArtifact]] = (
-            select(db_models.TemporalArtifact)
-            .where(db_models.TemporalArtifact.deleted_at.is_(None))
-            .order_by(
-                db_models.TemporalArtifact.created_at.desc(),
-                db_models.TemporalArtifact.artifact_id.desc(),
+        """Return one newest-first page of undeleted artifacts in a category.
+
+        Category and search are ``EXISTS`` tests over links, so an artifact
+        with several matching links appears once. Authorization is applied
+        by the service.
+        """
+        artifact = db_models.TemporalArtifact
+        link = db_models.TemporalArtifactLink
+
+        def has_link(*conditions: Any) -> Any:
+            return exists().where(link.artifact_id == artifact.artifact_id, *conditions)
+
+        def link_type_in(prefixes: tuple[str, ...]) -> Any:
+            return or_(
+                *(link.link_type.startswith(prefix, autoescape=True) for prefix in prefixes)
             )
+
+        if category == "artifacts":
+            category_filter = ~has_link(
+                link_type_in(
+                    COLLECTION_CATEGORY_LINK_PREFIXES["reports"]
+                    + COLLECTION_CATEGORY_LINK_PREFIXES["observability"]
+                )
+            )
+        else:
+            category_filter = has_link(
+                link_type_in(COLLECTION_CATEGORY_LINK_PREFIXES[category])
+            )
+        stmt: Select[tuple[db_models.TemporalArtifact]] = select(artifact).where(
+            artifact.deleted_at.is_(None), category_filter
+        )
+        text = (query or "").strip()
+        if text:
+            stmt = stmt.where(
+                or_(
+                    artifact.artifact_id.icontains(text, autoescape=True),
+                    artifact.content_type.icontains(text, autoescape=True),
+                    has_link(
+                        or_(
+                            link.label.icontains(text, autoescape=True),
+                            link.link_type.icontains(text, autoescape=True),
+                        )
+                    ),
+                )
+            )
+        stmt = (
+            stmt.order_by(artifact.created_at.desc(), artifact.artifact_id.desc())
             .offset(offset)
             .limit(limit)
         )
@@ -1771,6 +1828,20 @@ class TemporalArtifactService:
         except Exception:
             return False
 
+    @classmethod
+    def _reads_all_instance_artifacts(
+        cls, principal: str | None, admitted_principal: str | None
+    ) -> bool:
+        """Single-user (#4351): instance-operator visibility.
+
+        The admitted HTTP operator inspects any instance artifact without a
+        human-owner lookup; legacy owner strings stay as provenance. Machine
+        (workflow:/service:, bare system) readers remain execution-bound.
+        """
+        return cls._is_instance_operator_principal(
+            principal
+        ) or cls._is_instance_operator_principal(admitted_principal)
+
     @staticmethod
     def _workflow_id_for_principal(principal: str | None) -> str | None:
         """Return the workflow id for an execution-scoped principal."""
@@ -1841,14 +1912,7 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> None:
-        # Single-user (#4351): instance-operator visibility. The admitted
-        # HTTP operator inspects any instance artifact without a human-owner
-        # lookup; legacy owner strings stay as provenance. Machine
-        # (workflow:/service:, bare system) readers remain execution-bound
-        # below.
-        if self._is_instance_operator_principal(
-            principal
-        ) or self._is_instance_operator_principal(admitted_principal):
+        if self._reads_all_instance_artifacts(principal, admitted_principal):
             return
         # Execution-scoped workflow principals may read artifacts linked to
         # their own execution without an operator bypass.
@@ -2037,12 +2101,7 @@ class TemporalArtifactService:
         """
         if is_disabled_local_mode():
             return
-        # Single-user (#4351): instance-operator visibility, consistent with
-        # _assert_artifact_read_access. Never classifies machine principals
-        # as operators (see _is_instance_operator_principal).
-        if self._is_instance_operator_principal(
-            principal
-        ) or self._is_instance_operator_principal(admitted_principal):
+        if self._reads_all_instance_artifacts(principal, admitted_principal):
             return
         owner = self._owner_principal(artifact)
         candidates = {principal, *( [admitted_principal] if admitted_principal else [])}
@@ -3319,73 +3378,63 @@ class TemporalArtifactService:
         query: str | None,
         offset: int,
         limit: int,
-    ) -> tuple[list[tuple[db_models.TemporalArtifact, list[db_models.TemporalArtifactLink]]], int]:
-        """Return a compact, authorization-filtered artifact collection page."""
-        normalized_query = (query or "").strip().casefold()
-        matches: list[
-            tuple[
-                db_models.TemporalArtifact,
-                list[db_models.TemporalArtifactLink],
-            ]
-        ] = []
-        candidate_offset = 0
-        batch_size = max(100, limit * 2)
-        while True:
-            candidates = await self._repository.list_collection_candidates(
-                offset=candidate_offset, limit=batch_size
+    ) -> tuple[
+        list[tuple[db_models.TemporalArtifact, list[db_models.TemporalArtifactLink]]],
+        bool,
+    ]:
+        """Return one authorized collection page and whether another follows.
+
+        Category, search, ordering and paging run in SQL, so an operator page
+        costs one bounded query plus one link lookup. Other readers keep the
+        per-artifact read check and scan filtered candidates until the page
+        fills; there is no exact total because counting every match is the
+        unbounded part.
+        """
+        if self._reads_all_instance_artifacts(principal, admitted_principal):
+            page = await self._repository.list_collection_page(
+                category=category, query=query, offset=offset, limit=limit + 1
             )
-            if not candidates:
-                break
-            links_by_artifact: dict[str, list[db_models.TemporalArtifactLink]] = {
-                artifact.artifact_id: [] for artifact in candidates
-            }
-            for link in await self._repository.list_links_for_artifacts(
-                list(links_by_artifact)
-            ):
-                links_by_artifact[link.artifact_id].append(link)
-            for artifact in candidates:
-                try:
-                    await self._assert_artifact_read_access(
-                        artifact,
-                        principal=principal,
-                        admitted_principal=admitted_principal,
-                    )
-                except TemporalArtifactAuthorizationError:
-                    continue
-                links = links_by_artifact[artifact.artifact_id]
-                link_types = {link.link_type for link in links}
-                observability_prefixes = (
-                    "output.logs",
-                    "debug.",
-                    "observability.",
-                    "runtime.stderr",
-                    "runtime.diagnostics",
+        else:
+            page = []
+            authorized = 0
+            candidate_offset = 0
+            batch_size = max(100, 2 * (limit + 1))
+            while len(page) <= limit:
+                candidates = await self._repository.list_collection_page(
+                    category=category,
+                    query=query,
+                    offset=candidate_offset,
+                    limit=batch_size,
                 )
-                if category == "reports" and not any(
-                    value.startswith("report.") for value in link_types
-                ):
-                    continue
-                if category == "observability" and not any(
-                    value.startswith(observability_prefixes) for value in link_types
-                ):
-                    continue
-                if category == "artifacts" and any(
-                    value.startswith(("report.", *observability_prefixes))
-                    for value in link_types
-                ):
-                    continue
-                searchable = " ".join(
-                    [artifact.artifact_id, artifact.content_type or ""]
-                    + [link.label or "" for link in links]
-                    + list(link_types)
-                ).casefold()
-                if normalized_query and normalized_query not in searchable:
-                    continue
-                matches.append((artifact, links))
-            candidate_offset += len(candidates)
-            if len(candidates) < batch_size:
-                break
-        return matches[offset : offset + limit], len(matches)
+                for artifact in candidates:
+                    try:
+                        await self._assert_artifact_read_access(
+                            artifact,
+                            principal=principal,
+                            admitted_principal=admitted_principal,
+                        )
+                    except TemporalArtifactAuthorizationError:
+                        continue
+                    if authorized >= offset:
+                        page.append(artifact)
+                        if len(page) > limit:
+                            break
+                    authorized += 1
+                if len(candidates) < batch_size:
+                    break
+                candidate_offset += batch_size
+        has_more = len(page) > limit
+        page = page[:limit]
+        links_by_artifact: dict[str, list[db_models.TemporalArtifactLink]] = {
+            artifact.artifact_id: [] for artifact in page
+        }
+        for link in await self._repository.list_links_for_artifacts(
+            list(links_by_artifact)
+        ):
+            links_by_artifact[link.artifact_id].append(link)
+        return [
+            (artifact, links_by_artifact[artifact.artifact_id]) for artifact in page
+        ], has_more
 
     async def presign_download(
         self,

@@ -5437,10 +5437,10 @@ export interface components {
             /** Items */
             items?: components["schemas"]["ArtifactCollectionRowModel"][];
             /**
-             * Total
-             * @default 0
+             * Has More
+             * @default false
              */
-            total: number;
+            has_more: boolean;
             /**
              * Offset
              * @default 0
@@ -12777,6 +12777,27 @@ export interface components {
         RemediationCollectionResponseModel: {
             /** Items */
             items: components["schemas"]["RemediationCollectionItemModel"][];
+            /**
+             * Unavailablecount
+             * @default 0
+             */
+            unavailableCount: number;
+            /** Unavailableitems */
+            unavailableItems?: components["schemas"]["RemediationCollectionUnavailableItemModel"][];
+        };
+        /**
+         * RemediationCollectionUnavailableItemModel
+         * @description A link that could not be loaded; compact, without raw error text.
+         */
+        RemediationCollectionUnavailableItemModel: {
+            /** Remediationworkflowid */
+            remediationWorkflowId: string;
+            /** Targetworkflowid */
+            targetWorkflowId: string;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
         };
         /** RemediationLifecycleArtifactModel */
         RemediationLifecycleArtifactModel: {

@@ -52,6 +52,11 @@ export function isBrokenReferenceStatus(status: string | undefined): boolean {
   return Boolean(status) && _BROKEN_REFERENCE_STATUSES.has(String(status));
 }
 
+// Slugs are free-form, so `/`, `?`, `#` and spaces must not reshape the URL.
+function secretPath(slug: string): string {
+  return `/api/v1/secrets/${encodeURIComponent(slug)}`;
+}
+
 export function SecretManager({
   secrets,
   onNotice,
@@ -121,7 +126,7 @@ export function SecretManager({
       slug: string;
       plaintext: string;
     }) => {
-      const response = await fetch(`/api/v1/secrets/${nextSlug}`, {
+      const response = await fetch(secretPath(nextSlug), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plaintext: nextPlaintext }),
@@ -148,7 +153,7 @@ export function SecretManager({
       slug: string;
       plaintext: string;
     }) => {
-      const response = await fetch(`/api/v1/secrets/${nextSlug}/rotate`, {
+      const response = await fetch(`${secretPath(nextSlug)}/rotate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plaintext: nextPlaintext }),
@@ -169,7 +174,7 @@ export function SecretManager({
 
   const deleteOp = useMutation({
     mutationFn: async (targetSlug: string) => {
-      const response = await fetch(`/api/v1/secrets/${targetSlug}`, { method: 'DELETE' });
+      const response = await fetch(secretPath(targetSlug), { method: 'DELETE' });
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => ({}));
         throw new Error(errorPayload.detail || 'Failed to delete secret');
@@ -190,7 +195,7 @@ export function SecretManager({
       slug: string;
       status: 'active' | 'disabled';
     }) => {
-      const response = await fetch(`/api/v1/secrets/${nextSlug}/status`, {
+      const response = await fetch(`${secretPath(nextSlug)}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
@@ -276,7 +281,7 @@ export function SecretManager({
       return next;
     });
     try {
-      const response = await fetch(`/api/v1/secrets/${encodeURIComponent(targetSlug)}/usage`);
+      const response = await fetch(`${secretPath(targetSlug)}/usage`);
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => ({}));
         throw new Error(errorPayload.detail || 'Failed to load secret usage');

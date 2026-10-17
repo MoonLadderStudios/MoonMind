@@ -22,7 +22,7 @@ type CollectionRow = {
 type CollectionResponse = {
   category: Category;
   items: CollectionRow[];
-  total: number;
+  has_more: boolean;
   offset: number;
   limit: number;
   refreshed_at: string;
@@ -91,7 +91,7 @@ function EvidenceSection({ category, apiBase }: { category: Category; apiBase: s
             <td data-label="Actions"><a href={row.download_url}>Download</a></td>
           </tr>)}</tbody></table></div>
       ) : null}
-      {result.data ? <footer className="evidence-collection__pagination"><span>{result.data.total} total · refreshed <time dateTime={result.data.refreshed_at}>{new Date(result.data.refreshed_at).toLocaleTimeString()}</time></span><div><button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button><button type="button" disabled={offset + limit >= result.data.total} onClick={() => setPage(page + 1)}>Next</button></div></footer> : null}
+      {result.data ? <footer className="evidence-collection__pagination"><span>{result.data.items.length ? `Showing ${offset + 1}–${offset + result.data.items.length}` : `Page ${page}`} · refreshed <time dateTime={result.data.refreshed_at}>{new Date(result.data.refreshed_at).toLocaleTimeString()}</time></span><div><button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button><button type="button" disabled={!result.data.has_more} onClick={() => setPage(page + 1)}>Next</button></div></footer> : null}
     </section>
   );
 }

@@ -17,6 +17,14 @@ from moonmind.omnigent.harness_platform.stores import (
     DbExecutionPlanStore,
     DbRuntimeBindingStore,
 )
+from moonmind.omnigent.provider_leases import AcquiredProviderLease
+from moonmind.omnigent.runtime_bindings import (
+    DbRuntimeBindingStore as StableRuntimeBindingStore,
+)
+from moonmind.provider_profiles.lease_client import (
+    CredentialLease,
+    CredentialLeasePurpose,
+)
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from tests.unit.omnigent.test_bridge_store import _request
 from tests.unit.omnigent.test_generic_plane_n_way_concurrency import (
@@ -189,3 +197,123 @@ async def test_plan_backed_chat_denies_replaced_execution_acquisition(store):
 
     assert resolution.read_only is True
     assert resolution.capabilities == {}
+
+
+def _generic_host_leases(shape: str) -> dict:
+    """Stable (v2) provider leases, as the generic-host realizer persists them."""
+
+    acquired = AcquiredProviderLease(
+        slot="primary-model",
+        provider_profile_ref=ZEN_PROFILE,
+        capacity_scope_ref="opencode-zen:contributor-free",
+        provider_lease_ref="provider-lease:generic-step",
+        credential_generation=3,
+        lease=CredentialLease(
+            profile_id=ZEN_PROFILE,
+            runtime_id="opencode",
+            lease_id="lease-generic-step",
+            owner_id="agent-run-generic-step",
+            purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+            fencing_generation=7,
+        ),
+        owned_by_workflow=True,
+    )
+    lease = {
+        **acquired.runtime_binding_value(
+            credential_runtime_ref="credential-runtime:generic-step"
+        ),
+        "materializerRef": "opencode-zen-api-key@1",
+    }
+    if shape == "historical":
+        # Rows written before workflow-owned capacity and fenced grants.
+        lease.pop("leaseOwnerIsWorkflow")
+        lease.pop("leaseFencingGeneration")
+    return {"primary-model": lease}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["current", "historical"])
+async def test_generic_host_binding_resolves_chat_read_only(store, shape):
+    """A stable (v2) binding shares the table but is not harness authority.
+
+    Chat finds runtime authority by the session's host lease. A generic-host
+    session's lease belongs to a stable binding, which records no chat or
+    runner authority, so the session resolves read-only instead of failing
+    to parse that row as a harness binding.
+    """
+
+    request = _request("generic-step", with_step=True)
+    plan = _zen_plan("generic-chat")
+    await DbExecutionPlanStore(store._session_factory).persist(plan)
+    request.omnigent_execution_plan = OmnigentExecutionPlanBinding(
+        planRef=plan.planRef,
+        planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+        planArtifactRef="artifact:generic-plan",
+        taskInputSnapshotRef="artifact:generic-request",
+        taskInputSnapshotDigest="sha256:" + "1" * 64,
+    )
+    stable = StableRuntimeBindingStore(store._session_factory)
+    leases = _generic_host_leases(shape)
+    binding = await stable.create_initial(
+        execution_plan_ref=plan.planRef,
+        idempotency_key=request.idempotency_key,
+        provider_leases=leases,
+    )
+    binding = await stable.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        updates={
+            "hostBindingRef": "host-binding:generic-step",
+            "hostLeaseRef": "host-lease:generic-step",
+            "hostLeaseGeneration": 1,
+            "omnigentHostId": "host-generic-step",
+            "omnigentSessionId": "session-generic-step",
+            "attestationRefs": {"modelOptionAttestationRef": "artifact:model"},
+            "cleanupAuthorityRefs": [{"kind": "host", "ref": "host-lease:generic-step"}],
+        },
+    )
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="default",
+        provider_profile_id=ZEN_PROFILE,
+        provider_lease_id="provider-lease:generic-step",
+        credential_generation=3,
+        host_binding_ref="host-binding:generic-step",
+        host_lease_ref="host-lease:generic-step",
+        omnigent_host_id="host-generic-step",
+        effective_launch_snapshot={
+            "executionPlanRef": plan.planRef,
+            "runtimeBindingRef": binding.bindingId,
+            "launchPolicyRef": plan.payload.launchPolicyRef,
+            "capabilities": {"sendMessage": True, "viewTranscript": True},
+        },
+    )
+    await store.attach_session(request.idempotency_key, "session-generic-step")
+    row = await store.record_session_created(
+        request.idempotency_key,
+        session_id="session-generic-step",
+        session_status="running",
+        capabilities={"sendMessage": True, "viewTranscript": True},
+    )
+
+    resolution = await store.resolve_chat_binding(workflow_id=row.moonmind_workflow_id)
+
+    assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
+    assert resolution.chat_binding_id == row.chat_binding_id
+    assert resolution.read_only is True
+    assert resolution.capabilities == {}
+    # The stable aggregate still verifies through its own store, with its
+    # lease ownership, fencing and cleanup handles intact.
+    reloaded = await stable.get(binding.bindingId)
+    assert reloaded == binding
+    assert reloaded.providerLeases == leases
+    assert reloaded.cleanupAuthorityRefs == (
+        {"kind": "host", "ref": "host-lease:generic-step"},
+    )
+    assert (
+        await DbRuntimeBindingStore(store._session_factory).get_state_for_host_lease(
+            "host-lease:generic-step"
+        )
+        is None
+    )

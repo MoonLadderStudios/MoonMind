@@ -1,12 +1,18 @@
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from api_service.api.routers.secrets import router
 from api_service.db.base import get_async_session
+from api_service.db.models import Base, SecretStatus
 from api_service.auth_providers import get_current_user
+from api_service.services.secrets import SecretsService
 
 app = FastAPI()
 app.include_router(router, prefix="/api/v1/secrets")
@@ -314,3 +320,89 @@ def test_update_secret_status_allows_re_enable_with_disable_permission(
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "active"
     mock_secrets_service.set_status.assert_awaited()
+
+
+# -- route through the real SecretsService ----------------------------------
+#
+# The tests above mock SecretsService, so they cannot catch the route passing
+# an argument the service does not accept. These drive the real router into
+# the real service on a fresh SQLite database.
+
+real_app = FastAPI()
+real_app.include_router(router, prefix="/api/v1/secrets")
+real_app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
+
+
+@pytest_asyncio.fixture
+async def real_secrets(tmp_path):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/secrets-route.db", future=True
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def _session():
+        async with maker() as session:
+            yield session
+
+    real_app.dependency_overrides[get_async_session] = _session
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=real_app), base_url="http://test"
+        ) as http:
+            yield maker, http
+    finally:
+        real_app.dependency_overrides.pop(get_async_session, None)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_put_secret_edits_value_through_real_service(real_secrets):
+    maker, http = real_secrets
+    async with maker() as db:
+        await SecretsService.create_secret(db, "edit-me", "old-value")
+
+    resp = await http.put("/api/v1/secrets/edit-me", json={"plaintext": "new-value"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["credentialRevision"] == 2
+    assert body["policyRevision"] == 1
+    assert "new-value" not in resp.text
+    async with maker() as db:
+        assert await SecretsService.get_secret(db, "edit-me") == "new-value"
+
+
+@pytest.mark.asyncio
+async def test_put_secret_is_fenced_on_expected_policy_revision(real_secrets):
+    maker, http = real_secrets
+    async with maker() as db:
+        await SecretsService.create_secret(db, "fenced", "old-value")
+    # A disable/re-enable cycle advances the policy revision to 3.
+    async with maker() as db:
+        await SecretsService.set_status(db, "fenced", SecretStatus.DISABLED)
+    async with maker() as db:
+        await SecretsService.set_status(db, "fenced", SecretStatus.ACTIVE)
+
+    stale = await http.put(
+        "/api/v1/secrets/fenced",
+        json={"plaintext": "stale-edit", "expectedPolicyRevision": 1},
+    )
+    assert stale.status_code == 409, stale.text
+    assert "policy revision" in stale.json()["detail"]
+    async with maker() as db:
+        assert await SecretsService.get_secret_with_revision(db, "fenced") == {
+            "value": "old-value",
+            "credential_revision": 1,
+            "policy_revision": 3,
+        }
+
+    current = await http.put(
+        "/api/v1/secrets/fenced",
+        json={"plaintext": "fresh-edit", "expectedPolicyRevision": 3},
+    )
+    assert current.status_code == 200, current.text
+    assert current.json()["credentialRevision"] == 2
+    async with maker() as db:
+        assert await SecretsService.get_secret(db, "fenced") == "fresh-edit"
