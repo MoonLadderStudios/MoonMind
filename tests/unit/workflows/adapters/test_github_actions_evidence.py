@@ -568,8 +568,6 @@ async def test_mark_ready_revalidates_the_published_base(
     def respond(request):
         nonlocal base
         if request.method == "POST":
-            import json
-
             if "timelineItems" in json.loads(request.content)["query"]:
                 return httpx.Response(200, json={"data": {"node": {
                     "id": "PR_7", "timelineItems": {"nodes": []},
