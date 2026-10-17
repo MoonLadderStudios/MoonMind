@@ -145,6 +145,7 @@ export function WorkflowNativeChatRoute({
           <NativeChatUnavailableState
             status={status}
             unavailableReason={binding?.unavailableReason ?? null}
+            errorStatus={errorStatus}
             onRetry={() => {
               setFrameSignal(null);
               void query.refetch();

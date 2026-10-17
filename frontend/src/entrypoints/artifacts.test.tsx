@@ -30,7 +30,7 @@ describe('ArtifactsPage', () => {
             run_id: 'run-1',
             download_url: '/api/artifacts/art_SAFE/download',
           }] : [],
-          total: category === 'artifacts' ? 1 : 0,
+          has_more: false,
           offset: 0,
           limit: 25,
           refreshed_at: '2026-07-10T12:01:00Z',
@@ -48,6 +48,57 @@ describe('ArtifactsPage', () => {
     expect(await screen.findByText('art_SAFE')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Final output' }).getAttribute('href')).toBe('/workflows/mm%3Aworkflow-1');
     expect(window.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('pages with the server has_more flag instead of an exact total', async () => {
+    const row = (id: string) => ({
+      artifact_id: id,
+      created_at: '2026-07-10T12:00:00Z',
+      content_type: 'text/plain',
+      size_bytes: 12,
+      status: 'complete',
+      retention_class: 'standard',
+      link_type: 'output.primary',
+      label: `Output ${id}`,
+      workflow_id: null,
+      run_id: null,
+      download_url: `/api/artifacts/${id}/download`,
+    });
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input), window.location.origin);
+      const offset = Number(url.searchParams.get('offset'));
+      return {
+        ok: true,
+        json: async () => ({
+          category: 'observability',
+          items: offset === 0
+            ? Array.from({ length: 25 }, (_value, index) => row(`art_P1_${index}`))
+            : [row('art_P2_0')],
+          has_more: offset === 0,
+          offset,
+          limit: 25,
+          refreshed_at: '2026-07-10T12:01:00Z',
+        }),
+      } as Response;
+    });
+
+    renderWithClient(
+      <MemoryRouter initialEntries={['/observability']}>
+        <ArtifactsPage payload={{ page: 'artifacts', apiBase: '/api', features: { artifacts: true } }} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('art_P1_0')).toBeTruthy();
+    expect(screen.getByText(/Showing 1–25/)).toBeTruthy();
+    const next = screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement;
+    expect(next.disabled).toBe(false);
+    fireEvent.click(next);
+
+    expect(await screen.findByText('art_P2_0')).toBeTruthy();
+    expect(screen.getByText(/Showing 26–26/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(fetchSpy.mock.calls.map(([input]) => new URL(String(input), window.location.origin).searchParams.get('offset')))
+      .toEqual(['0', '25']);
   });
 
   it('hides collection data when the capability is disabled', () => {
@@ -69,7 +120,7 @@ describe('ArtifactsPage', () => {
         json: async () => ({
           category: url.searchParams.get('category'),
           items: [],
-          total: 0,
+          has_more: false,
           offset: 0,
           limit: 25,
           refreshed_at: '2026-07-10T12:01:00Z',
@@ -100,7 +151,7 @@ describe('ArtifactsPage', () => {
       }
       if (url.pathname.startsWith('/api/v1/provider-profiles')) return json([]);
       const category = url.searchParams.get('category') || 'artifacts';
-      return json({ category, items: [], total: 0, offset: 0, limit: 25, refreshed_at: '2026-07-10T12:01:00Z' });
+      return json({ category, items: [], has_more: false, offset: 0, limit: 25, refreshed_at: '2026-07-10T12:01:00Z' });
     });
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
     const filter = await screen.findByLabelText('Filter artifacts');

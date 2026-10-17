@@ -791,7 +791,7 @@ async def test_bare_service_denied_across_data_plane_with_admitted_scope(
                     await make_call()
 
             # Listing surfaces filter instead of leaking the row.
-            listed, _total = await service.list_authorized_collection(
+            listed, _has_more = await service.list_authorized_collection(
                 principal=bare, category="artifacts", query=None, offset=0, limit=50
             )
             assert artifact.artifact_id not in {
@@ -840,7 +840,7 @@ async def test_bare_service_denied_across_data_plane_with_admitted_scope(
                 admitted_principal="owner-1",
             )
             assert preview.artifact_id != artifact.artifact_id
-            listed_admitted, _total = await service.list_authorized_collection(
+            listed_admitted, _has_more = await service.list_authorized_collection(
                 principal=bare,
                 admitted_principal="owner-1",
                 category="artifacts",

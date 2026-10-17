@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  chatBindingPollDelay,
   deriveNativeChatStatus,
   fullPageChatHref,
   isMountableNativeChatStatus,
@@ -104,7 +105,17 @@ describe('deriveNativeChatStatus', () => {
       deriveNativeChatStatus({ isLoading: false, binding: null, errorStatus: 409 }),
     ).toBe('ambiguous');
     expect(
+      deriveNativeChatStatus({ isLoading: false, binding: null, errorStatus: 500 }),
+    ).toBe('serverError');
+    expect(
       deriveNativeChatStatus({ isLoading: false, binding: null, errorStatus: 503 }),
+    ).toBe('serverError');
+    // Network failures and request timeouts never reached a server answer.
+    expect(
+      deriveNativeChatStatus({ isLoading: false, binding: null, errorStatus: 0 }),
+    ).toBe('unavailable');
+    expect(
+      deriveNativeChatStatus({ isLoading: false, binding: null, errorStatus: 408 }),
     ).toBe('unavailable');
     // Degraded provider input (unknown state) must not mount the native app.
     expect(
@@ -133,6 +144,7 @@ describe('isMountableNativeChatStatus', () => {
       'incompatible',
       'disconnected',
       'unavailable',
+      'serverError',
     ] as const) {
       expect(isMountableNativeChatStatus(status)).toBe(false);
     }
@@ -195,5 +207,23 @@ describe('nativeChatContextStatusLabel', () => {
     expect(nativeChatContextStatusLabel('readOnly')).toBe('Read-only');
     expect(nativeChatContextStatusLabel('terminal')).toMatch(/read-only/i);
     expect(nativeChatContextStatusLabel('disconnected')).toBe('Disconnected');
+  });
+});
+
+describe('chatBindingPollDelay', () => {
+  it('doubles per consecutive failure up to a cap and resets on success', () => {
+    expect([0, 1, 2, 3, 4, 9].map((failures) => chatBindingPollDelay(5000, failures))).toEqual([
+      5000, 10000, 20000, 40000, 60000, 60000,
+    ]);
+  });
+});
+
+describe('server error copy', () => {
+  it('names the HTTP status and offers a retry', () => {
+    const copy = nativeChatStateCopy('serverError', null, 502);
+    expect(copy.title).toBe('Chat service error');
+    expect(copy.description).toContain('HTTP 502');
+    expect(copy.canRetry).toBe(true);
+    expect(nativeChatContextStatusLabel('serverError')).toBe('Chat unavailable');
   });
 });

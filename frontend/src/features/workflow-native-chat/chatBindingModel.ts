@@ -32,7 +32,8 @@ export type NativeChatStatus =
   | 'ambiguous' // multiple active chat-capable sessions
   | 'incompatible' // native UI compatibility/version failure (client-detected)
   | 'disconnected' // scoped transport disconnected with durable fallback available
-  | 'unavailable'; // upstream/server unavailable
+  | 'serverError' // the binding request answered with a 5xx
+  | 'unavailable'; // network failure, timeout, or unexpected answer
 
 /** Statuses where the native Omnigent application should be mounted. */
 export const NATIVE_CHAT_MOUNTED_STATUSES: readonly NativeChatStatus[] = [
@@ -43,6 +44,25 @@ export const NATIVE_CHAT_MOUNTED_STATUSES: readonly NativeChatStatus[] = [
 
 export function isMountableNativeChatStatus(status: NativeChatStatus): boolean {
   return NATIVE_CHAT_MOUNTED_STATUSES.includes(status);
+}
+
+/** Longest wait between binding polls while requests keep failing. */
+export const MAX_CHAT_BINDING_POLL_INTERVAL_MS = 60_000;
+
+/**
+ * Delay before the next binding poll: the base interval, doubled for each
+ * consecutive failed request and capped, so a persistent server error is not
+ * hammered but polling never stops and a server fix recovers the panel.
+ */
+export function chatBindingPollDelay(
+  baseMs: number,
+  consecutiveFailures: number,
+  maxMs: number = MAX_CHAT_BINDING_POLL_INTERVAL_MS,
+): number {
+  if (consecutiveFailures <= 0) {
+    return baseMs;
+  }
+  return Math.min(Math.max(maxMs, baseMs), baseMs * 2 ** consecutiveFailures);
 }
 
 /**
@@ -67,7 +87,10 @@ export function deriveNativeChatStatus(input: {
     if (errorStatus === 409) {
       return 'ambiguous';
     }
-    // 5xx, network failures, and unexpected statuses are upstream unavailability.
+    if (errorStatus >= 500) {
+      return 'serverError';
+    }
+    // Network failures, timeouts, and unexpected statuses are unavailability.
     return 'unavailable';
   }
   if (!binding) {
@@ -157,6 +180,7 @@ export interface NativeChatStateCopy {
 export function nativeChatStateCopy(
   status: NativeChatStatus,
   unavailableReason?: string | null,
+  errorStatus?: number | null,
 ): NativeChatStateCopy {
   switch (status) {
     case 'loading':
@@ -230,6 +254,15 @@ export function nativeChatStateCopy(
         role: 'alert',
         canRetry: true,
       };
+    case 'serverError':
+      return {
+        title: 'Chat service error',
+        description: `The chat service returned a server error${
+          errorStatus ? ` (HTTP ${errorStatus})` : ''
+        }. MoonMind keeps checking, backing off to once a minute; retry now or open diagnostics for details.`,
+        role: 'alert',
+        canRetry: true,
+      };
     case 'unavailable':
     default:
       return {
@@ -262,6 +295,7 @@ export function nativeChatContextStatusLabel(
     case 'unauthorized':
     case 'notFound':
     case 'ambiguous':
+    case 'serverError':
       return 'Chat unavailable';
     default:
       return null;
