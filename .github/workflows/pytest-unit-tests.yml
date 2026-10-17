@@ -997,7 +997,7 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
-      - name: Qualify active journal transition and controller refresh and handoff
+      - name: Qualify active journal transition and host controller refresh
         # Real Docker consumers, PostgreSQL, artifact bytes and source-image
         # helper. Kill the owner after partial recreation, resume the same
         # operation, then run the pre-chunk reader/sweeper contract. A release
