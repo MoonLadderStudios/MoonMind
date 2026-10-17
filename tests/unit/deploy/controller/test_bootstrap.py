@@ -1571,3 +1571,56 @@ def test_failed_handoff_restores_the_previous_controller(
     )
     # The marker stops the restored controller from handing off again.
     assert store.load("ui-handoff")["controllerHandoff"]["attemptGroup"] == 1
+
+
+def test_bootstrap_update_rechecks_open_operations_inside_the_stack_lock(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    record = load("record")
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    acquire = lock_mod.StackLock.acquire
+
+    def submission_recorded_first(self):
+        # A submission records intent between the first check and exclusion.
+        record.OperationStore(tmp_path).begin(
+            stack="moonmind", desired_image="img", source_revision=""
+        )
+        return acquire(self)
+
+    monkeypatch.setattr(lock_mod.StackLock, "acquire", submission_recorded_first)
+    monkeypatch.setattr(
+        bootstrap, "_compose", lambda *args: pytest.fail("replaced a live owner")
+    )
+    monkeypatch.setattr(
+        bootstrap, "ensure_target_network", lambda network, project: None
+    )
+    with pytest.raises(bootstrap.ActiveOperationError):
+        bootstrap.main(["update", "--state-dir", str(tmp_path)], env={})
+
+
+def test_bootstrap_restore_never_replaces_a_controller_that_owns_the_stack(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    held_during_compose = []
+
+    def fake_compose(state_dir, *args):
+        held_during_compose.append(
+            lock_mod.StackLock(state_dir, "moonmind").probe()
+        )
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_compose", fake_compose)
+    monkeypatch.setattr(
+        bootstrap, "ensure_target_network", lambda network, project: None
+    )
+    with lock_mod.StackLock(tmp_path, "moonmind").acquire():
+        with pytest.raises(lock_mod.LockBusyError):
+            bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={})
+    assert held_during_compose == []
+    assert bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={}) == 0
+    assert held_during_compose and all(held_during_compose)
