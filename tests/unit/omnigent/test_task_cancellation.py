@@ -67,3 +67,28 @@ async def test_the_callers_own_cancellation_is_not_swallowed(monkeypatch) -> Non
         await asyncio.wait_for(caller, 5)
     # The helper is still stopped before the caller's cancellation surfaces.
     assert helper.done()
+
+
+@pytest.mark.asyncio
+async def test_without_repeat_a_helper_finishes_its_cancellation_cleanup(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(task_cancellation, "CANCEL_REPEAT_SECONDS", 0.05)
+    cleaned: list[str] = []
+
+    async def cleaning() -> None:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            # Owned cleanup outlasts the repeat interval.
+            await asyncio.sleep(0.3)
+            cleaned.append("captured")
+            raise
+
+    helper = asyncio.create_task(cleaning())
+    await asyncio.sleep(0)
+
+    await asyncio.wait_for(cancel_and_wait(helper, repeat=False), 5)
+
+    assert cleaned == ["captured"]
+    assert helper.cancelled()

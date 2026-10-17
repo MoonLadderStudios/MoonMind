@@ -1998,7 +1998,7 @@ class GenericOmnigentHostRealizer:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if heartbeat_task in done and not driver_task.done():
-                await cancel_and_wait(driver_task)
+                await cancel_and_wait(driver_task, repeat=False)
                 await heartbeat_task
                 raise HarnessPlatformError(
                     "generic host heartbeat stopped before session completion",
@@ -2010,9 +2010,13 @@ class GenericOmnigentHostRealizer:
             return result
         finally:
             stop.set()
-            await cancel_and_wait(
-                driver_task, heartbeat_task, renewal_task, github_renewal_task
-            )
+            from moonmind.omnigent.activity_ownership import delivery_was_revoked
+
+            # A revoked delivery only closes its transports, so a cancel the
+            # HTTP stack absorbed is repeated. Any other cancel lets the
+            # driver finish its owned stop, capture and delete.
+            await cancel_and_wait(driver_task, repeat=delivery_was_revoked())
+            await cancel_and_wait(heartbeat_task, renewal_task, github_renewal_task)
 
     async def _inspect_terminal(self, request):
         return await self._workspace_publisher.inspect_request_terminal(request)
