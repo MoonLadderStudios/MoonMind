@@ -49,6 +49,57 @@ describe('Remediations', () => {
     expect(screen.getAllByText('No remediations match the current filter.').length).toBeGreaterThanOrEqual(1);
   });
 
+  it('reports remediations that could not be loaded alongside the loaded rows', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [{
+          remediationWorkflowId: 'mm:repair-1', title: 'Repair checkout', status: 'executing',
+          attentionRequired: false, targetWorkflowId: 'mm:source-1', targetTitle: 'Checkout release',
+          authorityMode: 'observe_only', mode: 'snapshot', createdAt: '2026-07-10T00:00:00Z', updatedAt: '2026-07-10T01:00:00Z',
+        }],
+        unavailableCount: 2,
+        unavailableItems: [{
+          remediationWorkflowId: 'mm:repair-broken', targetWorkflowId: 'mm:source-2',
+          code: 'remediation_item_unavailable', message: 'IntegrityError while loading this remediation or its source workflow.',
+        }],
+      }),
+    } as Response);
+    renderPage();
+
+    const notice = (await screen.findByText('2 remediations could not be loaded.')).closest('[role="status"]');
+    expect(notice).toBeTruthy();
+    expect(notice?.textContent).toContain('mm:repair-broken');
+    expect(notice?.textContent).toContain('mm:source-2');
+    expect(notice?.textContent).toContain('IntegrityError while loading');
+    expect(notice?.textContent).toContain('1 more not listed.');
+    expect(screen.getAllByRole('link', { name: 'Repair checkout remediation workflow' }).length).toBeGreaterThan(0);
+  });
+
+  it('shows no partial-results notice when every remediation loaded', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], unavailableCount: 0, unavailableItems: [] }),
+    } as Response);
+    renderPage();
+
+    expect((await screen.findAllByText('No remediation workflows are visible.')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/could not be loaded/)).toBeNull();
+  });
+
+  it('includes the server error detail when the inventory request fails', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ detail: { code: 'temporal_unavailable', message: 'Temporal is not reachable.' } }),
+    } as Response);
+    renderPage();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Remediation inventory request failed: 503');
+    expect(alert.textContent).toContain('Temporal is not reachable.');
+  });
+
   it('preserves the route shell and offers retry for unauthorized reads', async () => {
     vi.spyOn(window, 'fetch').mockResolvedValue({ ok: false, status: 403 } as Response);
     renderPage();
