@@ -113,7 +113,7 @@ A broken application health check is diagnostic input, not a prerequisite, becau
 
 ### 10.2 Acquire deployment lock
 
-Host and UI submissions share one per-stack local lock; a second request reattaches to the existing operation or waits within a bound. Ownership is not transferred merely because a PID or timestamp looks old in another container namespace. Controller replacement holds the same lock, so controller lifecycle and deployment mutation share one exclusion boundary. Separate deployment projects have independent locks.
+Host and UI submissions share one per-stack kernel lock, never inferred from a PID or timestamp. A submission takes it before recording intent, so a second request reattaches to the open operation or is refused without a record. Controller update and restore check open work and recreate the controller only under it. Separate deployment projects have independent locks.
 
 Staging/apply failures retry automatically up to the bounded per-group attempt budget, so a transient failure ends in `failed` or a later `succeeded` instead of staying open. Restart recovery reconciles before applying: only the newest open operation per stack survives, and an open operation older than a confirmed installation for the same stack is superseded rather than replayed over confirmed intent. Resubmitting the same operation identity, including after a lost response, observes that operation's terminal result instead of repeating it. Any other request is new work even when its image is already installed: `latest` names whatever was published last, so each update to it pulls again.
 
@@ -123,7 +123,7 @@ The controller records enough observed configuration, selected services, concret
 
 ### 10.4 Pull images and check runner integrity
 
-The controller verifies the concrete artifact being executed and runs independently of the services it replaces; a lost launch acknowledgment is resolved by checking the owned process/container before another launch. Native pull and content-addressed caching are reused. Equal source revisions between caller, controller, worker, and managed runtime are not required, because a different SHA is not by itself an incompatible interface.
+The controller verifies the concrete artifact being executed and runs independently of the services it replaces; a lost launch acknowledgment is resolved by checking the owned process/container before another launch. Native pull and content-addressed caching are reused.
 
 Host image-selection failures retain redacted Docker diagnostics and stop before recording a release submission. A read-only filesystem or exhausted disk is reported as a Docker storage failure with host/data-disk space recovery guidance, not an uncaught traceback or a claim that a release job was created. On Docker Desktop, recovery means freeing backing host space before restarting Desktop; resetting its data disk is not part of updater recovery.
 
@@ -190,11 +190,11 @@ The deployment-control worker is a submission/observation adapter where availabl
 
 ### 11.2 Standalone controller project
 
-The controller's restart policy, durable state directory, and direct Docker socket let an update replace its submitting worker and survive target-project shutdown. Ownership, target, progress, deadline, and attempt budget survive restarts; on restart the controller inspects Docker and converges only unfinished work toward the same target.
+The controller's restart policy, durable state directory, and direct Docker socket let an update replace its submitting worker and survive target-project shutdown. Ownership, target, progress, deadline, and attempt budget survive restarts; on restart the controller resumes unfinished work under the stack lock once its earlier one-offs have exited.
 
 The host entrypoint derives the endpoint port from the controller's identity. The network is named `<compose project>_deployment-controller-network` unless `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides it, so independent deployments on one host never share the alias. A submission that names no Compose target uses the target the controller derives: the project recorded at bootstrap (else `COMPOSE_PROJECT_NAME` from `.env`), `COMPOSE_FILE` from `.env` (else `docker-compose.yaml` plus its override), and the services that selection renders minus the Docker transport substrate.
 
-**Installation.** When no controller secret exists, or bootstrap left a secret but no reachable endpoint, operation record, or container, the host entrypoint installs the controller with `deploy/controller/bootstrap.py` from the selected release image, running it from that same application image (no separate controller image is published), and submits through it. A legacy writer still active from an earlier release is detected by the controller's cutover check, which defers instead of competing. `--dry-run` installs nothing.
+**Installation.** When no controller secret exists, or bootstrap left a secret but no reachable endpoint, operation record, or container, the host entrypoint installs the controller with `deploy/controller/bootstrap.py` from the selected release image, running it from that same application image (no separate controller image is published), and submits through it. A still-active legacy writer defers the controller; an idle controller from the retired shell installer is stopped, keeping its volume and secret. `--dry-run` installs nothing.
 
 **Refresh.** The default host command refreshes an idle controller from the selected release before submission. It extracts the stdlib bootstrap from the staged target, falling back to an observed installed application image when a rollback target lacks that lifecycle. Bootstrap runs in a temporary trusted image container with the Docker socket and writable controller state on the private controller network, so root-owned records and locks stay readable without host privilege changes; it needs no healthy API or worker and leaves the host checkout, Compose project, mounts, network, and credentials in place. If the identity file is lost, bootstrap first recovers it from the Compose installation without replacing the controller. Replacement holds the stack lock; a capable controller with open work keeps ownership, and an explicitly selected controller, endpoint, or secret keeps its release choice.
 
@@ -236,7 +236,7 @@ CI qualifies a candidate implementation; deployment observations identify the ar
 
 CI journeys for this boundary:
 
-- `controller-journey` runs `tests/integration/host_update/test_journal_transition.py` (journal compaction with real PostgreSQL and artifact bytes, controller interruption after partial recreation, resume, and rollback to an image lacking the helper) and `tests/integration/host_update/test_controller_refresh.py` (host refresh through a temporary bootstrap container, identity recovery, and open-operation protection).
+- `controller-journey` runs `tests/integration/host_update/test_journal_transition.py` (journal compaction with real PostgreSQL and artifact bytes, controller interruption after partial recreation, resume, and rollback to an image lacking the helper), `tests/integration/host_update/test_controller_refresh.py` (host refresh through a temporary bootstrap container, identity recovery, and open-operation protection), and `test_controller_compose_journeys.py` (disposable-stack repair without the application: pull failure, registry loss after staging, restart, init-db failure).
 - The reliability shards run `tests/integration/reliability/test_interrupted_step_replacement_journey.py` on real Temporal and PostgreSQL: the update interrupts one agent step, and only that step reruns on a new host restored from its archived workspace.
 - The `omnigent-exact-artifact` credential-free recovery row runs that journey on the pinned Omnigent server and host images with the production host runtime and host-loss predicate, using a controlled provider instead of a model turn.
 

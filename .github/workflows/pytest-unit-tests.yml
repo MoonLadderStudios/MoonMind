@@ -1002,9 +1002,11 @@ jobs:
         # helper. Kill the owner after partial recreation, resume the same
         # operation, then run the pre-chunk reader/sweeper contract. A release
         # one-off hands an open operation to the candidate's controller, and a
-        # replacement that cannot run is reverted.
+        # replacement that cannot run is reverted. Disposable Compose repairs
+        # run through the controller with the application absent: pull failure,
+        # registry loss after staging, restart recovery and init-db gating.
         if: matrix.suite == 'controller-journey'
-        timeout-minutes: 7
+        timeout-minutes: 10
         env:
           MOONMIND_TEST_JOURNAL_TRANSITION: "1"
           MOONMIND_TEST_JOURNAL_APP_IMAGE: moonmind-first-run-3938:ci
@@ -1018,7 +1020,8 @@ jobs:
             --confcutdir=tests/integration/host_update \
             tests/integration/host_update/test_journal_transition.py \
             tests/integration/host_update/test_controller_refresh.py \
-            tests/integration/host_update/test_controller_handoff.py -q
+            tests/integration/host_update/test_controller_handoff.py \
+            tests/integration/host_update/test_controller_compose_journeys.py -q
       - name: Upload redacted journey startup timings and resource footprints
         if: always() && endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
