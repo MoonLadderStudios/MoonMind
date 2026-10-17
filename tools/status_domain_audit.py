@@ -70,9 +70,7 @@ TEMPORAL_CLOSE_STATUSES = frozenset(
 LEGACY_NO_COMMIT_TOKENS = frozenset({"no_changes"})
 
 PROVIDER_STATUS_NORMALIZER_PATHS = (
-    "moonmind/jules/",
     "moonmind/workflows/adapters/",
-    "tests/unit/jules/",
     "tests/unit/workflows/adapters/",
 )
 

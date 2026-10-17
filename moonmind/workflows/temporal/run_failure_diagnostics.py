@@ -131,7 +131,7 @@ class RunFailureDiagnostics:
             "SlotAcquisitionTimeout",
             "RATE_LIMITED",
         }
-        system_error_types = {"WORKER_CAPABILITY_UNAVAILABLE"}
+        system_error_types = {"WORKER_CAPABILITY_UNAVAILABLE", "CapacityBlocked"}
         for app_type in reversed(application_types):
             if app_type in user_error_types:
                 return "user_error"
@@ -265,6 +265,19 @@ class RunFailureDiagnostics:
         current: BaseException | None = exc
         for _ in range(20):
             if current is None:
+                break
+            if (
+                isinstance(current, exceptions.ApplicationError)
+                and getattr(current, "type", None) == "CapacityBlocked"
+            ):
+                # The claimed AgentRun backed off before its first provider
+                # slot: a deferral for this deployment, not a failed attempt.
+                diagnostic.update(
+                    {
+                        "reasonCode": "issue_claim_capacity_deferred",
+                        "agentExecutionLaunched": False,
+                    }
+                )
                 break
             if (
                 isinstance(current, exceptions.ApplicationError)

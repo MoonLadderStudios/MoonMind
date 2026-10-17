@@ -85,7 +85,6 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
         "artifacts",
         "llm",
         "sandbox",
-        "integration:jules",
         "integration:openclaw",
         "integration:omnigent",
         "agent_runtime",
@@ -94,7 +93,6 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
     ARTIFACTS_FLEET: (
         "llm",
         "sandbox",
-        "integration:jules",
         "integration:openclaw",
         "integration:omnigent",
         "agent_runtime",
@@ -102,7 +100,6 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
     ),
     LLM_FLEET: (
         "sandbox",
-        "integration:jules",
         "integration:openclaw",
         "integration:omnigent",
         "agent_runtime",
@@ -110,7 +107,6 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
     ),
     SANDBOX_FLEET: (
         "llm",
-        "integration:jules",
         "integration:openclaw",
         "integration:omnigent",
         "agent_runtime",
@@ -120,7 +116,6 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
     AGENT_RUNTIME_FLEET: (
         "sandbox",
         "llm",
-        "integration:jules",
         "integration:openclaw",
         "integration:omnigent",
     ),
@@ -128,7 +123,6 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
         "artifacts",
         "llm",
         "sandbox",
-        "integration:jules",
         "integration:openclaw",
         "integration:omnigent",
         "agent_runtime",
@@ -368,8 +362,6 @@ def _required_secrets_for_fleet(
             "GOOGLE_API_KEY",
             "ANTHROPIC_API_KEY",
         )
-    if fleet == INTEGRATIONS_FLEET:
-        return ("JULES_API_URL", "JULES_API_KEY")
     return ()
 
 

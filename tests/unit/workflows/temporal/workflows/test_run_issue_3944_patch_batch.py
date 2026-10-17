@@ -1,14 +1,7 @@
 """MoonLadderStudios/MoonMind#3944: one small proven patch batch.
 
-Scope for this batch (integration-stage plant, one responsibility only):
+Scope for this batch:
 
-* Removes dead ordinary Python code in
-  ``MoonMindRunWorkflow._run_integration_under_claim``: the
-  ``_external_status == "failed"`` guard raised the same ``ValueError`` twice
-  in a row. The second block is unreachable (the first always raises), emits
-  no Temporal command, and records no patch marker, so deleting it is ordinary
-  dead-code retirement with different (lighter) requirements than
-  history-visible patch markers.
 * Records the precise missing live evidence for history-visible patch markers
   WITHOUT claiming their removal: ``run-emit-ephemeral-step-checkpoints-v1``
   and ``run-bounded-story-loop-remediation-budget-v1`` are defined as
@@ -20,11 +13,9 @@ Scope for this batch (integration-stage plant, one responsibility only):
   retention is shortened, and no patch registry / dashboard / scanner / CI
   gate is introduced.
 
-Failures stay observable: the surviving raise keeps the exact message
-``Integration failed during plan execution.`` Work/history stays intact: no
-deployment, cancellation, history deletion, or rolling-upgrade machinery.
-Repository verification vs actual deployment authorization are reported
-separately by later steps.
+Work/history stays intact: no deployment, cancellation, history deletion, or
+rolling-upgrade machinery. Repository verification vs actual deployment
+authorization are reported separately by later steps.
 """
 
 from __future__ import annotations
@@ -37,19 +28,6 @@ from moonmind.workflows.temporal.workflows import run as run_module
 
 def _production_source() -> str:
     return Path(run_module.__file__).read_text()
-
-
-def test_integration_failed_raise_is_not_duplicated() -> None:
-    """The failed-integration guard raises exactly once (dead duplicate gone)."""
-    source = _production_source()
-    block = (
-        'if self._external_status == "failed":\n'
-        '            raise ValueError("Integration failed during plan execution.")'
-    )
-    assert source.count(block) == 1, (
-        "expected exactly one failed-integration raise block in "
-        "_run_integration_under_claim; the unreachable duplicate must go"
-    )
 
 
 def test_orphaned_patch_ids_have_no_production_wiring() -> None:

@@ -40,7 +40,6 @@ _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
 _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "codex_cli": ("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
     "claude_code": ("MOONMIND_CLAUDE_MODEL", "CLAUDE_MODEL"),
-    "jules": ("MOONMIND_JULES_MODEL", "JULES_MODEL"),
     # MoonLadderStudios/MoonMind#4538: the OpenCode runtime has no hard-coded
     # stock model. The inherited default is the deployment-configured OpenCode
     # default for the execution context Omnigent actually launches,
@@ -56,7 +55,6 @@ _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
         "MODEL_REASONING_EFFORT",
     ),
     "claude_code": ("MOONMIND_CLAUDE_EFFORT", "CLAUDE_REASONING_EFFORT"),
-    "jules": ("MOONMIND_JULES_EFFORT", "JULES_REASONING_EFFORT"),
 }
 
 def resolve_default_workflow_runtime(

@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from moonmind.workflows.adapters.github_service import GitHubService
-from moonmind.workflows.temporal.activities import jules_activities
+from moonmind.workflows.temporal.activities import repo_activities
 from moonmind.workflows.temporal.workflows import run as run_module
 from tests.unit.workflows.skills.test_acceptance_source_binding import (
     _disclose_unverified,
@@ -92,7 +92,7 @@ async def test_activity_rejects_unaccepted_pr_head_before_disclosure(
         "moonmind.workflows.adapters.github_service.GitHubService", lambda: service
     )
     with pytest.raises(ValueError, match="head"):
-        await jules_activities.repo_sync_pr_unverified_criteria_activity(
+        await repo_activities.repo_sync_pr_unverified_criteria_activity(
             {
                 "repo": "o/r",
                 "prUrl": "https://github.com/o/r/pull/7",
@@ -112,7 +112,7 @@ async def test_activity_rejects_blank_expected_head(monkeypatch, expected_head):
         "moonmind.workflows.adapters.github_service.GitHubService", lambda: service
     )
     with pytest.raises(ValueError):
-        await jules_activities.repo_sync_pr_unverified_criteria_activity(
+        await repo_activities.repo_sync_pr_unverified_criteria_activity(
             {
                 "repo": "o/r",
                 "prUrl": "https://github.com/o/r/pull/7",
@@ -187,14 +187,14 @@ async def test_activity_honors_admitted_connection_denial(monkeypatch):
     monkeypatch.setattr(
         "moonmind.workflows.adapters.github_service.GitHubService", lambda: service
     )
-    monkeypatch.setattr(jules_activities.activity, "in_activity", lambda: True)
+    monkeypatch.setattr(repo_activities.activity, "in_activity", lambda: True)
     monkeypatch.setattr(
-        jules_activities.activity,
+        repo_activities.activity,
         "info",
         lambda: SimpleNamespace(workflow_id="selected-workflow"),
     )
     with pytest.raises(ValueError, match="selected connection denied"):
-        await jules_activities.repo_sync_pr_unverified_criteria_activity(
+        await repo_activities.repo_sync_pr_unverified_criteria_activity(
             {
                 "repo": "o/r",
                 "prUrl": "https://github.com/o/r/pull/7",
@@ -228,7 +228,7 @@ async def test_fresh_workflow_supersedes_stale_disclosure_without_editing_body(
     async def execute(name, payload, **kwargs):
         assert name == "repo.sync_pr_unverified_criteria"
         assert payload["expectedHeadSha"] == HEAD_SHA
-        return await jules_activities.repo_sync_pr_unverified_criteria_activity(payload)
+        return await repo_activities.repo_sync_pr_unverified_criteria_activity(payload)
 
     monkeypatch.setattr(
         run_module.workflow, "execute_activity", AsyncMock(side_effect=execute)
@@ -284,13 +284,13 @@ async def test_activity_uses_its_admitted_enterprise_connection(monkeypatch):
     monkeypatch.setattr(
         "moonmind.workflows.adapters.github_service.GitHubService", lambda: service
     )
-    monkeypatch.setattr(jules_activities.activity, "in_activity", lambda: True)
+    monkeypatch.setattr(repo_activities.activity, "in_activity", lambda: True)
     monkeypatch.setattr(
-        jules_activities.activity,
+        repo_activities.activity,
         "info",
         lambda: SimpleNamespace(workflow_id="selected-workflow"),
     )
-    await jules_activities.repo_sync_pr_unverified_criteria_activity(
+    await repo_activities.repo_sync_pr_unverified_criteria_activity(
         {
             "repo": "o/r",
             "prUrl": "https://git.example.test/o/r/pull/7",

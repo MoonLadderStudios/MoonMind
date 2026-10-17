@@ -8873,7 +8873,6 @@ async def test_partial_issue_no_commit_handoff_creates_pr_before_status_update(
     parent = MoonMindRunWorkflow()
     parent._owner_type = "user"
     parent._owner_id = "issue-pr-authority-replay"
-    parent._integration = None
     parent._repo = manifest["repository"]
     parent._canonical_no_commit_outcome_enabled = True
     parent._assessment_context = {

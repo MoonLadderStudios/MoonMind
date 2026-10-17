@@ -12,7 +12,7 @@
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
 - [`docs/ManagedAgents/ClaudeCodeManagedSessions.md`](./ClaudeCodeManagedSessions.md)
 - [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
-- [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
+- [`docs/ManagedAgents/DockerBackendService.md`](./DockerBackendService.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
 - [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
 - [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)

@@ -333,9 +333,8 @@ Examples:
 - `temporal.activity.artifact.write_complete`
 - `temporal.activity.mm.skill.execute`
 - `temporal.activity.sandbox.run_command`
-- `temporal.activity.integration.jules.start`
-- `temporal.activity.integration.jules.status`
-- `temporal.activity.integration.jules.fetch_result`
+- `temporal.activity.integration.omnigent.execute`
+- `temporal.activity.integration.openclaw.execute`
 
 ### 9.5 Sub-spans inside activities
 

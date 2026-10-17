@@ -6744,7 +6744,7 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
             },
             "workflow": {
                 "instructions": "Nested instructions",
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "claude_code"},
                 "remediation": {
                     "mode": "snapshot_then_follow",
                     "authorityMode": "limited_write",
@@ -20724,7 +20724,6 @@ def test_mm3788_create_execution_accepts_provider_profile_owned_by_selected_runt
     [
         ("claude_code", "anthropic", "claude-opus-5", "xhigh"),
         ("codex_cli", "openai", "gpt-5", "xhigh"),
-        ("jules", "google", "provider-selected-model", None),
     ],
 )
 @pytest.mark.parametrize("selection", ["profile_inferred", "omitted", "explicit"])

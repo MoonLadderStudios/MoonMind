@@ -1,9 +1,10 @@
-"""Host-owned lifecycle for the standalone controller (issue #4500, REQ-02).
+"""Lifecycle for the standalone controller (issue #4500, REQ-02).
 
 The host CLI installs, starts, updates, and restores the controller. The
 controller never replaces itself: this CLI refuses to run inside the
 controller container, and controller updates are serialized against active
-deployment mutation. Stdlib-only.
+deployment mutation. ``handoff`` runs in a one-off of the release an open
+operation requested, so that release's controller applies it. Stdlib-only.
 """
 
 from __future__ import annotations
@@ -54,6 +55,10 @@ REQUIRED_CAPABILITIES = (
 # `ensure --prefer-requested` reports whether the controller now runs a
 # different release, so a submitter retries only when the code changed.
 REFRESH_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
+# `handoff` reports whether the requested release's controller took over.
+HANDOFF_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_HANDOFF="
+# A replacement that exits or restarts this soon after starting is reverted.
+HANDOFF_SETTLE_SECONDS = 5
 
 
 # The standalone controller image repository. Any other image is the MoonMind
@@ -212,10 +217,7 @@ def cmd_ensure(args, env) -> int:
     """Refresh an old controller before submission, outside its operation.
 
     Host and the already-privileged deployment-control submitter use the
-    same lifecycle owner. Reuse its generated Compose file so daemon host
-    paths, networks, identity and authority never change in an app container;
-    only the spelling of a bind source changes, for a client that resolves
-    the same host directory under its WSL drive mount.
+    same lifecycle owner.
 
     ``--prefer-requested`` runs after the installed controller failed the
     requested release. A capability cannot show that the installed code can
@@ -274,53 +276,12 @@ def cmd_ensure(args, env) -> int:
                 args.image,
             )
         )
-        lines = _client_bind_lines(
-            compose_file.read_text(encoding="utf-8").splitlines()
-        )
-        image_lines = [
-            index for index, line in enumerate(lines) if line.startswith("    image:")
-        ]
-        if len(image_lines) != 1:
-            raise RuntimeError(
-                "Controller Compose project has no unique controller image."
-            )
         if prefer_requested and _running_controller_image(identity["project"]) == image:
             _print_refresh_receipt(refreshed=False, image=image)
             return 0
-        lines = [line for line in lines if not line.startswith("    entrypoint:")]
-        index = next(
-            index for index, line in enumerate(lines) if line.startswith("    image:")
+        _write_controller_compose(
+            compose_file, _retargeted_controller_lines(compose_file, image)
         )
-        replacement = [
-            f"    image: {image}",
-            '    entrypoint: ["python", "/app/deploy/controller/server.py"]',
-        ]
-        if not any(line.startswith("    user:") for line in lines):
-            # The standalone image defaults to root; the application image
-            # defaults to app. Preserve the installed process identity rather
-            # than losing secret/socket access or expanding a custom identity.
-            previous_image = lines[index].partition(":")[2].strip().strip("\"'")
-            previous_user = json.loads(
-                _checked_capture(
-                    [
-                        "docker",
-                        "image",
-                        "inspect",
-                        "--format",
-                        "{{json .Config.User}}",
-                        previous_image,
-                    ]
-                )
-            )
-            if not isinstance(previous_user, str):
-                raise RuntimeError(
-                    "Installed controller process identity is unavailable"
-                )
-            replacement.append(f"    user: {json.dumps(previous_user or '0:0')}")
-        lines[index : index + 1] = replacement
-        temporary = compose_file.with_suffix(".tmp")
-        temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        os.replace(temporary, compose_file)
         record_controller_image(state_dir, requested=args.image, pinned=image)
         _ensure_identity_network(identity)
         code = _compose_up(state_dir, identity["project"], "--pull", "never")
@@ -348,9 +309,163 @@ def cmd_ensure(args, env) -> int:
             time.sleep(1)
 
 
+def _retargeted_controller_lines(compose_file: Path, image: str) -> list[str]:
+    """The installed controller Compose file, running ``image``'s controller.
+
+    Reuse the generated file so daemon host paths, networks, identity and
+    authority never change in an app container; only the spelling of a bind
+    source changes, for a client that resolves the same host directory under
+    its WSL drive mount.
+    """
+    lines = _client_bind_lines(compose_file.read_text(encoding="utf-8").splitlines())
+    image_lines = [
+        index for index, line in enumerate(lines) if line.startswith("    image:")
+    ]
+    if len(image_lines) != 1:
+        raise RuntimeError("Controller Compose project has no unique controller image.")
+    lines = [line for line in lines if not line.startswith("    entrypoint:")]
+    index = next(
+        index for index, line in enumerate(lines) if line.startswith("    image:")
+    )
+    replacement = [
+        f"    image: {image}",
+        '    entrypoint: ["python", "/app/deploy/controller/server.py"]',
+    ]
+    if not any(line.startswith("    user:") for line in lines):
+        # The standalone image defaults to root; the application image
+        # defaults to app. Preserve the installed process identity rather
+        # than losing secret/socket access or expanding a custom identity.
+        previous_image = lines[index].partition(":")[2].strip().strip("\"'")
+        previous_user = json.loads(
+            _checked_capture(
+                [
+                    "docker",
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{json .Config.User}}",
+                    previous_image,
+                ]
+            )
+        )
+        if not isinstance(previous_user, str):
+            raise RuntimeError("Installed controller process identity is unavailable")
+        replacement.append(f"    user: {json.dumps(previous_user or '0:0')}")
+    lines[index : index + 1] = replacement
+    return lines
+
+
+def _write_controller_compose(compose_file: Path, lines: list[str]) -> None:
+    temporary = compose_file.with_suffix(".tmp")
+    temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(temporary, compose_file)
+
+
 def _print_refresh_receipt(*, refreshed: bool, image: str) -> None:
     receipt = json.dumps({"refreshed": refreshed, "image": image}, sort_keys=True)
     print(f"{REFRESH_RECEIPT_PREFIX}{receipt}", flush=True)
+
+
+def cmd_handoff(args, env) -> int:
+    """Let the controller an open operation's requested release ships apply it.
+
+    The running controller starts this in a one-off of the requested image
+    while it holds the stack lock for ``--operation``, before the operation
+    changes anything. Recreating the controller ends that process, and its
+    kernel lock with it; the new controller resumes the operation from its
+    record. Only that operation may be open, and each attempt group hands
+    off once, so a controller that cannot take over never loops: the running
+    controller keeps applying. A replacement that fails or does not stay
+    running is reverted.
+    """
+    _ensure_outside_controller(env)
+    state_dir = Path(args.state_dir).resolve()
+    compose_file = state_dir / "controller-compose.yaml"
+    if not compose_file.is_file():
+        return _print_handoff_receipt("unavailable", reason="no installed controller")
+    identity = recover_identity(state_dir)
+    project = str(identity["project"])
+    image = _checked_capture(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", args.image]
+    ).strip()
+    previous = _running_controller_image(project)
+    if previous == image:
+        return _print_handoff_receipt("current", image=image)
+    store = record_mod.OperationStore(state_dir)
+    operation = store.load(args.operation)
+    group = operation.get("attemptGroup", 1)
+    marker = operation.get("controllerHandoff") or {}
+    if previous is None:
+        reason = "the installed controller is not running"
+    elif operation.get("status") not in record_mod.OPEN_STATUSES:
+        reason = "the operation is not open"
+    elif [op["operationId"] for op in store.list_open()] != [args.operation]:
+        reason = "other deployment work is open"
+    elif marker.get("image") == image and marker.get("attemptGroup") == group:
+        reason = "this attempt already handed off to the requested controller"
+    else:
+        reason = None
+    if reason:
+        return _print_handoff_receipt("unavailable", reason=reason)
+    store.record_controller_handoff(
+        args.operation, {"image": image, "from": previous, "attemptGroup": group}
+    )
+    original = compose_file.read_text(encoding="utf-8")
+    recorded = load_controller_image(state_dir) or {}
+    try:
+        _write_controller_compose(
+            compose_file, _retargeted_controller_lines(compose_file, image)
+        )
+        record_controller_image(state_dir, requested=args.image, pinned=image)
+        _ensure_identity_network(identity)
+        code = _compose_up(state_dir, project, "--pull", "never")
+        if code:
+            raise RuntimeError(f"controller recreation failed (exit {code})")
+        if not _controller_stays_running(project, image):
+            raise RuntimeError("the requested controller did not stay running")
+    except (OSError, RuntimeError, ValueError) as exc:
+        compose_file.write_text(original, encoding="utf-8")
+        if recorded:
+            record_controller_image(
+                state_dir,
+                requested=str(recorded.get("requested") or ""),
+                pinned=recorded.get("pinned"),
+            )
+        code = _compose_up(state_dir, project, "--pull", "never")
+        restored = "restored" if code == 0 else f"restore failed (exit {code})"
+        return _print_handoff_receipt(
+            "unavailable", reason=f"{exc}; previous controller {restored}"
+        )
+    return _print_handoff_receipt("handed-off", image=image)
+
+
+def _controller_stays_running(project: str, image: str) -> bool:
+    """The replacement still runs ``image`` without a restart after settling."""
+    time.sleep(HANDOFF_SETTLE_SECONDS)
+    listed = _run_capture(
+        [
+            "docker",
+            "ps",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
+        ]
+    )
+    identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
+    if len(identifiers) != 1:
+        return False
+    inspected = _run_capture(
+        ["docker", "inspect", "--format", "{{.Image}} {{.RestartCount}}", identifiers[0]]
+    )
+    return inspected.returncode == 0 and (inspected.stdout or "").split() == [image, "0"]
+
+
+def _print_handoff_receipt(status: str, **details: str) -> int:
+    receipt = json.dumps({"status": status, **details}, sort_keys=True)
+    print(f"{HANDOFF_RECEIPT_PREFIX}{receipt}", flush=True)
+    return 0
 
 
 class InsideControllerError(RuntimeError):
@@ -1040,19 +1155,17 @@ def cmd_update(args, env) -> int:
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
     stack = args.stack
-    open_operations = _open_operations(state_dir, stack)
-    if open_operations:
-        raise ActiveOperationError(
-            f"Refusing controller update while {len(open_operations)} deployment "
-            f"operation(s) on stack {stack!r} are open; controller update is "
-            "serialized against active deployment mutation."
-        )
     # Controller replacement and stack mutation share one atomic exclusion
     # boundary: the target stack's lock, the same lock submissions hold
-    # across pull/apply. A submission that begins after the open-operation
-    # check above still blocks here instead of racing the recreation.
-    lock_candidate = lock_mod.StackLock(state_dir, stack)
-    with lock_candidate.acquire():
+    # while they record intent and apply. Open work is read only under it.
+    with lock_mod.StackLock(state_dir, stack).acquire():
+        open_operations = _open_operations(state_dir, stack)
+        if open_operations:
+            raise ActiveOperationError(
+                f"Refusing controller update while {len(open_operations)} deployment "
+                f"operation(s) on stack {stack!r} are open; controller update is "
+                "serialized against active deployment mutation."
+            )
         pinned, _ = pinned_controller_image(state_dir, args.image)
         repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
         identity = ensure_identity(
@@ -1083,31 +1196,39 @@ def cmd_update(args, env) -> int:
 
 
 def cmd_restore(args, env) -> int:
-    """Restore a missing/broken controller without touching deployment state."""
+    """Restore a missing/broken controller without touching deployment state.
+
+    A controller that still owns the stack is live, not broken: rerendering
+    could recreate it mid-apply, so restore takes the same stack lock. A
+    crashed controller's kernel lock ends with its process.
+    """
+    import lock as lock_mod
+
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
     repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
     ensure_secret(state_dir)
-    pinned, _ = pinned_controller_image(state_dir, args.image)
-    identity = ensure_identity(
-        state_dir,
-        repo,
-        getattr(args, "port", None),
-        target_network=args.target_network,
-        target_project=args.target_project,
-    )
-    render_compose_file(
-        state_dir=state_dir,
-        repo=repo,
-        image=pinned,
-        port=identity["port"],
-        project=identity["project"],
-        target_network=identity.get("targetNetwork"),
-        target_project=identity.get("targetProject"),
-    )
-    _ensure_identity_network(identity)
-    code = _compose_up(state_dir, identity["project"])
+    with lock_mod.StackLock(state_dir, args.stack).acquire():
+        pinned, _ = pinned_controller_image(state_dir, args.image)
+        identity = ensure_identity(
+            state_dir,
+            repo,
+            getattr(args, "port", None),
+            target_network=args.target_network,
+            target_project=args.target_project,
+        )
+        render_compose_file(
+            state_dir=state_dir,
+            repo=repo,
+            image=pinned,
+            port=identity["port"],
+            project=identity["project"],
+            target_network=identity.get("targetNetwork"),
+            target_project=identity.get("targetProject"),
+        )
+        _ensure_identity_network(identity)
+        code = _compose_up(state_dir, identity["project"])
     if code != 0:
         raise RuntimeError(f"Controller restore failed (exit {code}).")
     print("Controller restored independently of MoonMind health.", flush=True)
@@ -1157,6 +1278,7 @@ def build_parser() -> argparse.ArgumentParser:
         "ensure",
         "recover-identity",
         "describe-installation",
+        "handoff",
     ):
         child = sub.add_parser(name, parents=[common])
         child.add_argument("--repo", default=None, help="Target MoonMind checkout.")
@@ -1193,6 +1315,12 @@ def build_parser() -> argparse.ArgumentParser:
                     "release, refresh to that release's controller unless it "
                     "already runs it."
                 ),
+            )
+        if name == "handoff":
+            child.add_argument(
+                "--operation",
+                required=True,
+                help="The open operation the requested release's controller resumes.",
             )
     return parser
 
@@ -1236,6 +1364,7 @@ def main(argv=None, env=None) -> int:
         "ensure": cmd_ensure,
         "recover-identity": cmd_recover_identity,
         "describe-installation": cmd_describe_installation,
+        "handoff": cmd_handoff,
     }
     return commands[args.command](args, marker)
 

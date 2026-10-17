@@ -71,6 +71,7 @@ from moonmind.omnigent.settings import (
     resolved_proxy_forward_headers,
     resolved_server_url,
 )
+from moonmind.omnigent.task_cancellation import cancel_and_wait
 from moonmind.omnigent.transport import omnigent_httpx_client
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -2357,17 +2358,6 @@ def _first_message_response_identifiers(
     return identifiers
 
 
-async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
-    if task is None or task.done():
-        return
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        # Expected after requesting cancellation of a helper task.
-        pass
-
-
 def _activity_attempt() -> int:
     """Return the current Temporal attempt without requiring Activity context."""
 
@@ -3219,7 +3209,7 @@ async def run_omnigent_execution(
                         break
                     await asyncio.sleep(0.01)
                 if not stream_admitted.is_set():
-                    await _cancel_task(stream_task)
+                    await cancel_and_wait(stream_task)
                     queued: Any = None
                     while not stream_queue.empty():
                         item = stream_queue.get_nowait()
@@ -3745,8 +3735,8 @@ async def run_omnigent_execution(
                     await journal.flush()
                 raise
             finally:
-                await _cancel_task(heartbeat_task)
-                await _cancel_task(stream_task)
+                await cancel_and_wait(heartbeat_task)
+                await cancel_and_wait(stream_task)
             await journal.flush()
 
             final_snapshot_observed_at: float | None = None
@@ -3979,8 +3969,8 @@ async def run_omnigent_execution(
                 result = result.model_copy(update={"metadata": result_metadata})
             return result
     except asyncio.CancelledError:
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         from moonmind.omnigent.activity_ownership import delivery_was_revoked
 
         if run_store is not None and delivery_was_revoked():
@@ -4020,8 +4010,8 @@ async def run_omnigent_execution(
     except OmnigentArtifactError as exc:
         # §17: required artifact-persistence failure -> system_error
         # (MoonMind artifact authority failed).
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         if client is not None and session_id:
             with suppress(Exception):
                 await _cancel_omnigent_session(client, session_id)
@@ -4091,8 +4081,8 @@ async def run_omnigent_execution(
             },
         )
     except OmnigentAuthorizationError as exc:
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         failure_class = exc.failure_class
         final_snapshot = {"status": "failed", "summary": str(exc)}
         diagnostics = {
@@ -4154,8 +4144,8 @@ async def run_omnigent_execution(
         OmnigentAdapterError,
         ValueError,
     ) as exc:
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         if isinstance(
             exc, OmnigentAdapterError
         ) and exc.failure_class == classify_omnigent_failure(
@@ -4215,8 +4205,8 @@ async def run_omnigent_execution(
         # execution shape (realizer, coordinator, unprofiled) consumes through
         # its normal cleanup. The ambiguous parent keeps raising below so an
         # Activity retry can reattach to work that may still be live.
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         final_snapshot = dict(exc.snapshot or {"status": "idle"})
         # Persist the typed failure in the snapshot used for terminal refs so
         # a later Activity retry that restores the durable failure keeps its
@@ -4284,8 +4274,8 @@ async def run_omnigent_execution(
             metadata=result_metadata,
         )
     except _MarkedTurnStalledError as exc:
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         _safe_heartbeat(start_watchdog.heartbeat_fields())
         # Commit the recovery observation before interrupting provider work.
         # A retry restores the same semantic clock even if its heartbeat was lost.
@@ -4356,8 +4346,8 @@ async def run_omnigent_execution(
                 ) from exc
         raise
     except OmnigentSessionStillRunningError:
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         raise
     except (OmnigentClientError, httpx.HTTPError) as exc:
         # §17 transport rows: upstream unreachable / host register-connect /
@@ -4365,8 +4355,8 @@ async def run_omnigent_execution(
         # failures (invalid session payload) map to user_error. The client
         # already classified this via the shared §17 classifier and preserves
         # redacted host/server diagnostics through OmnigentClientError.
-        await _cancel_task(heartbeat_task)
-        await _cancel_task(stream_task)
+        await cancel_and_wait(heartbeat_task)
+        await cancel_and_wait(stream_task)
         status_code = exc.status_code if isinstance(exc, OmnigentClientError) else None
         transport_failure_class = classify_omnigent_failure(
             OmnigentFailureReason.HOST_REGISTER_CONNECT

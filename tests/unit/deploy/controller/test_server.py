@@ -795,6 +795,234 @@ def test_journal_oneoff_runs_recorded_source_with_controller_transport(
         phase="journal-prepare", helper_image="sha256:recorded-source") == {"status": "prepared"}
 
 
+def test_failed_selection_leads_with_helper_error_not_pull_progress(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    engine = server.engine
+    store = record.OperationStore(tmp_path / "state")
+    target = {"project": "moonmind-test", "projectDir": str(tmp_path),
+              "composeFiles": ["docker-compose.yaml"], "services": ["omnigent"]}
+    op = _begin_op(record, store, target)
+    refusal = ("RuntimeError: Refusing Omnigent select: the installed controller "
+               "does not provide unversioned-routing-cutover.")
+    seen = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            seen.append(args)
+            progress = "\n".join(f" {i:012x} Pull complete 0B" for i in range(300))
+            raise engine.CommandError(args[2], 1, f"{progress}\nTraceback:\n{refusal}")
+
+    monkeypatch.setattr(engine, "subprocess_runner", lambda: Runner())
+    with pytest.raises(engine.StageError) as failure:
+        server.production_apply(store, op, omnigent_selector=lambda operation:
+            server.run_omnigent_step(store, operation, runner=Runner(),
+                                     overlay="overlay", phase="select"))
+
+    assert "--quiet-pull" in seen[0]
+    error = store.load(op["operationId"])["errorSummary"]
+    assert error.startswith(
+        f"attempt 1: Omnigent selection failed: omnigent-select failed (exit 1) {refusal}"
+    )
+    assert refusal in str(failure.value.output)[:2000]
+
+
+@pytest.mark.parametrize("receipt", ["replaced", "current", "unsupported", "unavailable"])
+def test_managed_controller_hands_off_before_changing_anything(
+    controller_path, tmp_path, monkeypatch, receipt
+):
+    """The requested release's controller applies it; others keep applying."""
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    (tmp_path / ".env").write_text("OMNIGENT_IMAGE=example/omnigent\n")
+    op = _begin_op(record, store, {"project": "moonmind", "projectDir": str(tmp_path),
+                                   "composeFiles": ["docker-compose.yaml"],
+                                   "services": ["api"]})
+    monkeypatch.setenv("MOONMIND_CONTROLLER_MANAGED", "1")
+    runner = _verification_runner(server.engine)
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+
+    class Replaced(BaseException):
+        """The handoff ends this controller process."""
+
+    def step(store, operation, **kwargs):
+        assert kwargs["phase"] == "controller-handoff"
+        if receipt == "replaced":
+            raise Replaced
+        if receipt == "unavailable":
+            return {"status": "unavailable", "reason": "other deployment work is open"}
+        return {"status": receipt}
+
+    monkeypatch.setattr(server, "run_omnigent_step", step)
+    selections = []
+    options = {
+        "dispatch_probe": lambda: True,
+        "omnigent_selector": lambda operation: selections.append(1) or {"status": "skipped"},
+        "omnigent_migrator": lambda summary: {"status": "aligned"},
+    }
+    if receipt == "replaced":
+        with pytest.raises(Replaced):
+            server.production_apply(store, op, **options)
+        # Only the previous owner's release steps were observed.
+        assert selections == []
+        assert [command[:2] for command in runner.commands] == [("docker", "ps")]
+        assert store.load(op["operationId"])["status"] == "staged"
+        return
+    server.production_apply(store, op, **options)
+    assert selections == [1]
+    handoff = store.load(op["operationId"]).get("controllerHandoff") or {}
+    assert handoff.get("unavailable") == (
+        "other deployment work is open" if receipt == "unavailable" else None
+    )
+
+
+def test_resumed_controller_confirms_the_handoff_once(controller_path, tmp_path, monkeypatch):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test"})
+    store.record_controller_handoff(
+        op["operationId"], {"image": "sha256:new", "from": "sha256:old", "attemptGroup": 1}
+    )
+    monkeypatch.setattr(server, "run_omnigent_step", lambda *a, **k: {"status": "current"})
+    server.hand_off_to_requested_controller(store, op, runner=None, overlay="overlay")
+    confirmed = store.load(op["operationId"])["controllerHandoff"]
+    assert confirmed["confirmedAt"] and confirmed["from"] == "sha256:old"
+    server.hand_off_to_requested_controller(store, op, runner=None, overlay="overlay")
+    assert store.load(op["operationId"])["controllerHandoff"] == confirmed
+
+
+def test_handoff_oneoff_runs_the_requested_image_with_controller_transport(
+    controller_path, tmp_path
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test",
+        "projectDir": str(tmp_path), "composeFiles": ["docker-compose.yaml"]})
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            assert args[args.index("--pull") + 1] == "always"
+            overlay = [args[i + 1] for i, arg in enumerate(args) if arg == "-f"][-1]
+            helper = json.loads(Path(overlay).read_text())["services"][server.LEGACY_CONTROL_SERVICE]
+            assert helper["image"] == op["desired"]["image"]
+            assert helper["environment"]["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+            assert args[-2] == "handoff" and "controller_handoff_cli" in args[-3]
+            return {"exit": 0, "output": 'MOONMIND_OMNIGENT_RESULT={"status":"current"}'}
+
+    assert server.run_omnigent_step(store, op, runner=Runner(), overlay="overlay",
+        phase="controller-handoff") == {"status": "current"}
+
+
+def test_restart_resumes_handed_off_work_after_the_previous_oneoff_exits(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    lock = load("lock")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+    polls = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            assert args[:3] == ("docker", "ps", "--quiet")
+            assert args[-1] == f"label={server.OMNIGENT_OPERATION_LABEL}={op['operationId']}"
+            assert "label=com.docker.compose.project=moonmind-test" in args
+            polls.append(args)
+            return {"exit": 0, "output": "handoff-oneoff\n" if len(polls) < 3 else ""}
+
+    monkeypatch.setattr(server, "ONEOFF_EXIT_POLL_SECONDS", 0)
+    applied = []
+
+    def applier(operation):
+        # The one-off that started this controller is not a competing writer.
+        assert len(polls) == 3
+        assert lock.StackLock(store.state_dir, "moonmind").probe()
+        applied.append(operation["operationId"])
+        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+
+    result = server.resume_open_operations(store, applier, runner=Runner())
+    assert applied == [op["operationId"]] == result["converged"]
+    assert store.load(op["operationId"])["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("case", ["submission-owns-stack", "unexpected-error"])
+def test_restart_recovery_never_competes_or_crash_loops(
+    controller_path, tmp_path, monkeypatch, case
+):
+    record = load("record")
+    server = load("server")
+    lock = load("lock")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            return {"exit": 0, "output": ""}
+
+    def applier(operation):
+        if case == "submission-owns-stack":
+            pytest.fail("restart recovery competed with the stack owner")
+        raise ValueError("journal consumer inventory is incomplete")
+
+    if case == "submission-owns-stack":
+        monkeypatch.setattr(server, "STACK_LOCK_WAIT_SECONDS", 0)
+        with lock.StackLock(store.state_dir, "moonmind").acquire():
+            server.resume_open_operations(store, applier, runner=Runner())
+        assert store.load(op["operationId"])["attempts"] == []
+        return
+    server.resume_open_operations(store, applier, runner=Runner())
+    error = store.load(op["operationId"])["attempts"][-1]["error"]
+    assert error == "restart recovery failed: journal consumer inventory is incomplete"
+
+
+def test_restart_recovery_waits_for_the_restore_that_started_it(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    lock = server.lock_mod
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+    acquire = lock.StackLock.acquire
+    busy = []
+
+    def held_by_restore(self):
+        # A bootstrap restore holds the stack until `compose up --wait` returns,
+        # after the controller it started has already begun recovery.
+        if len(busy) < 2:
+            busy.append(self.stack)
+            raise lock.LockBusyError("restore owns the stack")
+        return acquire(self)
+
+    monkeypatch.setattr(lock.StackLock, "acquire", held_by_restore)
+    monkeypatch.setattr(server, "ONEOFF_EXIT_POLL_SECONDS", 0)
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            return {"exit": 0, "output": ""}
+
+    applied = []
+
+    def applier(operation):
+        applied.append(operation["operationId"])
+        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+
+    server.resume_open_operations(store, applier, runner=Runner())
+    assert busy == ["moonmind", "moonmind"]
+    assert applied == [op["operationId"]]
+    assert store.load(op["operationId"])["status"] == "succeeded"
+
+
 def _begin_op(record, store, target):
     return store.begin(
         stack="moonmind",
@@ -1012,7 +1240,7 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert payload["moonmindImage"] == op["desired"]["image"]
                 assert payload["controllerCapabilities"] == [
                     "active-journal-transition", "request-identity",
-                    "unversioned-routing-cutover",
+                    "unversioned-routing-cutover", "controller-handoff",
                 ]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase
@@ -1130,9 +1358,10 @@ def test_conflict_bodies_never_expose_error_detail(
             body = json.loads(exc.read().decode() or "{}")
             assert body == {
                 "error": (
-                    "legacy application-owned writer may still be active; "
-                    "stop or reconcile it before the controller takes over "
-                    "(REQ-07)"
+                    "a legacy writer (an application-owned updater or a "
+                    "controller from the retired shell installer) may still be "
+                    "active; stop or reconcile it before the controller takes "
+                    "over (REQ-07)"
                 )
             }
     finally:
@@ -1873,3 +2102,223 @@ def test_uncertain_omnigent_launch_is_observed_before_a_bounded_retry(
     assert len(launches) == 1
     assert "acknowledgment timed out" in result["errorSummary"]
     assert "still running" in result["attempts"][-1]["error"]
+
+
+def test_restart_recovery_skips_work_another_owner_finished_before_the_lock(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    lock = server.lock_mod
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+    acquire = lock.StackLock.acquire
+
+    def finished_meanwhile(self):
+        # A submission reattached, applied and released the stack between the
+        # restart's snapshot of open work and this owner's exclusion.
+        store.confirm_installed(op["operationId"], image=op["desired"]["image"])
+        return acquire(self)
+
+    monkeypatch.setattr(lock.StackLock, "acquire", finished_meanwhile)
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            return {"exit": 0, "output": ""}
+
+    def applier(operation):
+        pytest.fail("restart recovery repeated a confirmed installation")
+
+    server.resume_open_operations(store, applier, runner=Runner())
+    assert store.load(op["operationId"])["attempts"] == []
+
+
+@pytest.mark.parametrize("observation", ["running", "unobservable", "failed-exit"])
+def test_apply_never_starts_beside_a_previous_owners_release_step(
+    controller_path, tmp_path, monkeypatch, observation
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "projectDir": str(tmp_path),
+                                   "composeFiles": ["docker-compose.yaml"],
+                                   "services": ["api"]})
+    commands = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            commands.append(tuple(args))
+            if args[:2] != ("docker", "ps"):
+                pytest.fail(f"a writer started beside the previous owner: {args}")
+            if observation == "running":
+                return {"exit": 0, "output": "abc123\n", "stdout": "abc123\n"}
+            if observation == "failed-exit":
+                return {"exit": 1, "output": "daemon unavailable"}
+            raise server.engine.CommandError("ps", 1, "daemon unavailable")
+
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: Runner())
+    # A handed-off or interrupted owner's one-off may still run: an observed
+    # or unobservable step is never proof of absence.
+    with pytest.raises(server.engine.StageError):
+        server.production_apply(store, op)
+    assert all(command[:2] == ("docker", "ps") for command in commands)
+    # Operation identities are caller-supplied; only this deployment's
+    # project can hold its previous owner.
+    assert any(
+        f"label={server.OMNIGENT_OPERATION_LABEL}={op['operationId']}" in command
+        and "label=com.docker.compose.project=moonmind-test" in command
+        for command in commands
+    )
+    attempt = store.load(op["operationId"])["attempts"][-1]["error"]
+    assert "previous owner" in attempt
+
+
+def test_refused_submission_for_a_busy_stack_records_no_operation(
+    controller_path, tmp_path, monkeypatch
+):
+    lock = load("lock")
+    applied = []
+    harness = _ThreadedHarness(tmp_path, lambda operation: applied.append(operation))
+    # The writer takes the stack after the ownership probe answered.
+    monkeypatch.setattr(lock.StackLock, "probe", lambda self: False)
+    try:
+        with lock.StackLock(harness.store.state_dir, "moonmind").acquire():
+            status, body = harness.call(
+                "POST", "/v1/operations", {"stack": "moonmind", "desiredImage": "img"}
+            )
+        assert (status, body) == (409, {"error": "stack is owned by another writer"})
+        # No open record is left for restart recovery to apply later.
+        assert harness.store.list_open() == []
+        assert applied == []
+    finally:
+        harness.close()
+
+
+class _RetiredControllerDocker:
+    """Docker as seen beside a controller from the retired shell installer."""
+
+    def __init__(self, *, listed="retired1\n", state="idle", fail=None, exit_code=None):
+        self.listed, self.state, self.fail = listed, state, fail
+        self.exit_code = exit_code
+        self.commands = []
+
+    def run(self, args, timeout_seconds):
+        self.commands.append(tuple(args))
+        if self.exit_code and args[1] == self.exit_code:
+            return {"exit": 1, "output": "", "stdout": ""}
+        if self.fail and args[1] == self.fail:
+            raise OSError("docker unavailable")
+        if args[1] == "ps":
+            return {"exit": 0, "output": self.listed, "stdout": self.listed}
+        if args[1] == "inspect":
+            return {"exit": 0, "output": "", "stdout": "sha256:retired\n"}
+        if args[1] == "run":
+            return {"exit": 0, "output": self.state, "stdout": self.state + "\n"}
+        return {"exit": 0, "output": ""}
+
+
+def test_idle_retired_shell_controller_is_stopped_with_its_state_kept(controller_path):
+    server = load("server")
+    docker = _RetiredControllerDocker()
+    assert server.reconcile_retired_shell_controller(docker) is False
+    assert docker.commands[0][:3] == ("docker", "ps", "--quiet")
+    assert f"volume={server.RETIRED_CONTROLLER_VOLUME}" in docker.commands[0]
+    # Frozen before it is inspected, so no request it accepts can start work
+    # between the idle answer and the stop.
+    assert docker.commands[1] == ("docker", "pause", "retired1")
+    assert docker.commands[2][:2] == ("docker", "inspect")
+    check = docker.commands[3]
+    assert check[:3] == ("docker", "run", "--rm")
+    assert ("--network", "none") == check[check.index("--network"):][:2]
+    volume = check[check.index("--volume") + 1]
+    assert volume == (
+        f"{server.RETIRED_CONTROLLER_VOLUME}:{server.RETIRED_CONTROLLER_STATE_DIR}:ro"
+    )
+    assert "sha256:retired" in check
+    assert check[-1] == server.RETIRED_CONTROLLER_STATE_DIR
+    # Killed while frozen, never removed: its container, logs, volume and
+    # secret remain.
+    assert docker.commands[4] == ("docker", "kill", "retired1")
+    assert len(docker.commands) == 5
+
+
+@pytest.mark.parametrize("state", ["unfinished", "locked", "unreadable", ""])
+def test_busy_or_unreadable_retired_shell_controller_defers_the_controller(
+    controller_path, state
+):
+    server = load("server")
+    docker = _RetiredControllerDocker(state=state)
+    assert server.reconcile_retired_shell_controller(docker) is True
+    assert not any(command[1] in ("stop", "kill") for command in docker.commands)
+    assert docker.commands[-1] == ("docker", "unpause", "retired1")
+
+
+@pytest.mark.parametrize("step", ["ps", "pause", "inspect", "run", "kill"])
+@pytest.mark.parametrize("how", ["error", "exit"])
+def test_uninspectable_retired_shell_controller_is_never_assumed_absent(
+    controller_path, step, how
+):
+    server = load("server")
+    docker = _RetiredControllerDocker(
+        fail=step if how == "error" else None,
+        exit_code=step if how == "exit" else None,
+    )
+    with pytest.raises(server.LegacyWriterUnknown):
+        server.reconcile_retired_shell_controller(docker)
+    if step in ("inspect", "run", "kill"):
+        # A frozen controller is never left frozen by a failed reconciliation.
+        assert docker.commands[-1] == ("docker", "unpause", "retired1")
+
+
+def test_no_retired_shell_controller_needs_no_transition(controller_path):
+    server = load("server")
+    docker = _RetiredControllerDocker(listed="")
+    assert server.reconcile_retired_shell_controller(docker) is False
+    assert len(docker.commands) == 1
+
+
+@pytest.mark.parametrize(
+    "case, expected",
+    [
+        ("no-record", "idle"),
+        ("installed", "idle"),
+        ("unfinished", "unfinished"),
+        ("corrupt", "unreadable"),
+        ("held-lock", "locked"),
+    ],
+)
+def test_retired_controller_idle_check_reads_its_record_and_kernel_lock(
+    controller_path, tmp_path, case, expected
+):
+    import fcntl
+    import subprocess
+    import sys
+
+    server = load("server")
+    (tmp_path / "locks").mkdir()
+    lock_file = tmp_path / "locks" / "moonmind.lock"
+    lock_file.write_text('{"contract": "moonmind.deployment-kernel-lock.v1"}')
+    record = {
+        "schema": "moonmind-controller-operation/v1",
+        "status": "desired",
+        "desired": {"targetImage": "img:new"},
+        "installed": None,
+    }
+    if case == "installed":
+        record.update(status="installed", installed={"image": "img:new"})
+    if case in ("installed", "unfinished", "held-lock"):
+        (tmp_path / "operation.json").write_text(json.dumps(record))
+    if case == "corrupt":
+        (tmp_path / "operation.json").write_text("{not-json")
+    if case == "held-lock":
+        (tmp_path / "operation.json").write_text(
+            json.dumps({**record, "status": "installed", "installed": {"image": "img:new"}})
+        )
+    with open(lock_file, "a+b") as held:
+        if case == "held-lock":
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        completed = subprocess.run(
+            [sys.executable, "-c", server.RETIRED_CONTROLLER_IDLE_CHECK, str(tmp_path)],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+    assert completed.stdout.strip() == expected

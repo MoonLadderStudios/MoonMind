@@ -42,8 +42,8 @@ def _configure_workflow_runtime(monkeypatch):
 def _request() -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
-        agentId="jules",
-        executionProfileRef="jules-default",
+        agentId="openclaw",
+        executionProfileRef="openclaw-default",
         correlationId="corr-prepared-context",
         idempotencyKey="idem-prepared-context",
         parameters={

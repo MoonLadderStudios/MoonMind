@@ -29,8 +29,6 @@ from moonmind.workflows.temporal.activity_catalog import (
 )
 from moonmind.workflows.temporal.activity_runtime import (
     ArtifactCreateActivityResult,
-    IntegrationStartResult,
-    IntegrationStatusResult,
     PlanGenerateActivityResult,
     SandboxCommandResult,
     TemporalActivityBinding,
@@ -135,8 +133,6 @@ __all__ = [
     "ExecutionRef",
     "INTEGRATIONS_FLEET",
     "INTEGRATIONS_TASK_QUEUE",
-    "IntegrationStartResult",
-    "IntegrationStatusResult",
     "LocalTemporalArtifactStore",
         "MAX_REMEDIATION_CONTEXT_TAIL_LINES",
     "MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS",

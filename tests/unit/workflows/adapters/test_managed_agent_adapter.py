@@ -1350,7 +1350,7 @@ async def test_start_rejects_non_managed_agent_kind():
 
     request = AgentExecutionRequest(
         agentKind="external",
-        agentId="jules",
+        agentId="openclaw",
         executionProfileRef="auto",
         correlationId="corr-ext",
         idempotencyKey="idem-ext",

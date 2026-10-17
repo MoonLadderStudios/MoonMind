@@ -624,7 +624,6 @@
   "tests/integration/reliability/test_saved_preset_readiness.py::test_current_preset_requirements_admit_saved_schedule[None]": 0.919,
   "tests/integration/reliability/test_saved_preset_readiness.py::test_current_preset_requirements_admit_saved_schedule[claude_code]": 0.49,
   "tests/integration/reliability/test_saved_preset_readiness.py::test_current_preset_requirements_admit_saved_schedule[codex_cli]": 0.544,
-  "tests/integration/reliability/test_saved_preset_readiness.py::test_current_preset_requirements_admit_saved_schedule[jules]": 0.554,
   "tests/integration/reliability/test_saved_preset_readiness.py::test_current_preset_requirements_admit_saved_schedule[omnigent]": 0.712,
   "tests/integration/reliability/test_saved_preset_readiness.py::test_current_preset_requirements_admit_saved_schedule[openclaw]": 0.523,
   "tests/integration/reliability/test_saved_preset_readiness.py::test_current_preset_requirements_admit_saved_schedule[universal]": 0.515,

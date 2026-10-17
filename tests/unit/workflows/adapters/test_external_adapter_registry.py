@@ -36,10 +36,10 @@ class TestExternalAdapterRegistry:
 
     def test_register_is_case_insensitive(self):
         registry = ExternalAdapterRegistry()
-        registry.register("Jules", partial(_StubAdapter, agent_id="jules"))
-        adapter = registry.create("JULES")
+        registry.register("OpenClaw", partial(_StubAdapter, agent_id="openclaw"))
+        adapter = registry.create("OPENCLAW")
         assert isinstance(adapter, _StubAdapter)
-        assert adapter.agent_id == "jules"
+        assert adapter.agent_id == "openclaw"
 
     def test_register_rejects_blank_agent_id(self):
         registry = ExternalAdapterRegistry()
@@ -54,8 +54,8 @@ class TestExternalAdapterRegistry:
 
     def test_contains_membership(self):
         registry = ExternalAdapterRegistry()
-        registry.register("jules", _StubAdapter)
-        assert "jules" in registry
+        registry.register("openclaw", _StubAdapter)
+        assert "openclaw" in registry
         assert "codex_cloud" not in registry
 
     def test_len(self):
@@ -73,16 +73,6 @@ class TestBuildDefaultRegistry:
         registry = build_default_registry(env={})
         assert len(registry) == 0
 
-    def test_jules_registered_when_enabled(self):
-        env = {
-            "JULES_ENABLED": "true",
-            "JULES_API_URL": "https://jules.test",
-            "JULES_API_KEY": "test-key-123",
-        }
-        registry = build_default_registry(env=env)
-        assert "jules" in registry
-        assert "jules_api" in registry
-
     @pytest.mark.parametrize("enabled", [None, "false", "true"])
     def test_obsolete_cloud_environment_never_registers_adapter(self, enabled):
         env = {
@@ -98,6 +88,23 @@ class TestBuildDefaultRegistry:
         assert "codex_cloud" not in registry
         with pytest.raises(ValueError, match="No external adapter registered"):
             registry.create("codex_cloud")
+
+    @pytest.mark.parametrize("enabled", [None, "false", "true"])
+    def test_obsolete_jules_environment_never_registers_adapter(self, enabled):
+        env = {
+            "JULES_ENABLED": "true",
+            "JULES_API_URL": "https://jules.test",
+            "JULES_API_KEY": "test-key-123",
+        }
+        if enabled is None:
+            env = {}
+        else:
+            env["JULES_ENABLED"] = enabled
+        registry = build_default_registry(env=env)
+        for retired_id in ("jules", "jules_api"):
+            assert retired_id not in registry
+            with pytest.raises(ValueError, match="No external adapter registered"):
+                registry.create(retired_id)
 
     def test_omnigent_registered_when_enabled(self):
         env = {
@@ -128,8 +135,10 @@ class TestBuildDefaultRegistry:
         with pytest.raises(ValueError, match="No external adapter registered"):
             rolled_back_registry.create("omnigent")
 
-    def test_retained_provider_ignores_obsolete_cloud_configuration(self):
+    def test_retained_provider_ignores_obsolete_provider_configuration(self):
         env = {
+            "OMNIGENT_ENABLED": "true",
+            "OMNIGENT_SERVER_URL": "https://omnigent.test",
             "JULES_ENABLED": "true",
             "JULES_API_URL": "https://jules.test",
             "JULES_API_KEY": "test-key-jules",
@@ -138,17 +147,7 @@ class TestBuildDefaultRegistry:
             "CODEX_CLOUD_API_KEY": "test-key-codex",
         }
         registry = build_default_registry(env=env)
-        assert "jules" in registry
-        assert "codex_cloud" not in registry
-
-    def test_disabled_provider_not_registered(self):
-        env = {
-            "JULES_ENABLED": "false",
-            "JULES_API_URL": "https://jules.test",
-            "JULES_API_KEY": "test-key",
-        }
-        registry = build_default_registry(env=env)
-        assert "jules" not in registry
+        assert registry.registered_ids == ["omnigent"]
 
     def test_omnigent_registered_only_when_runtime_gate_enabled(self):
         disabled_registry = build_default_registry(env={})

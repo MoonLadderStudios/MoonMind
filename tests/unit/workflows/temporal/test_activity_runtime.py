@@ -25,14 +25,12 @@ from api_service.db.models import Base
 from moonmind.config.settings import (
     settings,
 )
-from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionLocator
-from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.schemas.workload_models import (
     ValidatedWorkloadRequest,
     WorkloadResult,
@@ -997,44 +995,6 @@ def _plan_payload(*, registry_artifact_id: str, registry_digest: str) -> dict:
         ],
         "edges": [],
     }
-
-class _FakeJulesClient:
-    def __init__(
-        self,
-        *,
-        create_status: str = "pending",
-        get_status: str = "completed",
-        get_pull_request_url: str | None = None,
-    ) -> None:
-        self.created: list[object] = []
-        self.lookups: list[object] = []
-        self.closed = False
-        self._create_status = create_status
-        self._get_status = get_status
-        self._get_pull_request_url = get_pull_request_url
-
-    async def create_task(self, request):
-        self.created.append(request)
-        return JulesTaskResponse(
-            task_id="task-001",
-            status=self._create_status,
-            url="https://jules.test/task-001",
-        )
-
-    async def get_task(self, request):
-        self.lookups.append(request)
-        outputs = []
-        if self._get_pull_request_url is not None:
-            outputs = [{"pullRequest": {"url": self._get_pull_request_url}}]
-        return JulesTaskResponse(
-            task_id=request.task_id,
-            status=self._get_status,
-            url="https://jules.test/task-001",
-            outputs=outputs,
-        )
-
-    async def aclose(self) -> None:
-        self.closed = True
 
 async def test_artifact_activity_create_returns_ref_and_upload_descriptor(
     tmp_path: Path,
@@ -2309,7 +2269,6 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
-                    client_factory=_FakeJulesClient,
                 ),
                 agent_skills_activities=AgentSkillsActivities(),
                 fleets=(ARTIFACTS_FLEET,),
@@ -2349,7 +2308,6 @@ async def test_build_activity_bindings_resolves_memory_integration_handlers(
                     catalog,
                     integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
-                        client_factory=_FakeJulesClient,
                     ),
                     fleets=(INTEGRATIONS_FLEET,),
                 )
@@ -4578,7 +4536,7 @@ async def test_agent_runtime_publish_artifacts_normalizes_missing_verdict(
 
 @pytest.mark.parametrize(
     "runtime",
-    ["omnigent", "codex_cli", "claude_code", "jules", "openclaw"],
+    ["omnigent", "codex_cli", "claude_code", "openclaw"],
 )
 @pytest.mark.parametrize("consumer_handoff", [True, False])
 async def test_assessment_consumer_dispatch_to_publication_regression(

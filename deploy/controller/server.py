@@ -5,10 +5,11 @@ from a deployment-owned file, never from an application service) guards every
 route; without it the endpoint answers 401. No agents receive sockets or
 unrestricted controller access.
 
-On startup :func:`converge_on_restart` inspects the local record and Docker
-state and converges only unfinished work toward the same target: a lost
-result never repeats a completed apply, and an already-running Compose child
-is reconciled (left alone) rather than competed with.
+On startup :func:`resume_open_operations` converges only unfinished work
+toward the same target under the stack lock: a lost result never repeats a
+completed apply. A Compose client child dies with this process, which also
+releases the kernel lock; a release one-off can outlive it, so an apply first
+observes that its operation's one-offs have exited.
 """
 
 from __future__ import annotations
@@ -33,6 +34,12 @@ from redact import redact_mapping, redact_text
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
+# How long a restarted controller lets the previous owner's one-off finish.
+ONEOFF_EXIT_WAIT_SECONDS = 180
+ONEOFF_EXIT_POLL_SECONDS = 2
+# How long restart recovery waits for a stack another owner holds, such as a
+# bootstrap restore that keeps it until the controller it started is up.
+STACK_LOCK_WAIT_SECONDS = 180
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # Behavior submitters require before trusting an answer. ``request-identity``:
@@ -40,10 +47,14 @@ OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # mutable tag such as ``latest`` applies again instead of returning an earlier
 # success. ``unversioned-routing-cutover``: an installation that still routes
 # through a Temporal Worker Deployment is moved to ordinary workers once.
+# ``controller-handoff``: the controller the requested release ships applies
+# it (see :func:`hand_off_to_requested_controller`), so later releases need no
+# new requirement here.
 CONTROLLER_CAPABILITIES = (
     "active-journal-transition",
     "request-identity",
     "unversioned-routing-cutover",
+    "controller-handoff",
 )
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
@@ -75,6 +86,7 @@ ROUTING_CUTOVER_RETRY_SECONDS = 15
 # One-offs whose release helper may predate the step: the selected image
 # answers ``unsupported`` instead of failing when it lacks the function.
 CAPABILITY_STEPS = {
+    "controller-handoff": ("controller_handoff_cli", "handoff"),
     "journal-prepare": ("controller_journal_cli", "journal-prepare"),
     "journal-quiesce": ("controller_journal_cli", "journal-quiesce"),
     "routing-cutover-probe": ("controller_routing_cutover_cli", "probe"),
@@ -89,6 +101,39 @@ TARGET_CONFIG_TIMEOUT_SECONDS = 120
 # The Docker transport substrate is never recreated through an update, the
 # same exclusion the host entrypoint applies to its explicit target.
 DEFAULT_EXCLUDED_SERVICES = ("docker-proxy", "sandbox-egress-proxy")
+# The retired shell installer kept its controller's record and kernel lock in
+# this fixed named volume; this controller's state is a bind mount instead.
+RETIRED_CONTROLLER_VOLUME = "moonmind-controller-state"
+RETIRED_CONTROLLER_STATE_DIR = "/var/lib/moonmind-controller"
+# Runs on the retired controller's image (python:3.14-slim) with its state
+# volume mounted read-only at argv[1]. It is idle only when its record is
+# finished or absent and no writer holds its kernel lock; an unreadable record
+# is never treated as finished.
+RETIRED_CONTROLLER_IDLE_CHECK = """
+import fcntl, glob, json, os, sys
+root = sys.argv[1]
+try:
+    with open(os.path.join(root, "operation.json"), encoding="utf-8") as stream:
+        record = json.load(stream)
+except FileNotFoundError:
+    record = None
+except (OSError, ValueError):
+    print("unreadable"); sys.exit()
+if record is not None:
+    if not isinstance(record, dict):
+        print("unreadable"); sys.exit()
+    installed = record.get("installed") or {}
+    if not (record.get("status") == "installed" and installed.get("image")
+            == (record.get("desired") or {}).get("targetImage")):
+        print("unfinished"); sys.exit()
+for path in glob.glob(os.path.join(root, "locks", "*.lock")):
+    with open(path, "rb") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("locked"); sys.exit()
+print("idle")
+"""
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _MAX_IMAGE_CHARS = 1024
@@ -188,11 +233,73 @@ def default_legacy_writer_probe() -> bool:
             (operation.get("target") or {}).get("project") or ""
         )
         for operation in (*store.list_open(), *store.list_terminal())
-        if operation.get("omnigentStep") in ("select", "migrate", "journal-prepare", "journal-quiesce")
+        if operation.get("omnigentStep") in (
+            "controller-handoff", "select", "migrate", "journal-prepare", "journal-quiesce",
+        )
         and operation.get("status") in (*record_mod.OPEN_STATUSES, "succeeded")
         and lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
     }
     return parse_legacy_mutation_ps(completed.stdout, controller_operations=operations)
+
+
+def _observed_stdout(runner, args) -> str:
+    """Complete stdout of a read-only Docker observation; any failure raises."""
+    result = engine.run_command(
+        runner, args, timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS
+    )
+    if int(result.get("exit", 0)) != 0:
+        raise engine.CommandError(str(args[1]), int(result.get("exit", 1)))
+    return engine.command_stdout(result)
+
+
+def reconcile_retired_shell_controller(runner=None) -> bool:
+    """Retire an idle controller from the removed shell installer.
+
+    That controller kept its own record and lock, so it shares no exclusion
+    with this one. Return True while it may still write. It is frozen before
+    its state is read, so no request it accepts can start work between the
+    idle answer and the stop; an idle one is killed while frozen (the signal
+    lands before it runs again) and is not removed: its container logs, state
+    volume and secret stay for the operator. Unfinished or unreadable work
+    thaws it and defers this controller; an operator who abandons that work
+    stops it.
+    """
+    runner = runner or engine.subprocess_runner()
+    try:
+        listed = _observed_stdout(runner, (
+            "docker", "ps", "--quiet", "--filter", f"volume={RETIRED_CONTROLLER_VOLUME}",
+        ))
+        for container in listed.split():
+            _observed_stdout(runner, ("docker", "pause", container))
+            try:
+                image = _observed_stdout(runner, (
+                    "docker", "inspect", "--format", "{{.Image}}", container,
+                )).strip()
+                state = _observed_stdout(runner, (
+                    "docker", "run", "--rm", "--network", "none", "--volume",
+                    f"{RETIRED_CONTROLLER_VOLUME}:{RETIRED_CONTROLLER_STATE_DIR}:ro",
+                    "--entrypoint", "python", image,
+                    "-c", RETIRED_CONTROLLER_IDLE_CHECK, RETIRED_CONTROLLER_STATE_DIR,
+                )).strip()
+                if state == "idle":
+                    _observed_stdout(runner, ("docker", "kill", container))
+                    continue
+            except Exception:
+                with contextlib.suppress(engine.CommandError, OSError):
+                    _observed_stdout(runner, ("docker", "unpause", container))
+                raise
+            _observed_stdout(runner, ("docker", "unpause", container))
+            return True
+    except (engine.CommandError, OSError) as exc:
+        raise LegacyWriterUnknown(
+            f"cannot reconcile the retired shell-installed controller: {exc}"
+        ) from exc
+    return False
+
+
+def default_writer_probe() -> bool:
+    """Every writer outside this controller that can still mutate the stack."""
+    return reconcile_retired_shell_controller() or default_legacy_writer_probe()
 
 
 def _read_secret(secret: str | None, secret_file: str | None) -> str:
@@ -236,20 +343,6 @@ def _public_operation(operation: dict) -> dict:
     return _redact_strings(redact_mapping(operation))
 
 
-def _compose_child_alive(state_dir: str) -> int | None:
-    pidfile = os.path.join(state_dir, "compose-child.pid")
-    try:
-        with open(pidfile, encoding="utf-8") as stream:
-            pid = int(stream.read().strip())
-    except (OSError, ValueError):
-        return None
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return None
-    return pid
-
-
 def converge_on_restart(
     store: record_mod.OperationStore,
     applier: Callable[[dict], Any],
@@ -260,10 +353,8 @@ def converge_on_restart(
     """Resume unfinished work after a controller restart.
 
     Completed applies (confirmed installation) are never repeated. When a
-    Compose child from before the restart is still running, it is reconciled
-    by leaving it alone instead of launching a competing writer. When a
-    legacy application-owned writer may still be active, unfinished work is
-    deferred with an explicit reason instead of being taken over.
+    legacy writer may still be active, unfinished work is deferred with an
+    explicit reason instead of being taken over.
 
     Stale open targets are reconciled before anything runs: only the newest
     open operation per stack survives, and an open operation older than a
@@ -280,15 +371,9 @@ def converge_on_restart(
         operation["operationId"]
         for operation in survivors["superseded"]
     )
-    child_pid = _compose_child_alive(str(store.state_dir))
     for operation in survivors["open"]:
         if operation.get("installed") is not None:
             skipped.append(operation["operationId"])
-            continue
-        if child_pid is not None:
-            deferred.append(
-                {"operationId": operation["operationId"], "reason": f"compose child {child_pid} still running"}
-            )
             continue
         if legacy_writer_probe is not None:
             try:
@@ -316,6 +401,71 @@ def converge_on_restart(
         "skippedInstalled": skipped,
         "superseded": superseded,
     }
+
+
+def resume_open_operations(
+    store: record_mod.OperationStore,
+    applier: Callable[[dict], Any],
+    *,
+    legacy_writer_probe: Callable[[], bool] | None = None,
+    runner=None,
+) -> dict:
+    """Converge unfinished work once a previous owner's one-offs have exited.
+
+    A handoff's one-off is still finishing when the controller it started
+    comes up; resuming first would mistake it for a competing writer. Each
+    resumed operation holds its stack lock, so a submission that arrives
+    meanwhile reattaches or is refused as usual. A busy stack is waited for,
+    bounded: a bootstrap restore holds it until this controller is up, and
+    work a submission finished meanwhile is not repeated.
+    """
+    runner = runner or engine.subprocess_runner()
+    deadline = time.monotonic() + ONEOFF_EXIT_WAIT_SECONDS
+    for operation in store.list_open():
+        while time.monotonic() < deadline:
+            try:
+                listed = engine.run_command(runner, (
+                    "docker", "ps", "--quiet",
+                    "--filter", f"label=com.docker.compose.project={_operation_project(operation)}",
+                    "--filter",
+                    f"label={OMNIGENT_OPERATION_LABEL}={operation['operationId']}",
+                ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)
+            except (engine.CommandError, OSError):
+                break
+            if not engine.command_stdout(listed).strip():
+                break
+            time.sleep(ONEOFF_EXIT_POLL_SECONDS)
+
+    def resume(operation: dict) -> None:
+        lock_deadline = time.monotonic() + STACK_LOCK_WAIT_SECONDS
+        try:
+            while True:
+                try:
+                    with lock_mod.StackLock(store.state_dir, operation["stack"]).acquire():
+                        # A submission may have finished it before this owner held the stack.
+                        current = store.load(operation["operationId"])
+                        if current.get("status") in record_mod.OPEN_STATUSES and (
+                            current.get("installed") is None
+                        ):
+                            _apply_recording_failure(store, operation["operationId"], applier)
+                    return
+                except lock_mod.LockBusyError:
+                    if time.monotonic() >= lock_deadline:
+                        # The owner kept the stack; it reattached to or replaced this work.
+                        print(
+                            f"restart recovery left {operation['operationId']} to the "
+                            f"owner of stack {operation['stack']!r}",
+                            flush=True,
+                        )
+                        return
+                    time.sleep(ONEOFF_EXIT_POLL_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - keep the error on the record
+            store.record_attempt_error(
+                operation["operationId"],
+                error=redact_text(f"restart recovery failed: {exc}"),
+            )
+
+    return converge_on_restart(store, resume, legacy_writer_probe=legacy_writer_probe)
 
 
 def _reconcile_open_operations(
@@ -396,7 +546,8 @@ def check_legacy_cutover(
     try:
         if legacy_writer_probe():
             return (
-                "legacy application-owned writer may still be active; stop or "
+                "a legacy writer (an application-owned updater or a controller "
+                "from the retired shell installer) may still be active; stop or "
                 "reconcile it before the controller takes over (REQ-07)"
             )
     except LegacyWriterUnknown:
@@ -705,6 +856,11 @@ def build_app(
                                 "400 Bad Request",
                                 {"error": f"deployment target could not be derived: {redact_text(str(exc))}"},
                             )
+                    # Own the stack before recording intent: a refused
+                    # submission leaves no open record for restart recovery.
+                    held.enter_context(
+                        lock_mod.StackLock(store.state_dir, stack).acquire()
+                    )
                     operation = store.begin(
                         stack=stack,
                         desired_image=desired_image,
@@ -714,10 +870,6 @@ def build_app(
                         operation_id=requested_id,
                     )
                     needs_apply = operation.get("status") in record_mod.OPEN_STATUSES
-                    if needs_apply:
-                        held.enter_context(
-                            lock_mod.StackLock(store.state_dir, stack).acquire()
-                        )
                 if needs_apply:
                     operation = _apply_recording_failure(
                         store, operation["operationId"], run_apply
@@ -983,6 +1135,20 @@ def omnigent_channels_for_target(target: dict) -> list:
     return channels
 
 
+def _omnigent_step_error(phase: str, exit_status: int, output: str) -> engine.CommandError:
+    """Lead with the helper's final line, which states why the step failed.
+
+    Bounded summaries keep the head of the error; the output before that line
+    is Compose and traceback context.
+    """
+    output = redact_text(output)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    reason = lines[-1] if lines else "no output"
+    return engine.CommandError(
+        f"omnigent-{phase}", exit_status, f"{reason}\n{output[-2000:]}"
+    )
+
+
 def run_omnigent_step(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1090,7 +1256,9 @@ def run_omnigent_step(
                 "--no-deps",
                 "-T",
                 "--pull",
-                "always" if phase == "select" else "never",
+                "always" if phase in ("controller-handoff", "select") else "never",
+                # Layer progress would fill the bounded diagnostic tail.
+                "--quiet-pull",
                 "--label",
                 f"{OMNIGENT_OPERATION_LABEL}={operation_id}",
                 "--entrypoint",
@@ -1100,13 +1268,13 @@ def run_omnigent_step(
             ),
             timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
         )
+    except engine.CommandError as exc:
+        raise _omnigent_step_error(phase, exc.exit_status, exc.output) from exc
     finally:
         store.record_omnigent_step(operation_id, None)
     output = str(result.get("output") or "")
     if int(result.get("exit", 0)) != 0:
-        raise engine.CommandError(
-            f"omnigent-{phase}", int(result.get("exit", 1)), redact_text(output)[-2000:]
-        )
+        raise _omnigent_step_error(phase, int(result.get("exit", 1)), output)
     for line in reversed(output.splitlines()):
         if line.startswith(OMNIGENT_RESULT_PREFIX):
             receipt = json.loads(line[len(OMNIGENT_RESULT_PREFIX) :])
@@ -1351,6 +1519,70 @@ def _routing_cutover_check(state: dict) -> dict:
             "detail": f"cutover pending ({outcome}): {state.get('detail', '')}"}
 
 
+def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> None:
+    """Let the controller the requested release ships apply it.
+
+    A release can need controller behavior the installed controller predates,
+    as the unversioned routing cutover did. Before this operation changes
+    anything, the requested image's one-off replaces a controller running
+    other code; this process ends and the replacement resumes the operation.
+    Any other answer leaves this controller applying: ``current``,
+    ``unsupported`` from a target predating handoff (a rollback), or
+    ``unavailable`` with the reason kept on the operation.
+    """
+    operation_id = operation["operationId"]
+    try:
+        receipt = run_omnigent_step(
+            store, operation, runner=runner, overlay=overlay, phase="controller-handoff"
+        )
+    except Exception as exc:  # noqa: BLE001 - the running controller still applies
+        receipt = {
+            "status": "unavailable",
+            "reason": redact_text(f"{exc} {getattr(exc, 'output', '')}")[-1000:],
+        }
+    marker = store.load(operation_id).get("controllerHandoff") or {}
+    if receipt.get("status") == "unavailable":
+        store.record_controller_handoff(
+            operation_id, {**marker, "unavailable": str(receipt.get("reason") or "")}
+        )
+    elif receipt.get("status") == "current" and marker and not marker.get("confirmedAt"):
+        store.record_controller_handoff(
+            operation_id, {**marker, "confirmedAt": record_mod._utc_now()}
+        )
+
+
+def _operation_project(operation: dict) -> str:
+    """The Compose project an operation targets; operation IDs are caller-supplied."""
+    return str((operation.get("target") or {}).get("project") or operation.get("stack"))
+
+
+def require_previous_oneoffs_exited(store, operation, *, runner) -> None:
+    """Refuse to start beside a release one-off a previous owner launched.
+
+    A handoff or an interrupted controller can leave its operation's one-off
+    running; only an observation that none runs admits this owner's writes.
+    """
+    operation_id = operation["operationId"]
+    try:
+        running = _observed_stdout(runner, (
+            "docker", "ps",
+            "--filter", f"label=com.docker.compose.project={_operation_project(operation)}",
+            "--filter", f"label={OMNIGENT_OPERATION_LABEL}={operation_id}",
+            "--format", "{{.ID}}",
+        )).split()
+    except (engine.CommandError, OSError) as exc:
+        detail = f"a previous owner's release step could not be observed: {exc}"
+    else:
+        if not running:
+            return
+        detail = (
+            "a previous owner's release step is still running "
+            f"({', '.join(running)}); no writer starts beside it"
+        )
+    store.record_attempt_error(operation_id, error=redact_text(detail))
+    raise engine.StageError("previous-owner", 1, redact_text(detail))
+
+
 def production_apply(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1373,11 +1605,14 @@ def production_apply(
             operation["operationId"], error="; ".join(checks["problems"])
         )
         return {"status": "refused", "problems": checks["problems"]}
-    store.mark_stage(operation["operationId"], stage="staged")
     runner = engine.subprocess_runner()
+    require_previous_oneoffs_exited(store, operation, runner=runner)
+    store.mark_stage(operation["operationId"], stage="staged")
     overlay = write_image_overlay(
         str(store.state_dir), operation["operationId"], operation["desired"]["image"]
     )
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1":
+        hand_off_to_requested_controller(store, operation, runner=runner, overlay=overlay)
     channels = omnigent_channels_for_target(target)
     selection = store.load(operation["operationId"]).get("omnigentSelection") or {}
     if channels and not selection:
@@ -1675,8 +1910,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     secret_file = args.secret_file or os.path.join(args.state_dir, "secrets", "controller-bearer")
     store = record_mod.OperationStore(args.state_dir)
-    probe = None if args.no_legacy_probe else default_legacy_writer_probe
-    converge_on_restart(store, lambda operation: production_apply(store, operation), legacy_writer_probe=probe)
+    probe = None if args.no_legacy_probe else default_writer_probe
     app = build_app(
         store=store,
         secret_file=secret_file,
@@ -1684,6 +1918,14 @@ def main(argv=None) -> int:
         target_resolver=production_target_resolver,
     )
     httpd = make_http_server("0.0.0.0", args.port, app)
+    # Answer status reads while unfinished work resumes, such as an operation
+    # handed to this controller, instead of looking unreachable throughout.
+    threading.Thread(
+        target=resume_open_operations,
+        args=(store, lambda operation: production_apply(store, operation)),
+        kwargs={"legacy_writer_probe": probe},
+        daemon=True,
+    ).start()
     print(f"moonmind-controller listening on 0.0.0.0:{args.port}", flush=True)
     httpd.serve_forever()
     return 0

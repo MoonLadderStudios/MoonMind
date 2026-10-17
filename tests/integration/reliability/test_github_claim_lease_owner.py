@@ -194,6 +194,9 @@ async def test_merge_wait_keeps_claim_across_worker_replacement(
         "worker_replacement",
         "expired_before_launch",
         "completion_during_renewal",
+        "retry_before_launch",
+        "retry_during_execution",
+        "stalled_renewal",
     ],
 )
 async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
@@ -223,13 +226,17 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     # it to 1:1 here: this journey owns the running lease, and a sub-second
     # announcement deadline could never clear the launch stop margin.
     monkeypatch.setattr(leases, "PREPARING_LEASE_DIVISOR", 1)
+    short_lease = {"outage", "expired_before_launch", "stalled_renewal"}
     monkeypatch.setattr(
         leases,
         "LEASE_DURATION",
-        timedelta(seconds=10 if fault in {"outage", "expired_before_launch"} else 60),
+        timedelta(seconds=10 if fault in short_lease else 60),
     )
     monkeypatch.setattr(leases, "RENEW_INTERVAL", timedelta(seconds=0.4))
-    monkeypatch.setattr(lease_workflow, "RENEW_SECONDS", 0.5)
+    # The pre-launch window bounds every observation, so it must still fit a
+    # retry plus a confirming round trip, as 300s does for 30s Activities.
+    monkeypatch.setattr(lease_workflow, "RENEW_SECONDS", 2)
+    monkeypatch.setattr(lease_workflow, "RETRY_SECONDS", 0.2)
     monkeypatch.setattr(lease_workflow, "STOP_MARGIN_SECONDS", 2)
     brief = await tools.load_github_issue_preset_brief(
         {"repository": "example/repo", "issueNumber": 3970},
@@ -269,7 +276,12 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
                     start_to_close_timeout=timedelta(seconds=10),
                 )
                 return AgentRunResult(summary="fixture completed")
-            await workflow.sleep(4 if fault == "worker_replacement" else 60)
+            short_run = {
+                "worker_replacement",
+                "retry_before_launch",
+                "retry_during_execution",
+            }
+            await workflow.sleep(4 if fault in short_run else 60)
             return AgentRunResult(summary="fixture completed")
         except asyncio.CancelledError:
             await workflow.execute_activity(
@@ -290,12 +302,20 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     )
 
     renewal_calls = 0
+    renewal_results = []
 
     @activity.defn(name="github_issue.renew_claim")
     async def renew(payload: dict):
         nonlocal renewal_calls
         renewal_calls += 1
+        if fault == "stalled_renewal" and renewal_calls > 1:
+            await asyncio.sleep(60)  # the observation never answers
         result = await TemporalIntegrationActivities().github_issue_renew_claim(payload)
+        renewal_results.append(result)
+        if result["status"] == "retry" and fault.startswith("retry_"):
+            # The outage ends; the next observation reconciles the accepted
+            # update under the same attempt instead of repeating it blindly.
+            state.pop("failed_read_path", None)
         if fault == "completion_during_renewal" and renewal_calls > 1:
             renewal_pending.set()
             await asyncio.sleep(60)  # acknowledgement is still in flight at completion
@@ -303,7 +323,7 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
 
     request = AgentExecutionRequest(
         agentKind=agent_kind,
-        agentId="codex" if agent_kind == "managed" else "jules",
+        agentId="codex" if agent_kind == "managed" else "openclaw",
         correlationId=queue,
         idempotencyKey=queue,
         parameters={"issueClaimLease": lease},
@@ -311,6 +331,10 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     if fault == "expired_before_launch":
         now = leases.utc_now()
         monkeypatch.setattr(leases, "utc_now", lambda: now + timedelta(seconds=11))
+    comments_path = "/repos/example/repo/issues/3970/comments"
+    if fault == "retry_before_launch":
+        # The launch renewal's update lands, but its confirmation read fails.
+        state["fail_reads_after_update"] = comments_path
     options = {
         "task_queue": queue,
         "workflow_runner": UnsandboxedWorkflowRunner(),
@@ -332,8 +356,18 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
             result = await asyncio.wait_for(handle.result(), 15)
             assert result.summary == "fixture completed" and not preserved.is_set()
             return
+        if fault == "retry_during_execution":
+            state["fail_reads_after_update"] = comments_path
+        if fault == "stalled_renewal":
+            with pytest.raises(WorkflowFailureError):
+                # Bounded by the confirmed 10s lease, not the 30s Activity
+                # timeout of the stalled observation.
+                await asyncio.wait_for(handle.result(), 12)
+            assert preserved.is_set() and start_count == 1
+            assert not (await store.get(owner)).released
+            return
         if fault == "outage":
-            state["failed_read_path"] = "/repos/example/repo/issues/3970/comments"
+            state["failed_read_path"] = comments_path
             with pytest.raises(WorkflowFailureError):
                 await asyncio.wait_for(handle.result(), 20)
             assert preserved.is_set()
@@ -356,3 +390,13 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     assert result.summary == "fixture completed"
     assert start_count == 1 and not preserved.is_set()
     assert state["posts"] == 1
+    if fault.startswith("retry_"):
+        retried = next(
+            index
+            for index, item in enumerate(renewal_results)
+            if item["status"] == "retry"
+        )
+        assert renewal_results[retried]["reasonCode"] == "claim_read_failure"
+        assert renewal_results[retried + 1]["status"] == "renewed"
+        assert renewal_results[retried + 1]["attemptId"] == lease["attemptId"]
+        assert (await store.get(owner)).attempt_id == lease["attemptId"]

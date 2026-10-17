@@ -9,7 +9,7 @@ description = "MoonMind workflow automation and supporting tools."
 readme = "README.md"
 license = "Apache-2.0"
 authors = ["MoonMind Contributors <opensource@moonmind.ai>"]
-packages = [{ include = "moonmind" }, { include = "pr_resolver_core" }, { include = "moonmind_controller" }]
+packages = [{ include = "moonmind" }, { include = "pr_resolver_core" }]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.15"
@@ -100,7 +100,6 @@ markers = [
     "integration_ci: marks hermetic integration tests that are safe for required CI.",
     "provider_verification: marks live external-provider verification tests.",
     "codex: marks tests specific to the Codex provider.",
-    "jules: marks tests specific to the Jules provider.",
     "requires_credentials: marks tests that require real provider credentials.",
     "requires_gpu: marks tests that require a deployment-owned NVIDIA GPU host.",
 ]

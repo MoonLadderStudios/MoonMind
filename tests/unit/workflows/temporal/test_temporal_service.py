@@ -4713,12 +4713,17 @@ async def test_edit_changed_repository_updates_repository_search_attribute(
         assert result.search_attributes["mm_repo"] == "octo/other"
 
 
-async def _insert_historical_cloud_execution(session, *, runtime_recorded):
+_RETIRED_RUNTIMES = ("codex_cloud", "jules")
+
+
+async def _insert_historical_cloud_execution(
+    session, *, runtime_recorded, retired_runtime="codex_cloud"
+):
     parameters = {"workflow": {"instructions": "Preserve historical task"}}
     if runtime_recorded:
-        parameters["targetRuntime"] = "codex_cloud"
+        parameters["targetRuntime"] = retired_runtime
         parameters["workflow"]["runtime"] = {
-            "mode": "codex_cloud",
+            "mode": retired_runtime,
             "model": "saved-model",
         }
     record = TemporalExecutionCanonicalRecord(
@@ -4734,9 +4739,9 @@ async def _insert_historical_cloud_execution(session, *, runtime_recorded):
         entry="user_workflow",
         parameters=parameters,
         memo={"title": "Historical cloud task"},
-        search_attributes={"mm_integration": "codex_cloud", "mm_stage": "failed"},
+        search_attributes={"mm_integration": retired_runtime, "mm_stage": "failed"},
         integration_state={
-            "integration_name": "codex_cloud",
+            "integration_name": retired_runtime,
             "correlation_id": "archived-correlation",
             "external_operation_id": "archived-cloud-task",
             "normalized_status": "failed",
@@ -4749,15 +4754,18 @@ async def _insert_historical_cloud_execution(session, *, runtime_recorded):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retired_runtime", _RETIRED_RUNTIMES)
 @pytest.mark.parametrize("replacement", ["codex_cli", "openclaw"])
 @pytest.mark.parametrize("runtime_recorded", [True, False])
 async def test_terminal_cloud_rerun_admits_explicit_supported_replacement(
-    tmp_path, mock_client_adapter, replacement, runtime_recorded
+    tmp_path, mock_client_adapter, replacement, runtime_recorded, retired_runtime
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         source = await _insert_historical_cloud_execution(
-            session, runtime_recorded=runtime_recorded
+            session,
+            runtime_recorded=runtime_recorded,
+            retired_runtime=retired_runtime,
         )
         source_run_id = source.run_id
         source_parameters = json.loads(json.dumps(source.parameters))
@@ -4787,27 +4795,30 @@ async def test_terminal_cloud_rerun_admits_explicit_supported_replacement(
             "runId": source_run_id,
         }
         assert rerun.integration_state is None
-        assert rerun.search_attributes.get("mm_integration") != "codex_cloud"
+        assert rerun.search_attributes.get("mm_integration") != retired_runtime
         assert source.run_id == source_run_id
         assert source.state is MoonMindWorkflowState.FAILED
         assert source.close_status is TemporalExecutionCloseStatus.FAILED
         assert source.parameters == source_parameters
         assert source.integration_state == source_integration
-        assert source.search_attributes["mm_integration"] == "codex_cloud"
+        assert source.search_attributes["mm_integration"] == retired_runtime
         mock_client_adapter.update_workflow.assert_not_awaited()
         mock_client_adapter.start_workflow.assert_awaited_once()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retired_runtime", _RETIRED_RUNTIMES)
 @pytest.mark.parametrize("runtime_recorded", [True, False])
 @pytest.mark.parametrize("entrypoint", ["update", "fresh"])
 async def test_cloud_rerun_requires_explicit_replacement(
-    tmp_path, mock_client_adapter, runtime_recorded, entrypoint
+    tmp_path, mock_client_adapter, runtime_recorded, entrypoint, retired_runtime
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         source = await _insert_historical_cloud_execution(
-            session, runtime_recorded=runtime_recorded
+            session,
+            runtime_recorded=runtime_recorded,
+            retired_runtime=retired_runtime,
         )
         source_run_id = source.run_id
         source_parameters = json.loads(json.dumps(source.parameters))
@@ -4860,8 +4871,9 @@ async def test_terminal_cloud_rerun_accepts_nested_runtime_alias(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retired_runtime", _RETIRED_RUNTIMES)
 async def test_cloud_fresh_rerun_requires_replacement_before_preset_expansion(
-    tmp_path, mock_client_adapter, monkeypatch
+    tmp_path, mock_client_adapter, monkeypatch, retired_runtime
 ):
     expand = AsyncMock(
         return_value={
@@ -4875,11 +4887,11 @@ async def test_cloud_fresh_rerun_requires_replacement_before_preset_expansion(
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         source = await _insert_historical_cloud_execution(
-            session, runtime_recorded=False
+            session, runtime_recorded=False, retired_runtime=retired_runtime
         )
         source.parameters = {"workflow": {"taskTemplate": {"slug": "jira-orchestrate"}}}
         await session.commit()
-        with pytest.raises(TemporalExecutionValidationError, match="codex_cloud"):
+        with pytest.raises(TemporalExecutionValidationError, match=retired_runtime):
             await service.create_fresh_rerun_execution(
                 workflow_id=source.workflow_id,
                 idempotency_key="no-implicit-template-replacement",
@@ -6523,7 +6535,7 @@ async def test_signal_pause_recovery_and_external_event_transitions(
         await service.signal_execution(
             workflow_id=created.workflow_id,
             signal_name="ExternalEvent",
-            payload={"source": "jules", "event_type": "completed"},
+            payload={"source": "openclaw", "event_type": "completed"},
             payload_artifact_ref="artifact://events/1",
         )
         signaled = await service.describe_execution(created.workflow_id)
@@ -7889,7 +7901,7 @@ async def test_signal_external_event_requires_source_and_event_type(tmp_path):
             await service.signal_execution(
                 workflow_id=created.workflow_id,
                 signal_name="ExternalEvent",
-                payload={"source": "jules"},
+                payload={"source": "openclaw"},
                 payload_artifact_ref=None,
             )
 
@@ -7914,7 +7926,7 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
 
         configured = await service.configure_integration_monitoring(
             workflow_id=created.workflow_id,
-            integration_name="Jules",
+            integration_name="OpenClaw",
             correlation_id=None,
             external_operation_id="task-123",
             normalized_status="running",
@@ -7922,17 +7934,17 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
             callback_supported=True,
             callback_correlation_key=None,
             recommended_poll_seconds=30,
-            external_url="https://jules.example.test/tasks/task-123",
+            external_url="https://openclaw.example.test/tasks/task-123",
             provider_summary={"queue": "primary"},
             result_refs=["artifact://events/start"],
         )
 
         assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
         assert configured.awaiting_external is True
-        assert configured.search_attributes["mm_integration"] == "jules"
+        assert configured.search_attributes["mm_integration"] == "openclaw"
         assert (
             configured.memo["external_url"]
-            == "https://jules.example.test/tasks/task-123"
+            == "https://openclaw.example.test/tasks/task-123"
         )
         assert configured.integration_state is not None
         assert configured.integration_state["callback_correlation_key"]
@@ -7967,7 +7979,7 @@ async def test_configure_integration_monitoring_rejects_waiting_states(tmp_path)
             with pytest.raises(TemporalExecutionValidationError):
                 await service.configure_integration_monitoring(
                     workflow_id=created.workflow_id,
-                    integration_name="jules",
+                    integration_name="openclaw",
                     correlation_id=None,
                     external_operation_id=f"task-{state.value}",
                     normalized_status="running",
@@ -8006,7 +8018,7 @@ async def test_configure_integration_monitoring_rejects_blank_external_operation
         ):
             await service.configure_integration_monitoring(
                 workflow_id=created.workflow_id,
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id=None,
                 external_operation_id="   ",
                 normalized_status="running",
@@ -8040,7 +8052,7 @@ async def test_ingest_integration_callback_deduplicates_provider_event_ids(
         )
         configured = await service.configure_integration_monitoring(
             workflow_id=created.workflow_id,
-            integration_name="jules",
+            integration_name="openclaw",
             correlation_id="corr-1",
             external_operation_id="task-123",
             normalized_status="running",
@@ -8054,7 +8066,7 @@ async def test_ingest_integration_callback_deduplicates_provider_event_ids(
         )
 
         first = await service.ingest_integration_callback(
-            integration_name="jules",
+            integration_name="openclaw",
             callback_correlation_key="cb-123",
             payload={
                 "event_type": "status_changed",
@@ -8065,7 +8077,7 @@ async def test_ingest_integration_callback_deduplicates_provider_event_ids(
             payload_artifact_ref=None,
         )
         second = await service.ingest_integration_callback(
-            integration_name="jules",
+            integration_name="openclaw",
             callback_correlation_key="cb-123",
             payload={
                 "event_type": "status_changed",
@@ -8104,7 +8116,7 @@ async def test_wait_cycle_continue_as_new_preserves_active_integration_monitorin
         )
         configured = await service.configure_integration_monitoring(
             workflow_id=created.workflow_id,
-            integration_name="jules",
+            integration_name="openclaw",
             correlation_id="corr-continue",
             external_operation_id="task-continue",
             normalized_status="running",
@@ -8889,7 +8901,7 @@ async def test_polling_backoff_resets_after_status_change_and_updates_visibility
         )
         configured = await service.configure_integration_monitoring(
             workflow_id=created.workflow_id,
-            integration_name="jules",
+            integration_name="openclaw",
             correlation_id="corr-backoff",
             external_operation_id="task-backoff",
             normalized_status="queued",
@@ -8952,7 +8964,7 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
         )
         await service.configure_integration_monitoring(
             workflow_id=created.workflow_id,
-            integration_name="jules",
+            integration_name="openclaw",
             correlation_id="corr-late",
             external_operation_id="task-late",
             normalized_status="running",
@@ -8965,7 +8977,7 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
             result_refs=[],
         )
         await service.ingest_integration_callback(
-            integration_name="jules",
+            integration_name="openclaw",
             callback_correlation_key="cb-late",
             payload={
                 "event_type": "completed",
@@ -8976,7 +8988,7 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
             payload_artifact_ref=None,
         )
         late = await service.ingest_integration_callback(
-            integration_name="jules",
+            integration_name="openclaw",
             callback_correlation_key="cb-late",
             payload={
                 "event_type": "progress",
@@ -9008,7 +9020,7 @@ async def test_failed_poll_marks_integration_error_summary(tmp_path):
         )
         await service.configure_integration_monitoring(
             workflow_id=created.workflow_id,
-            integration_name="jules",
+            integration_name="openclaw",
             correlation_id="corr-fail",
             external_operation_id="task-fail",
             normalized_status="running",

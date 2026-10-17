@@ -399,7 +399,7 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
                 "provider_profile_disabled",
             ),
             (
-                {"workflow.default_runtime": "jules"},
+                {"workflow.default_runtime": "claude_code"},
                 {"workflow.default_runtime": 1},
                 "workflow.default_runtime",
                 "runtime_policy_denied",
@@ -584,7 +584,7 @@ def test_mm656_boundary_validation_helpers_return_structured_issues():
     descriptor_issues = service.validate_descriptor_generation()
     preview_issues = service.validate_effective_preview(
         "workflow.default_runtime",
-        "jules",
+        "claude_code",
         scope="workspace",
     )
     launch_issues = service.validate_launch_execution(

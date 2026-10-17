@@ -724,19 +724,19 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
             configure_integration = await client.post(
                 f"/api/executions/{workflow_id}/integration",
                 json={
-                    "integrationName": "jules",
+                    "integrationName": "openclaw",
                     "externalOperationId": "task-123",
                     "normalizedStatus": "running",
                     "providerStatus": "queued",
                     "callbackSupported": True,
                     "recommendedPollSeconds": 30,
-                    "externalUrl": "https://jules.example.test/workflows/task-123",
+                    "externalUrl": "https://openclaw.example.test/workflows/task-123",
                 },
             )
             assert configure_integration.status_code == 202
             configured_body = configure_integration.json()
             assert configured_body["state"] == "awaiting_external"
-            assert configured_body["searchAttributes"]["mm_integration"] == "jules"
+            assert configured_body["searchAttributes"]["mm_integration"] == "openclaw"
             callback_key = configured_body["integration"]["callbackCorrelationKey"]
             assert callback_key
 
@@ -809,12 +809,12 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
             assert resume_response.status_code == 202
             resume_body = resume_response.json()
             # The pause/resume overlay preserves the underlying state: the
-            # jules integration is still pending here, so resuming clears
+            # external integration is still pending here, so resuming clears
             # the operator pause but correctly stays awaiting_external until
             # the integration poll/callback below completes.
             assert resume_body["state"] == "awaiting_external"
             # Resume clears the operator pause but restores the still-pending
-            # Jules integration wait: callbackSupported=True records
+            # integration wait: callbackSupported=True records
             # waitingReason="external_callback" with attention_required=False
             # at the record level. The detail serializer reports
             # attentionRequired=True for any awaiting_external dashboard
@@ -836,7 +836,7 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
             assert poll_response.json()["integration"]["monitorAttemptCount"] == 1
 
             callback_response = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key}",
+                f"/api/integrations/openclaw/callbacks/{callback_key}",
                 json={
                     "eventType": "completed",
                     "providerEventId": "evt-1",

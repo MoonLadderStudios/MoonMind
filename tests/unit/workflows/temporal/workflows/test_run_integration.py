@@ -1,4 +1,3 @@
-import asyncio
 import inspect
 import json
 from datetime import datetime, timezone, timedelta
@@ -12,7 +11,6 @@ pytest.importorskip("temporalio")
 
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
-    INTEGRATION_POLL_LOOP_PATCH,
     NATIVE_PR_BRANCH_DEFAULTS_PATCH,
     NATIVE_PR_LEASE_CONFLICT_GATE_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
@@ -499,24 +497,12 @@ def test_jira_integration_parameter_is_visibility_only() -> None:
     workflow._record_integration_from_parameters({"integration": "jira"})
 
     assert workflow._integration_label == "jira"
-    assert workflow._integration is None
-
-
-def test_jules_integration_parameter_enables_external_monitor() -> None:
-    workflow = MoonMindRunWorkflow()
-
-    workflow._record_integration_from_parameters({"integration": "JULES"})
-
-    assert workflow._integration_label == "jules"
-    assert workflow._integration == "jules"
-    assert workflow._integration_activity_type("start") == "integration.jules.start"
 
 
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
-    workflow._integration = "jules"
     workflow._repo = "org/repo"
     
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
@@ -551,100 +537,6 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     return workflow
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_skips_integration_after_merge_gate_cancellation(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    integration_calls: list[dict[str, Any]] = []
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: Any,
-        **_kwargs: Any,
-    ) -> Any:
-        if activity_type == "artifact.read":
-            artifact_ref = (
-                payload.get("artifact_ref")
-                if isinstance(payload, dict)
-                else getattr(payload, "artifact_ref", None)
-            )
-            if artifact_ref == "art:sha256:456":
-                return (
-                    b'{"skills":[{"name":"repo.noop","version":"1.0",'
-                    b'"description":"No-op","inputs":{"schema":{"type":"object"}},'
-                    b'"outputs":{"schema":{"type":"object"}},'
-                    b'"executor":{"activity_type":"mm.skill.execute",'
-                    b'"selector":{"mode":"by_capability"}},'
-                    b'"requirements":{"capabilities":["sandbox"]},'
-                    b'"policies":{"timeouts":{"start_to_close_seconds":60,'
-                    b'"schedule_to_close_seconds":120},"retries":{"max_attempts":1}}}]}'
-                )
-            return _mock_plan_payload(
-                [
-                    {
-                        "id": "step-1",
-                        "tool": {
-                            "type": "agent_runtime",
-                            "name": "jules",
-                        },
-                        "inputs": {"instructions": "Do nothing."},
-                    }
-                ]
-            )
-        return {"status": "COMPLETED", "outputs": {}}
-
-    async def fake_execute_child_workflow(
-        _workflow_type: str,
-        _args: Any,
-        **_kwargs: Any,
-    ) -> Any:
-        return {
-            "summary": "No-op completed",
-            "metadata": {"push_status": "not_requested"},
-            "output_refs": [],
-        }
-
-    async def fake_merge_gate(
-        *,
-        parameters: dict[str, Any],
-        pull_request_url: str | None,
-    ) -> None:
-        mock_run_workflow._cancel_requested = True
-        mock_run_workflow._set_state("canceled", summary="merge automation canceled")
-
-    async def fake_integration_stage(
-        *,
-        parameters: dict[str, Any],
-        plan_ref: str | None,
-    ) -> None:
-        integration_calls.append({"parameters": parameters, "plan_ref": plan_ref})
-
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "execute_activity",
-        fake_execute_activity,
-    )
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "execute_child_workflow",
-        fake_execute_child_workflow,
-    )
-    monkeypatch.setattr(mock_run_workflow, "_maybe_start_merge_gate", fake_merge_gate)
-    monkeypatch.setattr(
-        mock_run_workflow,
-        "_run_integration_stage",
-        fake_integration_stage,
-    )
-
-    await mock_run_workflow._run_execution_stage(
-        parameters={"publishMode": "none"},
-        plan_ref="plan-1",
-    )
-
-    assert integration_calls == []
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "retirement_patch_enabled",
     [True, False],
@@ -657,7 +549,6 @@ async def test_run_execution_stage_skips_retired_doc_reconciliation_step(
 ) -> None:
     """MoonMind#4808: plans compiled before the pass was removed still drain."""
 
-    mock_run_workflow._integration = None
     launched: list[str] = []
 
     async def fake_execute_activity(
@@ -670,7 +561,7 @@ async def test_run_execution_stage_skips_retired_doc_reconciliation_step(
             [
                 {
                     "id": "reconcile-docs",
-                    "tool": {"type": "agent_runtime", "name": "jules"},
+                    "tool": {"type": "agent_runtime", "name": "openclaw"},
                     "inputs": {
                         "title": "Reconcile declarative docs",
                         "instructions": "Run moonspec-doc-reconcile.",
@@ -679,7 +570,7 @@ async def test_run_execution_stage_skips_retired_doc_reconciliation_step(
                 },
                 {
                     "id": "final-status",
-                    "tool": {"type": "agent_runtime", "name": "jules"},
+                    "tool": {"type": "agent_runtime", "name": "openclaw"},
                     "inputs": {"instructions": "Finalize status."},
                 },
             ]
@@ -759,7 +650,6 @@ async def test_run_execution_stage_recovers_merge_handoff_from_publish_context(
 ) -> None:
     pull_request_url = "https://github.com/org/repo/pull/3343"
     merge_gate_urls: list[str | None] = []
-    mock_run_workflow._integration = None
     mock_run_workflow._publish_status = "not_required"
     mock_run_workflow._publish_reason = "Earlier assessment produced no commits."
     mock_run_workflow._publish_context.update(
@@ -784,7 +674,7 @@ async def test_run_execution_stage_recovers_merge_handoff_from_publish_context(
             [
                 {
                     "id": "final-status",
-                    "tool": {"type": "agent_runtime", "name": "jules"},
+                    "tool": {"type": "agent_runtime", "name": "openclaw"},
                     "inputs": {"instructions": "Finalize status."},
                 }
             ]
@@ -861,132 +751,10 @@ async def test_run_execution_stage_recovers_merge_handoff_from_publish_context(
     assert mock_run_workflow._publish_status == expected_status
 
 @pytest.mark.asyncio
-async def test_run_integration_stage_poll_driven_completion(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: list[tuple[str, dict[str, Any]]] = []
-    
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: Any,
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        captured.append((activity_type, _normalize_payload(payload)))
-        if activity_type == "artifact.read":
-            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-1", "tracking_ref": "track-1"}
-        if activity_type == "integration.jules.status":
-            # Simulate completion on the first poll
-            return {"normalized_status": "completed", "tracking_ref": "track-2"}
-        return {}
-
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        # Simulate timeout so we fall through to polling
-        raise asyncio.TimeoutError()
-
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
-
-    await mock_run_workflow._run_integration_stage(
-        parameters={"repo": "org/repo"},
-        plan_ref="plan-1",
-    )
-    
-    # Expected activity calls: artifact.read, start, status
-    assert len(captured) == 3
-    assert captured[0][0] == "artifact.read"
-    assert captured[1][0] == "integration.jules.start"
-    assert captured[2][0] == "integration.jules.status"
-    assert mock_run_workflow._external_status == "completed"
-
-@pytest.mark.asyncio
-async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Compatibility: polling completion must use the replay-stable patch id."""
-    patch_calls: list[str] = []
-
-    def fake_patched(patch_id: str) -> bool:
-        patch_calls.append(patch_id)
-        return True
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: dict[str, Any],
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        if activity_type == "artifact.read":
-            return _mock_plan_payload(
-                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
-            )
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-1", "tracking_ref": "track-1"}
-        if activity_type == "integration.jules.status":
-            return {"normalized_status": "completed", "tracking_ref": "track-2"}
-        return {}
-
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        raise asyncio.TimeoutError()
-
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
-
-    await mock_run_workflow._run_integration_stage(
-        parameters={"repo": "org/repo"},
-        plan_ref="plan-1",
-    )
-
-    assert patch_calls, "workflow.patched should be evaluated for integration poll completion"
-    assert INTEGRATION_POLL_LOOP_PATCH in patch_calls
-    assert mock_run_workflow._external_status == "completed"
-
-@pytest.mark.asyncio
-async def test_run_integration_legacy_unpatched_poll_completion_still_completes(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """In-flight history without the patch marker: legacy resume path still reaches completed."""
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: dict[str, Any],
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        if activity_type == "artifact.read":
-            return _mock_plan_payload(
-                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
-            )
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-1", "tracking_ref": "track-1"}
-        if activity_type == "integration.jules.status":
-            return {"normalized_status": "completed", "tracking_ref": "track-2"}
-        return {}
-
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        raise asyncio.TimeoutError()
-
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
-
-    await mock_run_workflow._run_integration_stage(
-        parameters={"repo": "org/repo"},
-        plan_ref="plan-1",
-    )
-
-    assert mock_run_workflow._external_status == "completed"
-
-
-@pytest.mark.asyncio
 async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mock_run_workflow._integration = None
     captured: list[tuple[str, Any, dict[str, Any]]] = []
 
     async def fake_execute_activity(
@@ -1083,7 +851,6 @@ async def test_run_execution_stage_hands_controlling_verification_to_finalizer(
 ) -> None:
     """Regression for workflow mm:341551dd-06d0-4c80-9563-77b12b144499."""
 
-    mock_run_workflow._integration = None
     mock_run_workflow._publish_context["moonSpecGate"] = {
         "logicalStepId": "verify",
         "verdict": "FULLY_IMPLEMENTED",
@@ -1217,116 +984,6 @@ def test_execute_kwargs_retry_override_preserves_route_retry_policy() -> None:
     assert retry_policy.non_retryable_error_types == ["invalid_input"]
     assert kwargs["heartbeat_timeout"] == timedelta(seconds=10)
 
-
-@pytest.mark.asyncio
-async def test_run_execution_stage_bundles_consecutive_jules_nodes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workflow = MoonMindRunWorkflow()
-    workflow._owner_id = "owner-1"
-    workflow._repo = "org/repo"
-    workflow._title = "Bundled Jules execution"
-
-    child_calls: list[object] = []
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: dict[str, Any],
-        **_kwargs: Any,
-    ) -> Any:
-        if activity_type == "artifact.read":
-            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "art:sha256:456":
-                import json
-
-                return json.dumps(
-                    {
-                        "skills": [
-                            {
-                                "name": "repo.run_tests",
-                                "description": "Run tests",
-                                "inputs": {"schema": {"type": "object"}},
-                                "outputs": {"schema": {"type": "object"}},
-                                "executor": {
-                                    "activity_type": "mm.skill.execute",
-                                    "selector": {"mode": "by_capability"},
-                                },
-                                "requirements": {"capabilities": ["sandbox"]},
-                                "policies": {
-                                    "timeouts": {
-                                        "start_to_close_seconds": 1800,
-                                        "schedule_to_close_seconds": 3600,
-                                    },
-                                    "retries": {"max_attempts": 3},
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
-            return _mock_plan_payload(
-                nodes=[
-                    {
-                        "id": "jules-step-1",
-                        "tool": {"type": "agent_runtime", "name": "jules"},
-                        "inputs": {
-                            "repository": "org/repo",
-                            "startingBranch": "main",
-                            "publishMode": "none",
-                            "instructions": "Step 1",
-                        },
-                    },
-                    {
-                        "id": "jules-step-2",
-                        "tool": {"type": "agent_runtime", "name": "jules"},
-                        "inputs": {
-                            "repository": "org/repo",
-                            "startingBranch": "main",
-                            "publishMode": "none",
-                            "instructions": "Step 2",
-                        },
-                    },
-                ]
-            )
-        if activity_type == "artifact.create":
-            return ({"artifact_id": "artifact://bundle/1"}, {"upload_url": "unused"})
-        if activity_type == "artifact.write_complete":
-            return {"ok": True}
-        if activity_type == "resilience.compile_policy":
-            return _mock_resilience_policy_envelope(payload)
-        return {"status": "COMPLETED", "outputs": {}}
-
-    async def fake_execute_child_workflow(
-        workflow_type: str,
-        args: object,
-        **_kwargs: Any,
-    ) -> object:
-        child_calls.append(args)
-        return {"summary": "Bundled run complete", "metadata": {}, "output_refs": []}
-
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
-    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
-    monkeypatch.setattr(run_workflow_module.workflow, "upsert_search_attributes", lambda _attributes: None)
-    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    workflow_info = type(
-        "WorkflowInfo",
-        (),
-        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}, "parent": None},
-    )
-    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
-
-    await workflow._run_execution_stage(
-        parameters={"repo": "org/repo", "publishMode": "none"},
-        plan_ref="plan-1",
-    )
-
-    assert len(child_calls) == 1
-    request = child_calls[0]
-    assert "Ordered Checklist:" in request.instruction_ref
-    assert "1. Step 1" in request.instruction_ref
-    assert "2. Step 2" in request.instruction_ref
-    assert request.parameters["metadata"]["moonmind"]["bundleManifestRef"] == "artifact://bundle/1"
-    assert request.parameters["metadata"]["moonmind"]["bundleStrategy"] == "one_shot_jules"
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
@@ -1463,90 +1120,6 @@ async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
         "relativePath": "repo",
     }
     assert [call[0] for call in captured].count("container_job.status") == 1
-
-@pytest.mark.asyncio
-async def test_run_execution_stage_skips_integration_after_merge_automation_cancels(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workflow = MoonMindRunWorkflow()
-    workflow._owner_id = "owner-1"
-    workflow._integration = "jules"
-    workflow._repo = "org/repo"
-    integration_calls = 0
-
-    async def fake_execute_activity(
-        activity_type: str,
-        _payload: Any,
-        **_kwargs: Any,
-    ) -> Any:
-        assert activity_type == "artifact.read"
-        return _mock_plan_payload(
-            [
-                {
-                    "id": "noop",
-                    "tool": {
-                        "type": "agent_runtime",
-                        "name": "codex",
-                    },
-                    "inputs": {"instructions": "No-op"},
-                }
-            ]
-        )
-
-    async def fake_maybe_start_merge_gate(
-        *,
-        parameters: dict[str, Any],
-        pull_request_url: str | None,
-    ) -> None:
-        assert parameters["publishMode"] == "none"
-        assert pull_request_url is None
-        workflow._cancel_requested = True
-
-    async def fake_run_integration_stage(
-        *,
-        parameters: dict[str, Any],
-        plan_ref: str | None,
-    ) -> None:
-        nonlocal integration_calls
-        integration_calls += 1
-
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "execute_activity",
-        fake_execute_activity,
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_ordered_plan_node_payloads",
-        lambda *, nodes, edges: [],
-    )
-    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "upsert_search_attributes",
-        lambda _attributes: None,
-    )
-    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "patched",
-        lambda patch_id: patch_id == "run-conditional-registry-read-v1",
-    )
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "wait_condition",
-        _immediate_wait_condition,
-    )
-    monkeypatch.setattr(workflow, "_maybe_start_merge_gate", fake_maybe_start_merge_gate)
-    monkeypatch.setattr(workflow, "_run_integration_stage", fake_run_integration_stage)
-
-    await workflow._run_execution_stage(
-        parameters={"repo": "org/repo", "publishMode": "none"},
-        plan_ref="plan-1",
-    )
-
-    assert integration_calls == 0
-
 
 @pytest.mark.asyncio
 async def test_wait_if_paused_uses_legacy_gate_when_patch_marker_absent(
@@ -1782,7 +1355,6 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "org/repo"
-    workflow._integration = None
     child_requests: list[AgentExecutionRequest] = []
     child_workflow_ids: list[str] = []
     manifests: list[tuple[str, int, str | None]] = []
@@ -1973,7 +1545,6 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "org/repo"
-    workflow._integration = None
     child_requests: list[AgentExecutionRequest] = []
     start_workspaces: dict[int, dict[str, Any]] = {}
     # ``workspace.capture_checkpoint`` records compact artifact ids, exactly as
@@ -2186,7 +1757,6 @@ async def test_run_execution_stage_preserves_step_deadline_across_interruptions(
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "org/repo"
-    workflow._integration = None
     child_requests: list[AgentExecutionRequest] = []
     clock = {"now": datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)}
 
@@ -2334,337 +1904,6 @@ async def test_run_execution_stage_preserves_step_deadline_across_interruptions(
         assert successor_policy["timeout_seconds"] == 3600
         assert successor_policy["progress_stall_seconds"] <= 3600
 
-
-@pytest.mark.asyncio
-async def test_run_integration_stage_signal_driven_completion(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: list[tuple[str, dict[str, Any]]] = []
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: Any,
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        captured.append((activity_type, _normalize_payload(payload)))
-        if activity_type == "artifact.read":
-            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-1", "tracking_ref": "track-1"}
-        return {}
-
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        # Simulate an external event arriving during the wait
-        mock_run_workflow.external_event({
-            "correlation_id": "ext-1",
-            "normalized_status": "completed"
-        })
-        return
-
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
-
-    await mock_run_workflow._run_integration_stage(
-        parameters={"repo": "org/repo"},
-        plan_ref="plan-1",
-    )
-
-    # Expected activity calls: artifact.read, start only, because it woke up via signal and skipped polling
-    assert len(captured) == 2
-    assert captured[0][0] == "artifact.read"
-    assert captured[1][0] == "integration.jules.start"
-    assert mock_run_workflow._external_status == "completed"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("bound_merge", [False, True])
-@pytest.mark.parametrize("durable_merge", [False, True])
-@pytest.mark.parametrize("canonical_target", [False, True])
-@pytest.mark.parametrize("publish_base", [None, "trunk"])
-async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-    bound_merge: bool,
-    durable_merge: bool,
-    canonical_target: bool,
-    publish_base: str | None,
-) -> None:
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "patched",
-        lambda patch: (bound_merge and patch == "jules-merge-target-authority-v1")
-        or (durable_merge and patch == "jules-merge-durable-candidate-v1")
-        or (canonical_target and patch == "jules-merge-canonical-authority-v1"),
-    )
-    captured: list[tuple[str, dict[str, Any]]] = []
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: Any,
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        captured.append((activity_type, _normalize_payload(payload)))
-        if activity_type == "artifact.read":
-            return _mock_plan_payload(
-                [
-                    {
-                        "id": "1",
-                        "tool": {"type": "skill", "name": "t"},
-                        "inputs": {"instructions": "Do something"},
-                    }
-                ]
-            )
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-1"}
-        if activity_type == "integration.jules.fetch_result":
-            return {"url": "https://github.com/org/repo/pull/123", "summary": "Done"}
-        if activity_type == "repo.merge_pr":
-            if durable_merge and not payload.get("expected_repository"):
-                return {"merged": False, "reasonCode": "merge_authority_required"}
-            if durable_merge and not payload.get("expected_head_sha"):
-                return {"merged": False, "reasonCode": "merge_head_resolved", "expectedHeadSha": "a" * 40}
-            return {"merged": True, "summary": "Merged successfully"}
-        return {}
-
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        # Simulate signal arriving
-        mock_run_workflow.external_event(
-            {"correlation_id": "ext-1", "normalized_status": "completed"}
-        )
-        return
-
-    monkeypatch.setattr(
-        run_workflow_module.workflow, "execute_activity", fake_execute_activity
-    )
-    monkeypatch.setattr(
-        run_workflow_module.workflow, "wait_condition", fake_wait_condition
-    )
-
-    if canonical_target:
-        mock_run_workflow._repo = None
-        parameters = {
-            "publishMode": "branch",
-            "workspaceSpec": {"repositoryTarget": {
-                "provider": "git",
-                "repository": {"name": "org/repo"},
-                "branch": {"name": "release"},
-            }},
-        }
-    else:
-        parameters = {
-            "repo": "org/repo",
-            "publishMode": "branch",
-            "workspaceSpec": {"startingBranch": "feature-branch"},
-        }
-    if publish_base is not None:
-        parameters["publishBaseBranch"] = publish_base
-    await mock_run_workflow._run_integration_stage(
-        parameters=parameters,
-        plan_ref="plan-1",
-    )
-
-    # Expected activity calls: fetch plan, start, fetch_result, merge_pr
-    assert len(captured) == 4 + (1 + int(not bound_merge) if durable_merge else 0)
-    assert captured[0][0] == "artifact.read"
-    assert captured[1][0] == "integration.jules.start"
-    assert captured[2][0] == "integration.jules.fetch_result"
-    assert captured[3][0] == "repo.merge_pr"
-
-    # Verify merge_pr payload
-    merge_payload = captured[3][1]
-    # The activity always receives the authored destination, even without an override.
-    expected = {"pr_url": "https://github.com/org/repo/pull/123"}
-    target_branch = publish_base or ("release" if canonical_target else "feature-branch")
-    if bound_merge:
-        expected.update(expected_repository="org/repo", target_branch=target_branch)
-    elif publish_base:
-        expected["target_branch"] = publish_base
-    assert merge_payload == expected
-    if durable_merge:
-        assert captured[-1] == ("repo.merge_pr", {
-            "pr_url": "https://github.com/org/repo/pull/123",
-            "expected_repository": "org/repo", "target_branch": target_branch,
-            "expected_head_sha": "a" * 40,
-        })
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_pending", [False, True])
-async def test_run_integration_stage_branch_publish_requires_pr_url(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-    legacy_pending: bool,
-) -> None:
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "patched",
-        lambda patch: (not legacy_pending and patch == "jules-merge-target-authority-v1")
-        or patch == "jules-merge-durable-candidate-v1",
-    )
-
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: dict[str, Any],
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        if activity_type == "artifact.read":
-            return _mock_plan_payload(
-                [
-                    {
-                        "id": "1",
-                        "tool": {"type": "skill", "name": "t"},
-                        "inputs": {"instructions": "Do something"},
-                    }
-                ]
-            )
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-1"}
-        if activity_type == "integration.jules.fetch_result":
-            return {
-                "external_url": "https://jules.google/sessions/123",
-                "summary": "Done: https://github.com/org/repo/pull/123",
-            }
-        if activity_type == "repo.merge_pr":
-            if not legacy_pending:
-                pytest.fail("Summary text must not authorize a merge")
-            if not payload.get("expected_repository"):
-                return {"merged": False, "reasonCode": "merge_authority_required"}
-            # The resumed request must retain the structured session URL,
-            # which the activity rejects, rather than adopt the summary URL.
-            assert payload["pr_url"] == "https://jules.google/sessions/123"
-            return {"merged": False, "summary": "No structured PR URL found"}
-        return {}
-
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        mock_run_workflow.external_event(
-            {"correlation_id": "ext-1", "normalized_status": "completed"}
-        )
-
-    monkeypatch.setattr(
-        run_workflow_module.workflow, "execute_activity", fake_execute_activity
-    )
-    monkeypatch.setattr(
-        run_workflow_module.workflow, "wait_condition", fake_wait_condition
-    )
-
-    with pytest.raises(ValueError, match="PR URL found"):
-        await mock_run_workflow._run_integration_stage(
-            parameters={
-                "repo": "org/repo",
-                "publishMode": "branch",
-                "workspaceSpec": {"startingBranch": "feature-branch"},
-            },
-            plan_ref="plan-1",
-        )
-
-
-@pytest.mark.asyncio
-async def test_run_integration_stage_branch_publish_requires_merge_success(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: dict[str, Any],
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        if activity_type == "artifact.read":
-            return _mock_plan_payload(
-                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
-            )
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-1"}
-        if activity_type == "integration.jules.fetch_result":
-            return {"url": "https://github.com/org/repo/pull/123", "summary": "Done"}
-        if activity_type == "repo.merge_pr":
-            return {"merged": False, "summary": "Merge rejected"}
-        return {}
-
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        mock_run_workflow.external_event(
-            {"correlation_id": "ext-1", "normalized_status": "completed"}
-        )
-
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
-
-    with pytest.raises(ValueError, match="merge failed"):
-        await mock_run_workflow._run_integration_stage(
-            parameters={
-                "repo": "org/repo",
-                "publishMode": "branch",
-                "workspaceSpec": {"startingBranch": "feature-branch"},
-            },
-            plan_ref="plan-1",
-        )
-
-@pytest.mark.asyncio
-async def test_run_integration_stage_multi_step_bundles_into_single_start(
-    mock_run_workflow: MoonMindRunWorkflow,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: list[tuple[str, dict[str, Any]]] = []
-    
-    async def fake_execute_activity(
-        activity_type: str,
-        payload: Any,
-        **_kwargs: Any,
-    ) -> Any:
-        captured.append((activity_type, _normalize_payload(payload)))
-        if activity_type == "artifact.read":
-            return _mock_plan_payload(
-                nodes=[
-                    {"id": "step1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 1"}},
-                    {"id": "step2", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 2"}},
-                    {"id": "step3", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 3"}},
-                ],
-                edges=[
-                    {"from": "step1", "to": "step2"},
-                    {"from": "step2", "to": "step3"}
-                ]
-            )
-        if activity_type == "artifact.create":
-            return ({"artifact_id": "artifact://bundle/1"}, {"upload_url": "unused"})
-        if activity_type == "artifact.write_complete":
-            return {"ok": True}
-        if activity_type == "integration.jules.start":
-            return {"external_id": "ext-session-123", "tracking_ref": "track-1"}
-        if activity_type == "integration.jules.status":
-            return {"normalized_status": "completed"}
-        return {}
-
-    def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
-        raise asyncio.TimeoutError()
-
-    def fake_patched(patch_id: str) -> bool:
-        return True
-
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
-
-    await mock_run_workflow._run_integration_stage(
-        parameters={"repo": "org/repo"},
-        plan_ref="plan-1",
-    )
-    
-    start_calls = [c for c in captured if c[0] == "integration.jules.start"]
-    artifact_create_calls = [c for c in captured if c[0] == "artifact.create"]
-    artifact_write_calls = [c for c in captured if c[0] == "artifact.write_complete"]
-    status_calls = [c for c in captured if c[0] == "integration.jules.status"]
-    
-    assert len(start_calls) == 1
-    description = start_calls[0][1]["parameters"]["description"]
-    assert "Ordered Checklist:" in description
-    assert "1. Step 1" in description
-    assert "2. Step 2" in description
-    assert "3. Step 3" in description
-    assert len(artifact_create_calls) == 1
-    assert len(artifact_write_calls) == 1
-    assert all(c[0] != "integration.jules.send_message" for c in captured)
-    assert len(status_calls) == 1
-    assert mock_run_workflow._external_status == "completed"
 
 def test_determine_publish_completion_fails_for_no_commit_pr_publish(
     mock_run_workflow: MoonMindRunWorkflow,
@@ -3722,11 +2961,11 @@ def test_record_execution_context_preserves_provider_native_pr_record(
                     "readinessState": "pending",
                     "headBranch": "feature/provider-native",
                     "baseBranch": "main",
-                    "source": "jules",
+                    "source": "openclaw",
                     "metadata": {
                         "title": "MM-676 Capture provider-native PR metadata",
                         "body": "Jira: MM-676\nSummary: Captured provider metadata.",
-                        "provider": "jules",
+                        "provider": "openclaw",
                     },
                 },
             },
@@ -3749,12 +2988,12 @@ def test_record_execution_context_preserves_provider_native_pr_record(
         "readinessState": "pending",
         "headBranch": "feature/provider-native",
         "baseBranch": "main",
-        "source": "jules",
+        "source": "openclaw",
     }
     assert mock_run_workflow._publish_context["providerNativePrMetadata"] == {
         "title": "MM-676 Capture provider-native PR metadata",
         "body": "Jira: MM-676\nSummary: Captured provider metadata.",
-        "provider": "jules",
+        "provider": "openclaw",
     }
     assert mock_run_workflow._publish_context["prMetadata"] == {
         "title": "MM-676 Capture provider-native PR metadata",
@@ -4330,7 +3569,6 @@ def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_c
 def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
-    mock_run_workflow._integration = None
 
     status, message, publish_failure = mock_run_workflow._determine_publish_completion(
         parameters={"publishMode": "pr"}
@@ -7693,7 +6931,6 @@ async def test_issue_implement_status_handoff_creates_pr_from_accepted_remote_he
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mock_run_workflow._integration = None
     mock_run_workflow._repo = "MoonLadderStudios/MoonMind"
     mock_run_workflow._assessment_context = {
         "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
@@ -7758,6 +6995,84 @@ async def test_issue_implement_status_handoff_creates_pr_from_accepted_remote_he
     assert mock_run_workflow._publish_status == "published"
     assert mock_run_workflow._publish_context["pullRequestUrl"] == url
     assert mock_run_workflow._accepted_published_base_branch() == "main"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("patch_enabled", [False, True])
+async def test_issue_search_pr_is_titled_from_trusted_source_issue(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    patch_enabled: bool,
+) -> None:
+    search_text = "Resolve one eligible open issue created by the GitHub account"
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "patched", lambda _patch_id: patch_enabled
+    )
+    mock_run_workflow._repo = "MoonLadderStudios/MoonMind"
+    # Native publication runs while the live summary is still transient; the
+    # completed step's result is the recorded operator summary.
+    mock_run_workflow._summary = "Executing plan step 4/6"
+    mock_run_workflow._operator_summary = "Reconciled retargeted PR bases."
+    mock_run_workflow._assessment_context = {
+        "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+        "assessmentArtifactRef": "art_assessment",
+    }
+    mock_run_workflow._trusted_issue_context = {
+        "trustedSource": "moonmind.github.get_issue",
+        "issue": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "number": 4443,
+            "title": "Resume the same candidate PR; fixes #12, Closes: o/r#3",
+            "url": "https://github.com/MoonLadderStudios/MoonMind/issues/4443",
+        },
+    }
+    mock_run_workflow._record_accepted_published_head(
+        {
+            "acceptedRepositoryEvidence": {
+                "publicationAuthorized": True,
+                "candidateContaminated": False,
+                "pushStatus": "pushed",
+                "branch": "moonmind-job-4443",
+                "headSha": "4e11c2fed" + ("0" * 30),
+                "baseBranch": "main",
+            }
+        }
+    )
+    execute_activity = AsyncMock(
+        return_value={"url": "https://github.com/MoonLadderStudios/MoonMind/pull/9"}
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", execute_activity
+    )
+
+    await mock_run_workflow._ensure_issue_implement_pr_before_status(
+        node={"annotations": {"issueImplementRole": "code-review-handoff"}},
+        parameters={
+            "publishMode": "pr",
+            "workflow": {
+                "instructions": search_text,
+                "publish": {"prBaseBranch": "main"},
+            },
+        },
+    )
+
+    payload = execute_activity.await_args.args[1]
+    if not patch_enabled:
+        # Retained histories keep the title they recorded.
+        assert payload["title"].startswith(search_text)
+        return
+    # A squash merge reuses the title, so neither text may close other issues.
+    neutral = "Resume the same candidate PR; fixes issue #12, Closes: issue o/r#3"
+    assert payload["title"] == f"MoonLadderStudios/MoonMind#4443: {neutral}"
+    assert search_text not in payload["body"]
+    assert payload["body"].startswith(
+        f"Source issue: MoonLadderStudios/MoonMind#4443 {neutral}"
+    )
+    assert "Reconciled retargeted PR bases." in payload["body"]
+    assert "Executing plan step" not in payload["body"]
+    assert payload["body"].splitlines()[-1] == (
+        "Closes MoonLadderStudios/MoonMind#4443"
+    )
 
 
 @pytest.mark.asyncio
@@ -10097,10 +9412,9 @@ async def test_publish_repair_runs_one_managed_child_and_returns_result(
     )
 
 
-def test_determine_publish_completion_requires_integration_pr_url(
+def test_determine_publish_completion_requires_pr_url(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
-    mock_run_workflow._integration = "jules"
 
     status, message, publish_failure = mock_run_workflow._determine_publish_completion(
         parameters={"publishMode": "pr"}
@@ -10113,7 +9427,6 @@ def test_determine_publish_completion_requires_integration_pr_url(
 def test_determine_publish_completion_succeeds_when_pr_was_created_after_skips(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
-    mock_run_workflow._integration = "jules"
     mock_run_workflow._publish_status = "published"
     mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/123"
     mock_run_workflow._publish_context["pullRequestUrl"] = (

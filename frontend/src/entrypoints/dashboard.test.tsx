@@ -2021,7 +2021,7 @@ describe('Dashboard shared entry', () => {
     window.history.replaceState(
       {},
       '',
-      '/workflows?stateIn=completed&source=jules&limit=50&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&sort=updatedAt',
+      '/workflows?stateIn=completed&source=temporal&limit=50&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli&sort=updatedAt',
     );
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -2030,7 +2030,7 @@ describe('Dashboard shared entry', () => {
       }
       if (
         url ===
-        '/api/executions?source=jules&pageSize=50&stateIn=completed&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli'
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli'
       ) {
         return Promise.resolve({
           ok: true,
@@ -2048,10 +2048,10 @@ describe('Dashboard shared entry', () => {
       expect(window.location.pathname).toBe('/workflows/first-query-row');
     });
     expect(fetchSpy).toHaveBeenCalledWith(
-      '/api/executions?source=jules&pageSize=50&stateIn=completed&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli',
+      '/api/executions?source=temporal&pageSize=50&stateIn=completed&nextPageToken=cursor-1&repoIn=MoonLadderStudios%2FMoonMind&targetRuntime=codex_cli',
     );
     expect(window.location.search).toContain('stateIn=completed');
-    expect(window.location.search).toContain('source=jules');
+    expect(window.location.search).toContain('source=temporal');
     expect(window.location.search).toContain('limit=50');
     expect(window.location.search).toContain('nextPageToken=cursor-1');
     expect(window.location.search).not.toContain('sort=updatedAt');

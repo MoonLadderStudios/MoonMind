@@ -37,7 +37,6 @@ def _disable_external_preflight_checks(monkeypatch) -> None:
             "universal",
             ("codex", "claude", "git", "gh", "execution.fanout"),
         ),
-        ("jules", ("jules", "git", "gh")),
     ),
 )
 def test_effective_worker_capabilities_include_supported_fanout_by_default(
@@ -556,48 +555,11 @@ def test_run_preflight_claude_runtime_accepts_anthropic_auth_token(monkeypatch) 
         ["/usr/bin/claude", "--version"],
     ]
 
-def test_run_preflight_jules_runtime_requires_configuration(monkeypatch) -> None:
-    """Jules runtime should fail fast when Jules API settings are missing."""
+def test_run_preflight_rejects_retired_runtime_as_unsupported() -> None:
+    """A retired runtime name gets the same validation as any unknown runtime."""
 
-    with pytest.raises(RuntimeError, match="targetRuntime=jules requires"):
-        cli.run_preflight(
-            env={
-                "MOONMIND_WORKER_RUNTIME": "jules",
-                "DEFAULT_EMBEDDING_PROVIDER": "openai",
-            }
-        )
-
-def test_run_preflight_jules_runtime_succeeds_with_configuration(monkeypatch) -> None:
-    """Jules runtime should pass preflight when Jules API settings are present."""
-
-    calls: list[list[str]] = []
-    verifications: list[str] = []
-
-    def fake_verify(name: str) -> str:
-        verifications.append(name)
-        return f"/usr/bin/{name}"
-
-    def fake_run(command, *args, **kwargs):
-        calls.append(list(command))
-        return subprocess.CompletedProcess(
-            args=command, returncode=0, stdout="", stderr=""
-        )
-
-    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    cli.run_preflight(
-        env={
-            "MOONMIND_WORKER_RUNTIME": "jules",
-            "DEFAULT_EMBEDDING_PROVIDER": "openai",
-            "JULES_ENABLED": "true",
-            "JULES_API_URL": "https://jules.example.test",
-            "JULES_API_KEY": "test-key",
-        }
-    )
-
-    assert verifications == []
-    assert calls == []
+    with pytest.raises(RuntimeError, match="MOONMIND_WORKER_RUNTIME must be one of"):
+        cli.run_preflight(env={"MOONMIND_WORKER_RUNTIME": "jules"})
 
 def test_run_preflight_universal_without_claude_capability_skips_checks(
     monkeypatch,

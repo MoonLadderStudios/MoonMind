@@ -2433,7 +2433,7 @@ class ProviderCapabilityDescriptor(BaseModel):
     provider_name: str = Field(
         ...,
         alias="providerName",
-        description="Canonical provider identifier (e.g. 'jules', 'omnigent').",
+        description="Canonical provider identifier (e.g. 'omnigent', 'openclaw').",
     )
     supports_callbacks: bool = Field(
         False,

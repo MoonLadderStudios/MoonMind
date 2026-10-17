@@ -113,7 +113,7 @@ class _LaneAdapterMetadataProbe:
     async def run(self) -> dict[str, str]:
         agent_run = MoonMindAgentRun.__new__(MoonMindAgentRun)
         return await agent_run._execute_routed_activity(
-            "integration.resolve_adapter_metadata", "jules"
+            "integration.resolve_adapter_metadata", "openclaw"
         )
 
 
@@ -231,7 +231,7 @@ async def test_workflow_fleet_activity_stays_on_the_parent_lane(queue_suffix):
                     task_queue=parent_queue,
                 )
                 assert await handle.result() == {
-                    "agentId": "jules",
+                    "agentId": "openclaw",
                     "ranOn": lane_queue,
                 }
                 history = await handle.fetch_history()

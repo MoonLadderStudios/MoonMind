@@ -60,8 +60,6 @@ def router_app(
     )
     monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
     monkeypatch.setattr(mcp_tools_router, "_jira_service", None)
-    monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
-    monkeypatch.setattr(mcp_tools_router, "_jules_client", None)
     app.dependency_overrides[mcp_tools_router.get_async_session] = _empty_async_session
     return app
 

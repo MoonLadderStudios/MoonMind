@@ -3,23 +3,23 @@
 **Document Class:** Module entrypoint
 **Status:** Current
 **Owners:** MoonMind Platform
-**Last updated:** 2026-10-14
-**Authority:** Short architecture/operator entrypoint for the Omnigent module. Each contract below has one surviving owner; this page routes, it does not restate.
+**Last updated:** 2026-10-16
+**Authority:** Short architecture/operator entrypoint for the Omnigent module. Each contract below has one owner; this page routes, it does not restate.
 
-Omnigent is becoming MoonMind's primary runtime provider: one generic execution
-plane over approved harnesses (Codex, Claude Code, OpenCode), while MoonMind
-keeps Temporal orchestration, Provider Profiles, OAuth enrollment, policy,
-workspaces, evidence, publication, and cleanup. Provider-native execution and
+Omnigent is MoonMind's agent backend: one generic execution plane over approved
+harnesses (Codex, Claude Code, OpenCode), while MoonMind keeps Temporal
+orchestration, Provider Profiles, OAuth enrollment, policy, workspaces,
+evidence, publication, and cleanup. Provider-native execution and
 MoonMind-owned credentials, policy, workflow control, and evidence are not
 interchangeable responsibilities.
 
-## Supported startup path
+## Startup path
 
-1. Select Runtime (`external/omnigent`) and one Provider Profile; resolve its
-   pinned execution configuration.
+1. Select a Harness and one Provider Profile; admission resolves the profile's
+   execution configuration.
 2. Admission compiles one immutable execution plan (harness, Provider Profile,
    runtime pack, credential materializer, Host Class, launch policy, model,
-   realizer) through the one shared selection boundary.
+   realizer) through the shared selection boundary.
 3. The trusted planner binds the plan to a fenced runtime binding: acquired
    credential generation, host lease, exact shared-image digest, and
    exact-host attestation.
@@ -30,36 +30,27 @@ interchangeable responsibilities.
    run-owned state is destroyed and profile-owned state is detached but
    preserved.
 
-## Exact limitations
+## Limitations
 
 - A shared image never authorizes every installed runtime. Each Host Class
   declares only its own harness, runtime pack, and materializers.
-- The generic Codex row starts `disabled` with
-  `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false`. Its surviving enablement
-  and default-promotion rules are owned by `RuntimeProviderRollout.md` and
-  `codex_cutover_drain.py`: a true switch permits promotion when no linked
-  qualification is declared; a declared linked qualification must match the
-  selected dimensions. An unavailable explicit selection never falls back to
-  another runtime, profile, or host mode.
-- Generic Claude Code has no profile-bound Omnigent realizer, so it is admitted
-  as an explicit choice by default: selecting a connected Anthropic OAuth
-  Provider Profile needs no manual toggle. Image, policy, inventory, credential
-  readiness, and exact-host attestation still gate each launch, and
-  `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` stops new admission without
-  falling back.
-- Admission and certification are distinct. Ordinary admission (omitted,
-  blank, or `MOONMIND_OMNIGENT_EVIDENCE_POLICY=either`) does not require a
-  historical certificate and can record an uncertified tier. Explicit
-  `protected` or `deployment` retains strict certification. Evidence identifies
-  the actual combination and operations observed; code presence alone does not
-  certify a live journey. See `ConformanceAndLiveSmoke.md`.
-- Direct Codex / direct Claude paths remain labeled compatibility paths until
-  their retirement rows close.
-
-The current ordinary/strict distinction is implemented. Remaining
-selection controls and compatibility paths are separate from the desired
-simplification in `PrimaryRuntimeProviderStrategy.md`; this entrypoint does
-not declare their migration or a deployment complete.
+- Codex runs on the retained profile-bound realizer by default. The generic
+  Codex row stays `disabled` while `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false`
+  (the shipped value); its promotion rules are owned by
+  `RuntimeProviderRollout.md` and `codex_cutover_drain.py`.
+- Generic Claude Code has no profile-bound realizer, so it is admitted as an
+  explicit choice by default: a connected Anthropic OAuth Provider Profile
+  needs no manual toggle. Image, policy, inventory, credential readiness, and
+  exact-host attestation still gate each launch, and
+  `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` stops new admission.
+- An unavailable explicit selection never falls back to another runtime,
+  profile, or host mode.
+- Ordinary admission (`MOONMIND_OMNIGENT_EVIDENCE_POLICY` omitted, blank, or
+  `either`) needs no historical certificate; explicit `protected` or
+  `deployment` keeps strict certification. Code presence alone does not certify
+  a live journey. See `ConformanceAndLiveSmoke.md`.
+- Direct `codex_cli` and `claude_code` remain labeled compatibility Backends,
+  offered only under Advanced.
 
 ## Status vocabulary
 
@@ -70,14 +61,16 @@ not declare their migration or a deployment complete.
 | installed | Binary present in the image; not support. |
 | admitted | A plan selected it through the shared selection boundary. |
 | qualified | Exact-combination evidence passed for this deployment. |
-| selected-by-default | A target selected by the surviving rollout policy; not proof of live certification. |
+| selected-by-default | A target selected by the rollout policy; not proof of live certification. |
 
 ## Contract owners
 
-| Contract | Surviving owner |
+| Contract | Owner |
 | --- | --- |
 | Pinned upstream transport and native UI contract | [`OmnigentBridge.md`](./OmnigentBridge.md) |
-| Agent / Provider Profile selection and defaults | [`PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md) §9, enforced by [`RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) |
+| Harness / Provider Profile selection and backend strategy | [`PrimaryRuntimeProviderStrategy.md`](./PrimaryRuntimeProviderStrategy.md) §9 |
+| Selection and rollout controls in code | [`RuntimeProviderRollout.md`](./RuntimeProviderRollout.md) |
+| Execution configurations and deployment-managed defaults | [`AgentProfiles.md`](./AgentProfiles.md) |
 | Host Classes and runtime packs | [`SharedHostImage.md`](./SharedHostImage.md) §§2–3 |
 | Credential materializers and enrollment | [`OmnigentHostOAuth.md`](./OmnigentHostOAuth.md); ownership table in [`SharedHostImage.md`](./SharedHostImage.md) §4 |
 | Session and turn control | [`CanonicalTurnCommandBoundary.md`](./CanonicalTurnCommandBoundary.md); lifecycle decisions in [`OmnigentLifecycleReconciler.md`](./OmnigentLifecycleReconciler.md) |
@@ -87,17 +80,12 @@ not declare their migration or a deployment complete.
 | Module packages and dependency direction | [`OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md) |
 | Retirement of duplicate architecture | Code-owned `moonmind/omnigent/legacy_retirement.py`, described in [`OmnigentModuleArchitecture.md`](./OmnigentModuleArchitecture.md) §5 |
 
-The full per-file map — every `docs/Omnigent/` path and duplicated section
-mapped to its surviving owner, with design status and outstanding issue
-references — lives in [`ContractOwnership.md`](./ContractOwnership.md).
+[`ContractOwnership.md`](./ContractOwnership.md) maps every `docs/Omnigent/`
+path and formerly duplicated section to its owner.
 
-## Credential ownership (summary, not a copy)
-
-Run-owned material (for example `opencode-auth-json@1`) may be destroyed on
-cleanup. Profile-owned OAuth homes (for example `codex-oauth-home@1`) are
-generation-fenced and detached but preserved. The binding table is
-[`SharedHostImage.md`](./SharedHostImage.md) §4; the mechanisms are
-[`OmnigentHostOAuth.md`](./OmnigentHostOAuth.md) §§6–9.
+Run-owned credential material (for example `opencode-auth-json@1`) may be
+destroyed on cleanup; profile-owned OAuth homes (for example
+`codex-oauth-home@1`) are generation-fenced and detached but preserved.
 
 ## ManagedAgents boundary
 

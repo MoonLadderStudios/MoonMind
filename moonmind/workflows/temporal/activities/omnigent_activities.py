@@ -62,6 +62,9 @@ class _OnDemandTemporalArtifactService:
     async def write_complete(self, *, artifact_id: str, **kwargs: Any) -> Any:
         return await self._invoke("write_complete", artifact_id=artifact_id, **kwargs)
 
+    async def soft_delete(self, *, artifact_id: str, **kwargs: Any) -> Any:
+        return await self._invoke("soft_delete", artifact_id=artifact_id, **kwargs)
+
 
 def _parent_repository_binding_set(parent_plan: Any) -> Any:
     """Rebuild the parent binding set for child-inheritance checks.
@@ -299,6 +302,39 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
         ).admit_occurrence_execution_plan(
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
+        )
+
+
+@activity.defn(name="omnigent.admit_step_successor_plan")
+async def omnigent_admit_step_successor_plan_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind an interrupted Step's successor attempt to the installed runtime.
+
+    The successor is a fresh attempt, so it is admitted like a fresh start or
+    schedule occurrence. The new plan must keep the recorded request intent;
+    otherwise the recorded plan stays.
+    """
+
+    from api_service.db.base import async_session_maker
+    from api_service.services.omnigent_execution_plan_service import (
+        readmit_frozen_execution_plan,
+    )
+
+    workflow_id = str(payload.get("workflowId") or "").strip()
+    if not workflow_id:
+        raise ValueError("workflowId is required")
+    initial_parameters = payload.get("initialParameters")
+    if not isinstance(initial_parameters, Mapping):
+        raise ValueError("initialParameters must be an object")
+    async with async_session_maker() as db_session:
+        return await readmit_frozen_execution_plan(
+            db_session=db_session,
+            artifact_service=_OnDemandTemporalArtifactService(async_session_maker),
+            workflow_id=workflow_id,
+            initial_parameters=initial_parameters,
+            subject="Interrupted Step successor of",
+            preserve_recorded_intent=True,
         )
 
 

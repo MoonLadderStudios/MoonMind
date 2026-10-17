@@ -1391,3 +1391,236 @@ def test_lifecycle_without_an_image_keeps_the_installed_application_controller(
     assert f"image: {installed}" in rendered
     assert "/app/deploy/controller/server.py" in rendered
     assert bootstrap.load_controller_image(tmp_path)["pinned"] == installed
+
+
+def _handoff_installation(bootstrap, record, tmp_path, *, status="staged"):
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, tmp_path, 8472, target_project="installed")
+    compose = bootstrap.render_compose_file(
+        state_dir=state, repo=tmp_path, image="sha256:" + "a" * 64
+    )
+    bootstrap.record_controller_image(
+        state, requested="ghcr.io/org/moonmind:old", pinned="sha256:" + "a" * 64
+    )
+    store = record.OperationStore(state)
+    operation = store.begin(
+        stack="moonmind",
+        desired_image="ghcr.io/org/moonmind:latest",
+        source_revision="",
+        operation_id="ui-handoff",
+    )
+    store.mark_stage(operation["operationId"], stage=status)
+    return state, compose, store
+
+
+class _HandoffDocker:
+    """The Docker CLI as the requested image's one-off sees it."""
+
+    def __init__(self, *, settles=True):
+        self.live = "sha256:" + "a" * 64
+        self.restarts = "0" if settles else "1"
+        self.commands = []
+
+    def run(self, command, **kwargs):
+        import subprocess
+
+        self.commands.append(command)
+        if command[1:3] == ["image", "inspect"]:
+            assert command[-1] == "ghcr.io/org/moonmind:latest"
+            return subprocess.CompletedProcess(command, 0, "sha256:" + "c" * 64 + "\n", "")
+        if command[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(command, 0, "live-controller\n", "")
+        if command[:2] == ["docker", "inspect"]:
+            assert command[-1] == "live-controller"
+            if command[3] == "{{.Image}}":
+                return subprocess.CompletedProcess(command, 0, self.live + "\n", "")
+            return subprocess.CompletedProcess(
+                command, 0, f"{self.live} {self.restarts}\n", ""
+            )
+        raise AssertionError(command)
+
+
+def _handoff(bootstrap, state, capsys):
+    import json
+
+    assert bootstrap.main(
+        [
+            "handoff",
+            "--state-dir",
+            str(state),
+            "--operation",
+            "ui-handoff",
+            "--image",
+            "ghcr.io/org/moonmind:latest",
+        ],
+        env={},
+    ) == 0
+    prefix = bootstrap.HANDOFF_RECEIPT_PREFIX
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith(prefix)]
+    return json.loads(lines[-1][len(prefix) :])
+
+
+def test_handoff_lets_the_requested_release_controller_resume_the_operation(
+    controller_path, tmp_path, monkeypatch, capsys
+):
+    """A release brings the controller it needs without a host step."""
+    bootstrap = load("bootstrap")
+    record = load("record")
+    lock = load("lock")
+    state, compose, store = _handoff_installation(bootstrap, record, tmp_path)
+    original_mounts = compose.read_text().split("    volumes:", 1)[1]
+    docker = _HandoffDocker()
+    recreations = []
+
+    def compose_run(state_dir, project, *args):
+        if args[0] == "up":
+            recreations.append(args)
+            docker.live = "sha256:" + "c" * 64
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_run_capture", docker.run)
+    monkeypatch.setattr(bootstrap, "_compose", compose_run)
+    monkeypatch.setattr(bootstrap, "HANDOFF_SETTLE_SECONDS", 0)
+
+    # The requesting controller holds the stack lock while it waits.
+    with lock.StackLock(state, "moonmind").acquire():
+        receipt = _handoff(bootstrap, state, capsys)
+
+    concrete = "sha256:" + "c" * 64
+    assert receipt == {"status": "handed-off", "image": concrete}
+    assert len(recreations) == 1 and "--pull" in recreations[0]
+    text = compose.read_text()
+    assert f"image: {concrete}" in text
+    assert text.split("    volumes:", 1)[1] == original_mounts
+    assert bootstrap.load_controller_image(state)["pinned"] == concrete
+    operation = store.load("ui-handoff")
+    assert operation["status"] == "staged"
+    assert operation["controllerHandoff"]["image"] == concrete
+    assert operation["controllerHandoff"]["from"] == "sha256:" + "a" * 64
+
+    # The resumed controller already runs the requested release.
+    assert _handoff(bootstrap, state, capsys) == {"status": "current", "image": concrete}
+    assert len(recreations) == 1
+
+
+@pytest.mark.parametrize("blocker", ["other-work", "already-handed-off", "closed"])
+def test_handoff_never_loops_or_interrupts_other_work(
+    controller_path, tmp_path, monkeypatch, capsys, blocker
+):
+    bootstrap = load("bootstrap")
+    record = load("record")
+    state, compose, store = _handoff_installation(
+        bootstrap, record, tmp_path, status="failed" if blocker == "closed" else "staged"
+    )
+    if blocker == "other-work":
+        store.begin(stack="moonmind", desired_image="ghcr.io/org/moonmind:next",
+                    source_revision="", operation_id="other")
+    if blocker == "already-handed-off":
+        store.record_controller_handoff(
+            "ui-handoff", {"image": "sha256:" + "c" * 64, "attemptGroup": 1}
+        )
+    before = compose.read_text()
+    monkeypatch.setattr(bootstrap, "_run_capture", _HandoffDocker().run)
+    monkeypatch.setattr(
+        bootstrap, "_compose", lambda *args: pytest.fail("controller recreated")
+    )
+
+    receipt = _handoff(bootstrap, state, capsys)
+
+    assert receipt["status"] == "unavailable"
+    assert compose.read_text() == before
+
+
+@pytest.mark.parametrize("failure", ["recreation", "restarting"])
+def test_failed_handoff_restores_the_previous_controller(
+    controller_path, tmp_path, monkeypatch, capsys, failure
+):
+    """The previous controller keeps the operation when the new one cannot."""
+    bootstrap = load("bootstrap")
+    record = load("record")
+    state, compose, store = _handoff_installation(bootstrap, record, tmp_path)
+    before = compose.read_text()
+    recorded = bootstrap.load_controller_image(state)
+    docker = _HandoffDocker(settles=failure != "restarting")
+    ups = []
+
+    def compose_run(state_dir, project, *args):
+        if args[0] != "up":
+            return 0
+        ups.append(compose.read_text())
+        if len(ups) == 1:
+            if failure == "recreation":
+                return 1
+            docker.live = "sha256:" + "c" * 64
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_run_capture", docker.run)
+    monkeypatch.setattr(bootstrap, "_compose", compose_run)
+    monkeypatch.setattr(bootstrap, "HANDOFF_SETTLE_SECONDS", 0)
+
+    receipt = _handoff(bootstrap, state, capsys)
+
+    assert receipt["status"] == "unavailable"
+    assert "previous controller restored" in receipt["reason"]
+    assert len(ups) == 2 and ups[1] == before
+    assert compose.read_text() == before
+    restored = bootstrap.load_controller_image(state)
+    assert (restored["requested"], restored["pinned"]) == (
+        recorded["requested"], recorded["pinned"]
+    )
+    # The marker stops the restored controller from handing off again.
+    assert store.load("ui-handoff")["controllerHandoff"]["attemptGroup"] == 1
+
+
+def test_bootstrap_update_rechecks_open_operations_inside_the_stack_lock(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    record = load("record")
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    acquire = lock_mod.StackLock.acquire
+
+    def submission_recorded_first(self):
+        # A submission records intent between the first check and exclusion.
+        record.OperationStore(tmp_path).begin(
+            stack="moonmind", desired_image="img", source_revision=""
+        )
+        return acquire(self)
+
+    monkeypatch.setattr(lock_mod.StackLock, "acquire", submission_recorded_first)
+    monkeypatch.setattr(
+        bootstrap, "_compose", lambda *args: pytest.fail("replaced a live owner")
+    )
+    monkeypatch.setattr(
+        bootstrap, "ensure_target_network", lambda network, project: None
+    )
+    with pytest.raises(bootstrap.ActiveOperationError):
+        bootstrap.main(["update", "--state-dir", str(tmp_path)], env={})
+
+
+def test_bootstrap_restore_never_replaces_a_controller_that_owns_the_stack(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
+    held_during_compose = []
+
+    def fake_compose(state_dir, *args):
+        held_during_compose.append(
+            lock_mod.StackLock(state_dir, "moonmind").probe()
+        )
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_compose", fake_compose)
+    monkeypatch.setattr(
+        bootstrap, "ensure_target_network", lambda network, project: None
+    )
+    with lock_mod.StackLock(tmp_path, "moonmind").acquire():
+        with pytest.raises(lock_mod.LockBusyError):
+            bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={})
+    assert held_during_compose == []
+    assert bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={}) == 0
+    assert held_during_compose and all(held_during_compose)

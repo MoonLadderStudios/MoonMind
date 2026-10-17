@@ -5,8 +5,7 @@ Owners: MoonMind Platform
 Last updated: 2026-08-04
 Related:
 - [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)
-- [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
-- [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
+- [`docs/ManagedAgents/DockerBackendService.md`](./DockerBackendService.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 
 ## Purpose

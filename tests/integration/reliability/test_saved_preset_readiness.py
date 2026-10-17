@@ -152,7 +152,7 @@ async def test_stale_schedule_stops_before_planner_or_agent(
 
 @pytest.mark.parametrize(
     "runtime",
-    [None, "universal", "omnigent", "codex_cli", "claude_code", "jules", "openclaw"],
+    [None, "universal", "omnigent", "codex_cli", "claude_code", "openclaw"],
 )
 async def test_current_preset_requirements_admit_saved_schedule(boundary, runtime):
     workflow, calls, sessions = boundary
@@ -180,7 +180,9 @@ async def test_current_preset_requirements_admit_saved_schedule(boundary, runtim
     assert saved == original
 
 
-@pytest.mark.parametrize("runtime", ["auto", "codex_cloud", "unknown_runtime"])
+@pytest.mark.parametrize(
+    "runtime", ["auto", "codex_cloud", "jules", "jules_api", "unknown_runtime"]
+)
 async def test_unsupported_saved_runtime_stops_before_planner_or_agent(
     boundary, monkeypatch, runtime
 ):

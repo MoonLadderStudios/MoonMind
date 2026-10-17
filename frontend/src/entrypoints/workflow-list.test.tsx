@@ -1247,7 +1247,7 @@ describe('Workflows Entrypoint', () => {
     window.history.pushState(
       {},
       'Contradictory filters',
-      '/workflows?stateIn=completed&stateNotIn=canceled&targetRuntimeIn=codex_cli&targetRuntimeNotIn=jules',
+      '/workflows?stateIn=completed&stateNotIn=canceled&targetRuntimeIn=codex_cli&targetRuntimeNotIn=claude_code',
     );
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
