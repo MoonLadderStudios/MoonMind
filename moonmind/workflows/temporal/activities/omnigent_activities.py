@@ -62,6 +62,9 @@ class _OnDemandTemporalArtifactService:
     async def write_complete(self, *, artifact_id: str, **kwargs: Any) -> Any:
         return await self._invoke("write_complete", artifact_id=artifact_id, **kwargs)
 
+    async def soft_delete(self, *, artifact_id: str, **kwargs: Any) -> Any:
+        return await self._invoke("soft_delete", artifact_id=artifact_id, **kwargs)
+
 
 def _parent_repository_binding_set(parent_plan: Any) -> Any:
     """Rebuild the parent binding set for child-inheritance checks.

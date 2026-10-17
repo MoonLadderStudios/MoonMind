@@ -11,33 +11,40 @@ open indefinitely.
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 
 #: How long a cancelled helper may keep running before the cancel is repeated.
 CANCEL_REPEAT_SECONDS = 1.0
 
 
-async def cancel_and_wait(*tasks: asyncio.Task | None) -> None:
+async def cancel_and_wait(*tasks: asyncio.Task | None, repeat: bool = True) -> None:
     """Cancel ``tasks`` and return once every one of them has stopped.
 
-    A helper that already finished is left alone. Once every helper stops,
-    the first helper failure other than its cancellation is raised, and a
-    cancellation of the caller itself is re-raised rather than swallowed.
+    A helper that already finished is left alone. With ``repeat`` the cancel
+    is repeated while a helper keeps running; without it a helper is cancelled
+    again only when the caller is, so a task handling its cancellation can
+    finish that cleanup. Once every helper stops, the first helper failure
+    other than its cancellation is raised, and a cancellation of the caller
+    itself is re-raised rather than swallowed.
     """
 
     running = [task for task in tasks if task is not None and not task.done()]
     caller_cancelled = False
     pending = set(running)
+    cancel = True
     while pending:
-        for task in pending:
-            task.cancel()
+        if cancel:
+            for task in pending:
+                task.cancel()
         try:
-            _done, pending = await asyncio.wait(pending, timeout=CANCEL_REPEAT_SECONDS)
+            _done, pending = await asyncio.wait(
+                pending, timeout=CANCEL_REPEAT_SECONDS if repeat else None
+            )
+            cancel = repeat
         except asyncio.CancelledError:
-            caller_cancelled = True
+            caller_cancelled = cancel = True
             pending = {task for task in pending if not task.done()}
     if caller_cancelled:
         raise asyncio.CancelledError()
     for task in running:
-        with suppress(asyncio.CancelledError):
-            await task
+        if not task.cancelled() and task.exception() is not None:
+            raise task.exception()

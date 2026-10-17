@@ -5882,3 +5882,48 @@ async def test_revoked_delivery_stops_a_turn_that_absorbed_its_cancellation(
     with pytest.raises(asyncio.CancelledError):
         execution.result()
     assert "host-cleaned" not in harness.events
+
+
+@pytest.mark.asyncio
+async def test_explicit_cancellation_lets_the_turn_finish_its_owned_cleanup(
+    monkeypatch,
+):
+    """Only a revoked delivery repeats the driver's cancellation.
+
+    An explicit workflow cancel is handled by the driver itself: it stops,
+    captures and deletes the remote session. That cleanup may outlast the
+    repeat interval and must not be interrupted by another cancel.
+    """
+
+    from moonmind.omnigent import task_cancellation
+
+    monkeypatch.setattr(task_cancellation, "CANCEL_REPEAT_SECONDS", 0.05)
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _plan("opencode-go/model")
+    started = asyncio.Event()
+    cleanup: list[str] = []
+
+    async def cleaning_driver(request, **_kwargs):
+        started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.3)
+            cleanup.append("captured")
+            raise
+
+    harness.realizer._session_driver = cleaning_driver
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: False
+    )
+    execution = asyncio.create_task(
+        harness.realizer._execute_lifecycle(harness.publish_request, plan)
+    )
+    await asyncio.wait_for(started.wait(), 10)
+    execution.cancel()
+    done, _pending = await asyncio.wait({execution}, timeout=10)
+
+    assert execution in done
+    assert cleanup == ["captured"]
+    with pytest.raises(asyncio.CancelledError):
+        execution.result()
