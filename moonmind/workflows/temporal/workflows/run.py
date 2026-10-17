@@ -1159,6 +1159,13 @@ RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
 # ceiling the interrupted attempts left, and an exhausted ceiling stops instead
 # of starting another attempt. Older histories keep a fresh budget per attempt.
 RUN_INTERRUPTED_STEP_DEADLINE_PATCH = "run-interrupted-step-deadline-v1"
+# MoonMind#4627: an interrupted Omnigent Step's successor is a fresh attempt.
+# It is admitted again on the installed runtime from the workflow's frozen
+# inputs, keeping the recorded request intent; a refused admission keeps the
+# recorded plan. Older histories keep launching the recorded plan.
+RUN_INTERRUPTED_STEP_INSTALLED_ADMISSION_PATCH = (
+    "run-interrupted-step-installed-admission-v1"
+)
 # GitHub and Jira Orchestrate run the same remediation loop, then hand off the
 # PR in a further fresh Omnigent sandbox that restores the verified candidate.
 # A history that launched a doc-reconciliation Step before MoonMind#4808
@@ -12338,9 +12345,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         The schedule action carries the plan compiled when the schedule was
         last planned. This occurrence's admission compiles the same frozen
         inputs against the installed host and server, so a release needs no
-        schedule re-plan. The admitted plan is written into the carried input:
-        Continue-As-New and interrupted-step successors keep it. A ``recorded``
-        disposition keeps the schedule's plan and its reason is logged.
+        schedule re-plan. The admitted plan is written into the carried input,
+        so Continue-As-New keeps it. A ``recorded`` disposition keeps the
+        schedule's plan and its reason is logged.
         """
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
@@ -12354,20 +12361,76 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             },
             **self._execute_kwargs_for_route(route),
         )
+        self._adopt_admitted_execution_plan(
+            parameters, admitted, subject="Scheduled occurrence"
+        )
+
+    async def _admit_step_successor_plan(
+        self, parameters: dict[str, Any], *, logical_step_id: str
+    ) -> None:
+        """Bind an interrupted Step's successor to the installed Omnigent runtime.
+
+        The successor is a fresh attempt, so the plan owner admits the
+        workflow's frozen inputs again, as for a fresh start or a schedule
+        occurrence, and refuses a plan that would change the recorded request
+        intent. The interrupted attempt keeps the plan it used. A refused or
+        failed admission keeps the recorded plan, which then launches under its
+        own launch-time checks.
+        """
+
+        if not isinstance(parameters.get("omnigentExecutionPlan"), Mapping):
+            return
+        original = self._original_input_payload.get(
+            "initialParameters"
+        ) or self._original_input_payload.get("initial_parameters")
+        frozen_parameters = {
+            **(dict(original) if isinstance(original, Mapping) else parameters),
+            "omnigentExecutionPlan": parameters["omnigentExecutionPlan"],
+        }
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "omnigent.admit_step_successor_plan"
+        )
+        subject = f"Step {logical_step_id} successor"
+        try:
+            admitted = await workflow.execute_activity(
+                "omnigent.admit_step_successor_plan",
+                {
+                    "workflowId": workflow.info().workflow_id,
+                    "initialParameters": frozen_parameters,
+                },
+                **self._execute_kwargs_for_route(route),
+            )
+        except exceptions.ActivityError as exc:
+            self._get_logger().warning(
+                "%s keeps its recorded execution plan: admission failed: %s",
+                subject,
+                exc.cause or exc,
+            )
+            return
+        self._adopt_admitted_execution_plan(parameters, admitted, subject=subject)
+
+    def _adopt_admitted_execution_plan(
+        self,
+        parameters: dict[str, Any],
+        admitted: Any,
+        *,
+        subject: str,
+    ) -> None:
+        """Carry an admission's plan into later launches and Continue-As-New."""
+
         if not isinstance(admitted, Mapping):
-            raise ValueError("scheduled occurrence admission returned no decision")
+            raise ValueError(f"{subject} admission returned no decision")
         if admitted.get("disposition") != "admitted":
             self._get_logger().warning(
-                "Scheduled occurrence keeps its recorded execution plan: %s",
+                "%s keeps its recorded execution plan: %s",
+                subject,
                 admitted.get("reason"),
             )
             return
         binding = admitted.get("omnigentExecutionPlan")
         skillset_ref = str(admitted.get("resolvedSkillsetRef") or "").strip()
         if not isinstance(binding, Mapping) or not skillset_ref:
-            raise ValueError(
-                "scheduled occurrence admission omitted plan or Skill authority"
-            )
+            raise ValueError(f"{subject} admission omitted plan or Skill authority")
         admitted_fields = {
             "omnigentExecutionPlan": dict(binding),
             "resolvedSkillsetRef": skillset_ref,
@@ -14440,6 +14503,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     )
                                     + 1,
                                 )
+                                if workflow.patched(
+                                    RUN_INTERRUPTED_STEP_INSTALLED_ADMISSION_PATCH
+                                ):
+                                    await self._admit_step_successor_plan(
+                                        parameters, logical_step_id=node_id
+                                    )
                             self._mark_step_running(
                                 node_id,
                                 updated_at=workflow.now(),

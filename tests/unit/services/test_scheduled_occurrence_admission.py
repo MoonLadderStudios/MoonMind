@@ -1,9 +1,10 @@
-"""A saved schedule's next occurrence binds the newly installed runtime.
+"""Fresh attempts of an admitted workflow bind the newly installed runtime.
 
-The schedule's stored plan was compiled before a release; the occurrence
-compiles the same frozen inputs through the real plan compiler at its own
-admission. Neither the schedule definition, its policy/Profile versions, nor
-the bulk schedule refresh are involved.
+A schedule's stored plan, or the plan an interrupted Step's earlier attempt
+used, was compiled before a release. The schedule occurrence or the Step
+successor compiles the same frozen inputs through the real plan compiler at
+its own admission. Neither the schedule definition, its policy/Profile
+versions, nor the bulk schedule refresh are involved.
 """
 
 from __future__ import annotations
@@ -263,3 +264,101 @@ async def test_worker_activity_admits_the_occurrence_through_the_schedule_owner(
     assert _PlanStore.persisted.payload.hostImageRef == _REPO + "8" * 64
     assert admitted["omnigentExecutionPlan"]["planRef"] == _PlanStore.persisted.planRef
     assert session.commits == 1
+
+
+async def _successor_admission(monkeypatch, artifacts, parameters, session):
+    from contextlib import asynccontextmanager
+
+    from api_service.db import base as db_base
+    from moonmind.workflows.temporal.activities import omnigent_activities
+
+    @asynccontextmanager
+    async def session_maker():
+        yield session
+
+    monkeypatch.setattr(db_base, "async_session_maker", session_maker)
+    monkeypatch.setattr(
+        omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
+    )
+    # Temporal delivers the workflow's parameters as JSON.
+    return await omnigent_activities.omnigent_admit_step_successor_plan_activity(
+        {
+            "workflowId": "mm:interrupted-run",
+            "initialParameters": json.loads(json.dumps(parameters)),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_step_successor_binds_the_installed_runtime_with_the_same_intent(
+    monkeypatch, compiler
+) -> None:
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters, recorded_plan = await _schedule_parameters(artifacts)
+
+    # An update replaced the host and server while the Step was running.
+    _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
+    session = _OccurrenceSession(_provider())
+    admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
+
+    assert admitted["disposition"] == "admitted"
+    plan = _PlanStore.persisted.payload
+    assert admitted["omnigentExecutionPlan"]["planRef"] == _PlanStore.persisted.planRef
+    assert admitted["resolvedSkillsetRef"]
+    launch = json.loads(
+        artifacts.payloads[plan.effectiveLaunchSnapshotRef.removeprefix("artifact:")]
+    )
+    assert plan.hostImageRef == _REPO + "8" * 64
+    assert launch["serverImageRef"] == _SERVER + "9" * 64
+    # Harness, Provider Profile account, model and effort, launch and capture
+    # policy, source and publication intent are the recorded ones.
+    assert plan_service.changed_admitted_intent(recorded_plan, plan) == []
+    assert plan.authority == recorded_plan.authority
+    assert plan.credentialBindings == recorded_plan.credentialBindings
+    assert plan.modelConfig == recorded_plan.modelConfig
+    # The interrupted attempt's plan keeps the images it actually used.
+    assert recorded_plan.hostImageRef == _REPO + "7" * 64
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_step_successor_keeps_the_recorded_plan_when_intent_would_change(
+    monkeypatch, compiler
+) -> None:
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters, _recorded_plan = await _schedule_parameters(artifacts)
+
+    _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
+    # The Provider Profile was edited to another route since admission.
+    edited = SimpleNamespace(
+        profile_id="codex", runtime_id="codex_cli", provider_id="azure-openai"
+    )
+    session = _OccurrenceSession(edited)
+    admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
+
+    assert admitted["disposition"] == "recorded"
+    assert "would change the recorded request intent: model" in admitted["reason"]
+    assert "omnigentExecutionPlan" not in admitted
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_step_successor_keeps_the_recorded_plan_it_cannot_compare(
+    monkeypatch, compiler
+) -> None:
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    parameters, _recorded_plan = await _schedule_parameters(artifacts)
+    _PlanStore.plans.pop(parameters["omnigentExecutionPlan"]["planRef"])
+
+    session = _OccurrenceSession(_provider())
+    admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
+
+    assert admitted == {
+        "disposition": "recorded",
+        "reason": "the recorded execution plan is unavailable",
+    }
+    assert session.commits == 0

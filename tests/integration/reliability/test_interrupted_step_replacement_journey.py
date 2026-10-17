@@ -23,8 +23,13 @@ observes. The same journey runs on two host fleets:
   that server's session projection, and the lost session is drained through
   the production cleanup client.
 
-The successor admits on the same image; admission on a newly installed image
-is #4503's selection.
+The update also installs the host image fresh attempts bind. The successor is
+admitted again from the recorded plan (the plan compiler's own installed
+selection is covered by its unit tests) and launches on the installed image,
+while the interrupted attempt keeps the image it ran. On the inert fleet the
+update installs a rebuilt image of the same repository as a new Host Class
+revision; the exact row has one pinned host image, so its successor is
+admitted on that same image.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ import os
 import subprocess
 import tarfile
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -159,6 +165,35 @@ PROFILE_BOUND_EXECUTE = "integration.omnigent.profile_bound_execute"
 CREDENTIALLESS = "none@1"
 #: The receipt the exact-artifact job validates for the exact-image journey.
 EXACT_RECEIPT = "interrupted-step-exact-docker.json"
+#: A healthy old worker stops within seconds once its delivery is revoked.
+OLD_WORKER_SHUTDOWN_SECONDS = 120
+
+
+def _pending_task_stacks() -> str:
+    """Name every await still pending, so a stuck shutdown is diagnosable."""
+
+    out = io.StringIO()
+    for task in asyncio.all_tasks():
+        if task is not asyncio.current_task():
+            task.print_stack(limit=20, file=out)
+    return out.getvalue()
+
+
+async def _stop_worker(worker, task) -> None:
+    """Stop an update's old worker, or fail naming what kept it running."""
+
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(worker.shutdown()), OLD_WORKER_SHUTDOWN_SECONDS
+        )
+        await asyncio.wait_for(asyncio.shield(task), OLD_WORKER_SHUTDOWN_SECONDS)
+    except TimeoutError:
+        stacks = _pending_task_stacks()
+        print(stacks, flush=True)
+        raise AssertionError(
+            f"the old worker did not stop within {OLD_WORKER_SHUTDOWN_SECONDS}s "
+            "of its update; pending awaits:\n" + stacks
+        ) from None
 
 
 def _journey_plan(*, host_class=None, agent_id=None):
@@ -280,11 +315,14 @@ class _InertDockerHosts:
     launch is a plain ``docker run``: the shard has no Omnigent host image.
     """
 
-    def __init__(self, *, docker, materializer, launches: list[dict]) -> None:
+    def __init__(
+        self, *, docker, materializer, launches: list[dict], images: dict
+    ) -> None:
         self._docker = docker
         self._materializer = materializer
         self._cleanup = DockerOmnigentHostCleanupService(docker)
         self._launches = launches
+        self._images = images
 
     async def validate_repository_intent(self, *, request, plan):
         await OmnigentGithubCredentialService(None).validate_repository_intent(
@@ -367,10 +405,13 @@ class _InertDockerHosts:
                 f"type=volume,src={volume},dst=/owned-state",
                 "--entrypoint",
                 "/bin/sh",
-                HOST_IMAGE,
+                self._images[host_class.ref],
                 "-c",
                 "sleep 600",
             ]
+        )
+        _code, image_id, _err = await self._docker.run(
+            ["docker", "container", "inspect", "--format", "{{.Image}}", name]
         )
         step = request.step_execution
         self._launches.append(
@@ -380,6 +421,7 @@ class _InertDockerHosts:
                 "step": step.logical_step_id,
                 "ordinal": step.execution_ordinal,
                 "workspace": workspace,
+                "imageId": image_id.strip(),
             }
         )
         return {
@@ -446,11 +488,48 @@ class _InertFleet:
         self.docker = docker
         self.host_class = _host_class()
         self.plan = _journey_plan()
+        # Each Host Class revision and the local image its hosts launch from.
+        self.host_classes = {self.host_class.ref: self.host_class}
+        self.images = {self.host_class.ref: HOST_IMAGE}
+        self.installed = self.host_class
+        self.installed_image_id = ""
 
     def host_runtime(self, *, materializer, launches):
         return _InertDockerHosts(
-            docker=self.docker, materializer=materializer, launches=launches
+            docker=self.docker,
+            materializer=materializer,
+            launches=launches,
+            images=self.images,
         )
+
+    def resolve_host(self, plan) -> HostClass:
+        return self.host_classes[plan.payload.hostClassRef]
+
+    async def install_update(self) -> None:
+        """Install a rebuilt host image of the same repository."""
+
+        tag = "moonmind-test-step-host:" + uuid4().hex[:12]
+        await self.docker.run(
+            ["docker", "build", "--quiet", "--tag", tag, "-"],
+            input_bytes=(
+                f"FROM {HOST_IMAGE}\nLABEL moonmind.test.rebuild={tag}\n"
+            ).encode(),
+        )
+        _code, image_id, _err = await self.docker.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", tag]
+        )
+        self.installed = self.host_class.model_copy(
+            update={
+                "version": self.host_class.version + 1,
+                "imageRef": "ghcr.io/example/opencode@sha256:" + "e" * 64,
+            }
+        )
+        self.host_classes[self.installed.ref] = self.installed
+        self.images[self.installed.ref] = tag
+        self.installed_image_id = image_id.strip()
+
+    def admitted_successor_payload(self, payload: dict) -> dict:
+        return {**payload, "hostClassRef": self.installed.ref}
 
     def route(self):
         return _ProviderCapacity(), _NoCredentials()
@@ -472,6 +551,11 @@ class _InertFleet:
             )
             await self.docker.run(
                 ["docker", "volume", "rm", launch["container"] + "-state"],
+                check=False,
+            )
+        if self.installed is not self.host_class:
+            await self.docker.run(
+                ["docker", "image", "rm", "-f", self.images[self.installed.ref]],
                 check=False,
             )
 
@@ -719,6 +803,15 @@ class _ExactFleet:
         route = _CredentiallessRoute()
         return route, route
 
+    def resolve_host(self, _plan) -> HostClass:
+        return self.host_class
+
+    async def install_update(self) -> None:
+        """The row installs one pinned host image; the update keeps it."""
+
+    def admitted_successor_payload(self, payload: dict) -> dict:
+        return payload
+
     def session_cleanup(self):
         return OmnigentSessionCleanupService(self.client)
 
@@ -812,8 +905,8 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
     docker = fleet.docker
     plan = fleet.plan
     plan_ref = "artifact:journey-run-plan"
-    host_class = fleet.host_class
     launches: list[dict] = []
+    successor_admissions: list[str] = []
     deliveries: list[tuple[str, int, str, str, str]] = []
     execution_requests = []
     turn_started = asyncio.Event()
@@ -871,8 +964,8 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             summary=f"{key[0]} completed", metadata={"omnigentSessionId": session}
         )
 
-    async def resolve_host(_plan):
-        return host_class, get_launch_policy("omnigent-on-demand@1")
+    async def resolve_host(planned):
+        return fleet.resolve_host(planned), get_launch_policy("omnigent-on-demand@1")
 
     async with isolated_postgres([]) as sessions:
         # One create_all so shared PostgreSQL enum types are created once.
@@ -1052,6 +1145,41 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             )
             if name in {"plan.validate", "agent_skill.resolve"}:
                 return {}
+            if name == "omnigent.admit_step_successor_plan":
+                # The update installed the host fresh attempts bind; the
+                # successor is admitted on it from the recorded plan.
+                recorded_binding = payload["initialParameters"]["omnigentExecutionPlan"]
+                plans = DbExecutionPlanStore(sessions)
+                recorded = await plans.load(recorded_binding["planRef"])
+                admitted = await plans.persist(
+                    create_execution_plan_envelope(
+                        fleet.admitted_successor_payload(
+                            recorded.payload.model_dump(mode="json", by_alias=True)
+                        )
+                    )
+                )
+                successor_admissions.append(admitted.planRef)
+                return {
+                    "disposition": "admitted",
+                    "omnigentExecutionPlan": {
+                        **recorded_binding,
+                        "planRef": admitted.planRef,
+                        "planDigest": "sha256:" + admitted.planRef.rsplit(":", 1)[-1],
+                        "planArtifactRef": "artifact:"
+                        + await put(
+                            json.dumps(
+                                admitted.model_dump(mode="json", by_alias=True),
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                ensure_ascii=False,
+                            ).encode(),
+                            {"artifact_class": "omnigent.execution_plan"},
+                        ),
+                    },
+                    "resolvedSkillsetRef": admitted.payload.resolvedSkills[
+                        "resolvedSkillSetRef"
+                    ].removeprefix("artifact:"),
+                }
             if name == "integration.resolve_adapter_metadata":
                 return {
                     "agent_id": "omnigent",
@@ -1202,10 +1330,10 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
                 # host container is removed, and a new worker composition
                 # starts with only the durable state.
                 print("Interrupted-step recovery: stopping the old worker", flush=True)
-                await old_worker.shutdown()
-                await asyncio.gather(old_worker_task)
+                await _stop_worker(old_worker, old_worker_task)
                 assert await host_running(lost_host)
                 await docker.run(["docker", "rm", "-f", lost_host])
+                await fleet.install_update()
                 print("Interrupted-step recovery: old host removed", flush=True)
                 current["realizer"] = build_realizer()
                 async with Worker(
@@ -1219,8 +1347,8 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             if "manager" in locals():
                 await manager.terminate(reason="interrupted step journey finished")
             if not old_worker_task.done():
-                await old_worker.shutdown()
-            await asyncio.gather(old_worker_task, return_exceptions=True)
+                with suppress(TimeoutError, AssertionError):
+                    await _stop_worker(old_worker, old_worker_task)
             await fleet.discard(launches)
 
         assert rows == [
@@ -1256,6 +1384,14 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
         assert successor.step_execution.execution_ordinal == 2
         assert successor.step_execution.workflow_id == queue
         assert successor.step_execution.logical_step_id == "implement"
+        # Only the successor was admitted again, and it launched that plan; the
+        # interrupted attempt keeps the plan and image it ran.
+        assert predecessor.step_execution.omnigent_execution_plan.plan_ref == (
+            plan.planRef
+        )
+        assert successor_admissions == [
+            successor.step_execution.omnigent_execution_plan.plan_ref
+        ]
         assert "workspaceCheckpointRestoreRef" not in predecessor.workspace_spec
         restore_ref = successor.workspace_spec["workspaceCheckpointRestoreRef"]
         with tarfile.open(
@@ -1306,9 +1442,12 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
 async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
     tmp_path, monkeypatch
 ):
-    await _interrupted_step_journey(
-        tmp_path, monkeypatch, _InertFleet(DockerCommandBackend())
-    )
+    fleet = _InertFleet(DockerCommandBackend())
+    journey = await _interrupted_step_journey(tmp_path, monkeypatch, fleet)
+    # The update installed a rebuilt host image; only the successor runs it.
+    images = [launch["imageId"] for launch in journey["launches"]]
+    assert images[:3] == [images[0]] * 3
+    assert images[3] == fleet.installed_image_id != images[0]
 
 
 def _digest(text: str) -> str:
