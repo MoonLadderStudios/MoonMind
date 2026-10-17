@@ -19,7 +19,6 @@ updates:
     directories:
       - "/api_service"
       - "/deploy/controller"
-      - "/deploy/moonmind-controller"
     schedule:
       interval: "weekly"
       day: "monday"
