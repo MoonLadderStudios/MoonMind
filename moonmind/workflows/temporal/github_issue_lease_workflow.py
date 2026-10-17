@@ -98,6 +98,7 @@ async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
         try:
             await workflow.wait_condition(observation.done, timeout=timeout)
         except asyncio.TimeoutError:
+            # Expected for a stalled observation; the finally block cancels it.
             pass
         finally:
             if not observation.done():
@@ -142,16 +143,22 @@ async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
     # No agent launch before a confirmed lease. Nothing writes before launch,
     # so transient observations are retried for at most one renew interval;
     # a lease that lapsed meanwhile is reported lost by the next readback.
+    # Each observation starts inside the window and is bounded by what is
+    # left of it, so recovery cannot confirm and launch after it closes.
     if recover:
         window_ends = workflow.now() + timedelta(seconds=RENEW_SECONDS)
-        while not await refresh():
+        while True:
             remaining = (window_ends - workflow.now()).total_seconds()
             if remaining <= 0:
                 raise ApplicationError(
                     "GitHub issue claim lease unavailable before launch",
                     non_retryable=True,
                 )
-            await workflow.sleep(min(RETRY_SECONDS, remaining))
+            if await refresh(timeout=remaining):
+                break
+            remaining = (window_ends - workflow.now()).total_seconds()
+            if remaining > 0:
+                await workflow.sleep(min(RETRY_SECONDS, remaining))
         if expires <= workflow.now() + timedelta(seconds=STOP_MARGIN_SECONDS):
             raise ApplicationError(
                 "GitHub issue claim lease unavailable before launch",
