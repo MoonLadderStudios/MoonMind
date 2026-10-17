@@ -149,6 +149,27 @@ def test_acceptance_survives_final_result_compaction(pressure: str) -> None:
     assert all(row["evidenceRefs"] == ["art-gate-result"] for row in evidence["evidence"])
 
 
+@pytest.mark.parametrize("pressure", ["annotations", "durable_refs"])
+def test_step_retry_recommendation_survives_published_result_compaction(
+    pressure: str,
+) -> None:
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    metadata = {
+        "mergeAutomationDisposition": "failed",
+        "retryRecommendation": "retry_step_execution",
+        "outputAgentResultRef": "art-full-result",
+    }
+    for index in range(24):
+        key = f"auxiliary{index}Ref" if pressure == "durable_refs" else f"annotation{index}"
+        metadata[key] = "x" * 900
+
+    compacted = compact_published_agent_run_result_payload({"metadata": metadata})
+
+    result = AgentRunResult.model_validate(compacted)
+    assert result.metadata["retryRecommendation"] == "retry_step_execution"
+
+
 def _write(workspace: Path, *, status: str, requested: int, queued: list[dict]) -> None:
     targets = workspace / "artifacts/batch-workflows-targets.json"
     targets.parent.mkdir(parents=True, exist_ok=True)

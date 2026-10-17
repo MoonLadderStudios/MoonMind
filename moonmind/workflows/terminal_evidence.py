@@ -113,8 +113,9 @@ def pr_resolver_host_repair_retry(payload: Mapping[str, Any]) -> str | None:
     """Return ``retry_step_execution`` when the next attempt repairs the verdict.
 
     A validated verdict is otherwise final. The one local condition MoonMind
-    itself owns is commit identity: every workspace preparation reapplies the
-    admitted identity (``moonmind/omnigent/git_identity.py``), so the Skill's
+    itself owns is commit identity: every workspace preparation, and every turn
+    of a live managed session, reapplies the admitted identity
+    (``moonmind/omnigent/git_identity.py``), so the Skill's
     first ``identity_missing`` commit refusal asks for one more attempt of the
     same step, which resumes at the commit. ``MoonMind.UserWorkflow`` grants it
     only when that attempt reuses the checkout. A repeat, exhaustion, or any

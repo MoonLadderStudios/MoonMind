@@ -1794,6 +1794,15 @@ class DockerCodexManagedSessionController:
             identity=identity,
         )
 
+    @staticmethod
+    async def _admitted_git_identity() -> tuple[str, str] | None:
+        admission = await publication_git_identity_projection()
+        return (
+            resolve_publication_git_identity(admission)
+            if admission is not None
+            else None
+        )
+
     async def _ensure_workspace_paths(
         self,
         request: LaunchCodexManagedSessionRequest,
@@ -2695,12 +2704,7 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
     ) -> CodexManagedSessionHandle:
         self._validate_launch_request(request)
-        admission = await publication_git_identity_projection()
-        identity = (
-            resolve_publication_git_identity(admission)
-            if admission is not None
-            else None
-        )
+        identity = await self._admitted_git_identity()
         existing_record: CodexManagedSessionRecord | None = None
         if self._session_store is not None:
             existing_record = self._session_store.load(request.session_id)
@@ -3173,6 +3177,19 @@ class DockerCodexManagedSessionController:
                 )
             }
         )
+        record = (
+            self._session_store.load(request.session_id)
+            if self._session_store is not None
+            else None
+        )
+        if record is not None:
+            # A step retry resumes this live session without relaunching it,
+            # so the turn, not only launch, restores the commit identity the
+            # checkout may have lost.
+            self._apply_workspace_git_identity(
+                Path(record.workspace_path),
+                identity=await self._admitted_git_identity(),
+            )
         try:
             payload = await self._invoke_json(
                 container_id=request.container_id,
