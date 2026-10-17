@@ -259,7 +259,7 @@ async def _typed_status_activity(request: ExternalAgentRunInput) -> AgentRunStat
     return AgentRunStatus(
         runId=request.run_id,
         agentKind="external",
-        agentId="jules",
+        agentId="openclaw",
         status="completed",
         observedAt=datetime.now(tz=UTC),
     )

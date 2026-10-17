@@ -16,15 +16,15 @@ its one surviving owner. Owners hold the contract; all other docs point.
 | 3 | Module packages, dependency direction, ports | `OmnigentModuleArchitecture.md` §§1–4, 6 |
 | 4 | Retained duplicate architecture and legacy new-admission control (code-owned table) | `OmnigentModuleArchitecture.md` §5 over `moonmind/omnigent/legacy_retirement.py` |
 | 5 | Target harness-platform model (catalog, attestation, plans, bindings, capability negotiation) | `OmnigentHarnessPlatformDesign.md` (Status: Proposed) |
-| 6 | Product selection, defaults, migration stages, acceptance gates | `PrimaryRuntimeProviderStrategy.md` |
+| 6 | Backend strategy, product selection, path retirement, acceptance gates | `PrimaryRuntimeProviderStrategy.md` |
 | 7 | Shared image, runtime packs, Host Classes, credential ownership, realizer admission | `SharedHostImage.md` |
 | 8 | Credential materializer mechanisms, enrollment, launch ordering, rotation, cleanup detail | `OmnigentHostOAuth.md` |
 | 9 | OpenCode runtime contract on the shared image | `OpenCodeHost.md` |
-| 10 | Agent / Provider Profile identities and discovery/launch security | `AgentProfiles.md` |
+| 10 | Agent / Provider Profile identities, discovery/launch security, managed defaults | `AgentProfiles.md` |
 | 11 | Canonical turn-command boundary, admission, terminal meanings | `CanonicalTurnCommandBoundary.md` |
 | 12 | Lifecycle reconciler transition contract | `OmnigentLifecycleReconciler.md` |
 | 13 | Control-plane aggregates, concurrency/fencing, telemetry/timeline | `ControlPlaneAggregates.md`, `ControlPlaneConcurrencyAndFencing.md`, `OmnigentSemanticTelemetryAndTimeline.md` |
-| 14 | Versioned rollout states, canary, rollback, migration status | `RuntimeProviderRollout.md` |
+| 14 | Selection/rollout controls: states, rows, canary, rollback, migration status | `RuntimeProviderRollout.md` |
 | 15 | Codex support evidence, active cutover diagnostic/evidence projection (phases retired for new-work admission), optional remediation observations and strict certification | `CodexSupportAndCutover.md` |
 | 16 | Codex create-to-host wire contract | `CodexCreateToHostContract.md` |
 | 17 | Codex product-path reconciliation | `NormalCodexProductPathReconciliation.md` |
@@ -77,18 +77,18 @@ Deliberately *not* merged (distinct responsibilities):
 | `README.md` | Module entrypoint | Current |
 | `ContractOwnership.md` | Ownership map | Current |
 | `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion evidence-gated. Per-combination assignments below remain authoritative for current behavior; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target. Retirement is class-based new-admission control only: removing a retained path deletes its code and row while the surviving owner's replay, historical-read, cleanup, and credential checks keep passing (`OmnigentModuleArchitecture.md` §5.2) |
-| `PrimaryRuntimeProviderStrategy.md` | Owner: selection/defaults/stages/gates; §§7–8 point to `SharedHostImage.md` | Desired simplification target; ordinary certificate-independent admission is implemented, while surviving selection controls remain code-owned |
+| `PrimaryRuntimeProviderStrategy.md` | Owner: backend strategy, selection, retirement, gates; §§7–8 point to `SharedHostImage.md` | Current; remaining controls are code-owned |
 | `OmnigentHostOAuth.md` | Owner: materializer mechanisms; §§10–11 point to `SharedHostImage.md` | Current desired state |
 | `OpenCodeHost.md` | Owner: OpenCode runtime contract; §§1–3, 6 point to `SharedHostImage.md` | Current |
 | `OmnigentBridge.md` | Owner: transport and native UI contract | Design with open questions (§21) |
 | `OmnigentAdapter.md` | Owner: adapter launch/lifecycle contract | Current |
 | `OmnigentModuleArchitecture.md` | Owner: packages, dependencies, retirement description | Current |
 | `OmnigentHarnessPlatformDesign.md` | Owner: target harness-platform model | Proposed (target, not shipped) |
-| `RuntimeProviderRollout.md` | Owner: rollout mechanism | Implemented mechanism; promotion per combination |
+| `RuntimeProviderRollout.md` | Owner: selection and rollout controls | Implemented controls |
 | `CodexSupportAndCutover.md` | Owner: Codex rows, phases, remediation matrix | Exact evidence pending |
 | `CodexCreateToHostContract.md` | Owner: create-to-host wire contract | Accepted; executable consumers own behavior coverage |
 | `NormalCodexProductPathReconciliation.md` | Owner: product-path reconciliation | Accepted; executable consumers own behavior coverage |
-| `AgentProfiles.md` | Owner: Profile identities | Desired-state design |
+| `AgentProfiles.md` | Owner: Profile identities and execution configurations | Current |
 | `CanonicalTurnCommandBoundary.md` | Owner: turn-command boundary | Implemented |
 | `OmnigentLifecycleReconciler.md` | Owner: transition contract | Accepted; executable consumers own behavior coverage |
 | `ControlPlaneAggregates.md` | Owner: durable aggregates | Proposed design |

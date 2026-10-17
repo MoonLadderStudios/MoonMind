@@ -161,7 +161,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
         system: {
           // `omnigent` is a facade, never a Provider Profile owner, so it must
           // not become a runtime filter option.
-          supportedRuntimes: ['omnigent', 'codex_cli', 'claude_code', 'jules'],
+          supportedRuntimes: ['omnigent', 'codex_cli', 'claude_code', 'openclaw'],
         },
       },
     },
@@ -263,7 +263,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
       { value: 'all', label: 'All Harnesses' },
       { value: 'codex_cli', label: 'Codex CLI' },
       { value: 'claude_code', label: 'Claude Code' },
-      { value: 'jules', label: 'Jules' },
+      { value: 'openclaw', label: 'OpenClaw' },
     ]);
     expect(options.map((option) => option.value)).not.toContain('omnigent');
   });
@@ -311,7 +311,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     expect(harnessSelect().value).toBe('codex_cli');
 
     // A filter Harness that is not a permitted creation choice seeds nothing.
-    selectRuntimeFilter('jules');
+    selectRuntimeFilter('openclaw');
     expect(harnessSelect().value).toBe('');
 
     // An explicitly chosen Harness survives a later filter change.
@@ -326,10 +326,10 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     await screen.findByRole('heading', { name: 'Profiles' });
     expect(screen.queryByText('No provider profiles configured yet.')).toBeNull();
 
-    selectRuntimeFilter('jules');
+    selectRuntimeFilter('openclaw');
 
     expect(
-      screen.getByText('No Provider Profiles are configured for Jules.'),
+      screen.getByText('No Provider Profiles are configured for OpenClaw.'),
     ).toBeTruthy();
     expect(screen.queryByText('No provider profiles configured yet.')).toBeNull();
   });
@@ -346,12 +346,13 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     expect(harnessSelect.value).toBe('claude_code');
     expect(harnessSelect.disabled).toBe(true);
   });
-  it('does not offer a removed runtime from a stale boot catalog (#4644)', async () => {
+  it('does not offer a removed runtime from a stale boot catalog', async () => {
     const stale = structuredClone(payloadWithRuntimes);
-    stale.initialData.runtimeConfig.system.supportedRuntimes.push('codex_cloud');
+    stale.initialData.runtimeConfig.system.supportedRuntimes.push('codex_cloud', 'jules', 'jules_api');
     renderProvidersPage(stale);
     await screen.findByRole('heading', { name: 'Profiles' });
-    expect(Array.from(runtimeFilterControl().options).map((option) => option.value)).not.toContain('codex_cloud');
+    const offered = Array.from(runtimeFilterControl().options).map((option) => option.value);
+    for (const removed of ['codex_cloud', 'jules', 'jules_api']) expect(offered).not.toContain(removed);
   });
 
 });

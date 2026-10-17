@@ -470,10 +470,10 @@ def test_rollback_only_changes_new_admission_not_recorded_authority():
 def test_unregistered_runtime_id_remains_authorable():
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.mcp_submission,
-        requested_runtime="jules",
+        requested_runtime="openclaw",
         policy=_policy(),
     )
-    assert selection.runtime_id == "jules"
+    assert selection.runtime_id == "openclaw"
     assert selection.available is True
     assert selection.target_id is None
 
@@ -563,10 +563,10 @@ def test_configured_runtime_with_no_selectable_target_reports_the_promoted_one()
 def test_configured_runtime_that_is_unregistered_stays_authorable():
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create,
-        workflow_settings=_settings("jules"),
+        workflow_settings=_settings("openclaw"),
         policy=_policy(),
     )
-    assert selection.runtime_id == "jules"
+    assert selection.runtime_id == "openclaw"
     assert selection.available is True
     assert selection.target_id is None
     assert selection.reason_code is RolloutReason.combination_not_registered
@@ -764,8 +764,9 @@ async def test_active_rollback_reaches_every_production_submission_surface(
     assert os.environ.get("MOONMIND_WORKER_RUNTIME") is None
 
 
-def test_removed_runtime_policy_cannot_advertise_a_cloud_target():
-    """#4644: a saved direct policy is not a Cloud reactivation hook."""
+@pytest.mark.parametrize("runtime_id", ["codex_cloud", "jules", "jules_api"])
+def test_removed_runtime_policy_cannot_advertise_a_retired_target(runtime_id):
+    """A saved direct policy is not a Codex Cloud or Jules reactivation hook."""
     policy = _policy({_CODEX_GATE: "true"})
     direct = next(
         rule
@@ -774,26 +775,26 @@ def test_removed_runtime_policy_cannot_advertise_a_cloud_target():
     )
     old_rule = direct.model_copy(
         update={
-            "target_id": "old-cloud",
-            "selector": {**direct.selector, "provider_runtime_id": "codex_cloud"},
+            "target_id": f"old-{runtime_id}",
+            "selector": {**direct.selector, "provider_runtime_id": runtime_id},
         }
     )
     stale = policy.model_copy(update={"rules": (*policy.rules, old_rule)})
-    assert "codex_cloud" not in {
+    assert runtime_id not in {
         row.runtime_id for row in resolve_runtime_target_catalog(policy=stale)
     }
     rejected = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create,
-        requested_runtime="codex_cloud",
+        requested_runtime=runtime_id,
         requested_target_id="codex.generic-omnigent",
         policy=stale,
     )
-    assert rejected.runtime_id == "codex_cloud"
+    assert rejected.runtime_id == runtime_id
     assert rejected.available is False
     assert rejected.replacement_required is True
 
 
-@pytest.mark.parametrize("runtime_id", ["jules", "openclaw"])
+@pytest.mark.parametrize("runtime_id", ["openclaw"])
 def test_cloud_removal_preserves_retained_external_policy_targets(runtime_id):
     """#4644: product contract enums do not retire other registered integrations."""
     policy = _policy()

@@ -8,12 +8,11 @@
 Codex-through-Omnigent product path across its canonical owners. It does not
 redefine any owned contract; each stage names the document that owns it.
 
-This document reconciles the **Codex via Omnigent** journey across its existing
-owners. Ordinary admission is certificate independent; explicitly
+This document reconciles the Codex journey across its owners. Ordinary admission is certificate independent; explicitly
 selected strict certification retains the evidence requirements in
 [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
 New-work selection uses the shared rollout boundary without the retired Codex
-phase inputs, as described in [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration).
+phase inputs, as described in [Runtime Provider Rollout](RuntimeProviderRollout.md#9-configuration).
 The v1 cutover evidence and phase examples below describe the retained diagnostic
 projection and historical interpretation, not ordinary startup instructions.
 Where a detail is owned elsewhere, that owner
@@ -21,9 +20,9 @@ governs it and this reconciliation must stay current.
 
 ## 1. Universal product identity
 
-Every canonical document that participates in this path names the same identity.
-The normal `/workflows/new` choice is **Codex via Omnigent**. Workflow Create
-writes `runtime.mode = "omnigent"`, and trusted runtime compilation — never any
+Every participating document names the same identity.
+The normal `/workflows/new` choice is the **Codex** Harness with a Codex
+Provider Profile. Workflow Create writes `runtime.mode = "omnigent"`, and trusted runtime compilation — never any
 browser input — converts that selector to the canonical external-agent identity.
 The API compiler persists the immutable workflow parameters and workspace intent;
 the Temporal workflow's trusted compiler

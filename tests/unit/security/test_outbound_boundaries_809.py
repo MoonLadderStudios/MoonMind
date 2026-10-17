@@ -7,7 +7,6 @@ error, diagnostics, evidence, or audit metadata.
 
 Caller matrix row (entrypoint | scanner/extractor | policy source | test):
 - PR/issue comments (Jira add_comment) | scan_outbound_text | explicit True | test_jira_comment_blocks_before_send
-- Provider follow-up messages (Jules send_message) | scan_outbound_text | operator env True | test_jules_send_message_blocks_before_post
 - Native queued/steered messages | scan_native_outbound digest+idempotency | explicit True | test_native_allow_bound_to_digest_and_key
 - Push bundles | scan_outbound_bundle + push_scan_coverage_error | explicit True | test_push_bundle_and_coverage_fail_closed
 - Operator/provider messages + notifications | scan_outbound_text exact-content | explicit True | test_operator_message_exact_content_and_redaction
@@ -28,14 +27,12 @@ from moonmind.omnigent.native_outbound_scan import (
     canonical_payload_digest,
     scan_native_outbound,
 )
-from moonmind.schemas.jules_models import JulesSendMessageRequest
 from moonmind.security.outbound_scan import (
     canonical_outbound_digest,
     push_scan_coverage_error,
     scan_outbound_bundle,
     scan_outbound_text,
 )
-from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
 
 class _StubJiraService(JiraToolService):
@@ -93,32 +90,6 @@ async def test_jira_comment_blocks_before_send() -> None:
         AddCommentRequest(issueKey="ENG-123", body="clean publication body")
     )
     assert len(clean.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_jules_send_message_blocks_before_post(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MOONMIND_HIGH_SECURITY_MODE", "true")
-    raw = "synthetic-jules-809-secret"
-    posted: list[dict] = []
-    client = JulesClient(base_url="https://jules.example", api_key="k")
-
-    async def _must_not_post(path, json):  # type: ignore[no-untyped-def]
-        posted.append({"path": path, "json": json})
-        return None
-
-    monkeypatch.setattr(client, "_post_json_empty", _must_not_post)
-    with pytest.raises(JulesClientError) as exc_info:
-        await client.send_message(
-            JulesSendMessageRequest(
-                sessionId="sessions/abc", prompt=f"continue with password={raw}"
-            )
-        )
-    assert posted == []
-    assert raw not in str(exc_info.value)
-
-    await client.aclose()
 
 
 def test_native_allow_bound_to_digest_and_key() -> None:

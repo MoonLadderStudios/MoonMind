@@ -3,7 +3,7 @@
 Source issue: MoonLadderStudios/MoonMind#3934.
 
 New producers write canonical runtime ids (``codex_cli``, ``claude_code``,
-``jules``, ``omnigent``). This module owns the one legacy-alias map shared
+``omnigent``). This module owns the one legacy-alias map shared
 by settings ingress, submission admission, and the runtime selection
 boundary, so canonical writes never depend on several independently
 maintained maps.
@@ -29,7 +29,6 @@ DEFAULT_WORKFLOW_RUNTIME = "omnigent"
 RUNTIME_ALIASES: dict[str, str] = {
     "codex": "codex_cli",
     "claude": "claude_code",
-    "jules_api": "jules",
 }
 
 

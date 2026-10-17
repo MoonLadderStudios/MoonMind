@@ -9,7 +9,7 @@ Workflow ID convention: ``provider-profile-manager:<runtime_id>``
   e.g. ``provider-profile-manager:codex_cli``
 
 Design references:
-  - docs/ManagedAgents/ManagedAgentsAuthentication.md (Section 5)
+  - docs/Security/ProviderProfiles.md
   - docs/Temporal/ManagedAndExternalAgentExecutionModel.md (Section 7)
 """
 

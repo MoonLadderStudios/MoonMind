@@ -81,24 +81,6 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
     ),
     TemporalBoundaryContract(
         kind="activity",
-        name="integration.jules.status",
-        owner="integration",
-        requestModel=_model(
-            module=_TEMPORAL_ACTIVITY_MODELS,
-            name="ExternalAgentRunInput",
-            role="request",
-        ),
-        responseModel=_model(
-            module=_AGENT_RUNTIME_MODELS,
-            name="AgentRunStatus",
-            role="response",
-        ),
-        status="modeled",
-        schemaHome=_TEMPORAL_ACTIVITY_MODELS,
-        coverageIds=("DESIGN-REQ-001", "DESIGN-REQ-002", "DESIGN-REQ-007"),
-    ),
-    TemporalBoundaryContract(
-        kind="activity",
         name="agent_runtime.status",
         owner="agent_runtime",
         requestModel=_model(

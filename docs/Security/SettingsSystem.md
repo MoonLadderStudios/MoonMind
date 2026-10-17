@@ -11,7 +11,7 @@
 **Audience:** Settings, API, dashboard, runtime, and security contributors and operators  
 **Authority:** Instance settings catalog, configuration resolution, persistence, audit, and retirement behavior, subject to the single-user scope authority below. Workflow Publishing owns publication selection and composition-default semantics.\
 **Owning Surface:** Settings registry/resolver, scoped override services, and Settings UI  
-**Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md)  
+**Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md)  
 **Related Implementation:** `moonmind/config/settings.py`, `api_service/services/settings_migrations.py`, `api_service/services/settings_backup.py`.
 
 Omnigent settings bootstrap the persistent [Omnigent policy authority](../Omnigent/PolicyAuthority.md);

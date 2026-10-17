@@ -131,7 +131,7 @@ generated table keeps distinct; they are not a second inventory.
   historical-only handlers retained for pre-cutover histories; module
   placement alone never proves Temporal Local Activity use.
 
-> Note: We intentionally do **not** model “Codex workflow,” “Gemini workflow,” “Jules workflow,” or “worker/system/manifest” as a top-level taxonomy. Provider/runtime choice is an execution concern, not a root orchestration category.
+> Note: We intentionally do **not** model “Codex workflow,” “Claude Code workflow,” or “worker/system/manifest” as a top-level taxonomy. Provider/runtime choice is an execution concern, not a root orchestration category.
 
 ---
 
@@ -326,7 +326,7 @@ Signals are used for asynchronous external events.
 Examples:
 
 - GitHub callback
-- Jules/provider callback
+- external provider callback
 - integration completion event
 - async external status transition
 

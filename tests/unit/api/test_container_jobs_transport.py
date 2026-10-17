@@ -125,7 +125,6 @@ def mcp_app(monkeypatch) -> FastAPI:
     app.include_router(mcp_tools_router.router, prefix="/api")
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=_OWNER_ID)
     monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
-    monkeypatch.setattr(mcp_tools_router, "_jules_registry", None)
     app.dependency_overrides[mcp_tools_router.get_async_session] = _empty_namespace
     return app
 

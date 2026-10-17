@@ -55,7 +55,6 @@ SUPPORTED_EXECUTION_RUNTIMES = {
     "codex_cli",
     "claude",
     "claude_code",
-    "jules",
 }
 SUPPORTED_PUBLISH_MODES = {"auto", "none", "branch", "pr"}
 _SECRET_REF_MOUNT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -673,7 +672,7 @@ def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
 
     Legacy spellings migrate at this ingress boundary through the shared
     ``moonmind.runtime_identity`` map (MoonLadderStudios/MoonMind#3934), so
-    new writes never persist ``codex``/``claude``/``jules_api`` as distinct
+    new writes never persist ``codex``/``claude`` as distinct
     runtime values. ``SUPPORTED_RUNTIME_MODES`` documents the accepted
     ingress spellings; the returned value is always canonical. Unknown
     explicit input raises a precise correction before resource effects and

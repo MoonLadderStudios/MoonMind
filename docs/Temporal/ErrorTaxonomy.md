@@ -302,8 +302,8 @@ Typical non-retryable failures:
 
 Examples:
 
-- `integration.jules.start`
-- `integration.jules.status`
+- `integration.openclaw.execute`
+- `integration.<provider>.status`
 
 Typical retryable failures:
 

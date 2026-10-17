@@ -388,7 +388,6 @@ def test_retained_manifest_strings_are_guards_history_or_excluded() -> None:
         "workspace_locators",
         "checkpoint_restore",
         "artifacts.py",
-        "jules_bundle",
         "container_image_acquisition",
     )
     markers = (

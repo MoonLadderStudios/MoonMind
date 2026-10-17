@@ -3,7 +3,7 @@
 This document describes the Settings experience for inspecting and editing a
 Provider Profile's `model_tiers` and `default_model_tier`.
 
-**Related design documents:** [Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md), [Provider Profiles](../Security/ProviderProfiles.md), [Provider Profile Creation](./ProviderProfileCreation.md), [Settings Page](./SettingsPage.md), [Dashboard Design System](./DashboardDesignSystem.md)
+**Related:** [Settings Page](./SettingsPage.md), [Dashboard Design System](./DashboardDesignSystem.md)
 
 The browser authors and previews tier policy. The backend validates it,
 normalizes compatibility, and resolves model and effort at launch; that
@@ -400,9 +400,9 @@ image, and never reused for another profile sharing runtime and provider.
   by a draft response. A response whose profile, generation, or image no longer
   matches the loaded profile is stale: the editor refetches and meanwhile treats
   observed options as unavailable for new selections.
-- `evidence.stale = true` means the catalog needs re-validation: existing values
-  stay, observed choices are disabled, and an explicit `model.allow_custom =
-  true` still permits manual entry.
+- `evidence.stale = true` means the catalog needs re-validation or the profile
+  has none yet: existing values stay, observed choices are disabled, and an
+  explicit `model.allow_custom = true` still permits manual entry.
 
 ### 10.4 Degradation
 

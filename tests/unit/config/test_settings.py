@@ -660,8 +660,8 @@ class TestWorkflowSettings:
         """Legacy deployment values migrate via the shared runtime alias map.
 
         MoonLadderStudios/MoonMind#3934: settings must not keep a private
-        alias map that diverges from runtime_defaults (which also covers
-        ``jules_api``). Unknown explicit input is rejected, never replaced.
+        alias map that diverges from runtime_defaults. Unknown explicit input
+        is rejected, never replaced.
         """
 
         from moonmind.runtime_identity import normalize_runtime_id
@@ -669,7 +669,6 @@ class TestWorkflowSettings:
         for legacy, canonical in (
             ("codex", "codex_cli"),
             ("claude", "claude_code"),
-            ("jules_api", "jules"),
         ):
             assert normalize_runtime_id(legacy) == canonical
             monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", legacy)
@@ -1020,44 +1019,18 @@ class TestAppSettingsRuntimeValidation:
         settings = AppSettings(**defaults)
         assert settings.workflow.default_runtime == "claude_code"
 
-    def test_app_settings_rejects_jules_default_without_runtime_config(
-        self, app_settings_defaults, monkeypatch
+    @pytest.mark.parametrize("retired_runtime", ["jules", "jules_api", "codex_cloud"])
+    def test_app_settings_rejects_retired_default_runtime(
+        self, app_settings_defaults, monkeypatch, retired_runtime
     ):
+        """A saved retired default runtime fails fast instead of being replaced."""
         for key in (
             "MOONMIND_DEFAULT_RUNTIME",
             "WORKFLOW_DEFAULT_RUNTIME",
-            "WORKFLOW_DEFAULT_RUNTIME",
-            "JULES_ENABLED",
-            "JULES_API_URL",
-            "JULES_API_KEY",
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["workflow"] = {"default_runtime": "jules"}
-        defaults["jules"] = {"jules_api_key": None}
+        defaults["workflow"] = {"default_runtime": retired_runtime}
 
-        with pytest.raises(
-            ValueError,
-            match="default_runtime=jules requires JULES_API_KEY configured",
-        ):
+        with pytest.raises(ValueError, match="default_runtime must be one of"):
             AppSettings(_env_file=None, **defaults)
-
-    def test_app_settings_allows_jules_default_with_runtime_config(
-        self, app_settings_defaults, monkeypatch
-    ):
-        for key in (
-            "MOONMIND_DEFAULT_RUNTIME",
-            "WORKFLOW_DEFAULT_RUNTIME",
-            "WORKFLOW_DEFAULT_RUNTIME",
-        ):
-            monkeypatch.delenv(key, raising=False)
-        defaults = dict(app_settings_defaults)
-        defaults["workflow"] = {"default_runtime": "jules"}
-        defaults["jules"] = {
-            "jules_enabled": True,
-            "jules_api_url": "https://jules.example.test",
-            "jules_api_key": "test-key",
-        }
-
-        settings = AppSettings(_env_file=None, **defaults)
-        assert settings.workflow.default_runtime == "jules"

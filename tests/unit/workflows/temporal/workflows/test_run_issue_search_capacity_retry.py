@@ -75,7 +75,6 @@ async def _run_native_search_stage(
     plan["policy"]["failure_mode"] = failure_mode
     plan["edges"] = [{"from": NODE_ID, "to": "after-search"}]
     calls = []
-    workflow._integration = None
     workflow._runtime_inheritance_parameters = copy.deepcopy(gate.SELECTION)
     workflow._issue_search_capacity_retry_enabled = retry_enabled
 

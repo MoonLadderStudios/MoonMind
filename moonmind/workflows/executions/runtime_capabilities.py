@@ -314,13 +314,6 @@ _DESCRIPTORS = (
         postExecutionCheckpointCriticality="recoverability_only",
     ),
     _descriptor(
-        runtimeId="jules", runtimeFamily="external_provider",
-        workspaceAuthority="external_provider", checkpointCaptureKinds=(),
-        checkpointRestoreKinds=(), supportsSameSessionContinuation=True,
-        terminalContractIds=("jules_fetch_result_v1",),
-        postExecutionCheckpointCriticality="unsupported",
-    ),
-    _descriptor(
         runtimeId="omnigent", runtimeFamily="external_provider",
         agentIdentity={"agentKind": "external", "agentId": "omnigent", "harness": "codex-native"},
         sessionState={

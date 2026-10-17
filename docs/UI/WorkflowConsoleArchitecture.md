@@ -287,7 +287,7 @@ Product language is preferred: **Start New Run** rather than Continue-As-New, **
 
 ## 13. Submit integration
 
-[`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) describes `/workflows/new` selection and trusted compilation for **Codex via Omnigent**. The form authors product intent, not runtime host, session, credential, filesystem, or daemon authority.
+[`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md) describes `/workflows/new` selection and trusted compilation for the Codex harness. The form authors product intent, not runtime host, session, credential, filesystem, or daemon authority.
 
 ### 13.1 Submit UX
 

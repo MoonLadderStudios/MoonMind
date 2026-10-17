@@ -94,7 +94,6 @@ class _InterruptedStepFixture:
         run = MoonMindRunWorkflow()
         run._owner_id = "owner-1"
         run._repo = "org/repo"
-        run._integration = None
 
         async def bind_session(request):
             return request

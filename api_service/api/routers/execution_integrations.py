@@ -93,22 +93,6 @@ def _bearer_token(authorization_header: str | None) -> str | None:
 
 def _callback_profile(integration_name: str) -> _CallbackProfile:
     normalized = str(integration_name or "").strip().lower()
-    if normalized == "jules":
-        token = str(settings.jules.jules_callback_token or "").strip() or None
-        return _CallbackProfile(
-            normalized_name=normalized,
-            expected_token=token,
-            max_payload_bytes=int(settings.jules.jules_callback_max_payload_bytes),
-            rate_limit_per_window=int(
-                settings.jules.jules_callback_rate_limit_per_window
-            ),
-            rate_limit_window_seconds=int(
-                settings.jules.jules_callback_rate_limit_window_seconds
-            ),
-            capture_artifacts=bool(
-                settings.jules.jules_callback_artifact_capture_enabled
-            ),
-        )
     return _CallbackProfile(
         normalized_name=normalized,
         expected_token=(
@@ -221,12 +205,6 @@ async def describe_integration_callbacks() -> dict[str, object]:
             "maxPayloadBytes": _DEFAULT_CALLBACK_MAX_PAYLOAD_BYTES,
             "rateLimitPerWindow": _DEFAULT_CALLBACK_RATE_LIMIT,
             "rateLimitWindowSeconds": _DEFAULT_CALLBACK_RATE_LIMIT_WINDOW_SECONDS,
-        },
-        "providerOverrides": {
-            "jules": {
-                "tokenSetting": "JULES_CALLBACK_TOKEN",
-                "artifactCaptureSetting": "JULES_CALLBACK_ARTIFACT_CAPTURE_ENABLED",
-            }
         },
     }
 
