@@ -2093,7 +2093,7 @@ def test_restart_recovery_skips_work_another_owner_finished_before_the_lock(
     assert store.load(op["operationId"])["attempts"] == []
 
 
-@pytest.mark.parametrize("observation", ["running", "unobservable"])
+@pytest.mark.parametrize("observation", ["running", "unobservable", "failed-exit"])
 def test_apply_never_starts_beside_a_previous_owners_release_step(
     controller_path, tmp_path, monkeypatch, observation
 ):
@@ -2110,6 +2110,8 @@ def test_apply_never_starts_beside_a_previous_owners_release_step(
             commands.append(tuple(args))
             if args[:2] == ("docker", "ps") and observation == "running":
                 return {"exit": 0, "output": "abc123\n", "stdout": "abc123\n"}
+            if args[:2] == ("docker", "ps") and observation == "failed-exit":
+                return {"exit": 1, "output": "daemon unavailable"}
             if args[:2] == ("docker", "ps"):
                 raise server.engine.CommandError("ps", 1, "daemon unavailable")
             pytest.fail(f"a writer started beside the previous owner: {args}")
@@ -2152,12 +2154,15 @@ def test_refused_submission_for_a_busy_stack_records_no_operation(
 class _RetiredControllerDocker:
     """Docker as seen beside a controller from the retired shell installer."""
 
-    def __init__(self, *, listed="retired1\n", state="idle", fail=None):
+    def __init__(self, *, listed="retired1\n", state="idle", fail=None, exit_code=None):
         self.listed, self.state, self.fail = listed, state, fail
+        self.exit_code = exit_code
         self.commands = []
 
     def run(self, args, timeout_seconds):
         self.commands.append(tuple(args))
+        if self.exit_code and args[1] == self.exit_code:
+            return {"exit": 1, "output": "", "stdout": ""}
         if self.fail and args[1] == self.fail:
             raise OSError("docker unavailable")
         if args[1] == "ps":
@@ -2189,13 +2194,18 @@ def test_busy_or_unreadable_retired_shell_controller_defers_the_controller(
     assert not any(command[1] == "stop" for command in docker.commands)
 
 
-@pytest.mark.parametrize("fail", ["ps", "exec", "stop"])
+@pytest.mark.parametrize("step", ["ps", "exec", "stop"])
+@pytest.mark.parametrize("how", ["error", "exit"])
 def test_uninspectable_retired_shell_controller_is_never_assumed_absent(
-    controller_path, fail
+    controller_path, step, how
 ):
     server = load("server")
+    docker = _RetiredControllerDocker(
+        fail=step if how == "error" else None,
+        exit_code=step if how == "exit" else None,
+    )
     with pytest.raises(server.LegacyWriterUnknown):
-        server.reconcile_retired_shell_controller(_RetiredControllerDocker(fail=fail))
+        server.reconcile_retired_shell_controller(docker)
 
 
 def test_no_retired_shell_controller_needs_no_transition(controller_path):

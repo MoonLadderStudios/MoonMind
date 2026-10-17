@@ -238,6 +238,16 @@ def default_legacy_writer_probe() -> bool:
     return parse_legacy_mutation_ps(completed.stdout, controller_operations=operations)
 
 
+def _observed_stdout(runner, args) -> str:
+    """Complete stdout of a read-only Docker observation; any failure raises."""
+    result = engine.run_command(
+        runner, args, timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS
+    )
+    if int(result.get("exit", 0)) != 0:
+        raise engine.CommandError(str(args[1]), int(result.get("exit", 1)))
+    return engine.command_stdout(result)
+
+
 def reconcile_retired_shell_controller(runner=None) -> bool:
     """Retire an idle controller from the removed shell installer.
 
@@ -249,20 +259,17 @@ def reconcile_retired_shell_controller(runner=None) -> bool:
     """
     runner = runner or engine.subprocess_runner()
     try:
-        listed = engine.run_command(runner, (
+        listed = _observed_stdout(runner, (
             "docker", "ps", "--quiet", "--filter", f"volume={RETIRED_CONTROLLER_VOLUME}",
-        ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)
-        for container in engine.command_stdout(listed).split():
-            state = engine.command_stdout(engine.run_command(runner, (
+        ))
+        for container in listed.split():
+            state = _observed_stdout(runner, (
                 "docker", "exec", container, "python", "-c",
                 RETIRED_CONTROLLER_IDLE_CHECK, RETIRED_CONTROLLER_STATE_DIR,
-            ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)).strip()
+            )).strip()
             if state != "idle":
                 return True
-            engine.run_command(
-                runner, ("docker", "stop", container),
-                timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS,
-            )
+            _observed_stdout(runner, ("docker", "stop", container))
     except (engine.CommandError, OSError) as exc:
         raise LegacyWriterUnknown(
             f"cannot reconcile the retired shell-installed controller: {exc}"
@@ -1518,12 +1525,11 @@ def require_previous_oneoffs_exited(store, operation, *, runner) -> None:
     """
     operation_id = operation["operationId"]
     try:
-        listed = engine.run_command(runner, (
+        running = _observed_stdout(runner, (
             "docker", "ps", "--filter",
             f"label={OMNIGENT_OPERATION_LABEL}={operation_id}",
             "--format", "{{.ID}}",
-        ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)
-        running = engine.command_stdout(listed).split()
+        )).split()
     except (engine.CommandError, OSError) as exc:
         detail = f"a previous owner's release step could not be observed: {exc}"
     else:
