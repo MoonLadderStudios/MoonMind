@@ -363,6 +363,7 @@ def resume_open_operations(
             with lock_mod.StackLock(store.state_dir, operation["stack"]).acquire():
                 _apply_recording_failure(store, operation["operationId"], applier)
         except lock_mod.LockBusyError:
+            # A submission owns the stack; it reattached to or replaced this work.
             pass
         except Exception as exc:  # noqa: BLE001 - keep the error on the record
             store.record_attempt_error(

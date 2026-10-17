@@ -17,6 +17,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 HANDOFF_PREFIX = "MOONMIND_CONTROLLER_HANDOFF="
+# Records a staged operation inside the controller, as a submission does.
+OPEN_OPERATION = (
+    "import sys; sys.path.insert(0,'/app/deploy/controller'); import record; "
+    "store=record.OperationStore('/var/lib/moonmind-controller'); "
+    "store.begin(stack='moonmind', desired_image=sys.argv[2], source_revision='', "
+    "operation_id=sys.argv[1], target={'project': sys.argv[3]}); "
+    "store.mark_stage(sys.argv[1], stage='staged')"
+)
+# Holds the stack lock the way an applying controller does while it waits.
+HOLD_STACK_LOCK = (
+    "import fcntl,time; f=open('/var/lib/moonmind-controller/locks/moonmind.lock','a+b'); "
+    "fcntl.flock(f, fcntl.LOCK_EX); time.sleep(600)"
+)
 pytestmark = [pytest.mark.integration]
 
 
@@ -129,11 +142,7 @@ def test_requested_release_controller_resumes_its_operation(tmp_path):
                 container(),
                 "python",
                 "-c",
-                "import sys; sys.path.insert(0,'/app/deploy/controller'); import record; "
-                "store=record.OperationStore('/var/lib/moonmind-controller'); "
-                "store.begin(stack='moonmind', desired_image=sys.argv[2], source_revision='', "
-                "operation_id=sys.argv[1], target={'project': sys.argv[3]}); "
-                "store.mark_stage(sys.argv[1], stage='staged')",
+                OPEN_OPERATION,
                 operation_id,
                 candidate,
                 project,
@@ -149,8 +158,7 @@ def test_requested_release_controller_resumes_its_operation(tmp_path):
                 container(),
                 "python",
                 "-c",
-                "import fcntl,time; f=open('/var/lib/moonmind-controller/locks/moonmind.lock','a+b'); "
-                "fcntl.flock(f, fcntl.LOCK_EX); time.sleep(600)",
+                HOLD_STACK_LOCK,
             ]
         )
 
@@ -204,6 +212,7 @@ def test_requested_release_controller_resumes_its_operation(tmp_path):
                 if check():
                     return
             except (AssertionError, OSError, ValueError):
+                # The replacement controller may still be starting.
                 pass
             assert time.monotonic() < deadline, "condition never held"
             time.sleep(2)
