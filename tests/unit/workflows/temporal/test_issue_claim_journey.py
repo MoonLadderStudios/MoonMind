@@ -175,6 +175,9 @@ async def journey(tmp_path, monkeypatch, request):
                 self.respond({"message": "fixture temporary failure"}, 503)
                 return
             comment["body"] = payload["body"]
+            if state.get("fail_reads_after_update"):
+                # The update is accepted; its confirmation read then fails.
+                state["failed_read_path"] = state.pop("fail_reads_after_update")
             if state.get("lose_update_ack"):
                 state["lose_update_ack"] = False
                 self.close_connection = True
