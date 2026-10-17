@@ -1009,8 +1009,23 @@ class RemediationCollectionItemModel(BaseModel):
     updatedAt: datetime
 
 
+class RemediationCollectionUnavailableItemModel(BaseModel):
+    """A link that could not be loaded; compact, without raw error text."""
+
+    remediationWorkflowId: str
+    targetWorkflowId: str
+    code: str
+    message: str
+
+
 class RemediationCollectionResponseModel(BaseModel):
     items: list[RemediationCollectionItemModel]
+    # Links whose executions could not be loaded. The count is exact; the
+    # entries are bounded by _REMEDIATION_UNAVAILABLE_ITEM_LIMIT.
+    unavailableCount: int = 0
+    unavailableItems: list[RemediationCollectionUnavailableItemModel] = Field(
+        default_factory=list
+    )
 
 
 class RemediationApprovalDecisionRequest(BaseModel):
@@ -14872,61 +14887,100 @@ async def _read_remediation_context_payload(
     return decoded
 
 
+_REMEDIATION_UNAVAILABLE_ITEM_LIMIT = 25
+
+
+def _remediation_item_error(exc: Exception) -> tuple[str, str]:
+    """Return a client-safe code and message; the raw error goes to the log."""
+    detail = exc.detail if isinstance(exc, HTTPException) else None
+    if isinstance(detail, Mapping) and detail.get("code"):
+        return str(detail["code"]), str(detail.get("message") or detail["code"])
+    return (
+        "remediation_item_unavailable",
+        f"{type(exc).__name__} while loading this remediation or its source workflow.",
+    )
+
+
 @router.get("/remediations", response_model=RemediationCollectionResponseModel)
 async def list_remediation_collection(
     service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> RemediationCollectionResponseModel:
     """List only remediation relationships whose two executions are visible."""
-    async def build_item(link: Any) -> RemediationCollectionItemModel | None:
-        try:
-            remediation, target = await asyncio.gather(
-                _get_owned_execution(
-                    service=service,
-                    workflow_id=link.remediation_workflow_id,
-                    user=user,
-                    allow_historical=True,
-                ),
-                _get_owned_execution(
-                    service=service,
-                    workflow_id=link.target_workflow_id,
-                    user=user,
-                    allow_historical=True,
-                ),
-            )
-        except HTTPException as exc:
-            if exc.status_code == status.HTTP_404_NOT_FOUND:
-                return None
-            raise
-        return RemediationCollectionItemModel(
-            remediationWorkflowId=link.remediation_workflow_id,
-            title=str(
-                (getattr(remediation, "memo", None) or {}).get("title")
-                or link.remediation_workflow_id
-            ),
-            status=str(link.status),
-            attentionRequired=bool(
-                getattr(remediation, "attention_required", False)
-            ),
-            targetWorkflowId=link.target_workflow_id,
-            targetTitle=str(
-                (getattr(target, "memo", None) or {}).get("title")
-                or link.target_workflow_id
-            ),
-            authorityMode=link.authority_mode,
-            mode=link.mode,
-            latestActionSummary=link.latest_action_summary,
-            deliveryStatus=link.outcome,
-            resolution=link.resolution,
-            createdAt=link.created_at,
-            updatedAt=link.updated_at,
-        )
+    # describe_execution commits and rolls back the request's one session, and
+    # an AsyncSession cannot serve concurrent tasks, so links are described one
+    # at a time. Link fields are copied first because a rollback expires every
+    # loaded row.
+    links = [
+        {
+            "remediationWorkflowId": link.remediation_workflow_id,
+            "targetWorkflowId": link.target_workflow_id,
+            "status": str(link.status),
+            "authorityMode": link.authority_mode,
+            "mode": link.mode,
+            "latestActionSummary": link.latest_action_summary,
+            "deliveryStatus": link.outcome,
+            "resolution": link.resolution,
+            "createdAt": link.created_at,
+            "updatedAt": link.updated_at,
+        }
+        for link in await service.list_remediation_links()
+    ]
 
-    results = await asyncio.gather(
-        *(build_item(link) for link in await service.list_remediation_links())
+    async def describe(workflow_id: str) -> tuple[str, bool]:
+        record = await _get_owned_execution(
+            service=service, workflow_id=workflow_id, user=user, allow_historical=True
+        )
+        title = (getattr(record, "memo", None) or {}).get("title") or workflow_id
+        return str(title), bool(getattr(record, "attention_required", False))
+
+    items: list[RemediationCollectionItemModel] = []
+    unavailable: list[RemediationCollectionUnavailableItemModel] = []
+    unavailable_count = 0
+    for fields in links:
+        try:
+            title, attention_required = await describe(fields["remediationWorkflowId"])
+            target_title, _ = await describe(fields["targetWorkflowId"])
+            items.append(
+                RemediationCollectionItemModel(
+                    **fields,
+                    title=title,
+                    attentionRequired=attention_required,
+                    targetTitle=target_title,
+                )
+            )
+        except Exception as exc:
+            if (
+                isinstance(exc, HTTPException)
+                and exc.status_code == status.HTTP_404_NOT_FOUND
+            ):
+                continue  # Not visible: filtered, not a failure.
+            logger.warning(
+                "Remediation collection could not load %s (target %s)",
+                fields["remediationWorkflowId"],
+                fields["targetWorkflowId"],
+                exc_info=True,
+            )
+            # A failed statement leaves the shared transaction unusable for
+            # the remaining links; this request has no other pending work.
+            await session.rollback()
+            unavailable_count += 1
+            if len(unavailable) < _REMEDIATION_UNAVAILABLE_ITEM_LIMIT:
+                code, message = _remediation_item_error(exc)
+                unavailable.append(
+                    RemediationCollectionUnavailableItemModel(
+                        remediationWorkflowId=fields["remediationWorkflowId"],
+                        targetWorkflowId=fields["targetWorkflowId"],
+                        code=code,
+                        message=message,
+                    )
+                )
+    return RemediationCollectionResponseModel(
+        items=items,
+        unavailableCount=unavailable_count,
+        unavailableItems=unavailable,
     )
-    items = [item for item in results if item is not None]
-    return RemediationCollectionResponseModel(items=items)
 
 
 @router.get(

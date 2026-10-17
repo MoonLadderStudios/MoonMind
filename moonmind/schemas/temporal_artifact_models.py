@@ -221,7 +221,9 @@ class ArtifactCollectionResponse(BaseModel):
 
     category: Literal["artifacts", "reports", "observability"]
     items: list[ArtifactCollectionRowModel] = Field(default_factory=list)
-    total: int = 0
+    # True when another page follows; no exact total, which would need an
+    # unbounded count over every matching artifact.
+    has_more: bool = False
     offset: int = 0
     limit: int = 50
     refreshed_at: datetime

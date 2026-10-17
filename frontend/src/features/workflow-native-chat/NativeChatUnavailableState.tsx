@@ -13,6 +13,8 @@ import {
 interface NativeChatUnavailableStateProps {
   status: NativeChatStatus;
   unavailableReason?: string | null;
+  /** HTTP status of the failed binding request, when one was answered. */
+  errorStatus?: number | null;
   onRetry?: (() => void) | null;
   /** Full-page MoonMind-scoped native surface (never an upstream URL). */
   fullPageHref?: string | null;
@@ -37,13 +39,14 @@ function isPlainClick(event: MouseEvent<HTMLAnchorElement>): boolean {
 export function NativeChatUnavailableState({
   status,
   unavailableReason = null,
+  errorStatus = null,
   onRetry = null,
   fullPageHref = null,
   evidenceHref = null,
   diagnosticsHref = null,
   onNavigate = null,
 }: NativeChatUnavailableStateProps) {
-  const copy = nativeChatStateCopy(status, unavailableReason);
+  const copy = nativeChatStateCopy(status, unavailableReason, errorStatus);
 
   const handleInternal = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
     if (!onNavigate || !isPlainClick(event)) {
