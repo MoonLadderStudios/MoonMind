@@ -24803,6 +24803,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             }:
                 category = "execution_error"
             recommended_next_action = "inspect_diagnostics"
+        deferred = diagnostic.get("reasonCode") == "issue_claim_capacity_deferred"
+        if deferred:
+            # No agent ran: recovery releases the issue as runtime_unavailable
+            # with its allowance intact and a bounded cooldown.
+            recommended_next_action = "retry_after_capacity_cooldown"
 
         compact: dict[str, Any] = {
             "type": "agent_runtime_failure",
@@ -24810,6 +24815,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "recommendedNextAction": recommended_next_action,
             "summary": message,
         }
+        if deferred:
+            compact.update(
+                reasonCode="issue_claim_capacity_deferred",
+                agentExecutionLaunched=False,
+            )
         if failure_cause:
             compact["failureCause"] = failure_cause
         if retry_action:
