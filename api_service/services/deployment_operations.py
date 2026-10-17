@@ -6,12 +6,14 @@ import asyncio
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+from moonmind.workflows.skills import deployment_controller
 from moonmind.workflows.skills.deployment_controller import (
     HOST_REPAIR_COMMAND,
     ControllerEndpoint,
@@ -307,12 +309,18 @@ class DeploymentOperationsService:
             )
         try:
             operations = list_controller_operations(endpoint, stack=policy.stack)
-        except ControllerTransportError as exc:
-            return DeploymentControllerObservation(
-                installed=True,
-                reachable=False,
-                message=unavailable_controller_error(str(exc)).message,
-            )
+        except ControllerTransportError:
+            # A controller handing an update to its requested release's
+            # controller is unreachable for a moment; ask once more.
+            time.sleep(deployment_controller.CONTROLLER_RETRY_PAUSE_SECONDS)
+            try:
+                operations = list_controller_operations(endpoint, stack=policy.stack)
+            except ControllerTransportError as exc:
+                return DeploymentControllerObservation(
+                    installed=True,
+                    reachable=False,
+                    message=unavailable_controller_error(str(exc)).message,
+                )
         except DeploymentOperationError as exc:
             return DeploymentControllerObservation(
                 installed=True, reachable=False, message=exc.message

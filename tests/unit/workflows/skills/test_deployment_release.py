@@ -816,6 +816,7 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
         "operationId": "controller-operation",
         "controllerCapabilities": [
             "active-journal-transition", "unversioned-routing-cutover",
+            "controller-handoff",
         ],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
@@ -876,6 +877,7 @@ async def test_controller_omnigent_failure_preserves_selection_for_retry(
         "operationId": "retry-omnigent",
         "controllerCapabilities": [
             "active-journal-transition", "unversioned-routing-cutover",
+            "controller-handoff",
         ],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
@@ -948,6 +950,7 @@ async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
         "operationId": "lost-selection-receipt",
         "controllerCapabilities": [
             "active-journal-transition", "unversioned-routing-cutover",
+            "controller-handoff",
         ],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
@@ -967,11 +970,18 @@ async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["select", "migrate"])
 async def test_old_controller_callback_refuses_before_release_state_access(monkeypatch, phase):
-    """An installed old caller has not run the new host/API bootstrap path."""
+    """An old owner the requested release's controller could not replace."""
     def mutable_release_store():
         pytest.fail("An owner without journal transition support reached release state")
 
+    handoffs = []
+
+    def unavailable(payload):
+        handoffs.append(payload["operationId"])
+        return {"status": "unavailable", "reason": "other deployment work is open"}
+
     monkeypatch.setattr(release, "_omnigent_release_store", mutable_release_store)
+    monkeypatch.setattr(release, "hand_off_controller", unavailable)
     old_request = {
         "operationId": "installed-old-controller",
         "moonmindImage": "example/moonmind@sha256:new",
@@ -982,6 +992,98 @@ async def test_old_controller_callback_refuses_before_release_state_access(monke
         await release.run_controller_omnigent_step(phase, old_request)
     assert "./tools/update-moonmind.sh" in str(failure.value)
     assert "active-journal-transition" in str(failure.value)
+    # Only selection runs before anything changes, so only it hands off.
+    assert handoffs == (["installed-old-controller"] if phase == "select" else [])
+    assert ("other deployment work is open" in str(failure.value)) is (phase == "select")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capabilities",
+    [[], ["active-journal-transition", "request-identity", "unversioned-routing-cutover"]],
+)
+async def test_selection_hands_an_old_controllers_operation_to_this_release(
+    monkeypatch, capabilities
+):
+    """A controller installed before handoff upgrades through its own update."""
+    def mutable_release_store():
+        pytest.fail("A replaced owner's callback reached release state")
+
+    monkeypatch.setattr(release, "_omnigent_release_store", mutable_release_store)
+    monkeypatch.setattr(
+        release, "hand_off_controller",
+        lambda payload: {"status": "handed-off", "image": "sha256:requested"},
+    )
+    request = {
+        "operationId": "installed-old-controller",
+        "controllerCapabilities": capabilities,
+        "moonmindImage": "example/moonmind:latest",
+        "target": {"project": "moonmind-test", "projectDir": "/installed/repo",
+                   "composeFiles": ["docker-compose.yaml"]},
+    }
+    with pytest.raises(RuntimeError, match="resumes it"):
+        await release.run_controller_omnigent_step("select", request)
+
+
+@pytest.mark.asyncio
+async def test_capable_old_controller_still_selects_when_handoff_is_unavailable(
+    tmp_path, monkeypatch
+):
+    state = tmp_path / "deployment-state"
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(state / ".env.deploy")
+    )
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCK_DIR", str(state / "locks"))
+    monkeypatch.setattr(
+        release, "hand_off_controller",
+        lambda payload: {"status": "unavailable", "reason": "no installed controller"},
+    )
+
+    async def select(runner, owner, image):
+        return {"status": "advanced", "revision": 4}
+
+    monkeypatch.setattr(release, "select_omnigent", select)
+    request = {
+        "operationId": "capable-old-controller",
+        "controllerCapabilities": [
+            "active-journal-transition", "request-identity", "unversioned-routing-cutover",
+        ],
+        "moonmindImage": "example/moonmind@sha256:new",
+        "target": {"project": "moonmind-test", "projectDir": "/installed/repo",
+                   "composeFiles": ["docker-compose.yaml"]},
+    }
+    assert await release.run_controller_omnigent_step("select", request) == {
+        "status": "advanced", "revision": 4,
+    }
+
+
+@pytest.mark.parametrize("outcome", ["receipt", "no-receipt"])
+def test_handoff_runs_this_images_controller_lifecycle(tmp_path, monkeypatch, outcome):
+    bootstrap = tmp_path / "bootstrap.py"
+    bootstrap.write_text(
+        "import json, sys\n"
+        "args = sys.argv[1:]\n"
+        "assert args[0] == 'handoff'\n"
+        "assert args[args.index('--state-dir') + 1] == '/deployment/controller'\n"
+        "assert args[args.index('--operation') + 1] == 'ui-op'\n"
+        "assert args[args.index('--image') + 1] == 'example/moonmind:latest'\n"
+        + (
+            "print('compose output')\n"
+            "print('MOONMIND_CONTROLLER_HANDOFF=' + json.dumps({'status': 'current'}))\n"
+            if outcome == "receipt"
+            else "print('docker unavailable', file=sys.stderr)\nsys.exit(3)\n"
+        )
+    )
+    monkeypatch.setattr(release, "CONTROLLER_BOOTSTRAP", bootstrap)
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", "/deployment/controller")
+    receipt = release.hand_off_controller(
+        {"operationId": "ui-op", "moonmindImage": "example/moonmind:latest"}
+    )
+    if outcome == "receipt":
+        assert receipt == {"status": "current"}
+    else:
+        assert receipt["status"] == "unavailable"
+        assert "exit 3" in receipt["reason"] and "docker unavailable" in receipt["reason"]
 
 
 @pytest.mark.asyncio
@@ -1000,6 +1102,10 @@ async def test_controller_without_routing_cutover_is_refused_before_selection(
         pytest.fail("An owner without the routing cutover reached release state")
 
     monkeypatch.setattr(release, "_omnigent_release_store", mutable_release_store)
+    monkeypatch.setattr(
+        release, "hand_off_controller",
+        lambda payload: {"status": "unavailable", "reason": "no installed controller"},
+    )
     request = {
         "operationId": "journal-capable-old-controller",
         "controllerCapabilities": ["active-journal-transition", "request-identity"],

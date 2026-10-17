@@ -310,6 +310,14 @@ class OperationStore:
         operation["status"] = "pending"
         return self._write(operation)
 
+    def record_controller_handoff(
+        self, operation_id: str, values: Mapping[str, Any]
+    ) -> dict:
+        """Remember which controller this attempt group handed the operation to."""
+        operation = self.load(operation_id)
+        operation["controllerHandoff"] = {**dict(values), "at": _utc_now()}
+        return self._write(operation)
+
     def record_omnigent_step(self, operation_id: str, phase: str | None) -> dict:
         """Identify the one-off this kernel-owned controller is awaiting."""
         operation = self.load(operation_id)

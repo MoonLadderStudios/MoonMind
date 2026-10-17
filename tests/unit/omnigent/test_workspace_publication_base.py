@@ -674,6 +674,7 @@ async def test_unchanged_shared_base_cannot_supply_an_unrelated_pr(
         "unchanged",
         "diverged",
         "foreign_before_clone",
+        "foreign_before_clone_unchanged",
         "foreign_before_lease",
         "foreign_before_push",
         "integrated",
@@ -715,6 +716,7 @@ async def test_owned_candidate_is_extended_not_stacked(
 
     if change in {
         "foreign_before_clone",
+        "foreign_before_clone_unchanged",
         "foreign_before_lease",
         "foreign_before_push",
     }:
@@ -722,7 +724,9 @@ async def test_owned_candidate_is_extended_not_stacked(
         git("add", ".", cwd=source)
         git("commit", "-m", "foreign actor", cwd=source)
         foreign_sha = git("rev-parse", "HEAD", cwd=source)
-        if change == "foreign_before_clone":
+        if change.startswith("foreign_before_clone"):
+            # The operator fast-forwards the run's PR branch between steps;
+            # the next step's checkout starts from that newer tip.
             git("push", "origin", candidate, cwd=source)
     if change in {"integrated", "base_advanced"}:
         git("push", "origin", "HEAD:refs/heads/main", cwd=source)
@@ -829,7 +833,6 @@ async def test_owned_candidate_is_extended_not_stacked(
 
     if change in {
         "diverged",
-        "foreign_before_clone",
         "foreign_before_lease",
         "foreign_before_push",
         "missing_accepted_sha",
@@ -859,7 +862,11 @@ async def test_owned_candidate_is_extended_not_stacked(
         assert evidence["push_branch"] == candidate
         assert evidence["push_base_branch"] == "main"
         assert evidence["push_head_sha"] == head_sha
-        assert evidence["push_commit_count"] == (1 if change == "unchanged" else 2)
+        assert evidence["push_commit_count"] == {
+            "unchanged": 1,
+            "foreign_before_clone_unchanged": 2,
+            "foreign_before_clone": 3,
+        }.get(change, 2)
         assert evidence["remote_verified"] is True
         assert git("rev-parse", f"refs/heads/{candidate}", cwd=origin) == head_sha
         assert git("status", "--porcelain", cwd=workspace) == ""
