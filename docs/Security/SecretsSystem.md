@@ -509,9 +509,12 @@ around a caller-owned transaction.
   identities across scopes.
 
 Connection-policy revalidation against the live host record is owned by the
-repository-reference integration; rotation accepts
-the agreed `expected_policy_revision` binding, records it in audit/outbox
-evidence, and requires explicit re-admission on ownership change.
+repository-reference integration. Value updates and rotations accept optional
+`expectedCredentialRevision` and `expectedPolicyRevision` compare-and-set
+fences: a stale revision returns 409 and leaves the secret unchanged, so an
+edit admitted before a concurrent disable cannot land; an omitted fence is not
+checked. Rotation additionally requires a validated candidate and an `ACTIVE`
+secret, and requires explicit re-admission on ownership change.
 
 ### 12.1 Launch and Retry Semantics
 
