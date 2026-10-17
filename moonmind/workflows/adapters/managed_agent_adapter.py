@@ -59,6 +59,7 @@ from moonmind.workflows.temporal.publish_auto_evidence import (
     AutoPublishEvidenceError,
     parse_auto_publish_evidence,
 )
+from moonmind.workflows.terminal_evidence import pr_resolver_host_repair_retry
 
 logger = logging.getLogger(__name__)
 
@@ -976,6 +977,9 @@ def _derive_pr_resolver_metadata(
         # The terminal-contract boundary and the generic-exit clearing branch
         # both need the validated reason, not just the disposition.
         metadata["prResolverFinalReason"] = reason
+    retry = pr_resolver_host_repair_retry(payload)
+    if retry:
+        metadata["retryRecommendation"] = retry
     metadata["prResolverMergeGateOwned"] = bool(merge_gate_owned)
     final = _pr_resolver_final_payload(payload)
     head_sha = _first_stripped_text(

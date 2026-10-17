@@ -6802,6 +6802,94 @@ async def test_controller_send_turn_skips_missing_durable_record(tmp_path: Path)
     assert store.load("sess-1") is None
 
 @pytest.mark.asyncio
+async def test_controller_send_turn_restores_identity_to_live_session_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A step retry resumes the live session without relaunching it.
+
+    The turn itself must restore the commit identity the checkout lost, or the
+    retry granted for ``identity_missing`` repeats the same refusal.
+    """
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    identity = {"name": "Admitted", "email": "admitted@example.invalid"}
+    recorded_publication_identity(monkeypatch, identity)
+    monkeypatch.setattr(
+        "moonmind.omnigent.git_identity.os.chown",
+        lambda *_args, **_kwargs: None,
+    )
+    workspace_path = tmp_path / "agent_jobs" / "task-1" / "repo"
+    workspace_path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(workspace_path)], check=True)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath=str(workspace_path),
+            sessionWorkspacePath=str(tmp_path / "agent_jobs" / "task-1" / "session"),
+            artifactSpoolPath=str(tmp_path / "agent_jobs" / "task-1" / "artifacts"),
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            configured = subprocess.run(
+                ["git", "-C", str(workspace_path), "config", "--local", "--get", "user.email"],
+                capture_output=True,
+                text=True,
+            )
+            assert configured.stdout.strip() == identity["email"]
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "vendor-turn-1",
+                "status": "completed",
+                "metadata": {"assistantText": "OK"},
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    response = await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+            instructions="Resume the commit",
+        )
+    )
+
+    assert response.status == "completed"
+
+@pytest.mark.asyncio
 async def test_controller_send_turn_persists_failed_turn_status(tmp_path: Path) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
     store.save(

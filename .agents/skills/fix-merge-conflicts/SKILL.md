@@ -126,6 +126,8 @@ test -n "$FIX_MERGE_CONFLICTS_SKILL_DIR" && test -f "$FIX_MERGE_CONFLICTS_SKILL_
   or any unconditional/broad staging, and never stage or commit unrelated
   pre-existing staged, unstaged, or untracked files.
 - Complete the merge commit with `git commit` (or `git commit -m "Merge origin/<base> and resolve conflicts"`).
+  When delegated by pr-resolver, commit through its `pr_resolve_commit.py`
+  helper; a refused commit is `local_commit_failed`, never `publish_unavailable`.
 
 5. Validate resolution completeness.
 - Confirm `git diff --name-only --diff-filter=U` returns nothing.

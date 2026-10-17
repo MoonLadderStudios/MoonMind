@@ -455,6 +455,8 @@ _ESSENTIAL_PUBLISHED_METADATA_KEYS = frozenset(
         "providerFailure",
         "queuedChildCount",
         "queuedChildren",
+        # A step-retry request decides recovery, like the verdict it rides on.
+        "retryRecommendation",
         "status",
         "terminalContractAuthority",
         "terminalContractEvidencePath",

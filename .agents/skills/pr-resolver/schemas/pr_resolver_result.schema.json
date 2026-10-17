@@ -218,6 +218,77 @@
     "next_step": {
       "type": "string"
     },
+    "localCommit": {
+      "type": "object",
+      "description": "Receipt for a commit Git refused in the local workspace (reason local_commit_failed). Nothing was published.",
+      "properties": {
+        "phase": {
+          "const": "commit"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "identity_missing",
+            "signing_failed",
+            "hook_rejected",
+            "other"
+          ]
+        },
+        "missingIdentityRoles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "author",
+              "committer"
+            ]
+          }
+        },
+        "signingRequired": {
+          "type": "boolean"
+        },
+        "commitHooks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "gitError": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "headBefore": {
+          "type": "string"
+        },
+        "headAfter": {
+          "type": "string"
+        },
+        "stagedTree": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "exhausted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "phase",
+        "kind",
+        "gitError",
+        "headBefore",
+        "stagedTree",
+        "attempts"
+      ]
+    },
     "attempt": {
       "type": "integer"
     },

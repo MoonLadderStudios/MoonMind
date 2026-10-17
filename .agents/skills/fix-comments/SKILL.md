@@ -118,6 +118,12 @@ If no constraints are provided, default to addressing all applicable feedback.
   work. Preserve configured Git identity (existing authorized configuration
   only; missing identity stops as blocked with supported setup, never
   invented attribution).
+- When delegated by pr-resolver, commit through
+  `$ACTIVE_SKILLS_DIR/pr-resolver/bin/pr_resolve_commit.py` as that Skill
+  describes; it records a refused commit as `local_commit_failed`. Standalone,
+  a refused `git commit` writes blocked evidence with
+  `--reason local_commit_failed` and reports Git's original error. Either way
+  a local commit failure is never `publish_unavailable`: nothing was pushed.
 - If tracked or untracked code/documentation changes exist outside ignored artifacts, commit with a clear message (default: `Address PR feedback for #<number>`).
 - Push the current branch after committing.
 - If there was nothing to commit, still prove the current branch is published: verify the exact local `HEAD` SHA is visible on the remote PR branch using `gh pr view`, `git ls-remote`, or an equivalent GitHub connector path.
@@ -155,8 +161,8 @@ If no constraints are provided, default to addressing all applicable feedback.
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
-  If push or remote verification is unavailable, write blocked evidence and
-  stop as blocked with reason `publish_unavailable`:
+  If push or remote verification is denied or unavailable, write blocked
+  evidence and stop as blocked with reason `publish_unavailable`:
   ```bash
   python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-comments \
@@ -165,7 +171,7 @@ If no constraints are provided, default to addressing all applicable feedback.
     --reason publish_unavailable
   ```
   Do not report success.
-- When fix-comments is delegated by pr-resolver and publication is unavailable, also ensure `var/pr_resolver/result.json` reflects `status=blocked`, `merge_outcome=blocked`, and `mergeAutomationDisposition=manual_review` so the parent resolver cannot report a stale merge-ready result.
+- When fix-comments is delegated by pr-resolver and the push is denied, also ensure `var/pr_resolver/result.json` reflects `status=blocked`, `merge_outcome=blocked`, and `mergeAutomationDisposition=manual_review` so the parent resolver cannot report a stale merge-ready result.
 
 ## Output
 

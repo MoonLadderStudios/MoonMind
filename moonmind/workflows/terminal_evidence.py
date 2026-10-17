@@ -108,6 +108,35 @@ PR_RESOLVER_VERDICT_FAILURE_CODES = frozenset(
     {"PR_RESOLVER_MANUAL_REVIEW", "PR_RESOLVER_FAILED"}
 )
 
+
+def pr_resolver_host_repair_retry(payload: Mapping[str, Any]) -> str | None:
+    """Return ``retry_step_execution`` when the next attempt repairs the verdict.
+
+    A validated verdict is otherwise final. The one local condition MoonMind
+    itself owns is commit identity: every workspace preparation, and every turn
+    of a live managed session, reapplies the admitted identity
+    (``moonmind/omnigent/git_identity.py``), so the Skill's
+    first ``identity_missing`` commit refusal asks for one more attempt of the
+    same step, which resumes at the commit. ``MoonMind.UserWorkflow`` grants it
+    only when that attempt reuses the checkout. A repeat, exhaustion, or any
+    other kind (signing, hooks, unrelated Git errors) names a condition another
+    attempt cannot fix, so it stays final.
+    """
+
+    receipt = payload.get("localCommit")
+    reason = str(payload.get("final_reason") or payload.get("reason") or "")
+    if (
+        not isinstance(receipt, Mapping)
+        or reason.strip().lower() != "local_commit_failed"
+        or receipt.get("kind") != "identity_missing"
+        or receipt.get("exhausted") is True
+        or receipt.get("attempts") != 1
+        or isinstance(receipt.get("attempts"), bool)
+    ):
+        return None
+    return "retry_step_execution"
+
+
 # Evidence a Skill must regenerate with its own helper rather than by hand.
 _TERMINAL_EVIDENCE_PRODUCERS = {
     "pr_resolver_terminal.v1": (
@@ -155,7 +184,8 @@ def _pr_resolver_verdict_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return the compact, validated pr-resolver verdict fields.
 
     Only the terminal verdict facts the Skill wrote (status, reason, next step)
-    are carried; MoonMind does not reinterpret them.
+    are carried; MoonMind does not reinterpret them. It only adds a step retry
+    for the commit identity its own workspace preparation supplies.
     """
 
     final = payload.get("final")
@@ -183,6 +213,9 @@ def _pr_resolver_verdict_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         verdict["prResolverReason"] = reason
     if next_step:
         verdict["prResolverNextStep"] = next_step
+    retry = pr_resolver_host_repair_retry(payload)
+    if retry:
+        verdict["retryRecommendation"] = retry
     return verdict
 
 

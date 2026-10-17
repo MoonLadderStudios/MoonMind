@@ -532,6 +532,150 @@ def test_pre_adapter_verdict_history_replays_the_recorded_retry(
     )
 
 
+_HOST_REPAIRABLE_COMMIT_VERDICT = {
+    "mergeAutomationDisposition": "failed",
+    "prResolverFinalReason": "local_commit_failed",
+    "retryRecommendation": "retry_step_execution",
+}
+
+
+def _terminal_contract_verdict_result(
+    workflow: MoonMindRunWorkflow, **metadata_overrides: Any
+) -> dict[str, Any]:
+    return _mapped_step_result(
+        workflow,
+        summary=(
+            "pr-resolver reported status 'blocked'; local_commit_failed; "
+            "next_step=provide_commit_identity"
+        ),
+        providerErrorCode="PR_RESOLVER_FAILED",
+        metadata={
+            **_RECORDED_MANUAL_REVIEW_RESULT["metadata"],
+            "failureCode": "PR_RESOLVER_FAILED",
+            "prResolverReason": "local_commit_failed",
+            "prResolverNextStep": "provide_commit_identity",
+            **{
+                key: value
+                for key, value in _HOST_REPAIRABLE_COMMIT_VERDICT.items()
+                if key != "prResolverFinalReason"
+            },
+            **metadata_overrides,
+        },
+    )
+
+
+@pytest.mark.parametrize("shape", ["adapter", "terminal_contract"])
+def test_host_repairable_commit_verdict_gets_a_step_retry(
+    monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """The first identity refusal is repaired by the next attempt's preparation."""
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = (
+        _adapter_verdict_result(workflow, **_HOST_REPAIRABLE_COMMIT_VERDICT)
+        if shape == "adapter"
+        else _terminal_contract_verdict_result(workflow)
+    )
+
+    assert workflow._activity_result_retryable(
+        result,
+        failure_message="execution_error",
+        tool_type="agent_runtime",
+        reuses_step_workspace=True,
+    )
+
+
+@pytest.mark.parametrize("shape", ["adapter", "terminal_contract"])
+def test_host_repairable_commit_verdict_stays_final_in_a_fresh_attempt_workspace(
+    monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """Without the reused checkout the next attempt cannot resume the commit."""
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = (
+        _adapter_verdict_result(workflow, **_HOST_REPAIRABLE_COMMIT_VERDICT)
+        if shape == "adapter"
+        else _terminal_contract_verdict_result(workflow)
+    )
+
+    assert (
+        workflow._activity_result_retryable(
+            result,
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+            reuses_step_workspace=False,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("shape", ["adapter", "terminal_contract"])
+def test_commit_verdict_without_host_repair_stays_final(
+    monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """Signing, hook, unrelated, repeated or exhausted refusals carry no retry."""
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    result = (
+        _adapter_verdict_result(
+            workflow,
+            **{**_HOST_REPAIRABLE_COMMIT_VERDICT, "retryRecommendation": None},
+        )
+        if shape == "adapter"
+        else _terminal_contract_verdict_result(workflow, retryRecommendation=None)
+    )
+
+    assert (
+        workflow._activity_result_retryable(
+            result,
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        )
+        is False
+    )
+
+
+def test_step_retry_recommendation_never_reopens_a_manual_review_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+
+    assert (
+        workflow._activity_result_retryable(
+            _adapter_verdict_result(
+                workflow, retryRecommendation="retry_step_execution"
+            ),
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        )
+        is False
+    )
+
+
+def test_pre_host_repair_history_replays_the_final_commit_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: patch != run_workflow_module.RUN_RESOLVER_HOST_REPAIR_RETRY_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+
+    assert (
+        workflow._activity_result_retryable(
+            _adapter_verdict_result(workflow, **_HOST_REPAIRABLE_COMMIT_VERDICT),
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        )
+        is False
+    )
+
+
 def test_existing_history_preserves_provider_retry_decision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
