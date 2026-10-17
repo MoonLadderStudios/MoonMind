@@ -4,10 +4,11 @@
 A commit that Git refuses is a local workspace failure, not a publication
 outage: the PR, its remote branch and GitHub authority are untouched. This
 helper commits exactly the staged index, diagnoses a refusal from Git's own
-structured state (identity resolution, signing configuration, installed commit
-hooks) and writes ``local_commit_failed`` with the bounded original Git error
-so the resolver neither claims ``publish_unavailable`` nor reruns completed
-remediation once the condition is corrected.
+structured state (identity resolution, and the hook or signing program Git's
+trace2 events record as having failed) and writes ``local_commit_failed`` with
+the bounded, redacted original Git error so the resolver neither claims
+``publish_unavailable`` nor reruns completed remediation once the condition is
+corrected.
 
 It never accepts an author, never bypasses hooks or signing, never amends and
 never pushes. Rerunning it reconciles against the recorded receipt first, so a
@@ -22,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -45,25 +47,68 @@ EXIT_CODE_COMMITTED = 0
 EXIT_CODE_NOTHING_TO_COMMIT = 1
 DEFAULT_RESULT_PATH = Path("var/pr_resolver/result.json")
 GIT_ERROR_MAX_CHARS = 2000
-_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+GIT_TIMEOUT_SECONDS = 300
+EXIT_CODE_GIT_TIMEOUT = 124
 # Only hooks that run before the commit object exists can refuse it.
 _REJECTING_HOOKS = ("pre-commit", "prepare-commit-msg", "commit-msg")
-_SECRET_RE = re.compile(
-    r"(ghp_[A-Za-z0-9_]+|gho_[A-Za-z0-9_]+|ghs_[A-Za-z0-9_]+|"
-    r"github_pat_[A-Za-z0-9_]+|(?i:token|password)=\S+)"
+# Hook and signing-program output is persisted, so credential shapes that a
+# helper commonly prints are removed before the error is stored or emitted.
+_SECRET_PATTERNS = (
+    (
+        re.compile(
+            r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?"
+            r"(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)",
+            re.S,
+        ),
+        "[redacted]",
+    ),
+    (re.compile(r"(?i)\b(authorization\s*:\s*)(?:[a-z]+\s+)?\S+"), r"\1[redacted]"),
+    (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1[redacted]"),
+    (
+        re.compile(
+            r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]+"
+            r"|\bAIza[A-Za-z0-9_-]{16,}|\bAKIA[A-Z0-9]{16}\b"
+        ),
+        "[redacted]",
+    ),
+    (
+        re.compile(
+            r"(?i)\b([a-z0-9_.-]{0,80}(?:token|passw(?:or)?d|secret|api[_-]?key"
+            r"|credential)[a-z0-9_.-]{0,80})\s*[:=]\s*"
+            r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
+        ),
+        r"\1=[redacted]",
+    ),
+    (re.compile(r"(://)[^/@\s]+@"), r"\1[redacted]@"),
 )
-_URL_CREDENTIAL_RE = re.compile(r"(://)[^/@\s]+@")
 
 
-def _git(*args: str, input_text: str | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        input=input_text,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+def _git(
+    *args: str, input_text: str | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            input=input_text,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=GIT_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A hung hook or signing program is a local failure with its own
+        # captured output, not a missing receipt.
+        def _text(value: str | bytes | None) -> str:
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return value or ""
+
+        stderr = _text(exc.stderr).rstrip()
+        stderr += f"\ngit {args[0]} timed out after {GIT_TIMEOUT_SECONDS} seconds"
+        return subprocess.CompletedProcess(
+            exc.cmd, EXIT_CODE_GIT_TIMEOUT, _text(exc.stdout), stderr.lstrip()
+        )
 
 
 def _git_value(*args: str) -> str:
@@ -75,7 +120,8 @@ def _bounded_git_error(result: subprocess.CompletedProcess) -> str:
     text = "\n".join(
         part.strip() for part in (result.stderr, result.stdout) if part and part.strip()
     )
-    text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", _SECRET_RE.sub("[redacted]", text))
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
     if len(text) > GIT_ERROR_MAX_CHARS:
         text = "..." + text[-(GIT_ERROR_MAX_CHARS - 3) :]
     return text
@@ -96,8 +142,59 @@ def _commit_hooks() -> list[str]:
     ]
 
 
-def diagnose_commit_failure() -> dict[str, Any]:
-    """Classify a refused commit from Git state rather than its message text."""
+def _read_trace(path: Path) -> list[dict[str, Any]]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    events = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def _failed_child(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the start event of the last child the commit process saw fail.
+
+    Hooks and their own Git commands append nested sessions to the same trace;
+    only the commit process's session (the file's first event) is read.
+    """
+
+    if not events:
+        return {}
+    session = events[0].get("sid")
+    started: dict[Any, dict[str, Any]] = {}
+    failed: dict[str, Any] = {}
+    for event in events:
+        if event.get("sid") != session:
+            continue
+        if event.get("event") == "child_start":
+            started[event.get("child_id")] = event
+        elif event.get("event") == "child_exit" and event.get("code") != 0:
+            failed = started.get(event.get("child_id"), {})
+    return failed
+
+
+def _is_signing_program(child: dict[str, Any]) -> bool:
+    argv = child.get("argv")
+    if not isinstance(argv, list):
+        return False
+    # Git's own argv shapes for OpenPGP/X.509 and SSH signing.
+    return "-bsau" in argv or argv[1:3] == ["-Y", "sign"]
+
+
+def diagnose_commit_failure(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify a refused commit from Git state rather than its message text.
+
+    Configured signing or an installed hook proves nothing on its own: Git
+    can refuse earlier (a held index lock, an unwritable object database).
+    Only the child Git records as failing names the stage.
+    """
 
     missing_roles = [
         role
@@ -111,15 +208,16 @@ def diagnose_commit_failure() -> dict[str, Any]:
         _git_value("config", "--type=bool", "--get", "commit.gpgsign") == "true"
     )
     hooks = _commit_hooks()
+    failed = _failed_child(events)
     # Git resolves identity before running hooks or signing, so an unresolvable
-    # identity is the refusal. Otherwise only an unambiguous single remaining
-    # stage is named; anything else stays ``other`` with its original error.
+    # identity is the refusal. Otherwise the failed child names the stage;
+    # anything else stays ``other`` with its original error.
     if missing_roles:
         kind = "identity_missing"
-    elif signing_required and not hooks:
-        kind = "signing_failed"
-    elif hooks and not signing_required:
+    elif failed.get("child_class") == "hook":
         kind = "hook_rejected"
+    elif _is_signing_program(failed):
+        kind = "signing_failed"
     else:
         kind = "other"
     return {
@@ -241,11 +339,12 @@ def main(argv: list[str] | None = None) -> None:
     if landed:
         _emit({"status": "reconciled", "head": landed}, EXIT_CODE_COMMITTED)
 
-    base_tree = (
-        _git_value("rev-parse", f"{head_before}^{{tree}}")
-        if head_before
-        else _EMPTY_TREE
-    )
+    if head_before:
+        base_tree = _git_value("rev-parse", f"{head_before}^{{tree}}")
+    else:
+        # The empty tree of this repository's object format (SHA-1 or SHA-256).
+        empty = _git("hash-object", "-t", "tree", "--stdin", input_text="")
+        base_tree = empty.stdout.strip() if empty.returncode == 0 else ""
     merging = bool(_git_value("rev-parse", "--verify", "-q", "MERGE_HEAD"))
     if staged_tree and staged_tree == base_tree and not merging:
         _emit(
@@ -269,7 +368,16 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     message = "\n\n".join(part.strip() for part in args.message if part.strip())
-    commit = _git("commit", "--file", "-", input_text=message + "\n")
+    with tempfile.TemporaryDirectory(prefix="pr-resolve-commit-") as trace_dir:
+        trace = Path(trace_dir) / "trace2.json"
+        commit = _git(
+            "commit",
+            "--file",
+            "-",
+            input_text=message + "\n",
+            env={**os.environ, "GIT_TRACE2_EVENT": str(trace)},
+        )
+        events = _read_trace(trace)
     if commit.returncode == 0:
         head = _git_value("rev-parse", "HEAD")
         _emit({"status": "committed", "head": head}, EXIT_CODE_COMMITTED)
@@ -279,7 +387,7 @@ def main(argv: list[str] | None = None) -> None:
 
     receipt = {
         "phase": "commit",
-        **diagnose_commit_failure(),
+        **diagnose_commit_failure(events),
         "exitCode": commit.returncode,
         "gitError": _bounded_git_error(commit),
         "headBefore": head_before,
