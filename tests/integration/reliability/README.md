@@ -28,7 +28,8 @@ deployment. PostgreSQL cases use disposable schemas, and the Compose services
 publish no host ports. Required CI owns startup, diagnostics and teardown. The
 corpus includes real Temporal progress under a blocked source scan, PostgreSQL
 claim races and parent/child ownership, MinIO candidate read-back after source
-loss, and pinned release qualification with compare-and-set promotion.
+loss, and the one-time cutover of a versioned installation's in-flight and
+queued work to ordinary workers.
 
 `replays/workflow-reliability-authority-handoffs/manifest.json` maps the captured
 failure shapes to these required journeys. The saved default preset crosses
@@ -40,10 +41,11 @@ and rechecks terminal evidence. Verification recovery runs a real candidate
 check through Temporal without another implementation attempt.
 
 Provider decisions are controlled fixtures; these checks do not promote a new
-provider/credential combination or replace protected live qualification. Release
-routing exercises every independently routed queue, while the minimized Compose
-inventory replay excludes retained and stopped one-offs from current-service
-convergence. A protected live scheduled canary remains a separate release gate.
+provider/credential combination or replace protected live qualification. The
+cutover keeps versioned routing until ordinary workers poll every queue, and
+the minimized Compose inventory replay excludes retained and stopped one-offs
+from current-service convergence. A protected live scheduled canary remains a
+separate release gate.
 
 Run only the source-destroying archive replay with:
 
