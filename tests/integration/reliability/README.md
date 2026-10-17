@@ -28,8 +28,9 @@ deployment. PostgreSQL cases use disposable schemas, and the Compose services
 publish no host ports. Required CI owns startup, diagnostics and teardown. The
 corpus includes real Temporal progress under a blocked source scan, PostgreSQL
 claim races and parent/child ownership, MinIO candidate read-back after source
-loss, and the one-time cutover of a versioned installation's in-flight and
-queued work to ordinary workers.
+loss, and the one-time cutover of a versioned installation's AUTO_UPGRADE
+in-flight and queued work to ordinary workers, which preserves any other pinned
+execution for an explicit operator disposition.
 
 `replays/workflow-reliability-authority-handoffs/manifest.json` maps the captured
 failure shapes to these required journeys. The saved default preset crosses
