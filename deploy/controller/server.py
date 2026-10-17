@@ -37,6 +37,9 @@ LEGACY_PROBE_TIMEOUT_SECONDS = 30
 # How long a restarted controller lets the previous owner's one-off finish.
 ONEOFF_EXIT_WAIT_SECONDS = 180
 ONEOFF_EXIT_POLL_SECONDS = 2
+# How long restart recovery waits for a stack another owner holds, such as a
+# bootstrap restore that keeps it until the controller it started is up.
+STACK_LOCK_WAIT_SECONDS = 180
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # Behavior submitters require before trusting an answer. ``request-identity``:
@@ -102,9 +105,10 @@ DEFAULT_EXCLUDED_SERVICES = ("docker-proxy", "sandbox-egress-proxy")
 # this fixed named volume; this controller's state is a bind mount instead.
 RETIRED_CONTROLLER_VOLUME = "moonmind-controller-state"
 RETIRED_CONTROLLER_STATE_DIR = "/var/lib/moonmind-controller"
-# Runs inside the retired controller (python:3.14-slim) with its state dir as
-# argv[1]. It is idle only when its record is finished or absent and no writer
-# holds its kernel lock; an unreadable record is never treated as finished.
+# Runs on the retired controller's image (python:3.14-slim) with its state
+# volume mounted read-only at argv[1]. It is idle only when its record is
+# finished or absent and no writer holds its kernel lock; an unreadable record
+# is never treated as finished.
 RETIRED_CONTROLLER_IDLE_CHECK = """
 import fcntl, glob, json, os, sys
 root = sys.argv[1]
@@ -123,7 +127,7 @@ if record is not None:
             == (record.get("desired") or {}).get("targetImage")):
         print("unfinished"); sys.exit()
 for path in glob.glob(os.path.join(root, "locks", "*.lock")):
-    with open(path, "a+b") as handle:
+    with open(path, "rb") as handle:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -252,10 +256,13 @@ def reconcile_retired_shell_controller(runner=None) -> bool:
     """Retire an idle controller from the removed shell installer.
 
     That controller kept its own record and lock, so it shares no exclusion
-    with this one. Return True while it may still write. An idle one is
-    stopped, not removed: its container logs, state volume and secret stay
-    for the operator. Unfinished or unreadable work keeps it running and
-    defers this controller; an operator who abandons that work stops it.
+    with this one. Return True while it may still write. It is frozen before
+    its state is read, so no request it accepts can start work between the
+    idle answer and the stop; an idle one is killed while frozen (the signal
+    lands before it runs again) and is not removed: its container logs, state
+    volume and secret stay for the operator. Unfinished or unreadable work
+    thaws it and defers this controller; an operator who abandons that work
+    stops it.
     """
     runner = runner or engine.subprocess_runner()
     try:
@@ -263,13 +270,26 @@ def reconcile_retired_shell_controller(runner=None) -> bool:
             "docker", "ps", "--quiet", "--filter", f"volume={RETIRED_CONTROLLER_VOLUME}",
         ))
         for container in listed.split():
-            state = _observed_stdout(runner, (
-                "docker", "exec", container, "python", "-c",
-                RETIRED_CONTROLLER_IDLE_CHECK, RETIRED_CONTROLLER_STATE_DIR,
-            )).strip()
-            if state != "idle":
-                return True
-            _observed_stdout(runner, ("docker", "stop", container))
+            _observed_stdout(runner, ("docker", "pause", container))
+            try:
+                image = _observed_stdout(runner, (
+                    "docker", "inspect", "--format", "{{.Image}}", container,
+                )).strip()
+                state = _observed_stdout(runner, (
+                    "docker", "run", "--rm", "--network", "none", "--volume",
+                    f"{RETIRED_CONTROLLER_VOLUME}:{RETIRED_CONTROLLER_STATE_DIR}:ro",
+                    "--entrypoint", "python", image,
+                    "-c", RETIRED_CONTROLLER_IDLE_CHECK, RETIRED_CONTROLLER_STATE_DIR,
+                )).strip()
+                if state == "idle":
+                    _observed_stdout(runner, ("docker", "kill", container))
+                    continue
+            except Exception:
+                with contextlib.suppress(engine.CommandError, OSError):
+                    _observed_stdout(runner, ("docker", "unpause", container))
+                raise
+            _observed_stdout(runner, ("docker", "unpause", container))
+            return True
     except (engine.CommandError, OSError) as exc:
         raise LegacyWriterUnknown(
             f"cannot reconcile the retired shell-installed controller: {exc}"
@@ -395,8 +415,9 @@ def resume_open_operations(
     A handoff's one-off is still finishing when the controller it started
     comes up; resuming first would mistake it for a competing writer. Each
     resumed operation holds its stack lock, so a submission that arrives
-    meanwhile reattaches or is refused as usual, and an operation a
-    submission already owns is left to it.
+    meanwhile reattaches or is refused as usual. A busy stack is waited for,
+    bounded: a bootstrap restore holds it until this controller is up, and
+    work a submission finished meanwhile is not repeated.
     """
     runner = runner or engine.subprocess_runner()
     deadline = time.monotonic() + ONEOFF_EXIT_WAIT_SECONDS
@@ -404,7 +425,9 @@ def resume_open_operations(
         while time.monotonic() < deadline:
             try:
                 listed = engine.run_command(runner, (
-                    "docker", "ps", "--quiet", "--filter",
+                    "docker", "ps", "--quiet",
+                    "--filter", f"label=com.docker.compose.project={_operation_project(operation)}",
+                    "--filter",
                     f"label={OMNIGENT_OPERATION_LABEL}={operation['operationId']}",
                 ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)
             except (engine.CommandError, OSError):
@@ -414,17 +437,28 @@ def resume_open_operations(
             time.sleep(ONEOFF_EXIT_POLL_SECONDS)
 
     def resume(operation: dict) -> None:
+        lock_deadline = time.monotonic() + STACK_LOCK_WAIT_SECONDS
         try:
-            with lock_mod.StackLock(store.state_dir, operation["stack"]).acquire():
-                # A submission may have finished it before this owner held the stack.
-                current = store.load(operation["operationId"])
-                if current.get("status") in record_mod.OPEN_STATUSES and (
-                    current.get("installed") is None
-                ):
-                    _apply_recording_failure(store, operation["operationId"], applier)
-        except lock_mod.LockBusyError:
-            # A submission owns the stack; it reattached to or replaced this work.
-            pass
+            while True:
+                try:
+                    with lock_mod.StackLock(store.state_dir, operation["stack"]).acquire():
+                        # A submission may have finished it before this owner held the stack.
+                        current = store.load(operation["operationId"])
+                        if current.get("status") in record_mod.OPEN_STATUSES and (
+                            current.get("installed") is None
+                        ):
+                            _apply_recording_failure(store, operation["operationId"], applier)
+                    return
+                except lock_mod.LockBusyError:
+                    if time.monotonic() >= lock_deadline:
+                        # The owner kept the stack; it reattached to or replaced this work.
+                        print(
+                            f"restart recovery left {operation['operationId']} to the "
+                            f"owner of stack {operation['stack']!r}",
+                            flush=True,
+                        )
+                        return
+                    time.sleep(ONEOFF_EXIT_POLL_SECONDS)
         except Exception as exc:  # noqa: BLE001 - keep the error on the record
             store.record_attempt_error(
                 operation["operationId"],
@@ -1517,6 +1551,11 @@ def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> No
         )
 
 
+def _operation_project(operation: dict) -> str:
+    """The Compose project an operation targets; operation IDs are caller-supplied."""
+    return str((operation.get("target") or {}).get("project") or operation.get("stack"))
+
+
 def require_previous_oneoffs_exited(store, operation, *, runner) -> None:
     """Refuse to start beside a release one-off a previous owner launched.
 
@@ -1526,8 +1565,9 @@ def require_previous_oneoffs_exited(store, operation, *, runner) -> None:
     operation_id = operation["operationId"]
     try:
         running = _observed_stdout(runner, (
-            "docker", "ps", "--filter",
-            f"label={OMNIGENT_OPERATION_LABEL}={operation_id}",
+            "docker", "ps",
+            "--filter", f"label=com.docker.compose.project={_operation_project(operation)}",
+            "--filter", f"label={OMNIGENT_OPERATION_LABEL}={operation_id}",
             "--format", "{{.ID}}",
         )).split()
     except (engine.CommandError, OSError) as exc:
