@@ -264,8 +264,16 @@ async def resume_published_issue_evidence(
     deadline = budget_origin + timedelta(
         seconds=spec.budgets.max_wall_clock_seconds or 3600
     )
+    # The candidate was verified and published against this base; a retargeted
+    # PR changes what its evidence means.
+    base = str(
+        prior.get("baseRef")
+        or owner._normalize_native_pr_base_branch(context.get("baseRef"))
+        or ""
+    )
     record = {
         **prior,
+        **({"baseRef": base} if base else {}),
         "repository": owner._repo,
         "prNumber": int(match[2]),
         "headSha": head,
@@ -295,6 +303,7 @@ async def resume_published_issue_evidence(
             if (
                 observation.get("headSha") != head
                 or observation.get("observedHeadSha", head) != head
+                or observation.get("observedBaseRef", base) != base
                 or observation.get("pullRequestOpen") is False
                 or status in {"moved", "closed", "cancelled", "held"}
             ):
@@ -489,6 +498,7 @@ async def resume_published_issue_evidence(
             if (
                 fresh.get("headSha") != head
                 or fresh.get("observedHeadSha", head) != head
+                or fresh.get("observedBaseRef", base) != base
                 or fresh.get("pullRequestOpen") is False
                 or fresh.get("status") not in {"ready", "current"}
             ):
