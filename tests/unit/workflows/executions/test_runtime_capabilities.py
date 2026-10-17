@@ -19,7 +19,6 @@ def test_every_registered_runtime_descriptor_is_valid_and_versioned() -> None:
     assert RUNTIME_EXECUTION_CAPABILITIES.runtime_ids == (
         "claude_code",
         "codex_cli",
-        "jules",
         "omnigent",
         "openclaw",
     )
@@ -34,13 +33,12 @@ def test_every_registered_runtime_descriptor_is_valid_and_versioned() -> None:
 
 def test_alias_resolves_before_lookup_and_unknown_runtime_fails() -> None:
     assert resolve_runtime_execution_capabilities("codex").runtime_id == "codex_cli"
-    assert resolve_runtime_execution_capabilities("jules_api").runtime_id == "jules"
     with pytest.raises(RuntimeCapabilityError, match="unknown agent runtime"):
         resolve_runtime_execution_capabilities("new_runtime")
 
 
 def test_registry_rejects_duplicates() -> None:
-    descriptor = resolve_runtime_execution_capabilities("jules")
+    descriptor = resolve_runtime_execution_capabilities("openclaw")
     with pytest.raises(RuntimeCapabilityError, match="duplicate"):
         RuntimeExecutionCapabilityRegistry((descriptor, descriptor))
 
@@ -192,6 +190,7 @@ def test_v3_rejects_workspace_plane_contract_drift(
         RuntimeExecutionCapabilities.model_validate(snapshot)
 
 
-def test_removed_cloud_has_no_live_capability_or_terminal_contract():
+@pytest.mark.parametrize("runtime_id", ["codex_cloud", "jules", "jules_api"])
+def test_removed_runtime_has_no_live_capability_or_terminal_contract(runtime_id):
     with pytest.raises(RuntimeCapabilityError, match="unknown agent runtime"):
-        resolve_runtime_execution_capabilities("codex_cloud")
+        resolve_runtime_execution_capabilities(runtime_id)

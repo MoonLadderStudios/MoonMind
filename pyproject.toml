@@ -100,7 +100,6 @@ markers = [
     "integration_ci: marks hermetic integration tests that are safe for required CI.",
     "provider_verification: marks live external-provider verification tests.",
     "codex: marks tests specific to the Codex provider.",
-    "jules: marks tests specific to the Jules provider.",
     "requires_credentials: marks tests that require real provider credentials.",
     "requires_gpu: marks tests that require a deployment-owned NVIDIA GPU host.",
 ]

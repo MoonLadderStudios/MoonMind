@@ -23,7 +23,7 @@ def test_temporal_activity_topology_contract_uses_canonical_v1_queue_set() -> No
             catalog.resolve_activity("artifact.create"),
             catalog.resolve_activity("plan.generate"),
             catalog.resolve_activity("sandbox.checkout_repo"),
-            catalog.resolve_activity("integration.jules.start"),
+            catalog.resolve_activity("integration.openclaw.execute"),
         )
     }
     assert queues == {
@@ -70,10 +70,10 @@ def test_explicit_skill_binding_requires_declared_operational_reason() -> None:
                 "inputs": {"schema": {"type": "object", "properties": {}}},
                 "outputs": {"schema": {"type": "object", "properties": {}}},
                 "executor": {
-                    "activity_type": "integration.jules.fetch_result",
+                    "activity_type": "integration.openclaw.execute",
                     "selector": {"mode": "by_capability"},
                 },
-                "requirements": {"capabilities": ["integration:jules"]},
+                "requirements": {"capabilities": ["integration:openclaw"]},
                 "policies": {
                     "timeouts": {
                         "start_to_close_seconds": 30,

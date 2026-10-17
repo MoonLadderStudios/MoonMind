@@ -102,7 +102,6 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
@@ -419,10 +418,6 @@ def _build_jira_orchestrate_execution_creator():
 
 
 _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
-# Agent runtimes where PR creation is driven by the provider API (e.g. Jules
-# ``automationMode`` / ``AUTO_CREATE_PR``), not by appending ``gh pr create``
-# to plan instructions.
-_TOOLS_WITH_AUTO_PR_CREATION = frozenset({"jules", "jules_api"})
 
 
 _DEFAULT_DEPLOYMENT_LOCAL_PROJECT_DIR = "/workspace/host_project"
@@ -2038,16 +2033,12 @@ def _build_runtime_planner():
             node_inputs["storyOutput"] = story_output_payload
 
         # If no explicit steps but stepCount > 1, synthesise N identical
-        # nodes for runtimes that still execute sequentially step-by-step.
-        # Jules is excluded because the workflow now bundles standard
-        # multi-step work into one one-shot execution brief instead of
-        # chaining provider follow-up messages.
+        # nodes that execute sequentially step-by-step.
         effective_step_count = node_inputs.get("stepCount")
         expand_step_count = (
             not has_multi_steps
             and isinstance(effective_step_count, int)
             and effective_step_count > 1
-            and str(runtime_mode).strip().lower() not in JULES_AGENT_IDS
         )
 
         nodes: list[dict[str, Any]] = []
@@ -2365,9 +2356,6 @@ def _build_runtime_planner():
 
         # Append PR creation instructions to the last node so CLI-based agents
         # create the PR in the same workspace where the changes were made.
-        # Skip Jules: session creation uses Jules API ``automationMode`` =
-        # ``AUTO_CREATE_PR`` when ``publishMode`` is ``pr`` or ``branch``
-        # (see ``JulesAgentAdapter.do_start``), not shell instructions.
         publish_requested = (
             isinstance(publish_mode, str)
             and publish_mode.strip().lower() in ("pr", "branch")
@@ -2399,16 +2387,12 @@ def _build_runtime_planner():
                     ),
                     nodes[-1],
                 )
-            publish_tool = (
-                str(publish_node.get("tool", {}).get("name") or "").strip().lower()
-            )
             publish_tool_type = (
                 str(publish_node.get("tool", {}).get("type") or "").strip().lower()
             )
             publish_selected_skill = _plan_node_selected_skill(publish_node)
             if (
                 publish_tool_type == "agent_runtime"
-                and publish_tool not in _TOOLS_WITH_AUTO_PR_CREATION
                 and (
                     not _jira_agent_skill_selected(publish_selected_skill)
                     or publish_selected_skill.lower() in _MOONSPEC_BREAKDOWN_TOOLS

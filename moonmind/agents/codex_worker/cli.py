@@ -28,10 +28,6 @@ from moonmind.agents.codex_worker.worker import (
     QueueClientError,
 )
 from moonmind.config.logging import configure_logging, default_log_fields_from_env
-from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
-from moonmind.jules.runtime import (
-    build_runtime_gate_state as build_jules_runtime_gate_state,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +44,7 @@ def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
     runtime = (
         str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
     )
-    allowed = {"codex", "codex_cli", "claude", "claude_code", "jules", "universal"}
+    allowed = {"codex", "codex_cli", "claude", "claude_code", "universal"}
     if runtime not in allowed:
         supported = ", ".join(sorted(allowed))
         raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
@@ -132,26 +128,12 @@ def _effective_worker_capabilities(
     if configured:
         return configured
     if runtime == "universal":
-        capabilities = ["codex", "claude", "git", "gh", "execution.fanout"]
-        if _jules_runtime_gate_from_env(source).enabled:
-            capabilities.insert(2, "jules")
-        return tuple(capabilities)
+        return ("codex", "claude", "git", "gh", "execution.fanout")
     normalized_runtime = {
         "codex_cli": "codex",
         "claude_code": "claude",
     }.get(runtime, runtime)
-    capabilities = (normalized_runtime, "git", "gh")
-    if normalized_runtime in {"codex", "claude"}:
-        return (*capabilities, "execution.fanout")
-    return capabilities
-
-def _jules_runtime_gate_from_env(source: Mapping[str, str]):
-    """Return Jules runtime gate state derived from worker environment."""
-
-    return build_jules_runtime_gate_state(
-        env=source,
-        error_message=JULES_RUNTIME_DISABLED_MESSAGE,
-    )
+    return (normalized_runtime, "git", "gh", "execution.fanout")
 
 def _redact_value(text: str, secrets: Sequence[str]) -> str:
     redacted = text
@@ -232,11 +214,10 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
     capabilities = _effective_worker_capabilities(source, runtime)
-    runtime_verification_order = ("codex", "claude", "jules")
+    runtime_verification_order = ("codex", "claude")
     resolved_paths: dict[str, str | None] = {
         "codex": None,
         "claude": None,
-        "jules": None,
         "rg": None,
     }
 
@@ -287,13 +268,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 )
             except CliVerificationError as exc:
                 raise RuntimeError(str(exc)) from exc
-            continue
-        if runtime_name == "jules":
-            if runtime_name not in capabilities:
-                continue
-            gate = _jules_runtime_gate_from_env(source)
-            if not gate.enabled:
-                raise RuntimeError(gate.error_message)
             continue
 
         if runtime_name == "codex":

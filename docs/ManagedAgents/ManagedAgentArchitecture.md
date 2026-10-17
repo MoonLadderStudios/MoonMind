@@ -1,10 +1,10 @@
 # Managed Agent Architecture
 
 **Document Class:** Module Architecture View
-- **Status:** Desired state
+- **Status:** Current
 - **Audience:** Contributors, operators, runtime authors, and integration authors
-- **Purpose:** Subsystem architecture entrypoint for MoonMind managed agents and managed sessions
-- **Last updated:** 2026-07-13
+- **Purpose:** Subsystem architecture entrypoint for MoonMind's direct managed runtimes and managed sessions
+- **Last updated:** 2026-10-16
 
 **Related:**
 
@@ -21,12 +21,19 @@
 - [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Memory/MemoryArchitecture.md`](../Memory/MemoryArchitecture.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+- [`docs/Omnigent/README.md`](../Omnigent/README.md)
 
 ---
 
 ## 1. Summary
 
-MoonMind's managed-agent architecture is **managed-session first**.
+Omnigent is MoonMind's normal agent backend ([Omnigent](../Omnigent/README.md)).
+The direct managed runtimes described here, Codex CLI (`codex_cli`) and Claude
+Code (`claude_code`), are compatibility Backends an operator can choose under
+Advanced. They share Provider Profiles, OAuth, the Docker Backend Service, and
+artifact contracts with Omnigent hosts but not execution ownership.
+
+The direct managed-agent architecture is **managed-session first**.
 
 A managed agent is not a directly launched process handle and it is not a
 collection of competing runtime-management strategies. It is declarative desired
@@ -47,11 +54,9 @@ At the system level:
 - **Containerized build and test work** is submitted to the API-owned
   [`Docker Backend Service`](./DockerBackendService.md).
 
-Codex CLI is currently first-class for workflow-scoped managed sessions. Claude
-Code is first-class for managed runs and has documented session-domain models,
-but it does not yet enter the live managed-session controller. Future runtimes
-adopt the shared session contracts instead of introducing another top-level
-managed-agent abstraction.
+Codex CLI runs as a workflow-scoped managed session. Claude Code runs as one-shot
+managed runs; its session-domain model is documented, but the live
+managed-session controller admits only Codex.
 
 ---
 
@@ -81,7 +86,7 @@ Detailed contracts live in their owning documents:
 - the Secrets System;
 - skill resolution;
 - the generic container-job contract;
-- external delegated-agent execution.
+- the Omnigent agent backend and external delegated-agent execution.
 
 ---
 
@@ -137,7 +142,7 @@ shared contracts and normalized observations.
 
 ### 4.3 Temporal orchestration
 
-The intended workflow shape is:
+The workflow shape is:
 
 - `MoonMind.UserWorkflow` owns the workflow envelope and ordered steps;
 - `MoonMind.AgentSession` owns one workflow-scoped managed session entity;
@@ -210,7 +215,7 @@ not merge workload identity with managed-session identity.
 ## 6. Managed-session container-job capability
 
 A managed session may need a containerized compiler, SDK, test runner, database,
-or other tool. The desired-state route is the API-owned Docker Backend Service.
+or other tool. It uses the API-owned Docker Backend Service.
 
 The session:
 
@@ -230,9 +235,8 @@ The session does **not** receive:
   volumes;
 - arbitrary host bind-mount authority.
 
-The Docker Backend Service uses the deployment-selected Docker daemon. The
-current implementation target is the existing system Docker host or proxy. Its
-image store survives session and workflow completion, so images acquired by one
+The Docker Backend Service uses the deployment-selected Docker daemon, normally
+the existing system Docker host or proxy. Its image store survives session and workflow completion, so images acquired by one
 job are reusable by later workflows.
 
 MoonMind preserves security through an API boundary rather than by giving the
@@ -397,7 +401,9 @@ operations remain separately gated and do not expose a socket to the agent.
 
 ## 12. Extensibility
 
-A new managed runtime joins by implementing the shared session-plane contracts:
+New harnesses are added as Omnigent harness adapters (OpenCode exists only that
+way), not as another direct managed runtime. A direct runtime implements the
+shared session-plane contracts:
 
 - launch or adopt;
 - observe;
@@ -409,8 +415,8 @@ A new managed runtime joins by implementing the shared session-plane contracts:
 
 It does not introduce another top-level orchestration model.
 
-Container execution remains runtime-neutral. Codex, Claude, Omnigent-hosted
-agents, and future runtimes call the same Docker Backend Service tools.
+Container execution remains runtime-neutral. Codex, Claude Code, and
+Omnigent-hosted agents call the same Docker Backend Service tools.
 
 ---
 
@@ -426,24 +432,3 @@ agents, and future runtimes call the same Docker Backend Service tools.
   image reuse, and cleanup.
 - `ProviderProfiles.md`: runtime/provider/credential target selection.
 - `SecretsSystem.md`: durable secret references and resolution.
-
----
-
-## 14. Final desired-state statement
-
-MoonMind's managed-agent architecture is:
-
-- managed-session first;
-- Temporal-orchestrated;
-- artifact-first;
-- session-container based;
-- context-assembled by MoonMind;
-- observed through session-aware Live Logs;
-- authenticated through Provider Profiles and controlled OAuth/secret systems;
-- extended through runtime-specific session adapters;
-- integrated with containerized tools through the API-owned Docker Backend
-  Service.
-
-Managed sessions, workload containers, and authentication containers remain
-separate roles. Managed runtimes never need direct Docker daemon authority to run
-containerized repository work.

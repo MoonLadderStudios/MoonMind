@@ -92,41 +92,8 @@ async def execute_typed_activity(
 
 @overload
 async def execute_typed_activity(
-    activity: Literal["integration.jules.start"],
-    arg: AgentExecutionRequest,
-    *,
-    task_queue: str | None = None,
-    start_to_close_timeout: timedelta | None = None,
-    schedule_to_close_timeout: timedelta | None = None,
-    heartbeat_timeout: timedelta | None = None,
-    retry_policy: RetryPolicy | None = None,
-    cancellation_type: ActivityCancellationType | None = None,
-    summary: str | Mapping[str, Any] | None = None,
-) -> AgentRunHandle:
-    pass
-
-@overload
-async def execute_typed_activity(
-    activity: Literal["integration.jules.status"],
-    arg: ExternalAgentRunInput,
-    *,
-    task_queue: str | None = None,
-    start_to_close_timeout: timedelta | None = None,
-    schedule_to_close_timeout: timedelta | None = None,
-    heartbeat_timeout: timedelta | None = None,
-    retry_policy: RetryPolicy | None = None,
-    cancellation_type: ActivityCancellationType | None = None,
-    summary: str | Mapping[str, Any] | None = None,
-) -> AgentRunStatus:
-    pass
-
-@overload
-async def execute_typed_activity(
-    activity: Literal[
-        "integration.jules.fetch_result",
-        "agent_runtime.publish_artifacts",
-    ],
-    arg: ExternalAgentRunInput | AgentRunResult,
+    activity: Literal["agent_runtime.publish_artifacts"],
+    arg: AgentRunResult,
     *,
     task_queue: str | None = None,
     start_to_close_timeout: timedelta | None = None,
@@ -136,21 +103,6 @@ async def execute_typed_activity(
     cancellation_type: ActivityCancellationType | None = None,
     summary: str | Mapping[str, Any] | None = None,
 ) -> AgentRunResult:
-    pass
-
-@overload
-async def execute_typed_activity(
-    activity: Literal["integration.jules.cancel"],
-    arg: ExternalAgentRunInput,
-    *,
-    task_queue: str | None = None,
-    start_to_close_timeout: timedelta | None = None,
-    schedule_to_close_timeout: timedelta | None = None,
-    heartbeat_timeout: timedelta | None = None,
-    retry_policy: RetryPolicy | None = None,
-    cancellation_type: ActivityCancellationType | None = None,
-    summary: str | Mapping[str, Any] | None = None,
-) -> AgentRunStatus:
     pass
 
 @overload

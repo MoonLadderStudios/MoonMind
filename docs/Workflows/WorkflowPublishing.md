@@ -246,7 +246,7 @@ A blocked gate records `publicationBlockedBy: "moonspec_verify"` and `failureSum
 
 Runtime instructions follow the compiled role and explain authority without replacing admission, credentials, egress, and publisher controls. Skill-owned auto performs only the resolved Skill's effects and writes current-attempt `publish_result.json`; a non-publishing scope does not push, create PRs, or merge; a coordinator dispatches admitted children with the inherited intent, not its local `none`; managed Branch/PR steps commit the candidate and leave pushing and PR creation to the trusted publisher.
 
-A provider-native runtime such as Jules can supply publication mechanics through its adapter, but its automatic-PR feature cannot implement Branch by creating a PR, implement None by publishing, or manufacture evidence. Its outputs meet the same evidence requirements and never trigger duplicate local publishing.
+An external provider can supply publication mechanics through its adapter, but a provider automatic-PR feature cannot implement Branch by creating a PR, implement None by publishing, or manufacture evidence. Its outputs meet the same evidence requirements and never trigger duplicate local publishing.
 
 Publication scan fetches terminate option parsing before remote/ref operands, per-file scans disable external diff and text conversion, publisher authentication uses an in-memory host-scoped helper, and repository verification runs without publisher credentials. These measures do not isolate Git from agent-writable hooks, configuration, or worker-readable files.
 

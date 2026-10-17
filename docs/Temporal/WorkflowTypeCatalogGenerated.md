@@ -167,14 +167,6 @@ with deterministic workflow code, not Temporal Local Activities.
 | `github_issue.plan_legacy_repair` | `integrations` | `mm.activity.integrations` |
 | `github_issue.reconcile_handoffs` | `integrations` | `mm.activity.integrations` |
 | `github_issue.renew_claim` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.answer_question` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.cancel` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.fetch_result` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.get_auto_answer_config` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.list_activities` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.send_message` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.start` | `integrations` | `mm.activity.integrations` |
-| `integration.jules.status` | `integrations` | `mm.activity.integrations` |
 | `integration.omnigent.execute` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `integration.omnigent.oauth_host_janitor` | `agent_runtime` | `mm.activity.agent_runtime.control` |
 | `integration.omnigent.profile_bound_execute` | `agent_runtime` | `mm.activity.agent_runtime` |
@@ -263,7 +255,6 @@ with deterministic workflow code, not Temporal Local Activities.
 | `publication_recovery.verify` | `integrations` | `mm.activity.integrations` |
 | `release.reconcile` | `deployment` | `mm.activity.deployment` |
 | `repo.create_pr` | `integrations` | `mm.activity.integrations` |
-| `repo.merge_pr` | `integrations` | `mm.activity.integrations` |
 | `repo.sync_pr_unverified_criteria` | `integrations` | `mm.activity.integrations` |
 | `resilience.compile_policy` | `artifacts` | `mm.activity.artifacts` |
 | `sandbox.apply_patch` | `sandbox` | `mm.activity.sandbox` |

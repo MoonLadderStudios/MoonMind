@@ -83,7 +83,6 @@ def test_managed_session_models_is_openapi_affecting_exported_api_schema() -> No
         "moonmind/workflows/temporal/activity_runtime.py",
         "moonmind/manifest/interpolation.py",
         "moonmind/schemas/_validation.py",
-        "moonmind/schemas/jules_models.py",
         "moonmind/schemas/step_execution_models.py",
         "moonmind/schemas/temporal_payload_policy.py",
         "moonmind/schemas/workload_models.py",

@@ -421,10 +421,12 @@ async def test_temporal_cancel_propagates_to_active_agent_child(
 
 
 @pytest.mark.asyncio
-async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypatch):
+async def test_resume_while_awaiting_external_requests_recovery_without_message_signal(
+    monkeypatch,
+):
     workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
-    workflow_instance._active_agent_id = "jules"
+    workflow_instance._active_agent_id = "codex"
     workflow_instance._awaiting_external = True
 
     mock_handle = type(
@@ -445,10 +447,7 @@ async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypa
     )
 
     mock_handle.execute_update.assert_awaited_once_with("Resume")
-    mock_handle.signal.assert_awaited_once_with(
-        "operator_message",
-        {"message": "Please rename it to Provider Profiles."},
-    )
+    mock_handle.signal.assert_not_awaited()
     assert workflow_instance._recovery_requested is True
 
 @pytest.mark.asyncio
@@ -524,10 +523,10 @@ def test_dependency_wait_loop_exits_after_unpaused_dependency_failure() -> None:
     )
 
 @pytest.mark.asyncio
-async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):
+async def test_send_message_does_not_signal_or_resume_active_child(monkeypatch):
     workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
-    workflow_instance._active_agent_id = "jules"
+    workflow_instance._active_agent_id = "codex"
     workflow_instance._awaiting_external = True
 
     mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
@@ -537,30 +536,21 @@ async def test_send_message_forwards_operator_message_without_resuming(monkeypat
         lambda workflow_id: mock_handle,
     )
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
-    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
 
     await workflow_instance.send_message({"message": "Please use Provider Profiles."})
 
-    mock_handle.signal.assert_awaited_once_with(
-        "operator_message",
-        {"message": "Please use Provider Profiles."},
-    )
+    mock_handle.signal.assert_not_awaited()
     assert workflow_instance._recovery_requested is False
 
 
 @pytest.mark.asyncio
 async def test_send_message_does_not_scan_inside_workflow_replay_path(monkeypatch):
+    """Outbound scanning belongs to the service boundary, not workflow replay."""
     workflow_instance = MoonMindUserWorkflow()
     workflow_instance._active_agent_child_workflow_id = "wf:child"
-    workflow_instance._active_agent_id = "jules"
+    workflow_instance._active_agent_id = "codex"
     workflow_instance._awaiting_external = True
 
-    forward_mock = AsyncMock()
-    monkeypatch.setattr(
-        workflow_instance,
-        "_forward_operator_message_to_active_child",
-        forward_mock,
-    )
     monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
     monkeypatch.setattr(
         run_workflow_module.settings.security,
@@ -572,35 +562,6 @@ async def test_send_message_does_not_scan_inside_workflow_replay_path(monkeypatc
         {"message": "Please use token=blocked-secret-value"}
     )
 
-    forward_mock.assert_awaited_once_with(
-        {"message": "Please use token=blocked-secret-value"}
-    )
-
-
-@pytest.mark.asyncio
-async def test_send_message_forwards_clean_operator_message_with_scan(monkeypatch):
-    workflow_instance = MoonMindUserWorkflow()
-    workflow_instance._active_agent_child_workflow_id = "wf:child"
-    workflow_instance._active_agent_id = "jules"
-    workflow_instance._awaiting_external = True
-
-    forward_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        workflow_instance,
-        "_forward_operator_message_to_active_child",
-        forward_mock,
-    )
-    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
-    monkeypatch.setattr(
-        run_workflow_module.settings.security,
-        "high_security_mode",
-        True,
-    )
-
-    message = "Please use Provider Profiles exactly."
-    await workflow_instance.send_message({"message": message})
-
-    forward_mock.assert_awaited_once_with({"message": message})
     assert workflow_instance._recovery_requested is False
 
 
@@ -1008,20 +969,8 @@ async def test_update_inputs_skips_parent_visibility_refresh_when_unpatched(
 
 @pytest.mark.asyncio
 async def test_run_workflow_send_message_update_uses_temporal_boundary(
-    mock_run_environment, monkeypatch
+    mock_run_environment,
 ):
-    forwarded_payloads = []
-
-    async def fake_forward(self, payload):
-        forwarded_payloads.append(payload)
-        return True
-
-    monkeypatch.setattr(
-        MoonMindUserWorkflow,
-        "_forward_operator_message_to_active_child",
-        fake_forward,
-    )
-
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
@@ -1047,7 +996,6 @@ async def test_run_workflow_send_message_update_uses_temporal_boundary(
             await asyncio.sleep(0.1)
             status = await handle.query("get_status")
             assert status.get("paused") is True
-            assert forwarded_payloads == [{"message": "Please use Provider Profiles."}]
 
             await handle.execute_update("Cancel")
             result = await handle.result()
@@ -1121,20 +1069,6 @@ async def test_run_workflow_send_message_update_rejects_blank_message(
             await handle.execute_update("Cancel")
             result = await handle.result()
             assert result["status"] == "canceled"
-
-def test_update_inputs_extracts_clarification_message_from_parameters_patch():
-    workflow_instance = MoonMindUserWorkflow()
-
-    message = workflow_instance._extract_clarification_message(
-        {
-            "parametersPatch": {
-                "message": "Use the Workers page copy for now.",
-            }
-        }
-    )
-
-    assert message == "Use the Workers page copy for now."
-
 
 @pytest.mark.asyncio
 async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatch):

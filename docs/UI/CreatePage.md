@@ -2,10 +2,9 @@
 
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
-**Status:** Accepted
-**Implementation and deployment:** Harness/Provider Profile/Backend selection is accepted design intent; implementation is tracked separately.
+**Status:** Current
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-10-01
+**Updated:** 2026-10-16
 **Audience:** Dashboard, workflow authoring, schema-form, and API contributors  
 **Authority:** Create-page information architecture, single-context presentation, schema-driven task inputs, preview/error behavior, and submission/reconstruction UX. Backend providing contracts remain authoritative for execution and policy.  
 **Owning Surface:** Shared /workflows/new authoring form and its catalog/compiler consumers  
@@ -26,19 +25,15 @@ This specification describes the long-term UI, not a claim that every current co
 - Backend context, target, expansion, authorization, and publishing validation are authoritative.
 - Advanced disclosure exposes meaningful specialization, not duplicate authority or hidden contradictory values.
 
-Ordinary agent authoring uses **Harness** and one **Provider Profile**. **Backend** identifies Omnigent and is normally resolved without an ordinary selector. The existing selection/admission owners resolve their agreement and compatible execution configuration. Publishing does not introduce additional Harness, Backend, Target, Agent Profile, or Host Class controls or silently select another execution path.
-
 ## Harness, Provider Profile, and Backend
 
-[The shared selection design](HarnessProfileBackendSelection.md) owns this interaction across Create, profile Settings, schedules, edit/rerun, remediation, and execution details. Harness means Codex, Claude Code, or OpenCode. Provider Profile remains the existing configured connection and defaults, not a new account object. The selected/default profile establishes the initial compatible Harness, and Harness changes filter profiles through the existing authorized projection.
+Ordinary agent authoring uses **Harness** and one **Provider Profile**. [The shared selection design](HarnessProfileBackendSelection.md) owns this interaction across Create, profile Settings, schedules, edit/rerun, remediation, and execution details, including profile compatibility, draft preservation, and Backend disclosure. Publishing adds no Harness, Backend, Target, Agent Profile, or Host Class controls and never selects another execution path.
 
-A genuinely unconfigured draft may use the authorized default or sole compatible profile. An explicit profile is not replaced by a different account when the user changes Harness. Keep it only if compatible; otherwise retain recoverable draft values and require a compatible selection. Delayed metadata responses cannot overwrite newer input. Missing setup, unsupported configuration, and temporary capacity failure remain distinct.
+Omnigent is the normal Backend, so the page shows no selector or summary line for it. A nondefault Backend appears as `Backend: <name>` under Harness, and the Advanced Backend selector appears only when the selected Harness has a supported alternative. Do not require host, image, or materializer choices, or call Omnigent a Container.
 
-Backend is normally Omnigent. Offer a Backend selector under Advanced only when a meaningful supported alternative exists. A nondefault choice stays visible in the collapsed summary. With only one supported backend, remove the selector and retain the recorded Backend in execution details. Do not create a new Direct path, require host/image/materializer choices, or call Omnigent a Container.
+The selected profile supplies model tiers and its default tier through the shared **Tier / Model / Effort** controls owned by [Workflow Model Selection](WorkflowModelSelection.md). There is no Tier fallback selector, including under Advanced.
 
-The selected profile supplies model tiers and its actual default tier. Reuse the shared **Tier / Model / Effort** controls and the adopted Tier/Custom design. Numbered tiers populate both fields, editing either field selects Custom without clearing the companion field, and choosing Custom directly leaves both fields unchanged. The Tier fallback selector is removed, not hidden under Advanced. Model-selection details and compatibility remain with the tier contract and its separate implementation rather than another policy in the Harness picker.
-
-Submission preserves defaulted, inherited, and explicitly selected intent. The API validates the Harness/Profile/Backend agreement before credential or host effects. Simply omitting the old Runtime field must not reactivate a direct-backend fallback. Existing serialized runtime fields keep their actual meaning until their schema owner makes a necessary compatible change. Tools without agent execution do not acquire a dummy Harness or Provider Profile.
+Submission preserves defaulted, inherited, and explicitly selected intent. The API validates the Harness/Profile/Backend agreement before credential or host effects. Existing serialized runtime fields keep their actual meaning. Tools without agent execution do not acquire a dummy Harness or Provider Profile.
 
 ## Primary User Flows
 
@@ -332,8 +327,7 @@ Required production-boundary coverage includes:
 - None, incompatible resolvers, shared-branch batches, and missing prerequisite-code handoffs fail visibly before prohibited effects.
 - Edit/rerun/schedule/remediation reconstruction preserves authored versus derived values and reports legacy ambiguity.
 - Validation failure preserves task input, while changed context invalidates stale generated authority.
-- Harness, Provider Profile, and Backend agree through production form and API submission, including omitted defaults, explicit incompatible pairs, rapid changes, inherited steps, and unchanged Custom values.
-- Advanced disclosure preserves authored Backend intent and displays exceptional choices. A single supported Backend has no selector, and no extra Target/configuration wizard or second publishing selection is introduced.
+- Harness, Provider Profile, and Backend agree through production form and API submission, including omitted defaults, explicit incompatible pairs, rapid changes, inherited steps, and unchanged Custom values; Advanced disclosure never changes authored Backend intent.
 
 A rendered selector or passing component fixture alone is not proof that the API, compiler, fan-out, or runtime honors the same policy.
 

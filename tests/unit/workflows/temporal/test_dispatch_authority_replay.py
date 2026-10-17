@@ -28,7 +28,7 @@ class LegacyCheckpointFixture:
         # Before hardening, the result snapshot wins over the prelaunch runtime.
         workflow.patched(RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH)
         return await workflow.execute_activity(
-            record_capture, "jules", start_to_close_timeout=timedelta(seconds=5)
+            record_capture, "openclaw", start_to_close_timeout=timedelta(seconds=5)
         )
 
 
@@ -46,7 +46,7 @@ class CurrentCheckpointFixture:
             "execute",
             {
                 "runtimeCapabilities": resolve_runtime_execution_capabilities(
-                    "jules"
+                    "openclaw"
                 ).model_dump(by_alias=True, mode="json")
             },
         )
@@ -63,7 +63,7 @@ async def test_checkpoint_authority_pre_and_post_patch_histories_replay():
     histories = []
     async with await WorkflowEnvironment.start_time_skipping() as env:
         for kind, implementation, expected in (
-            ("legacy", LegacyCheckpointFixture, "jules"),
+            ("legacy", LegacyCheckpointFixture, "openclaw"),
             ("current", CurrentCheckpointFixture, "codex_cli"),
         ):
             queue = f"dispatch-authority-checkpoint-{kind}"

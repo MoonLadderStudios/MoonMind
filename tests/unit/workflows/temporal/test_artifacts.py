@@ -773,7 +773,7 @@ async def test_generic_output_links_remain_accepted_with_generic_metadata(
                         "link_type": link_type,
                     },
                     metadata_json={
-                        "integration_name": "jules",
+                        "integration_name": "openclaw",
                         "raw_result_shape": {"status": "completed"},
                     },
                 )
@@ -1734,7 +1734,7 @@ async def test_write_integration_event_artifact_creates_restricted_preview(
                     run_id="run-1",
                     link_type="debug.trace",
                 ),
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id="corr-1",
                 payload=b'{"token":"secret"}',
                 event_type="completed",
@@ -1878,14 +1878,14 @@ async def test_write_integration_result_and_failure_artifacts_assign_link_retent
             result_ref = await service.write_integration_result_artifact(
                 principal="service:integration-result",
                 execution=execution,
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id="corr-2",
                 payload={"status": "completed", "url": "https://example.test/task/2"},
             )
             failure_ref = await service.write_integration_failure_artifact(
                 principal="service:integration-result",
                 execution=execution,
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id="corr-2",
                 external_operation_id="task-2",
                 normalized_status="failed",

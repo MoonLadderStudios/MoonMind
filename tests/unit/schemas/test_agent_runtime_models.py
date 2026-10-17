@@ -142,8 +142,8 @@ def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
     with pytest.raises(ValidationError, match="idempotencyKey must not be blank"):
         AgentExecutionRequest(
             agentKind="external",
-            agentId="jules",
-            executionProfileRef="profile:jules-default",
+            agentId="openclaw",
+            executionProfileRef="profile:openclaw-default",
             correlationId="corr-1",
             idempotencyKey="   ",
         )
@@ -169,8 +169,8 @@ def test_agent_execution_request_rejects_sensitive_parameter_keys() -> None:
     ):
         AgentExecutionRequest(
             agentKind="external",
-            agentId="jules",
-            executionProfileRef="profile:jules-default",
+            agentId="openclaw",
+            executionProfileRef="profile:openclaw-default",
             correlationId="corr-1",
             idempotencyKey="idem-1",
             parameters={"api_key": "should-not-be-accepted"},
@@ -444,7 +444,7 @@ def test_agent_run_status_terminal_helpers() -> None:
     status = AgentRunStatus(
         runId="run-1",
         agentKind="external",
-        agentId="jules",
+        agentId="openclaw",
         status="completed",
     )
     assert status.terminal is True
@@ -637,7 +637,7 @@ def test_build_canonical_start_handle_safely_maps_provider_fields() -> None:
     raw_payload = {
         "external_id": "ext-12345",
         "agentKind": "external",
-        "agentId": "jules",
+        "agentId": "openclaw",
         "status": "running",
         "startedAt": "2026-03-31T00:00:00Z",
         "tracking_ref": "track-999",

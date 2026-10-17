@@ -64,11 +64,11 @@ def test_image_mismatch_marks_stale():
     assert "image" in result["diagnostics"][0]["message"]
 
 
-def test_missing_evidence_is_stale_with_diagnostic():
+def test_missing_evidence_is_stale_without_advisory_diagnostic():
     profile = _profile(model_catalog_evidence_json=None)
     result = tier_capabilities_for_profile(profile)
     assert result["evidence"]["stale"] is True
-    assert [d["code"] for d in result["diagnostics"]] == ["evidence_missing"]
+    assert result["diagnostics"] == []
 
 
 def test_evidence_without_models_falls_back_with_diagnostic():

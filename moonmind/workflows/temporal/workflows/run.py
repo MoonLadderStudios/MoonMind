@@ -14,7 +14,6 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
-    from moonmind.workflows.temporal.jules_merge import continue_jules_merge
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
@@ -88,11 +87,6 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.incident_reconstruction_models import (
         INCIDENT_RECONSTRUCTION_CONTENT_TYPE,
     )
-    from moonmind.workflows.temporal.jules_bundle import (
-        build_bundle_spec,
-        eligible_for_bundle,
-        is_jules_agent_runtime_node,
-    )
     from moonmind.workflows.executions.routing import (
         _coerce_bool,
         merge_automation_candidates,
@@ -140,7 +134,6 @@ with workflow.unsafe.imports_passed_through():
         merge_resolved_provider_profile,
     )
     from moonmind.workflows.executions.repository_contract import (
-        repository_branch_from_value,
         repository_name_from_value,
     )
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
@@ -353,7 +346,6 @@ _PR_OPTIONAL_TASK_SKILLS = frozenset({"jira-implement", *_PR_OPTIONAL_AGENT_SKIL
 _CANONICAL_NO_COMMIT_TASK_PRESETS = frozenset(
     {"github-issue-implement", "github-issue-search-and-implement"}
 )
-_EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"jules"})
 _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
     {
         "not_required",
@@ -544,8 +536,6 @@ _JSON_OBJECT_CODE_FENCE_PATTERN = re.compile(
     r"```(?:json)?\s*([\s\S]*?)\s*```",
     re.IGNORECASE | re.DOTALL,
 )
-# Replay-stable `workflow.patched` id for integration status polling terminal handling.
-INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Deprecated marker for the retired parent-initiated defensive slot release
 # (MoonLadderStudios/MoonMind#1089 R8). New executions emit no release; the
 # marker is recorded only as deprecated. `workflow.deprecate_patch` at the
@@ -1623,7 +1613,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._entry: Optional[str] = None
         self._repo: Optional[str] = None
         self._integration_label: Optional[str] = None
-        self._integration: Optional[str] = None
         self._target_runtime: Optional[str] = None
         self._target_skill: Optional[str] = None
         self._runtime_inheritance_parameters: dict[str, Any] = {}
@@ -2674,50 +2663,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return manifest_ref
         return manifest_ref
 
-    async def _bundle_ordered_nodes_for_execution(
-        self,
-        ordered_nodes: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        bundled_nodes: list[dict[str, Any]] = []
-        bundle_index = 0
-        idx = 0
-        while idx < len(ordered_nodes):
-            node = ordered_nodes[idx]
-            if not is_jules_agent_runtime_node(node):
-                bundled_nodes.append(node)
-                idx += 1
-                continue
-
-            group = [node]
-            cursor = idx + 1
-            while cursor < len(ordered_nodes) and eligible_for_bundle(
-                group[-1], ordered_nodes[cursor]
-            ):
-                group.append(ordered_nodes[cursor])
-                cursor += 1
-
-            if len(group) > 1:
-                bundle_index += 1
-                bundle_spec = build_bundle_spec(
-                    group,
-                    workflow_id=workflow.info().workflow_id,
-                    workflow_run_id=workflow.info().run_id,
-                )
-                manifest_ref = await self._write_json_artifact(
-                    name=f"reports/jules_bundle_{bundle_index}.json",
-                    payload=bundle_spec.manifest,
-                )
-                representative = dict(bundle_spec.representative_node)
-                representative_inputs = dict(representative.get("inputs") or {})
-                representative_inputs["bundleManifestRef"] = manifest_ref
-                representative["inputs"] = representative_inputs
-                bundled_nodes.append(representative)
-            else:
-                bundled_nodes.extend(group)
-            idx = cursor
-
-        return bundled_nodes
-
     def _ordered_plan_node_payloads(
         self,
         *,
@@ -2775,47 +2720,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             for node in ordered_nodes
             if str(node.get("id") or "").strip()
         }
-        bundle_id_by_member_id: dict[str, str] = {}
-        for node in ordered_nodes:
-            node_id = str(node.get("id") or "").strip()
-            if not node_id:
-                continue
-            node_inputs = node.get("inputs")
-            candidates: list[Any] = [
-                node.get("bundledNodeIds"),
-                node.get("bundled_node_ids"),
-            ]
-            if isinstance(node_inputs, Mapping):
-                candidates.extend(
-                    [
-                        node_inputs.get("bundledNodeIds"),
-                        node_inputs.get("bundled_node_ids"),
-                        node_inputs.get("bundleNodeIds"),
-                        node_inputs.get("bundle_node_ids"),
-                    ]
-                )
-            for candidate in candidates:
-                if not isinstance(candidate, (list, tuple, set)):
-                    continue
-                for member_id in candidate:
-                    normalized_member_id = str(member_id or "").strip()
-                    if normalized_member_id and normalized_member_id != node_id:
-                        bundle_id_by_member_id[normalized_member_id] = node_id
         for edge in edges:
             from_node = str(getattr(edge, "from_node", "") or "").strip()
             to_node = str(getattr(edge, "to_node", "") or "").strip()
-            if not from_node or not to_node:
+            if not from_node or not to_node or from_node == to_node:
                 continue
-            mapped_from_node = bundle_id_by_member_id.get(from_node, from_node)
-            mapped_to_node = bundle_id_by_member_id.get(to_node, to_node)
-            if mapped_from_node == mapped_to_node:
+            if to_node not in dependency_map or from_node not in dependency_map:
                 continue
-            if (
-                mapped_to_node not in dependency_map
-                or mapped_from_node not in dependency_map
-            ):
-                continue
-            dependency_map[mapped_to_node].add(mapped_from_node)
+            dependency_map[to_node].add(from_node)
         return {
             node_id: sorted(dependencies)
             for node_id, dependencies in dependency_map.items()
@@ -12407,9 +12319,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if integration:
             integration = integration.strip().lower()
         self._integration_label = integration
-        self._integration = (
-            integration if integration in _EXTERNAL_INTEGRATION_MONITOR_IDS else None
-        )
 
     def _record_remediation_context(
         self,
@@ -13103,10 +13012,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             nodes=plan_definition.nodes,
             edges=plan_definition.edges,
         )
-        if workflow.patched("jules-bundling-v1"):
-            ordered_nodes = await self._bundle_ordered_nodes_for_execution(
-                ordered_nodes
-            )
+        # Retained only for recorded-history command order: every run reaches
+        # this marker. The Jules bundling it once gated is gone, so a history
+        # that bundled Jules nodes cannot replay here; admitted Jules work
+        # drains on the installed release before this one replaces it.
+        workflow.patched("jules-bundling-v1")
         dependency_map = self._plan_dependency_map(
             ordered_nodes=ordered_nodes,
             edges=plan_definition.edges,
@@ -13142,11 +13052,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             parameters,
             include_applied_templates=True,
         )
-        require_pull_request_url = (
-            publish_mode == "pr"
-            and self._integration is None
-            and not pr_publish_optional
-        )
+        require_pull_request_url = publish_mode == "pr" and not pr_publish_optional
         pull_request_url: str | None = None
         # Keep this patch command in its historical position, after the
         # jules-bundling marker and before any lazy registry read. Removing or
@@ -15963,9 +15869,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 .lower()
             )
             # Derive the last node's effective agent_id using the same
-            # resolution logic as _build_agent_execution_request so that
-            # Jules-via-runtime-settings (e.g. tool.name="auto" with
-            # inputs.runtime.mode="jules") is correctly detected.
+            # resolution logic as _build_agent_execution_request so runtime
+            # settings (e.g. tool.name="auto" with inputs.runtime.mode) count.
             _last_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
             _last_rt = _last_inputs.get("runtime") or {}
             last_agent_id = (
@@ -15984,7 +15889,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
             )
 
-            if last_agent_id in ("jules", "jules_api", "github_pr_creator"):
+            if last_agent_id == "github_pr_creator":
                 self._get_logger().info(
                     "Skipping native PR creation: agent '%s' handles its own PRs.",
                     last_agent_id,
@@ -16179,9 +16084,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
         if self._cancel_requested:
             return
-
-        if self._integration:
-            await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
 
     def _get_from_result(self, result: Any, key: str) -> Any:
         if isinstance(result, dict):
@@ -19546,7 +19448,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     ) -> bool:
         """Derive the PR gate from durable publication evidence after all steps."""
 
-        if publish_mode != "pr" or self._integration is not None:
+        if publish_mode != "pr":
             return False
         if self._publish_status == "failed" or self._publish_context.get(
             "publicationBlockedBy"
@@ -20631,11 +20533,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 False,
             )
 
-        if (
-            publish_mode == "pr"
-            and self._integration is None
-            and self._pull_request_url is None
-        ):
+        if publish_mode == "pr" and self._pull_request_url is None:
             self._publish_status = "failed"
             self._publish_reason = "publishMode 'pr' requested but no PR was created"
             return (
@@ -23103,33 +23001,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 parameters=parameters,
                 node_inputs=node_inputs,
             )
-        bundle_payload: dict[str, Any] = {}
-        for bundle_key in (
-            "bundleId",
-            "bundledNodeIds",
-            "bundleManifestRef",
-            "bundleStrategy",
-        ):
-            if node_inputs.get(bundle_key) is not None:
-                bundle_payload[bundle_key] = self._json_value(
-                    node_inputs.get(bundle_key),
-                    path=f"node[{node_id}].{bundle_key}",
-                )
-        if bundle_payload:
-            metadata_payload = (
-                parameters.get("metadata")
-                if isinstance(parameters.get("metadata"), dict)
-                else {}
-            )
-            moonmind_payload = (
-                metadata_payload.get("moonmind")
-                if isinstance(metadata_payload.get("moonmind"), dict)
-                else {}
-            )
-            moonmind_payload.update(bundle_payload)
-            metadata_payload["moonmind"] = moonmind_payload
-            parameters["metadata"] = metadata_payload
-
         step_execution = self._step_execution_for(node_id)
         if step_execution is not None:
             metadata_payload = (
@@ -24743,426 +24614,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         normalized_agent_id = _normalize_agent_runtime_id(agent_id)
         return "managed" if normalized_agent_id in _MANAGED_AGENT_IDS else "external"
 
-    async def _run_integration_stage(
-        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
-    ) -> None:
-        lease = (self._trusted_issue_context or {}).get("issueClaimLease")
-        if lease:
-            from moonmind.workflows.temporal.github_issue_lease_workflow import execute_with_issue_lease
-
-            async def renew(payload):
-                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("github_issue.renew_claim")
-                return await workflow.execute_activity(
-                    "github_issue.renew_claim", payload,
-                    **self._execute_kwargs_for_route(route),
-                )
-
-            return await execute_with_issue_lease(
-                lease=lease,
-                execute=lambda: self._run_integration_under_claim(parameters=parameters, plan_ref=plan_ref),
-                renew=renew,
-            )
-        return await self._run_integration_under_claim(parameters=parameters, plan_ref=plan_ref)
-
-    async def _run_integration_under_claim(
-        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
-    ) -> None:
-        self._awaiting_external = True
-        self._set_state(
-            STATE_AWAITING_EXTERNAL, summary="Waiting for external integration."
-        )
-
-        # Extract per-step instructions if a plan is available
-        step_instructions: list[str] = []
-        if plan_ref:
-            try:
-                artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                    "artifact.read"
-                )
-                plan_payload = await execute_typed_activity(
-                    "artifact.read",
-                    ArtifactReadInput(
-                        principal=self._principal(),
-                        artifact_ref=plan_ref,
-                    ),
-                    **self._execute_kwargs_for_route(artifact_read_route),
-                )
-                plan_dict = self._decode_json_payload(
-                    plan_payload,
-                    error_message="plan_ref must resolve to a JSON object",
-                )
-                plan_definition = parse_plan_definition(plan_dict)
-                plan_nodes_payloads = self._ordered_plan_node_payloads(
-                    nodes=plan_definition.nodes,
-                    edges=plan_definition.edges,
-                )
-                for node in plan_nodes_payloads:
-                    inputs = node.get("inputs", {})
-                    instr = inputs.get("instructions")
-                    if instr and isinstance(instr, str) and instr.strip():
-                        step_instructions.append(instr.strip())
-            except Exception as e:
-                self._get_logger().warning(
-                    f"Failed to extract step instructions for integration multi-step: {e}"
-                )
-
-        integration_parameters = dict(parameters)
-        instructions_to_run = [None]
-
-        integration_parameters.setdefault(
-            "title", self._title or "MoonMind Integration"
-        )
-        if (
-            self._integration == "jules"
-            and len(step_instructions) > 1
-            and workflow.patched("MoonMind.UserWorkflow.jules_one_shot_bundle")
-        ):
-            workspace_spec = integration_parameters.get("workspaceSpec") or {}
-            repo_value = (
-                self._repo
-                or workspace_spec.get("repository")
-                or workspace_spec.get("repo")
-                or ""
-            )
-            pseudo_nodes = []
-            for index, instruction in enumerate(step_instructions, start=1):
-                pseudo_nodes.append(
-                    {
-                        "id": f"integration-step-{index}",
-                        "tool": {
-                            "type": "agent_runtime",
-                            "name": "jules",
-                        },
-                        "inputs": {
-                            "instructions": instruction,
-                            "repository": repo_value,
-                            "repo": repo_value,
-                            "startingBranch": workspace_spec.get("startingBranch")
-                            or workspace_spec.get("branch")
-                            or "main",
-                            "targetBranch": workspace_spec.get("targetBranch"),
-                            "publishMode": self._publish_mode(integration_parameters)
-                            or "none",
-                        },
-                    }
-                )
-            bundle_spec = build_bundle_spec(
-                pseudo_nodes,
-                workflow_id=workflow.info().workflow_id,
-                workflow_run_id=workflow.info().run_id,
-            )
-            manifest_ref = await self._write_json_artifact(
-                name="reports/jules_integration_bundle.json",
-                payload=bundle_spec.manifest,
-            )
-            integration_parameters["description"] = bundle_spec.compiled_brief
-            metadata = integration_parameters.setdefault("metadata", {})
-            if not isinstance(metadata, dict):
-                raise ValueError("integration metadata must be an object when provided")
-
-            moonmind_meta = metadata.setdefault("moonmind", {})
-            if not isinstance(moonmind_meta, dict):
-                moonmind_meta = {}
-                metadata["moonmind"] = moonmind_meta
-
-            moonmind_meta.update(
-                {
-                    "bundleId": bundle_spec.bundle_id,
-                    "bundledNodeIds": list(bundle_spec.bundled_node_ids),
-                    "bundleManifestRef": manifest_ref,
-                    "bundleStrategy": "one_shot_jules",
-                }
-            )
-            integration_parameters["metadata"] = metadata
-        elif step_instructions:
-            integration_parameters["description"] = step_instructions[0]
-        else:
-            integration_parameters.setdefault(
-                "description",
-                f"Monitor MoonMind.UserWorkflow workflow for {self._repo or 'the requested workflow'}.",
-            )
-
-        metadata = integration_parameters.get("metadata")
-        if metadata is None:
-            metadata = {}
-        if not isinstance(metadata, dict):
-            raise ValueError("integration metadata must be an object when provided")
-        metadata.setdefault("repo", self._repo)
-        metadata.setdefault("planRef", plan_ref)
-        integration_parameters["metadata"] = metadata
-
-        start_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            self._integration_activity_type("start")
-        )
-        start_result = await workflow.execute_activity(
-            start_route.activity_type,
-            {
-                "principal": self._principal(),
-                "parameters": integration_parameters,
-            },
-            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-            **self._execute_kwargs_for_route(start_route),
-        )
-        summary_ref = self._get_from_result(start_result, "tracking_ref")
-        if summary_ref:
-            self._summary_ref = summary_ref
-            self._update_memo()
-
-        external_id = self._get_from_result(start_result, "external_id")
-        self._correlation_id = external_id
-
-        self._waiting_reason = "external_completion"
-        self._attention_required = False
-        self._update_search_attributes()
-
-        for step_index, instruction in enumerate(instructions_to_run):
-            if self._cancel_requested:
-                break
-
-            poll_interval_seconds = 5
-            max_poll_interval_seconds = 300
-            _poll_terminal = False
-
-            while (
-                not self._recovery_requested
-                and not self._cancel_requested
-                and not _poll_terminal
-            ):
-                self._wait_cycle_count += 1
-                try:
-                    await workflow.wait_condition(
-                        lambda: self._recovery_requested or self._cancel_requested,
-                        timeout=timedelta(seconds=poll_interval_seconds),
-                    )
-                except asyncio.TimeoutError:
-                    # No external signal arrived in this interval; proceed to status polling.
-                    pass
-
-                if self._recovery_requested or self._cancel_requested:
-                    break
-
-                try:
-                    poll_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        self._integration_activity_type("status")
-                    )
-                    poll_result = await workflow.execute_activity(
-                        poll_route.activity_type,
-                        {
-                            "principal": self._principal(),
-                            "external_id": external_id,
-                            "parameters": integration_parameters,
-                            "execution_ref": {
-                                "namespace": workflow.info().namespace,
-                                "workflow_id": workflow.info().workflow_id,
-                                "run_id": workflow.info().run_id,
-                                "link_type": "output.summary",
-                            },
-                        },
-                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        **self._execute_kwargs_for_route(poll_route),
-                    )
-                    summary_ref = self._get_from_result(poll_result, "tracking_ref")
-                    if summary_ref:
-                        self._summary_ref = summary_ref
-                        self._update_memo()
-
-                    status = self._get_from_result(poll_result, "normalized_status")
-                    if status in (
-                        "completed",
-                        "failed",
-                        "canceled",
-                        "awaiting_feedback",
-                    ):
-                        # Temporal records which branch was taken; replay without the patch marker
-                        # must follow the pre-patch control flow (else branch + clear below).
-                        if workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
-                            _poll_terminal = True
-                        else:
-                            self._recovery_requested = True
-                        self._external_status = (
-                            "completed" if status == "awaiting_feedback" else status
-                        )
-                        if status == "failed":
-                            self._get_logger().warning(
-                                f"Integration failed: {poll_result}"
-                            )
-                        elif status == "canceled":
-                            self._cancel_requested = True
-                except Exception as exc:
-                    self._get_logger().warning(f"Integration polling failed: {exc}")
-                finally:
-                    poll_interval_seconds = min(
-                        poll_interval_seconds * 2, max_poll_interval_seconds
-                    )
-
-            if not workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
-                self._recovery_requested = False
-
-            if self._external_status != "completed":
-                # If a step failed or was canceled, do not dispatch remaining steps
-                break
-
-        self._awaiting_external = False
-        self._waiting_reason = None
-        self._attention_required = False
-        self._update_search_attributes()
-
-        if self._external_status == "failed":
-            raise ValueError("Integration failed during plan execution.")
-
-        # --- Jules branch-publish auto-merge ---
-        # When publishMode is "branch" and the integration is Jules, the
-        # workflow uses AUTO_CREATE_PR so Jules produces a PR targeting the
-        # starting branch.  After Jules succeeds, we auto-merge that PR so
-        # the changes land directly on the target branch.
-        publish_mode = self._publish_mode(parameters)
-        if (
-            publish_mode == "branch"
-            and self._integration == "jules"
-            and not self._cancel_requested
-            and self._external_status == "completed"
-        ):
-            self._get_logger().info(
-                "Jules branch-publish: fetching result for PR merge"
-            )
-            try:
-                fetch_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                    self._integration_activity_type("fetch_result")
-                )
-                fetch_result = await workflow.execute_activity(
-                    fetch_route.activity_type,
-                    {
-                        "principal": self._principal(),
-                        "external_id": external_id,
-                        "parameters": integration_parameters,
-                    },
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                    **self._execute_kwargs_for_route(fetch_route),
-                )
-                pr_url = self._get_from_result(
-                    fetch_result, "external_url"
-                ) or self._get_from_result(fetch_result, "url")
-                # If external_url is the session URL, try to extract PR URL
-                # from the summary or output_refs text.
-                if (
-                    pr_url
-                    and workflow.patched("jules-merge-target-authority-v1")
-                    and not re.fullmatch(
-                        r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*/?",
-                        str(pr_url),
-                    )
-                ):
-                    pr_url = None
-                if pr_url and not _GITHUB_PR_URL_PATTERN.search(pr_url):
-                    summary_text = self._get_from_result(fetch_result, "summary") or ""
-                    pr_match = _GITHUB_PR_URL_PATTERN.search(summary_text)
-                    if pr_match:
-                        pr_url = pr_match.group(0)
-                    else:
-                        pr_url = None
-
-                if pr_url:
-                    # Determine if the PR's base branch needs updating.
-                    # Jules creates the PR against startingBranch. If the
-                    # caller wants a different merge destination we PATCH
-                    # the PR base before merging.
-                    ws = parameters.get("workspaceSpec") or {}
-                    starting_branch = (
-                        ws.get("startingBranch") or ws.get("branch") or "main"
-                    )
-                    base_override = parameters.get("publishBaseBranch") or ws.get(
-                        "publishBaseBranch"
-                    )
-                    # Only re-target when explicitly different from starting
-                    effective_base = (
-                        base_override
-                        if base_override and base_override != starting_branch
-                        else None
-                    )
-                    expected_repository = (
-                        self._repo
-                        or parameters.get("repository")
-                        or parameters.get("repo")
-                        or ws.get("repository")
-                        or ws.get("repo")
-                        or ""
-                    )
-                    merge_target_branch = effective_base or starting_branch
-                    # Retained histories keep both initial and continuation
-                    # arguments; new calls project the admitted target once.
-                    if workflow.patched("jules-merge-canonical-authority-v1"):
-                        repository_target = ws.get("repositoryTarget")
-                        expected_repository = repository_name_from_value(
-                            repository_target
-                            if repository_target is not None
-                            else expected_repository,
-                            provider="git",
-                        )
-                        merge_target_branch = (
-                            base_override
-                            or ws.get("startingBranch")
-                            or ws.get("branch")
-                            or repository_branch_from_value(repository_target)
-                            or "main"
-                        )
-
-                    self._get_logger().info(
-                        "Jules branch-publish: merging PR %s (base=%s)",
-                        pr_url,
-                        merge_target_branch,
-                    )
-                    merge_payload = {"pr_url": pr_url}
-                    if workflow.patched("jules-merge-target-authority-v1"):
-                        merge_payload["expected_repository"] = expected_repository
-                        merge_payload["target_branch"] = merge_target_branch
-                    elif effective_base:
-                        merge_payload["target_branch"] = effective_base
-
-                    merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "repo.merge_pr"
-                    )
-                    merge_result = await workflow.execute_activity(
-                        merge_route.activity_type,
-                        merge_payload,
-                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        **self._execute_kwargs_for_route(merge_route),
-                    )
-                    merge_result = await continue_jules_merge(
-                        merge_result,
-                        authored_payload={
-                            # A resumed legacy call must not promote the old
-                            # summary-text fallback into fresh merge authority.
-                            "pr_url": self._get_from_result(fetch_result, "external_url")
-                            or self._get_from_result(fetch_result, "url") or "",
-                            "expected_repository": expected_repository,
-                            "target_branch": merge_target_branch,
-                        },
-                        execute_merge=lambda payload: workflow.execute_activity(
-                            merge_route.activity_type, payload,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **self._execute_kwargs_for_route(merge_route),
-                        ),
-                    )
-                    merged = self._get_from_result(merge_result, "merged")
-                    merge_summary = self._get_from_result(merge_result, "summary") or ""
-                    if merged:
-                        self._pull_request_url = pr_url
-                        self._publish_status = "published"
-                        self._publish_reason = "published branch"
-                        self._get_logger().info(
-                            "Jules branch-publish: PR merged: %s", merge_summary
-                        )
-                    else:
-                        raise ValueError(
-                            f"Jules branch-publish: merge failed: {merge_summary}"
-                        )
-                else:
-                    raise ValueError("Jules branch-publish: no PR URL found in result")
-            except Exception as exc:
-                raise ValueError(
-                    f"Jules branch-publish auto-merge failed: {exc}"
-                ) from exc
-
     def _finish_summary_failure_summary(self) -> dict[str, Any] | None:
         moonspec_summary = self._moonspec_gate_failure_summary()
         if moonspec_summary is not None:
@@ -26285,11 +25736,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             raise ValueError("Trusted owner metadata is required")
         return self._owner_id
 
-    def _integration_activity_type(self, operation: str = "start") -> str:
-        if not self._integration:
-            raise ValueError("integration is required for integration activities")
-        return f"integration.{self._integration}.{operation}"
-
     def _trusted_owner_metadata(self) -> tuple[str, str]:
         search_attributes = workflow.info().search_attributes
         owner_type = self._search_attribute_value(
@@ -26795,7 +26241,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     self._repo,
                 )
             )
-        integration_label = self._integration_label or self._integration
+        integration_label = self._integration_label
         if integration_label:
             pairs.append(
                 SearchAttributePair(
@@ -27329,7 +26775,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 raise RuntimeError(
                     "Failed to forward Resume update to active child workflow."
                 )
-            await self._forward_operator_message_to_active_child(payload)
             if self._awaiting_external:
                 self._recovery_requested = True
             self._system_control_generation = max(self._system_control_generation, generation)
@@ -27355,7 +26800,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     @workflow.update(name="Approve")
     async def approve(self, payload: dict[str, Any] | None = None) -> None:
         self._approve_requested = True
-        await self._forward_operator_message_to_active_child(payload)
         if self._awaiting_external:
             self._recovery_requested = True
 
@@ -27401,9 +26845,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     @workflow.update(name="SendMessage")
     async def send_message(self, payload: dict[str, Any] | None = None) -> None:
-        message = self._extract_operator_message(payload)
-        if message is not None:
-            await self._forward_operator_message_to_active_child({"message": message})
         self._update_search_attributes()
 
     @send_message.validator
@@ -27493,51 +26934,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return None
         normalized = str(candidate).strip()
         return normalized or None
-
-    @staticmethod
-    def _extract_clarification_message(payload: Mapping[str, Any] | None) -> str | None:
-        if not isinstance(payload, Mapping):
-            return None
-        candidate = (
-            payload.get("message")
-            or payload.get("clarification_response")
-            or payload.get("clarificationResponse")
-        )
-        if candidate is None:
-            parameters_patch = payload.get("parameters_patch") or payload.get(
-                "parametersPatch"
-            )
-            if isinstance(parameters_patch, Mapping):
-                candidate = (
-                    parameters_patch.get("message")
-                    or parameters_patch.get("clarification_response")
-                    or parameters_patch.get("clarificationResponse")
-                )
-        if candidate is None:
-            return None
-        normalized = str(candidate).strip()
-        return normalized or None
-
-    async def _forward_operator_message_to_active_child(
-        self, payload: Mapping[str, Any] | None
-    ) -> bool:
-        message = self._extract_clarification_message(payload)
-        if not message:
-            return False
-        if not self._active_agent_child_workflow_id:
-            return False
-        if str(self._active_agent_id or "").strip().lower() not in {
-            "jules",
-            "jules_api",
-        }:
-            return False
-        handle = workflow.get_external_workflow_handle(
-            self._active_agent_child_workflow_id
-        )
-        await handle.signal("operator_message", {"message": message})
-        self._summary = "Operator clarification sent to Jules."
-        self._update_memo()
-        return True
 
     async def _forward_lifecycle_update_to_active_child(self, update_name: str) -> bool:
         if not self._active_agent_child_workflow_id:
@@ -27716,11 +27112,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     ) -> bool:
         if not self._active_agent_child_workflow_id:
             return False
-        if str(self._active_agent_id or "").strip().lower() in {
-            "jules",
-            "jules_api",
-        }:
-            return False
         runtime_update = self._runtime_selection_update_payload(payload)
         if runtime_update is None:
             return False
@@ -27819,10 +27210,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         forwarded_runtime_update = (
             await self._forward_runtime_selection_update_to_active_child(payload)
         )
-        forwarded = await self._forward_operator_message_to_active_child(payload)
         return {
             "accepted": True,
-            "forwardedOperatorMessage": forwarded,
             "forwardedRuntimeSelectionUpdate": forwarded_runtime_update,
         }
 

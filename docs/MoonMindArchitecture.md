@@ -1,14 +1,8 @@
 # MoonMind Architecture
 
 **Document Class:** System Architecture View
-Codex managed-runtime support is governed by the versioned
-[`CodexSupportAndCutover`](./Omnigent/CodexSupportAndCutover.md) contract.
-Codex-through-Omnigent is currently opt-in pending complete protected-live
-evidence; direct Codex remains a truthfully labeled migration and historical
-compatibility path. Claude-through-Omnigent parity is deferred.
-
-**Status:** Current architecture and near-term direction  
-**Updated:** 2026-09-14\
+**Status:** Current architecture  
+**Updated:** 2026-10-16  
 **Audience:** Contributors, operators, runtime authors, integration authors, and dashboard developers  
 **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtimes, managed sessions, Omnigent hosts, external agents, artifacts, provider profiles, and API-governed container jobs.
 
@@ -16,18 +10,12 @@ MoonMind is an open-source platform for orchestrating leading AI coding agents
 and automation systems while adding resilience, security, context delivery,
 provider-profile routing, durable workflows, and artifact-first observability.
 
-MoonMind currently has two concrete managed-runtime centers of gravity:
-
-1. **Codex CLI** — a working managed-runtime path and the live
-   workflow-scoped managed-session reference implementation.
-2. **Claude Code** — a working managed-runtime path with provider-profile,
-   OAuth/API-key, context, GitHub-auth, and supervision support. Claude-specific
-   session models exist, but Claude Code does not yet enter the live shared
-   session controller.
-
-Omnigent integration extends the agent-facing surface to additional harnesses and
-hosts while preserving MoonMind's workflow, policy, artifact, and execution
-boundaries.
+Omnigent is MoonMind's agent backend. Codex, Claude Code, and OpenCode
+harnesses run on Omnigent hosts behind one lifecycle while MoonMind keeps the
+workflow, policy, credential, artifact, and execution boundaries. Direct
+`codex_cli` and `claude_code` managed runtimes remain compatibility Backends
+offered under Advanced; direct Codex is also the workflow-scoped
+`MoonMind.AgentSession` implementation.
 
 > **Core rule:** Temporal is MoonMind's durable outer orchestrator. Workflow code
 > is deterministic and side-effect-free. Managed runtimes, container jobs,
@@ -130,7 +118,7 @@ flowchart LR
   end
 
   subgraph IntegrationPlane["External Agent and Integration Plane"]
-    JULES[Jules]
+    OCLAW[OpenClaw]
     OTHER[Other External Systems]
   end
 
@@ -191,7 +179,8 @@ flowchart LR
   DHOST --> WC
   WC --> OBJ
 
-  IW --> JULES
+  RW --> OMS
+  IW --> OCLAW
   IW --> OTHER
   AW --> OBJ
   AW --> PG
@@ -216,11 +205,11 @@ Diagram rules:
 
 | Runtime or integration | Role | Maturity | Architectural boundary |
 |---|---|---|---|
-| `codex_cli` | Managed CLI runtime and workflow-scoped session runtime | Working managed-run and live `MoonMind.AgentSession` path | Codex App Server transport, session epochs, thread boundaries, artifact-backed continuity |
-| `claude_code` | Managed CLI runtime | Working managed-run path; session admission not yet live | Provider profiles, OAuth/API-key materialization, context delivery, runtime-specific hardening |
-| Omnigent | Agent host and meta-harness | Combined-stack integration in progress | Omnigent runners call MoonMind through authenticated APIs and MCP tools |
-| Jules | External delegated agent | Working integration | Provider adapter normalizes status and artifacts into canonical agent contracts |
-| Docker Backend Service | API-owned workload service | Desired-state container-job interface over existing Docker backend | Arbitrary permitted images, logical workspaces, Temporal durability, cross-workflow image reuse |
+| Omnigent | Agent backend for Codex, Claude Code, and OpenCode harnesses | Default for agent steps | Admission compiles one execution plan; `integration.omnigent.*` activities run it on Omnigent hosts; runners call MoonMind through authenticated APIs and MCP tools |
+| `codex_cli` | Direct managed CLI and workflow-scoped session runtime | Compatibility Backend under Advanced | Codex App Server transport, session epochs, thread boundaries, artifact-backed continuity |
+| `claude_code` | Direct managed CLI runtime | Compatibility Backend under Advanced | Provider profiles, OAuth/API-key materialization, context delivery, runtime-specific hardening |
+| OpenClaw | External delegated agent (streaming gateway) | Optional; registered when configured | Adapter normalizes status and results into canonical agent contracts |
+| Docker Backend Service | API-owned workload service | Container-job interface over the existing Docker backend | Arbitrary permitted images, logical workspaces, Temporal durability, cross-workflow image reuse |
 
 ---
 
@@ -346,7 +335,8 @@ wrapper exit alone, filesystem timestamps, or raw container state.
 
 ## 6. Managed runtime run plane
 
-The managed runtime run plane is strategy-driven. A managed run is normally a
+The managed runtime run plane serves the direct compatibility Backends; ordinary
+agent work runs on Omnigent (§9). It is strategy-driven, and a managed run is a
 step-scoped CLI execution under `MoonMind.AgentRun`.
 
 It includes:
@@ -470,13 +460,14 @@ normal agent interface.
 
 ---
 
-## 9. Omnigent integration
+## 9. Omnigent agent backend
 
 Start at the [Omnigent module entrypoint](./Omnigent/README.md) for the
-supported startup path, exact limitations, and contract owners.
+startup path, limitations, and contract owners.
 
-Omnigent provides a common host and orchestration layer over multiple coding
-harnesses. MoonMind integration preserves the following boundary:
+Admission resolves the selected Harness and Provider Profile into one execution
+plan, and `MoonMind.AgentRun` runs it on an Omnigent host. Container work from
+an Omnigent agent crosses this boundary:
 
 ```text
 Omnigent agent
@@ -501,8 +492,8 @@ infrastructure branch.
 
 ## 10. External agent systems
 
-External agents such as Jules are delegated integrations.
-MoonMind does not own their execution envelope, but it owns:
+External delegated agents such as OpenClaw run outside MoonMind's execution
+envelope. MoonMind still owns:
 
 - durable orchestration;
 - status normalization;

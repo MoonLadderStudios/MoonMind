@@ -13,7 +13,6 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, MoonMindWorkflowState
 from moonmind.config import settings
-from moonmind.schemas.jules_models import normalize_jules_status
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
     TemporalExecutionService,
@@ -59,7 +58,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
             )
             configured = await service.configure_integration_monitoring(
                 workflow_id=created.workflow_id,
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id="corr-callback",
                 external_operation_id="task-callback",
                 normalized_status="running",
@@ -67,14 +66,14 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 callback_supported=True,
                 callback_correlation_key="cb-callback",
                 recommended_poll_seconds=10,
-                external_url="https://jules.example.test/tasks/task-callback",
+                external_url="https://openclaw.example.test/tasks/task-callback",
                 provider_summary={},
                 result_refs=[],
             )
             assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
 
             completed = await service.ingest_integration_callback(
-                integration_name="jules",
+                integration_name="openclaw",
                 callback_correlation_key="cb-callback",
                 payload={
                     "event_type": "completed",
@@ -117,7 +116,7 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
             )
             configured = await service.configure_integration_monitoring(
                 workflow_id=created.workflow_id,
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id="corr-poll",
                 external_operation_id="task-poll",
                 normalized_status="queued",
@@ -180,7 +179,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             )
             await service.configure_integration_monitoring(
                 workflow_id=created.workflow_id,
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id="corr-safe",
                 external_operation_id="task-safe",
                 normalized_status="running",
@@ -194,7 +193,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             )
 
             first = await service.ingest_integration_callback(
-                integration_name="jules",
+                integration_name="openclaw",
                 callback_correlation_key="cb-safe",
                 payload={
                     "event_type": "status_changed",
@@ -207,7 +206,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
 
             duplicate = await service.ingest_integration_callback(
-                integration_name="jules",
+                integration_name="openclaw",
                 callback_correlation_key="cb-safe",
                 payload={
                     "event_type": "status_changed",
@@ -220,7 +219,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             assert "Ignored duplicate external event" in duplicate.memo["summary"]
 
             terminal = await service.ingest_integration_callback(
-                integration_name="jules",
+                integration_name="openclaw",
                 callback_correlation_key="cb-safe",
                 payload={
                     "event_type": "completed",
@@ -233,7 +232,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             assert terminal.integration_state["normalized_status"] == "completed"
 
             reordered = await service.ingest_integration_callback(
-                integration_name="jules",
+                integration_name="openclaw",
                 callback_correlation_key="cb-safe",
                 payload={
                     "event_type": "late-progress",
@@ -246,13 +245,13 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             assert reordered.integration_state["normalized_status"] == "completed"
             with pytest.raises(TemporalExecutionNotFoundError):
                 await service.ingest_integration_callback(
-                    integration_name="jules",
+                    integration_name="openclaw",
                     callback_correlation_key="missing-key",
                     payload={"event_type": "completed"},
                     payload_artifact_ref=None,
                 )
 
-async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
+async def test_failure_and_cancel_paths_keep_integration_status_compact(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
@@ -272,10 +271,10 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
             )
             await service.configure_integration_monitoring(
                 workflow_id=created.workflow_id,
-                integration_name="jules",
+                integration_name="openclaw",
                 correlation_id="corr-failure",
                 external_operation_id="task-failure",
-                normalized_status=normalize_jules_status("in_progress"),
+                normalized_status="running",
                 provider_status="in_progress",
                 callback_supported=False,
                 callback_correlation_key=None,
@@ -286,7 +285,7 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
             )
             failed = await service.record_integration_poll(
                 workflow_id=created.workflow_id,
-                normalized_status=normalize_jules_status("failed"),
+                normalized_status="failed",
                 provider_status="failed",
                 observed_at=None,
                 recommended_poll_seconds=None,

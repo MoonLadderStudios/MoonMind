@@ -7700,7 +7700,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     : activeProviderProfiles.find(
         (profile) => profile.profile_id === providerProfile,
       );
-  const selectedProfileSupportsModelControls = runtime !== "jules";
   const workflowTierPreviewError = modelTierPreviewsQuery.data?.errors.workflow;
 
   // MM-936: the primary step always carries the publish-mode capability (gh)
@@ -12952,11 +12951,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </span>
             ) : null}
           </label>
-          {runtime === "omnigent" && selectedHarnessId && !selectedConfiguredProfile?.execution_selection_error ? (
-            <span className="small" data-runtime-execution-summary>
-              Uses {formatRuntimeTargetLabel(selectedHarnessId.replace(/-native$/, ""))} through Omnigent.
-            </span>
-          ) : null}
           {runtime !== "omnigent" && !(showAdvancedStepOptions && backendSelectable) ? (
             <span className="small" data-backend-summary>
               Backend: {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)}
@@ -13115,7 +13109,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        {selectedProfileSupportsModelControls ? <ModelSelectionFields
+        <ModelSelectionFields
           scope="Workflow"
           value={modelSelection}
           profile={selectedProviderProfileForPreview}
@@ -13126,7 +13120,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           modelList={MODEL_OPTIONS_DATALIST_ID}
           effortList={EFFORT_OPTIONS_DATALIST_ID}
           onChange={setModelSelection}
-        /> : null}
+        />
 
         </section>
 

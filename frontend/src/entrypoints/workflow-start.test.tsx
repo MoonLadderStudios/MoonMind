@@ -838,7 +838,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
           ...mockDashboardConfig,
           system: {
             ...mockDashboardConfig.system,
-            supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code", "jules"],
+            supportedAgentRuntimes: ["omnigent", "codex_cli", "claude_code"],
             defaultAgentRuntime: "omnigent",
             omnigentExecutionCatalog: {
               profiles: [{ ref: "omnigent-codex-default", displayName: "Codex default", defaultPolicyRef: "on-demand-v1", providerRuntime: "codex_cli" }],
@@ -949,7 +949,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(screen.queryByLabelText("Runtime")).toBeNull();
     expect(screen.queryByLabelText("Backend")).toBeNull();
     expect(within(profile).queryByRole("option", { name: /Codex Personal/ })).toBeNull();
-    expect(await screen.findByText("Uses OpenCode through Omnigent.")).toBeTruthy();
+    expect(screen.queryByText(/through Omnigent/)).toBeNull();
     expect(screen.queryByLabelText("Target")).toBeNull();
     expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/Loading execution configuration for this Profile/)).toBeTruthy();
@@ -964,7 +964,8 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       await waitFor(() => expect(profile.value).toBe("codex-personal"));
       expect(within(profile).queryByRole("option", { name: /OpenCode Go/ })).toBeNull();
       fireEvent.change(profile, { target: { value: "codex-personal" } });
-      expect(await screen.findByText("Uses Codex through Omnigent.")).toBeTruthy();
+      expect(harness.value).toBe("codex_cli");
+      expect(profile.value).toBe("codex-personal");
       fireEvent.change(harness, { target: { value: "opencode" } });
       expect(profile.value).toBe("");
       expect(screen.getByText(/Choose a OpenCode Provider Profile\. The previous Provider Profile returns/)).toBeTruthy();
@@ -982,7 +983,8 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       harnessId: "codex-native", rolloutState: "new_work_default", available: true,
       compatibleProviderProfiles: [], policies: ["opencode-on-demand@1"], gateReasons: [],
     }] }) } as Response); });
-    expect(screen.getByText("Uses OpenCode through Omnigent.")).toBeTruthy();
+    expect(harness.selectedOptions[0]?.textContent).toBe("OpenCode");
+    expect(profile.value).toBe("opencode-go");
     fireEvent.click(screen.getByLabelText("Advanced mode"));
     expect(screen.queryByLabelText("Execution target")).toBeNull();
     // Hiding advanced options must preserve the same ordinary selection.
@@ -1465,7 +1467,8 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
       if (!advancedToggle.checked) fireEvent.click(advancedToggle);
     }
-    expect(await screen.findByText("Uses OpenCode through Omnigent.")).toBeTruthy();
+    await waitFor(() => expect((screen.getByLabelText("Harness") as HTMLSelectElement).value).toBe("opencode"));
+    expect(screen.queryByText(/through Omnigent/)).toBeNull();
     expect(screen.queryByLabelText("Execution target")).toBeNull();
     const startButton = screen.getByRole("button", { name: "Start Workflow" });
     await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false));
@@ -2423,7 +2426,7 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
           supportedAgentRuntimes: [
             "codex_cli",
             "claude_code",
-            "jules",
+            "opencode",
           ],
           runtimeCommandPreview: {
             hintCatalogVersion: "2026-05-13",
@@ -2438,7 +2441,7 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
                 renderMode: "prompt_prefix",
                 commandHintsRef: "claude_code",
               },
-              jules: {
+              opencode: {
                 slashCommandPassthrough: false,
                 renderMode: "plain_prompt",
               },
@@ -20493,7 +20496,7 @@ describe("Task Create runtime command previews", () => {
       if (String(input).startsWith("/api/v1/provider-profiles")) {
         return Promise.resolve({ ok: true, json: async () => [
           { profile_id: "codex-default", account_label: "Codex Default", runtime_id: "codex_cli", is_default: true },
-          { profile_id: "jules-default", account_label: "Jules Default", runtime_id: "jules" },
+          { profile_id: "opencode-default", account_label: "OpenCode Default", runtime_id: "opencode" },
         ] } as Response);
       }
       return fallback(input, init);
@@ -20506,7 +20509,7 @@ describe("Task Create runtime command previews", () => {
     });
     await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-default"));
     fireEvent.change(screen.getByLabelText("Harness"), {
-      target: { value: "jules" },
+      target: { value: "opencode" },
     });
 
     expect((instructions as HTMLTextAreaElement).value).toBe(
@@ -21703,20 +21706,20 @@ describe('removed target drafts (#4644)', () => {
     });
   });
   afterEach(() => { fetchSpy.mockRestore(); cleanup(); });
-  it('keeps supported legacy Jules selections when restoring a saved workflow', async () => {
+  it.each(['jules', 'jules_api'])('treats a retired %s selection like Cloud when restoring a saved workflow', async (retiredRuntime) => {
     const originalFetch = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await originalFetch(input, init);
       if (!String(input).startsWith('/api/executions/mm%3Aold-cloud')) return response;
       const execution = await response.json();
-      execution.inputParameters.workflow.runtime.mode = 'jules_api';
-      execution.inputParameters.workflow.steps[0].runtime.mode = 'jules_api';
+      execution.inputParameters.workflow.runtime.mode = retiredRuntime;
+      execution.inputParameters.workflow.steps[0].runtime.mode = retiredRuntime;
       return { ...response, json: async () => execution } as Response;
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     await waitFor(() => expect((screen.getAllByLabelText('Instructions')[0] as HTMLTextAreaElement).value).toBe('Preserve the Cloud step'));
-    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('jules_api');
-    expect(screen.queryByText(/unsupported Harness jules_api/i)).toBeNull();
+    expect((screen.getByLabelText('Harness') as HTMLSelectElement).value).toBe('');
+    expect(screen.getAllByText(new RegExp(`unsupported Harness ${retiredRuntime}\\b`, 'i')).length).toBeGreaterThan(0);
     expect((screen.getByLabelText('Workflow Model') as HTMLInputElement).value).toBe('saved-model');
     expect((screen.getAllByLabelText('Instructions')[1] as HTMLTextAreaElement).value).toBe('Keep the supported step');
   });

@@ -658,7 +658,7 @@ async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_p
                 initial_parameters={
                     "requestType": "task",
                     "repository": "MoonLadderStudios/MoonMind",
-                    "targetRuntime": "jules",
+                    "targetRuntime": "claude_code",
                     "publishMode": "pr",
                     "task": {
                         "title": "Break down feature",
@@ -671,7 +671,7 @@ async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_p
         "task"
     ]
     assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
-    assert downstream_task["runtime"] == {"mode": "jules"}
+    assert downstream_task["runtime"] == {"mode": "claude_code"}
 
 
 @pytest.mark.asyncio
@@ -3456,7 +3456,7 @@ def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
                     {"id": "s2", "instructions": "Step two instructions"},
                     {"id": "s3", "instructions": "Step three instructions"},
                 ],
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -3477,7 +3477,7 @@ def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
     # All nodes use agent_runtime tool type
     for node in nodes:
         assert node["tool"]["type"] == "agent_runtime"
-        assert node["tool"]["name"] == "jules"
+        assert node["tool"]["name"] == "claude_code"
 
     # Sequential edges
     assert len(edges) == 2
@@ -3544,7 +3544,7 @@ def test_runtime_planner_multi_step_preserves_custom_keys():
                         "instructions": "Step two instructions",
                     }
                 ],
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -3577,7 +3577,7 @@ def test_runtime_planner_single_step_falls_back_to_single_node():
                 "steps": [
                     {"id": "only", "instructions": "Only step"},
                 ],
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -3597,7 +3597,7 @@ def test_runtime_planner_no_steps_falls_back_to_single_node():
         inputs={
             "task": {
                 "instructions": "Do the thing",
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -3621,7 +3621,7 @@ def test_runtime_planner_multi_step_step_fallback_instructions():
                     {"id": "a", "instructions": "Explicit step A"},
                     {"id": "b"},  # no instructions
                 ],
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -3704,7 +3704,7 @@ def test_runtime_planner_multi_step_auto_generated_ids():
                     {"instructions": "First"},
                     {"instructions": "Second"},
                 ],
-                "runtime": {"mode": "jules"},
+                "runtime": {"mode": "claude_code"},
             }
         },
         parameters={},
@@ -3981,27 +3981,6 @@ def test_runtime_planner_preserves_jira_implement_pr_handoff_step_id_fallback():
     )
     assert "commit your work" not in pr_node["inputs"]["instructions"]
 
-
-def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
-    """Jules uses API automationMode AUTO_CREATE_PR; do not inject gh CLI text."""
-    planner = _build_runtime_planner()
-    snapshot = _make_snapshot()
-
-    plan = planner(
-        inputs={
-            "task": {
-                "instructions": "Do work",
-                "runtime": {"mode": "jules"},
-                "publish": {"mode": "pr"},
-            }
-        },
-        parameters={},
-        snapshot=snapshot,
-    )
-
-    text = plan["nodes"][-1]["inputs"]["instructions"]
-    assert text == "Do work"
-    assert "gh pr create" not in text
 
 def test_runtime_planner_publish_pr_uses_task_title_for_target_branch_prefix():
     planner = _build_runtime_planner()
@@ -4656,7 +4635,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_dispatcher_cls,
     mock_skill_activities_cls,
     mock_sandbox_activities_cls,
-    mock_jules_activities_cls,
+    mock_integration_activities_cls,
     mock_agent_runtime_activities_cls,
     mock_build_bindings,
     mock_build_deps,
@@ -4715,7 +4694,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_sandbox_activities_cls.assert_called_once_with(
         artifact_service=ANY
     )
-    mock_jules_activities_cls.assert_called_once_with(
+    mock_integration_activities_cls.assert_called_once_with(
         artifact_service=ANY
     )
     mock_agent_runtime_activities_cls.assert_not_called()
@@ -4740,7 +4719,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         plan_activities=mock_plan_activities_cls.return_value,
         skill_activities=mock_skill_activities_cls.return_value,
         sandbox_activities=mock_sandbox_activities_cls.return_value,
-        integration_activities=mock_jules_activities_cls.return_value,
+        integration_activities=mock_integration_activities_cls.return_value,
         agent_runtime_activities=None,
         review_activities=ANY,
         agent_skills_activities=ANY,
@@ -4770,7 +4749,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     mock_dispatcher_cls,
     mock_skill_activities_cls,
     mock_sandbox_activities_cls,
-    mock_jules_activities_cls,
+    mock_integration_activities_cls,
     mock_agent_runtime_activities_cls,
     mock_build_bindings,
     mock_build_deps,
@@ -4881,7 +4860,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         plan_activities=mock_plan_activities_cls.return_value,
         skill_activities=mock_skill_activities_cls.return_value,
         sandbox_activities=mock_sandbox_activities_cls.return_value,
-        integration_activities=mock_jules_activities_cls.return_value,
+        integration_activities=mock_integration_activities_cls.return_value,
         agent_runtime_activities=mock_agent_runtime_activities_cls.return_value,
         review_activities=ANY,
         agent_skills_activities=ANY,
@@ -4908,7 +4887,7 @@ async def test_build_runtime_activities_registers_deployment_tool_only_on_deploy
     mock_dispatcher_cls,
     mock_skill_activities_cls,
     mock_sandbox_activities_cls,
-    mock_jules_activities_cls,
+    mock_integration_activities_cls,
     mock_agent_runtime_activities_cls,
     mock_build_bindings,
 ):
@@ -4943,7 +4922,7 @@ async def test_build_runtime_activities_registers_deployment_tool_only_on_deploy
         plan_activities=mock_plan_activities_cls.return_value,
         skill_activities=mock_skill_activities_cls.return_value,
         sandbox_activities=mock_sandbox_activities_cls.return_value,
-        integration_activities=mock_jules_activities_cls.return_value,
+        integration_activities=mock_integration_activities_cls.return_value,
         agent_runtime_activities=None,
         review_activities=ANY,
         agent_skills_activities=ANY,

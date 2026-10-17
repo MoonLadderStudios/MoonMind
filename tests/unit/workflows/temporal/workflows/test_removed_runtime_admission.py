@@ -1,4 +1,10 @@
-"""#4644: retired targets cannot enter plan/child dispatch; history stays decodable."""
+"""Retired targets cannot enter plan/child dispatch; history stays decodable.
+
+Codex Cloud and Jules were removed. Saved schedules, presets, plans, and
+recorded requests may still name them, so admission must reject those
+references fail-fast and non-retryably instead of retrying or silently
+retargeting them.
+"""
 
 from types import SimpleNamespace
 
@@ -10,36 +16,47 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import resolve_adapter_metadata
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 
+REMOVED_RUNTIMES = ("codex_cloud", "jules", "jules_api")
+
 
 @pytest.mark.asyncio
-async def test_removed_external_adapter_fails_without_activity_retries():
+@pytest.mark.parametrize("runtime_id", REMOVED_RUNTIMES)
+async def test_removed_external_adapter_fails_without_activity_retries(runtime_id):
     with pytest.raises(ApplicationError) as error:
-        await resolve_adapter_metadata("codex_cloud")
+        await resolve_adapter_metadata(runtime_id)
     assert error.value.non_retryable
     assert "unknown agent runtime" in str(error.value)
+
+
+def _saved_parameter_shapes(runtime_id: str) -> list[dict]:
+    return [
+        {
+            "workflow": {
+                "instructions": "Saved task",
+                "runtime": {"mode": runtime_id, "model": "saved-model"},
+            }
+        },
+        {"targetRuntime": runtime_id},
+        {
+            "workflow": {
+                "steps": [
+                    {
+                        "runtime": {"mode": runtime_id},
+                        "instructions": "Preserve step",
+                    }
+                ]
+            }
+        },
+    ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "parameters",
     [
-        {
-            "workflow": {
-                "instructions": "Saved task",
-                "runtime": {"mode": "codex_cloud", "model": "saved-model"},
-            }
-        },
-        {"targetRuntime": "codex_cloud"},
-        {
-            "workflow": {
-                "steps": [
-                    {
-                        "runtime": {"mode": "codex_cloud"},
-                        "instructions": "Preserve step",
-                    }
-                ]
-            }
-        },
+        parameters
+        for runtime_id in REMOVED_RUNTIMES
+        for parameters in _saved_parameter_shapes(runtime_id)
     ],
 )
 async def test_saved_schedule_plan_is_rejected_before_any_activity(
@@ -66,21 +83,23 @@ async def test_saved_schedule_plan_is_rejected_before_any_activity(
     assert parameters  # validation preserves original authored inputs
 
 
-def test_cloud_history_contract_keeps_original_identity():
+@pytest.mark.parametrize("runtime_id", REMOVED_RUNTIMES)
+def test_removed_runtime_history_contract_keeps_original_identity(runtime_id):
     request = AgentExecutionRequest(
         agentKind="external",
-        agentId="codex_cloud",
+        agentId=runtime_id,
         correlationId="original",
         idempotencyKey="saved",
     )
-    assert request.agent_id == "codex_cloud"
-    assert request.model_dump(by_alias=True)["agentId"] == "codex_cloud"
+    assert request.agent_id == runtime_id
+    assert request.model_dump(by_alias=True)["agentId"] == runtime_id
 
 
-def test_cloud_runtime_edit_is_rejected_before_mutating_the_current_request(
-    monkeypatch,
+@pytest.mark.parametrize("runtime_id", REMOVED_RUNTIMES)
+def test_removed_runtime_edit_is_rejected_before_mutating_the_current_request(
+    monkeypatch, runtime_id
 ):
-    """#4644: an indirect session edit cannot retarget a healthy Codex request."""
+    """An indirect session edit cannot retarget a healthy Codex request."""
     from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
     monkeypatch.setattr(workflow, "patched", lambda _id: True)
@@ -98,7 +117,7 @@ def test_cloud_runtime_edit_is_rejected_before_mutating_the_current_request(
     saved = request.model_dump()
     with pytest.raises(ApplicationError) as error:
         MoonMindAgentRun()._apply_runtime_selection_update(
-            request, {"targetRuntime": "codex_cloud", "model": "different"}
+            request, {"targetRuntime": runtime_id, "model": "different"}
         )
     assert error.value.non_retryable
     assert request.model_dump() == saved
