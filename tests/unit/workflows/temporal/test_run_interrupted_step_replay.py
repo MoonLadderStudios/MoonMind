@@ -1,9 +1,11 @@
 """Interrupted-step successor histories replay across the #4627 patches.
 
-A Run history recorded before ``run-omnigent-interrupted-step-workspace-v1``
-and ``run-interrupted-step-deadline-v1`` retried a host-loss Step with a fresh
-sandbox and a fresh budget. That history must keep replaying on the current
-worker, and a history recorded with the patches must replay as well.
+A Run history recorded before ``run-omnigent-interrupted-step-workspace-v1``,
+``run-interrupted-step-deadline-v1`` and
+``run-interrupted-step-installed-admission-v1`` retried a host-loss Step with a
+fresh sandbox, a fresh budget and the workflow's recorded execution plan. That
+history must keep replaying on the current worker, and a history recorded with
+the patches must replay as well.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from temporalio import workflow
+from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
@@ -25,6 +27,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CONDITIONAL_REGISTRY_READ_PATCH,
     RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
     RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
+    RUN_INTERRUPTED_STEP_INSTALLED_ADMISSION_PATCH,
     RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
     MoonMindRunWorkflow,
 )
@@ -42,12 +45,37 @@ _BASE_PATCHES = frozenset(
         RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
     }
 )
-_CURRENT_PATCHES = _BASE_PATCHES | {
+_WORKSPACE_PATCHES = _BASE_PATCHES | {
     RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
     RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
 }
+_CURRENT_PATCHES = _WORKSPACE_PATCHES | {RUN_INTERRUPTED_STEP_INSTALLED_ADMISSION_PATCH}
 _REAL_PATCHED = workflow.patched
 _CHILD_REQUESTS: list[AgentExecutionRequest] = []
+_ADMISSIONS: list[dict[str, Any]] = []
+_ADMISSION_RESULT: dict[str, Any] = {}
+
+
+def _binding(digit: str) -> dict[str, str]:
+    return {
+        "planRef": "omnigent-execution-plan:sha256:" + digit * 64,
+        "planDigest": "sha256:" + digit * 64,
+        "planArtifactRef": f"art_plan_{digit}",
+        "taskInputSnapshotRef": "art_original_task",
+        "taskInputSnapshotDigest": "sha256:" + "1" * 64,
+    }
+
+
+# Admitted before the update, on the images installed then.
+_RECORDED = _binding("2")
+# Admitted for the successor against the newly installed images.
+_INSTALLED = _binding("3")
+
+
+@activity.defn(name="omnigent.admit_step_successor_plan")
+async def _admit_successor(payload: dict[str, Any]) -> dict[str, Any]:
+    _ADMISSIONS.append(payload)
+    return dict(_ADMISSION_RESULT)
 
 
 @workflow.defn(name="MoonMind.AgentRun")
@@ -125,7 +153,12 @@ class _InterruptedStepFixture:
         run._record_canonical_step_checkpoint = record_checkpoint
         run._record_step_execution_manifest = record_manifest
         await run._run_execution_stage(
-            parameters={"publishMode": "none"}, plan_ref="plan-ref"
+            parameters={
+                "publishMode": "none",
+                "omnigentExecutionPlan": dict(_RECORDED),
+                "resolvedSkillsetRef": "art_skills_recorded",
+            },
+            plan_ref="plan-ref",
         )
         return run._step_execution_for(_STEP) or 0
 
@@ -143,6 +176,7 @@ def _enable(monkeypatch: pytest.MonkeyPatch, patches: frozenset[str]) -> None:
 async def _record(env, monkeypatch, patches, name: str):
     _enable(monkeypatch, patches)
     _CHILD_REQUESTS.clear()
+    _ADMISSIONS.clear()
     async with Worker(
         env.client,
         task_queue=f"{name}-queue",
@@ -156,10 +190,11 @@ async def _record(env, monkeypatch, patches, name: str):
         return await handle.fetch_history(), list(_CHILD_REQUESTS)
 
 
-@pytest.mark.asyncio
-async def test_interrupted_step_pre_and_post_patch_histories_replay(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _plan_refs(requests: list[AgentExecutionRequest]) -> list[str]:
+    return [r.step_execution.omnigent_execution_plan.plan_ref for r in requests]
+
+
+def _patch_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_workflow_module, "execute_typed_activity", _plan)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _m: None)
     monkeypatch.setattr(
@@ -168,30 +203,74 @@ async def test_interrupted_step_pre_and_post_patch_histories_replay(
     monkeypatch.setattr(
         run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
     )
-    async with await WorkflowEnvironment.start_time_skipping(
-        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
-    ) as env:
-        async with Worker(
+
+
+def _workers(env):
+    admission_queue = run_workflow_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+        "omnigent.admit_step_successor_plan"
+    ).task_queue
+    return (
+        Worker(
             env.client,
             task_queue=WORKFLOW_TASK_QUEUE,
             workflows=[_InterruptedAgentRun],
             workflow_runner=UnsandboxedWorkflowRunner(),
-        ):
+        ),
+        Worker(env.client, task_queue=admission_queue, activities=[_admit_successor]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_interrupted_step_pre_and_post_patch_histories_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_environment(monkeypatch)
+    _ADMISSION_RESULT.clear()
+    _ADMISSION_RESULT.update(
+        disposition="admitted",
+        omnigentExecutionPlan=dict(_INSTALLED),
+        resolvedSkillsetRef="art_skills_installed",
+    )
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+    ) as env:
+        agent_worker, admission_worker = _workers(env)
+        async with agent_worker, admission_worker:
             legacy_history, legacy = await _record(
                 env, monkeypatch, _BASE_PATCHES, "interrupted-step-legacy"
+            )
+            workspace_history, workspace = await _record(
+                env, monkeypatch, _WORKSPACE_PATCHES, "interrupted-step-workspace"
             )
             current_history, current = await _record(
                 env, monkeypatch, _CURRENT_PATCHES, "interrupted-step-current"
             )
+            current_admissions = list(_ADMISSIONS)
 
-    # Recorded before the patches: a fresh sandbox and a fresh budget.
+    # Recorded before the patches: a fresh sandbox, a fresh budget and the
+    # recorded execution plan.
     assert [r.step_execution.execution_ordinal for r in legacy] == [1, 2]
     assert "workspaceCheckpointRestoreRef" not in (legacy[1].workspace_spec or {})
     assert legacy[1].timeout_policy["max_timeout_seconds"] == 7200
-    # Recorded with the patches: the verified save and the remaining ceiling.
-    assert [r.step_execution.execution_ordinal for r in current] == [1, 2]
-    assert current[1].workspace_spec["workspaceCheckpointRestoreRef"] == _ARCHIVE
-    assert 5390 <= current[1].timeout_policy["max_timeout_seconds"] <= 5400
+    assert _plan_refs(legacy) == [_RECORDED["planRef"]] * 2
+    # Recorded with the workspace patches: the verified save and the remaining
+    # ceiling, still on the recorded plan.
+    for requests in (workspace, current):
+        assert [r.step_execution.execution_ordinal for r in requests] == [1, 2]
+        assert requests[1].workspace_spec["workspaceCheckpointRestoreRef"] == _ARCHIVE
+        assert 5390 <= requests[1].timeout_policy["max_timeout_seconds"] <= 5400
+    assert _plan_refs(workspace) == [_RECORDED["planRef"]] * 2
+    # Recorded with installed admission: only the successor is admitted again,
+    # from the recorded plan's frozen inputs, and launches on the new plan with
+    # its Skill snapshot. The interrupted attempt keeps the plan it used.
+    assert len(current_admissions) == 1
+    assert current_admissions[0]["workflowId"] == "interrupted-step-current"
+    assert current_admissions[0]["initialParameters"]["omnigentExecutionPlan"] == (
+        _RECORDED
+    )
+    assert _plan_refs(current) == [_RECORDED["planRef"], _INSTALLED["planRef"]]
+    assert current[0].step_execution.resolved_skillset_ref == "art_skills_recorded"
+    assert current[1].step_execution.resolved_skillset_ref == "art_skills_installed"
 
     _enable(monkeypatch, _CURRENT_PATCHES)
     replayer = Replayer(
@@ -200,4 +279,33 @@ async def test_interrupted_step_pre_and_post_patch_histories_replay(
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     )
     await replayer.replay_workflow(legacy_history)
+    await replayer.replay_workflow(workspace_history)
     await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.asyncio
+async def test_successor_keeps_the_recorded_plan_when_admission_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_environment(monkeypatch)
+    _ADMISSION_RESULT.clear()
+    _ADMISSION_RESULT.update(
+        disposition="recorded",
+        reason="re-admission would change the recorded request intent: model",
+    )
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+    ) as env:
+        agent_worker, admission_worker = _workers(env)
+        async with agent_worker, admission_worker:
+            _history, requests = await _record(
+                env, monkeypatch, _CURRENT_PATCHES, "interrupted-step-refused"
+            )
+            admissions = list(_ADMISSIONS)
+
+    # A refused admission is truthful: the successor still restarts, on the
+    # recorded plan and Skill snapshot, under that plan's launch-time checks.
+    assert len(admissions) == 1
+    assert [r.step_execution.execution_ordinal for r in requests] == [1, 2]
+    assert _plan_refs(requests) == [_RECORDED["planRef"]] * 2
+    assert requests[1].step_execution.resolved_skillset_ref == "art_skills_recorded"
