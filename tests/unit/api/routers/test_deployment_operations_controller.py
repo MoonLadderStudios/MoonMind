@@ -474,12 +474,52 @@ def test_failed_postcheck_is_partially_verified_with_the_failed_check(
     assert latest["retryAllowed"] is False
 
 
+def test_submission_observes_through_a_controller_handoff_restart(
+    controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The submitting controller is replaced by its requested release's own."""
+    controller_factory()
+    request = controller_client._controller_request
+    outages = {"post": 1, "get": 2}
+
+    def handoff_restart(endpoint, **kwargs):
+        answer = request(endpoint, **kwargs)
+        kind = "post" if kwargs["method"] == "POST" else "get"
+        if kwargs["path"].startswith("/v1/operations") and outages[kind]:
+            # The accepted submission's answer and the next reads are lost
+            # while the replacement controller starts.
+            outages[kind] -= 1
+            raise controller_client.ControllerTransportError("connection refused")
+        return answer
+
+    monkeypatch.setattr(controller_client, "_controller_request", handoff_restart)
+    monkeypatch.setattr(controller_client, "CONTROLLER_RETRY_PAUSE_SECONDS", 0)
+    client, temporal = _client()
+
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "SUCCEEDED"
+    assert outages == {"post": 0, "get": 0}
+    assert temporal.calls == []
+
+    # A status read during the restart is asked again, not reported as an
+    # outage that needs the host command.
+    outages["get"] = 1
+    state = _stack(client)
+    assert state["controller"]["reachable"] is True
+    assert state["latestAction"]["status"] == "SUCCEEDED"
+
+
 def test_unavailable_controller_is_reported_and_never_becomes_a_workflow(
     controller_factory: Callable[..., InProcessController],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     controller = controller_factory()
     controller.close()
+    monkeypatch.setattr(controller_client, "CONTROLLER_RESTART_GRACE_SECONDS", 0)
+    monkeypatch.setattr(controller_client, "CONTROLLER_RETRY_PAUSE_SECONDS", 0)
     client, temporal = _client()
 
     response = client.post("/api/v1/operations/deployment/update", json=_update())

@@ -238,6 +238,67 @@ async def prepare_journal_transition(project, *, compact=True):
             "consumers": [row["Id"] for row in observed], **receipt}
 
 
+# The controller lifecycle this image ships, and the receipt its handoff prints.
+CONTROLLER_BOOTSTRAP = (
+    Path(__file__).resolve().parents[3] / "deploy" / "controller" / "bootstrap.py"
+)
+CONTROLLER_HANDOFF_PREFIX = "MOONMIND_CONTROLLER_HANDOFF="
+
+
+def hand_off_controller(payload) -> dict:
+    """Have this image's controller take over the payload's open operation.
+
+    Runs in the controller's one-off of this image, which holds the Docker
+    socket and the deployment state. On success the calling controller is
+    replaced before it can read the answer.
+    """
+    import subprocess
+    import sys
+
+    state_dir = (
+        os.environ.get("MOONMIND_CONTROLLER_STATE_DIR")
+        or "/workspace/deployment_state/controller"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable, str(CONTROLLER_BOOTSTRAP), "handoff",
+                "--state-dir", state_dir,
+                "--operation", str(payload["operationId"]),
+                "--image", str(payload["moonmindImage"]),
+            ],
+            capture_output=True, text=True, check=False, timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "unavailable", "reason": f"controller handoff did not run: {exc}"}
+    for line in reversed((completed.stdout or "").splitlines()):
+        if line.startswith(CONTROLLER_HANDOFF_PREFIX):
+            try:
+                receipt = json.loads(line[len(CONTROLLER_HANDOFF_PREFIX):])
+            except ValueError:
+                break
+            if isinstance(receipt, dict):
+                return receipt
+            break
+    detail = f"{completed.stdout or ''}\n{completed.stderr or ''}".strip()[-1000:]
+    return {
+        "status": "unavailable",
+        "reason": f"controller handoff failed (exit {completed.returncode}): {detail}",
+    }
+
+
+async def controller_handoff_cli(phase, payload):
+    """Operation-scoped one-off: this release's controller applies it."""
+    import sys
+
+    if phase != "handoff":
+        raise ValueError("Unknown controller handoff phase")
+    receipt = await asyncio.to_thread(hand_off_controller, payload)
+    print("MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
+          file=sys.stderr, flush=True)
+    return 0
+
+
 async def controller_journal_cli(phase, payload):
     """Operation-scoped one-off; the standalone owner retains its outer lock."""
     import sys
@@ -803,26 +864,39 @@ async def run_controller_omnigent_step(phase, payload):
     if phase not in ("select", "migrate"):
         raise ValueError("Unknown controller Omnigent release step")
     capabilities = payload.get("controllerCapabilities")
-    # An old installed owner reaches this selected-image callback before any
-    # updated API or host client necessarily runs. Without journal transition
-    # it cannot prepare a later rollback; without the routing cutover it would
-    # install workers that Temporal still does not route to. Selection runs
-    # before any container changes, so refusing here fails the operation
-    # safely and lets the submitter retry with the requested release's
-    # controller. This one-off neither replaces its controller nor launches
-    # an updater.
+    if not isinstance(capabilities, (list, tuple)):
+        capabilities = ()
+    # A controller installed before handoff existed reaches this callback
+    # before changing anything, from any submitter. Hand the operation to
+    # this release's controller, which resumes it; that ends the caller.
+    handoff = {}
+    if phase == "select" and "controller-handoff" not in capabilities:
+        handoff = await asyncio.to_thread(hand_off_controller, payload)
+        if handoff.get("status") == "handed-off":
+            raise RuntimeError(
+                "Handed this operation to the requested release's controller, "
+                "which resumes it."
+            )
+    # Without journal transition the owner cannot prepare a later rollback;
+    # without the routing cutover it would install workers that Temporal
+    # still does not route to. Refusing here fails the operation before any
+    # container changes.
     required = ("active-journal-transition",) + (
         ("unversioned-routing-cutover",) if phase == "select" else ()
     )
-    if not isinstance(capabilities, (list, tuple)):
-        capabilities = ()
     missing = [name for name in required if name not in capabilities]
     if missing:
+        unavailable = (
+            f" The requested release's controller could not take over: {handoff['reason']}."
+            if handoff.get("reason")
+            else ""
+        )
         raise RuntimeError(
             f"Refusing Omnigent {phase}: the installed controller does not provide "
-            f"{', '.join(missing)}. This helper has not changed release state. "
-            "Run ./tools/update-moonmind.sh from the updated MoonMind checkout "
-            "to bootstrap the deployment controller, then retry this release."
+            f"{', '.join(missing)}. This helper has not changed release state."
+            f"{unavailable} Run ./tools/update-moonmind.sh from the updated "
+            "MoonMind checkout to bootstrap the deployment controller, then retry "
+            "this release."
         )
 
     from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
