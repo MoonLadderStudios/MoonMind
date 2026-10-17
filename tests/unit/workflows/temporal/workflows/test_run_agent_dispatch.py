@@ -192,11 +192,11 @@ def test_auto_publish_external_provider_does_not_compile_workspace_contract() ->
     ):
         request = MoonMindRunWorkflow()._build_agent_execution_request(
             node_inputs={
-                "targetRuntime": "jules",
+                "targetRuntime": "openclaw",
                 "selectedSkill": "fix-comments",
             },
             node_id="fix-comments",
-            tool_name="jules",
+            tool_name="openclaw",
             workflow_parameters={"publishMode": "auto"},
         )
 
@@ -393,7 +393,7 @@ class TestAgentKindForId(unittest.TestCase):
 
     def test_external_agent_ids(self) -> None:
         wf = MoonMindRunWorkflow()
-        for agent_id in ("jules", "custom_agent"):
+        for agent_id in ("openclaw", "custom_agent"):
             self.assertEqual(wf._agent_kind_for_id(agent_id), "external", f"{agent_id} should be external")
 
     def test_case_insensitive(self) -> None:
@@ -2868,7 +2868,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             {
                 "effectClass": "external_provider",
                 "operation": "provider_run_started",
-                "target": "jules",
+                "target": "openclaw",
                 "disposition": "occurred",
             }
         ]
@@ -2885,10 +2885,10 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             request = wf._build_agent_execution_request(
                 node_inputs={
                     "instructions": "Continue delegated work.",
-                    "runtime": {"mode": "jules"},
+                    "runtime": {"mode": "openclaw"},
                 },
                 node_id="delegate",
-                tool_name="jules",
+                tool_name="openclaw",
             )
 
         step_execution = request.step_execution
@@ -3588,7 +3588,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                     tool_type="agent_runtime",
                     original_inputs={
                         instruction_key: "Implement the requested change.",
-                        "targetRuntime": "jules",
+                        "targetRuntime": "openclaw",
                     },
                     attempt=1,
                     feedback="Fix the missing import before retrying.",
@@ -3602,7 +3602,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                     request = wf._build_agent_execution_request(
                         node_inputs=retried_inputs,
                         node_id="node-review-retry",
-                        tool_name="jules",
+                        tool_name="openclaw",
                     )
 
                 self.assertIn("REVIEW FEEDBACK (attempt 1)", request.instruction_ref)
@@ -3668,7 +3668,7 @@ class TestReviewGateHelpers(unittest.TestCase):
         is_active = is_review_gate_active(
             approval_policy=approval_policy,
             tool_type="agent_runtime",
-            tool_name="jules",
+            tool_name="openclaw",
         )
 
         self.assertFalse(is_active)

@@ -45,7 +45,7 @@ semantics, error taxonomy, scheduling), plus
 `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`,
 `docs/ManagedAgents/ManagedAgentArchitecture.md`,
 `docs/ManagedAgents/CodexCliManagedSessions.md`,
-`docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Observability/LiveLogs.md`,
+`docs/ManagedAgents/DockerBackendService.md`, `docs/Observability/LiveLogs.md`,
 `docs/Steps/SkillSystem.md`, and `docs/MoonMindArchitecture.md`.
 
 Exact lifecycle state machines, complete activity catalogs, API schemas, and
@@ -113,11 +113,9 @@ Temporal-owned state.
 The managed runtime plane supervises MoonMind-managed CLI/container runtimes
 (launch, status, results, cleanup, log capture) through Activities,
 `MoonMind.AgentRun`, and, for workflow-scoped sessions, `MoonMind.AgentSession`.
-The external integration plane talks to delegated providers such as Jules,
-OpenClaw, GitHub, and Jira, verifies callbacks, and normalizes provider
-payloads into canonical runtime contracts before workflow code sees them.
-
----
+The external integration plane runs Omnigent agent work, talks to OpenClaw,
+GitHub, and Jira, verifies callbacks, and normalizes provider payloads into
+canonical runtime contracts before workflow code sees them.
 
 ---
 

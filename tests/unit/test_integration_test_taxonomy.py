@@ -10,11 +10,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_TEST_RUNNERS = (
     "tools/test_integration.sh",
     "tools/test_unit_docker.sh",
-    "tools/test_jules_provider.sh",
     "tools/test-unit.ps1",
     "tools/test-integration.ps1",
     "tools/test-e2e.ps1",
-    "tools/test-provider.ps1",
 )
 
 
@@ -77,7 +75,7 @@ def test_pytest_registers_phase1_taxonomy_markers(pytestconfig) -> None:
 
     assert "integration_ci" in registered_markers
     assert "provider_verification" in registered_markers
-    assert "jules" in registered_markers
+    assert "codex" in registered_markers
     assert "requires_credentials" in registered_markers
 
 
@@ -98,44 +96,18 @@ def test_ci_safe_temporal_artifact_and_topology_modules_are_marked_for_integrati
         assert "integration" in marker_names
 
 
-def test_live_jules_suite_is_provider_verification_only() -> None:
-    marker_names = _marker_names("tests.provider.jules.test_jules_integration")
+def test_live_codex_canary_is_provider_verification_only() -> None:
+    marker_names = _marker_names("tests.provider.codex.test_codex_long_command_canary")
 
     assert "provider_verification" in marker_names
-    assert "jules" in marker_names
+    assert "codex" in marker_names
     assert "requires_credentials" in marker_names
     assert "integration_ci" not in marker_names
     assert "integration" not in marker_names
 
 
-def test_provider_verification_suite_lives_outside_tests_integration() -> None:
-    assert not (
-        REPO_ROOT / "tests" / "integration" / "test_jules_integration.py"
-    ).exists()
-    assert (
-        REPO_ROOT / "tests" / "provider" / "jules" / "test_jules_integration.py"
-    ).exists()
-
-
-def test_temporal_topology_integration_suite_stays_jules_free() -> None:
-    topology_module = (
-        REPO_ROOT
-        / "tests"
-        / "integration"
-        / "temporal"
-        / "test_activity_worker_topology.py"
-    ).read_text(encoding="utf-8")
-
-    assert "integration.jules." not in topology_module
-    assert "JulesTaskResponse" not in topology_module
-    assert "_FakeJulesClient" not in topology_module
-
-
 def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
-        encoding="utf-8"
-    )
-    provider_runner = (REPO_ROOT / "tools" / "test_jules_provider.sh").read_text(
         encoding="utf-8"
     )
     powershell_runner = (REPO_ROOT / "tools" / "test-integration.ps1").read_text(
@@ -143,8 +115,6 @@ def test_shell_and_powershell_runner_commands_select_new_taxonomy() -> None:
     )
 
     assert "integration_ci" in shell_runner
-    assert "provider_verification and jules" in provider_runner
-    assert "pytest tests/provider/jules" in provider_runner
     assert "integration_ci" in powershell_runner
 
 
@@ -192,10 +162,7 @@ def test_powershell_compose_runners_preserve_test_exit_codes_after_cleanup() -> 
 
 
 def test_bash_compose_runners_register_cleanup_before_setup() -> None:
-    for relative_path in (
-        "tools/test_integration.sh",
-        "tools/test_jules_provider.sh",
-    ):
+    for relative_path in ("tools/test_integration.sh",):
         runner = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         assert "trap cleanup EXIT" in runner, relative_path
 
@@ -206,7 +173,7 @@ def test_bash_compose_test_runners_reject_the_deployment_project() -> None:
         "MOONMIND_TEST_COMPOSE_PROJECT_NAME": "moonmind",
     }
 
-    for relative_path in COMPOSE_TEST_RUNNERS[:3]:
+    for relative_path in COMPOSE_TEST_RUNNERS[:2]:
         result = subprocess.run(
             ["bash", str(REPO_ROOT / relative_path)],
             cwd=REPO_ROOT,
@@ -229,21 +196,17 @@ def test_provider_verification_is_not_configured_as_a_github_action() -> None:
 
     assert not provider_workflow.exists()
     assert "./tools/test_integration.sh" in required_workflow
-    assert "./tools/test_jules_provider.sh" not in required_workflow
 
 
 def test_docker_compose_test_runners_delegate_network_lifecycle_to_compose() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
         encoding="utf-8"
     )
-    provider_runner = (REPO_ROOT / "tools" / "test_jules_provider.sh").read_text(
-        encoding="utf-8"
-    )
     powershell_runner = (REPO_ROOT / "tools" / "test-integration.ps1").read_text(
         encoding="utf-8"
     )
 
-    for runner in (shell_runner, provider_runner, powershell_runner):
+    for runner in (shell_runner, powershell_runner):
         assert "network inspect" not in runner
         assert "network create" not in runner
 
@@ -253,8 +216,6 @@ def test_auth_and_provider_helpers_do_not_bootstrap_compose_networks() -> None:
         "tools/auth-codex-volume.sh",
         "tools/auth-claude-volume.sh",
         "tools/test_codex_provider.sh",
-        "tools/test_jules_provider.sh",
-        "tools/test-provider.ps1",
     ):
         helper = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         assert "network inspect" not in helper, relative_path

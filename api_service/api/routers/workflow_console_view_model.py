@@ -38,7 +38,7 @@ _POLL_INTERVALS_MS = {
     "events": 1000,
 }
 
-_SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "claude_code", "jules", "universal")
+_SUPPORTED_WORKER_RUNTIMES = ("codex_cli", "claude_code", "universal")
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SSH_GIT_RE = re.compile(
     r"^(?:ssh://)?git@[A-Za-z0-9.-]+[:/]"
@@ -1449,14 +1449,7 @@ def status_maps() -> dict[str, dict[str, str]]:
     return deepcopy(_STATUS_MAPS)
 
 def _build_supported_runtimes() -> list[str]:
-    supported: list[str] = [
-        "omnigent",
-        "codex_cli",
-        "claude_code",
-    ]
-    if settings.jules_runtime_gate.enabled:
-        supported.append("jules")
-    return supported
+    return ["omnigent", "codex_cli", "claude_code"]
 
 def _build_default_attachment_policy(config: "dict[str, Any]") -> dict[str, Any]:
     """Normalize attachment policy values for dashboard consumption."""

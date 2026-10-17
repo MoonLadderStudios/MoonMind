@@ -1,9 +1,6 @@
 # Adding a New External Agent Provider
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 Status: **Guide for current runtime architecture**
-Last updated: 2026-03-30
 Related:
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Temporal/ActivityCatalogAndWorkerTopology.md`](../Temporal/ActivityCatalogAndWorkerTopology.md)
@@ -28,8 +25,8 @@ This document covers:
 
 This document is for providers that MoonMind does **not** run locally, such as:
 
-- Jules
-- future BYOA-style delegated agents
+- OpenClaw-style delegated gateways
+- future bring-your-own-agent providers
 
 This document does **not** cover:
 
@@ -76,9 +73,9 @@ This rule exists so `MoonMind.AgentRun` does not need workflow-side coercion glu
 
 MoonMind currently supports two external execution styles.
 
-## 3.1 Standard polling or callback provider
+## 3.1 Polling or callback provider
 
-This is the normal provider path.
+For providers that run work asynchronously behind an external id. No registered provider uses this path today, but `MoonMind.AgentRun` keeps the generic lifecycle.
 
 Activities:
 
@@ -86,8 +83,6 @@ Activities:
 - `integration.<provider>.status`
 - `integration.<provider>.fetch_result`
 - `integration.<provider>.cancel`
-
-Use this for most new providers.
 
 ## 3.2 Streaming gateway provider
 
@@ -366,7 +361,7 @@ Registration rules:
 
 ## 9. Step 5: add Temporal activities
 
-For the normal external provider path, create four activities.
+For a polling provider, create four activities.
 
 Suggested file:
 
@@ -419,19 +414,7 @@ That means:
 * no top-level provider fields outside the canonical schema
 * no reliance on workflow-side repair logic
 
-## 9.2 Optional callback or helper activities
-
-If the provider supports additional operations, you may add narrowly scoped provider activities such as:
-
-* `integration.<provider>.send_message`
-* `integration.<provider>.list_activities`
-* `integration.<provider>.answer_question`
-
-These are provider-specific extensions, not part of the core required lifecycle set.
-
-Only add them when the provider’s product semantics actually need them.
-
-## 9.3 Streaming gateway activity
+## 9.2 Streaming gateway activity
 
 For a streaming-gateway provider, add one activity instead of the polling
 lifecycle set:
@@ -465,7 +448,7 @@ Update:
 moonmind/workflows/temporal/activity_catalog.py
 ```
 
-For a normal provider integration, add:
+For a polling provider, add:
 
 * `integration.<provider>.start`
 * `integration.<provider>.status`
@@ -504,9 +487,9 @@ Verify that the activity bindings for the integrations fleet now include your pr
 
 ## 12. Step 8: understand when workflow changes are not required
 
-## 12.1 Standard provider path
+## 12.1 Polling provider path
 
-For a normal polling or callback provider using:
+For a polling or callback provider using:
 
 * `integration.<provider>.start`
 * `integration.<provider>.status`
@@ -518,8 +501,6 @@ For a normal polling or callback provider using:
 * the adapter is registered
 * the activity types are in the catalog
 * the activity handlers are deployed
-
-This is the preferred provider integration path.
 
 ## 12.2 Streaming gateway provider path
 
@@ -600,14 +581,14 @@ Test the end-to-end provider lifecycle:
 * fetch_result
 * cancel
 
-Verify that `MoonMind.AgentRun` can use the provider through the dynamic integration activity path without provider-specific workflow logic for the standard polling/callback model.
+Verify that `MoonMind.AgentRun` can use the provider through the dynamic integration activity path without provider-specific workflow logic.
 
 ## 14.5 Recommended test commands
 
 Run the adapter and provider activity test suites, for example:
 
 ```bash id="83820"
-./tools/test_unit.sh tests/unit/workflows/adapters/
+./tools/test_unit.sh --python-only tests/unit/workflows/adapters/
 ```
 
 Also add or update provider-specific tests alongside the existing external adapter tests.
@@ -623,30 +604,9 @@ A provider is considered correctly integrated when all of the following are true
 * adapter subclass exists
 * adapter returns canonical runtime contracts only
 * adapter is registered in the external adapter registry
-* four core integration activities are defined for the standard provider path
+* the polling activity family or the streaming `execute` activity is defined
 * activity catalog entries exist
 * worker runtime exposes the activity handlers
 * unit tests cover adapter and activity behavior
 * unknown provider states are rejected at the adapter/activity boundary
 * provider-specific details live in `metadata`, not ad hoc top-level response fields
-
----
-
-## 16. Summary
-
-To add a new external provider correctly in MoonMind:
-
-1. add a runtime gate
-2. add a thin provider client
-3. implement a `BaseExternalAgentAdapter` subclass
-4. return canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` contracts
-5. register the adapter
-6. add `integration.<provider>.*` activities
-7. register the catalog entries and worker bindings
-8. test canonical return-shape behavior thoroughly
-
-The most important rule is simple:
-
-* **normalize at the adapter/activity boundary**
-* **do not rely on workflow-side coercion**
-* **keep provider-specific details in canonical metadata**

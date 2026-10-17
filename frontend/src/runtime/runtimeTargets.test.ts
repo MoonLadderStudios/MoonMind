@@ -100,11 +100,9 @@ describe('resolveDefaultRuntimeId', () => {
 });
 
 describe('backendOptionsForHarness', () => {
-  it('keeps the supported legacy Jules identity available for restored drafts', () => {
-    expect(backendOptionsForHarness('jules_api', undefined, { omnigentRoute: false })).toEqual([]);
-    expect(runtimeUnavailableReason('jules_api')).toBeNull();
-    expect(formatRuntimeLabel('jules_api')).toBe('Jules');
-    expect(formatHarnessLabel('jules_api')).toBe('Jules');
+  it.each(['jules', 'jules_api'])('treats the retired %s identity as unsupported', (runtimeId) => {
+    expect(backendOptionsForHarness(runtimeId, undefined, { omnigentRoute: false })).toEqual([]);
+    expect(runtimeUnavailableReason(runtimeId)).toMatch(new RegExp(`^Unsupported Harness ${runtimeId}\\. Explicitly choose a supported replacement`));
   });
 
   it('offers a direct Backend only beside Omnigent for its own Harness', () => {

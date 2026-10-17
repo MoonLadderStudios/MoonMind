@@ -303,7 +303,7 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
 
     request = AgentExecutionRequest(
         agentKind=agent_kind,
-        agentId="codex" if agent_kind == "managed" else "jules",
+        agentId="codex" if agent_kind == "managed" else "openclaw",
         correlationId=queue,
         idempotencyKey=queue,
         parameters={"issueClaimLease": lease},

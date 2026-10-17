@@ -86,7 +86,7 @@ Example tool call:
 
 ## JSON helper endpoints
 
-`GET /mcp/resources` advertises the `moonmind://mcp/tools` tool catalog resource. `GET /mcp/tools` returns registered tool metadata. Depending on deployment settings, the catalog can include container-job, Jira, Jules, skills-on-demand, remediation, and governed Temporal executable tools. The latter require workflow submission and return `execution_tool_requires_task_submission` if directly invoked.
+`GET /mcp/resources` advertises the `moonmind://mcp/tools` tool catalog resource. `GET /mcp/tools` returns registered tool metadata. Depending on deployment settings, the catalog can include container-job, Jira, skills-on-demand, remediation, and governed Temporal executable tools. The latter require workflow submission and return `execution_tool_requires_task_submission` if directly invoked.
 
 `POST /mcp/tools/call` accepts a tool name and arguments:
 

@@ -263,7 +263,6 @@ def tier_capabilities_for_profile(profile: Any) -> dict[str, Any]:
             image_ref=profile_image_ref,
             observed_at=None,
             stale=True,
-            diagnostics=[{"code": "evidence_missing", "level": "warning", "message": "No catalog evidence for this profile; model choices are advisory."}],
             evidence={"source": "profile_catalog_evidence", "credential_generation": credential_generation, "image_ref": profile_image_ref, "observed_at": None, "stale": True},
         )
 

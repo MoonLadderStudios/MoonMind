@@ -556,9 +556,10 @@ Purpose: external provider interaction and delegated agent execution.
 
 ### Current implemented provider families
 
-- `integration.jules.*`
-- `integration.openclaw.execute`
-- `integration.omnigent.execute`
+- `integration.openclaw.execute` on `mm.activity.integrations`
+- `integration.omnigent.execute` and `integration.omnigent.profile_bound_execute` on `mm.activity.agent_runtime`, because Omnigent runs admitted agent work rather than calling a remote provider
+
+Both are streaming-gateway paths: one call returns a canonical `AgentRunResult`. `MoonMind.AgentRun` also retains the generic polling family (`integration.<provider>.start/status/fetch_result/cancel` returning `AgentRunHandle`/`AgentRunStatus`/`AgentRunResult`) for providers that run asynchronously behind an external id; no registered provider uses it today. See [External Agent Integration System](../ExternalAgents/ExternalAgentIntegrationSystem.md).
 
 Capability labels and execution visibility metadata are not provider activity
 families by themselves. For example, Jira is available as the
@@ -566,40 +567,9 @@ families by themselves. For example, Jira is available as the
 merge-automation activities, but there is no `integration.jira.start` /
 `integration.jira.status` external monitor family.
 
-### Jules contract pattern
-
-Current canonical pattern:
-
-- `integration.jules.start(...) -> AgentRunHandle`
-- `integration.jules.status(...) -> AgentRunStatus`
-- `integration.jules.fetch_result(...) -> AgentRunResult`
-- `integration.jules.cancel(...) -> AgentRunStatus`
-
-
-### Streaming-gateway contract pattern
-
-`integration.openclaw.execute(...)` and `integration.omnigent.execute(...)` are special-case single-call external execution paths for providers using the streaming-gateway execution style.
-
-Contract:
-
-- `integration.openclaw.execute(...) -> AgentRunResult`
-- `integration.omnigent.execute(...) -> AgentRunResult`
-
-Worker queue: `mm.activity.integrations`
-
 ### Integration helper activity
 
-Current helper activity:
-
-- `integration.resolve_adapter_metadata`
-
-Contract:
-
-- validate adapter registration
-- return adapter metadata such as execution style
-- keep env inspection and dynamic provider registration reads out of deterministic workflow code
-
-This activity is intentionally small and is not part of the true agent-run status/result contract family.
+`integration.resolve_adapter_metadata` validates adapter registration and returns adapter metadata such as execution style, keeping env inspection and dynamic registry reads out of deterministic workflow code. It is not part of the agent-run status/result contract family.
 
 ## 8.8 Repo activities (`repo.*`)
 
@@ -608,7 +578,6 @@ Purpose: provider-backed repository operations used by workflow or runtime flows
 Current implemented activities:
 
 - `repo.create_pr`
-- `repo.merge_pr`
 
 Worker queue: `mm.activity.integrations`
 
@@ -751,7 +720,7 @@ Representative capability classes include:
 
 - `plan.generate` routes to `mm.activity.llm`
 - `sandbox.run_tests` routes to `mm.activity.sandbox`
-- `integration.jules.start` routes to `mm.activity.integrations`
+- `integration.openclaw.execute` routes to `mm.activity.integrations`
 - `agent_runtime.fetch_result` routes to `mm.activity.agent_runtime`
 - `agent_runtime.restore_workspace_checkpoint` routes to `mm.activity.agent_runtime`
 - `agent_runtime.evaluate_terminal_evidence` routes to `mm.activity.agent_runtime.control`

@@ -113,7 +113,7 @@ async def _create_monitored_execution(
     client: AsyncClient,
     *,
     execution_suffix: str = "default",
-    integration_name: str = "jules",
+    integration_name: str = "openclaw",
 ) -> tuple[str, str]:
     create_response = await client.post(
         "/api/executions",
@@ -171,49 +171,6 @@ async def test_callback_discovery_describes_generic_contract():
     assert payload["defaults"]["maxPayloadBytes"] > 0
 
 @pytest.mark.asyncio
-async def test_callback_rejects_missing_configured_token(monkeypatch):
-    shared_user_id = uuid4()
-    monkeypatch.setattr(settings.jules, "jules_callback_token", "callback-secret")
-
-    async with _shared_client(shared_user_id) as client:
-        _workflow_id, callback_key = await _create_monitored_execution(
-            client, execution_suffix=f"missing-token-{uuid4().hex[:8]}"
-        )
-        response = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key}",
-            json={
-                "eventType": "completed",
-                "normalizedStatus": "completed",
-            },
-        )
-
-    assert response.status_code == 401
-    assert response.json()["detail"]["code"] == "integration_callback_unauthorized"
-
-@pytest.mark.asyncio
-async def test_callback_accepts_matching_bearer_token(monkeypatch):
-    shared_user_id = uuid4()
-    monkeypatch.setattr(settings.jules, "jules_callback_token", "callback-secret")
-
-    async with _shared_client(shared_user_id) as client:
-        _workflow_id, callback_key = await _create_monitored_execution(
-            client, execution_suffix=f"auth-{uuid4().hex[:8]}"
-        )
-        response = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key}",
-            headers={"Authorization": "Bearer callback-secret"},
-            json={
-                "eventType": "completed",
-                "providerEventId": "evt-1",
-                "normalizedStatus": "completed",
-            },
-        )
-
-    assert response.status_code == 202
-    assert response.json()["integration"]["normalizedStatus"] == "completed"
-
-
-@pytest.mark.asyncio
 async def test_generic_callback_profile_accepts_matching_bearer_token(monkeypatch):
     shared_user_id = uuid4()
     monkeypatch.setattr(settings.integration_callbacks, "callback_token", "generic-secret")
@@ -251,15 +208,15 @@ async def test_generic_callback_profile_accepts_matching_bearer_token(monkeypatc
 @pytest.mark.asyncio
 async def test_callback_rejects_payload_over_limit(monkeypatch):
     shared_user_id = uuid4()
-    monkeypatch.setattr(settings.jules, "jules_callback_token", None)
-    monkeypatch.setattr(settings.jules, "jules_callback_max_payload_bytes", 32)
+    monkeypatch.setattr(settings.integration_callbacks, "callback_token", None)
+    monkeypatch.setattr(settings.integration_callbacks, "max_payload_bytes", 32)
 
     async with _shared_client(shared_user_id) as client:
         _workflow_id, callback_key = await _create_monitored_execution(
             client, execution_suffix=f"size-{uuid4().hex[:8]}"
         )
         response = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key}",
+            f"/api/integrations/openclaw/callbacks/{callback_key}",
             json={
                 "eventType": "completed",
                 "providerSummary": {"message": "x" * 128},
@@ -275,16 +232,18 @@ async def test_callback_rejects_payload_over_limit(monkeypatch):
 @pytest.mark.asyncio
 async def test_callback_rejects_rate_limited_bursts(monkeypatch):
     shared_user_id = uuid4()
-    monkeypatch.setattr(settings.jules, "jules_callback_token", None)
-    monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_per_window", 1)
-    monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_window_seconds", 60)
+    monkeypatch.setattr(settings.integration_callbacks, "callback_token", None)
+    monkeypatch.setattr(settings.integration_callbacks, "rate_limit_per_window", 1)
+    monkeypatch.setattr(
+        settings.integration_callbacks, "rate_limit_window_seconds", 60
+    )
 
     async with _shared_client(shared_user_id) as client:
         _workflow_id, callback_key = await _create_monitored_execution(
             client, execution_suffix=f"rate-limit-{uuid4().hex[:8]}"
         )
         first = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key}",
+            f"/api/integrations/openclaw/callbacks/{callback_key}",
             json={
                 "eventType": "progress",
                 "providerEventId": "evt-rate-1",
@@ -292,7 +251,7 @@ async def test_callback_rejects_rate_limited_bursts(monkeypatch):
             },
         )
         second = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key}",
+            f"/api/integrations/openclaw/callbacks/{callback_key}",
             json={
                 "eventType": "progress",
                 "providerEventId": "evt-rate-2",
@@ -307,9 +266,11 @@ async def test_callback_rejects_rate_limited_bursts(monkeypatch):
 @pytest.mark.asyncio
 async def test_callback_rate_limit_applies_across_callback_keys(monkeypatch):
     shared_user_id = uuid4()
-    monkeypatch.setattr(settings.jules, "jules_callback_token", None)
-    monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_per_window", 1)
-    monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_window_seconds", 60)
+    monkeypatch.setattr(settings.integration_callbacks, "callback_token", None)
+    monkeypatch.setattr(settings.integration_callbacks, "rate_limit_per_window", 1)
+    monkeypatch.setattr(
+        settings.integration_callbacks, "rate_limit_window_seconds", 60
+    )
 
     async with _shared_client(shared_user_id) as client:
         suffix = uuid4().hex[:8]
@@ -322,7 +283,7 @@ async def test_callback_rate_limit_applies_across_callback_keys(monkeypatch):
             execution_suffix=f"shared-two-{suffix}",
         )
         first = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key_one}",
+            f"/api/integrations/openclaw/callbacks/{callback_key_one}",
             json={
                 "eventType": "progress",
                 "providerEventId": "evt-shared-1",
@@ -330,7 +291,7 @@ async def test_callback_rate_limit_applies_across_callback_keys(monkeypatch):
             },
         )
         second = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key_two}",
+            f"/api/integrations/openclaw/callbacks/{callback_key_two}",
             json={
                 "eventType": "progress",
                 "providerEventId": "evt-shared-2",
@@ -351,18 +312,20 @@ def test_callback_rate_limiter_evicts_idle_buckets(monkeypatch):
         lambda: next(ticks),
     )
 
-    assert limiter.allow(key="jules:callback-1", limit=1, window_seconds=30) is True
-    assert limiter.allow(key="jules:callback-2", limit=1, window_seconds=30) is True
-    assert set(limiter._buckets) == {"jules:callback-1", "jules:callback-2"}
+    assert limiter.allow(key="openclaw:callback-1", limit=1, window_seconds=30) is True
+    assert limiter.allow(key="openclaw:callback-2", limit=1, window_seconds=30) is True
+    assert set(limiter._buckets) == {"openclaw:callback-1", "openclaw:callback-2"}
 
-    assert limiter.allow(key="jules:callbacks", limit=1, window_seconds=30) is True
-    assert set(limiter._buckets) == {"jules:callbacks"}
+    assert limiter.allow(key="openclaw:callbacks", limit=1, window_seconds=30) is True
+    assert set(limiter._buckets) == {"openclaw:callbacks"}
 
 @pytest.mark.asyncio
 async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
     shared_user_id = uuid4()
-    monkeypatch.setattr(settings.jules, "jules_callback_token", None)
-    monkeypatch.setattr(settings.jules, "jules_callback_artifact_capture_enabled", True)
+    monkeypatch.setattr(settings.integration_callbacks, "callback_token", None)
+    monkeypatch.setattr(
+        settings.integration_callbacks, "artifact_capture_enabled", True
+    )
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
         settings.workflow,
@@ -375,7 +338,7 @@ async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
             client, execution_suffix=f"artifact-{uuid4().hex[:8]}"
         )
         response = await client.post(
-            f"/api/integrations/jules/callbacks/{callback_key}",
+            f"/api/integrations/openclaw/callbacks/{callback_key}",
             json={
                 "eventType": "completed",
                 "providerEventId": "evt-artifact",
@@ -391,8 +354,11 @@ async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_removed_integration_binding_is_rejected_without_signalling(monkeypatch):
-    """MoonLadderStudios/MoonMind#4644: a generic binding cannot re-enable Cloud."""
+@pytest.mark.parametrize("retired_name", ["codex_cloud", "jules", "jules_api"])
+async def test_removed_integration_binding_is_rejected_without_signalling(
+    monkeypatch, retired_name
+):
+    """A generic binding cannot re-enable Codex Cloud or Jules."""
     signals = []
 
     async def signal(*args, **kwargs):
@@ -416,7 +382,7 @@ async def test_removed_integration_binding_is_rejected_without_signalling(monkey
         bound = await client.post(
             f"/api/executions/{created.json()['workflowId']}/integration",
             json={
-                "integrationName": "codex_cloud",
+                "integrationName": retired_name,
                 "externalOperationId": "old-operation",
                 "normalizedStatus": "running",
                 "callbackSupported": True,
@@ -428,9 +394,10 @@ async def test_removed_integration_binding_is_rejected_without_signalling(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retired_name", ["codex_cloud", "jules"])
 @pytest.mark.parametrize("terminal", [False, True])
 async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
-    _module_db, monkeypatch, terminal, tmp_path
+    _module_db, monkeypatch, terminal, tmp_path, retired_name
 ):
     from sqlalchemy import select
     from api_service.db.models import (
@@ -481,7 +448,7 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
                 )
             )
             snapshot = dict(row.integration_state)
-            snapshot["integration_name"] = "codex_cloud"
+            snapshot["integration_name"] = retired_name
             snapshot["result_refs"] = ["saved-result-original"]
             row.integration_state = snapshot
             canonical = await session.scalar(
@@ -499,11 +466,11 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
                     TemporalIntegrationCorrelationRecord.workflow_id == workflow_id
                 )
             )
-            correlation.integration_name = "codex_cloud"
+            correlation.integration_name = retired_name
             await session.commit()
         read = await client.get(f"/api/executions/{workflow_id}")
         assert read.status_code == 200
-        assert read.json()["integration"]["integrationName"] == "codex_cloud"
+        assert read.json()["integration"]["integrationName"] == retired_name
         assert read.json()["integration"]["resultRefs"] == ["saved-result-original"]
         signals.clear()
         existing = await client.post(
@@ -512,7 +479,7 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
                 "workflowType": "MoonMind.UserWorkflow",
                 "planArtifactRef": "old-plan",
                 "idempotencyKey": f"execution-integrations-create-{execution_suffix}",
-                "initialParameters": {"targetRuntime": "codex_cloud"},
+                "initialParameters": {"targetRuntime": retired_name},
             },
         )
         assert existing.status_code == 201, existing.text
@@ -535,7 +502,7 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
         assert "unsupported integration" in rerun.text.lower()
         assert signals == []
         late = await client.post(
-            f"/api/integrations/codex_cloud/callbacks/{key}",
+            f"/api/integrations/{retired_name}/callbacks/{key}",
             json={"eventType": "completed", "normalizedStatus": "completed"},
         )
         assert late.status_code == (202 if terminal else 409)
@@ -544,17 +511,15 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
         assert after.json()["integration"] == read.json()["integration"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "request_payload",
-    [
+def _removed_target_request_payloads(runtime_id: str) -> list[dict]:
+    return [
         {
             "type": "workflow",
             "payload": {
                 "workflow": {
                     "instructions": "Keep task",
                     "runtime": {
-                        "mode": "codex_cloud",
+                        "mode": runtime_id,
                         "model": "saved-model",
                         "effort": "high",
                     },
@@ -564,7 +529,7 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
         {
             "type": "workflow",
             "payload": {
-                "targetRuntime": "codex_cloud",
+                "targetRuntime": runtime_id,
                 "workflow": {
                     "instructions": "Keep task",
                     "runtime": {"mode": "codex_cli"},
@@ -579,13 +544,23 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
                     "instructions": "Keep task",
                     "steps": [
                         {
-                            "runtime": {"mode": "codex_cloud"},
+                            "runtime": {"mode": runtime_id},
                             "instructions": "Keep this step",
                         }
                     ],
                 }
             },
         },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_payload",
+    [
+        payload
+        for runtime_id in ("codex_cloud", "jules", "jules_api")
+        for payload in _removed_target_request_payloads(runtime_id)
     ],
 )
 async def test_removed_execution_targets_reject_before_temporal_start(

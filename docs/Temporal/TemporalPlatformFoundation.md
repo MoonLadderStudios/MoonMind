@@ -201,7 +201,7 @@ Optional lanes (only if needed): `:high`, `:normal`, `:low`
 
 Workers are separated by:
 
-* secrets needed (LLM keys vs GitHub/Jules tokens),
+* secrets needed (LLM keys vs GitHub/provider tokens),
 * isolation level (sandbox execution),
 * cost profile (LLM vs non-LLM).
 

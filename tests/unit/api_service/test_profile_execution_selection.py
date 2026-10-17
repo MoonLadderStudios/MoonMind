@@ -88,7 +88,7 @@ def test_configuration_without_validation_result_cannot_be_selected():
 
 
 @pytest.mark.parametrize(
-    "runtime", ["codex", "codex_cli", "claude", "claude_code", "jules"]
+    "runtime", ["codex", "codex_cli", "claude", "claude_code"]
 )
 def test_direct_runtime_inventory_does_not_require_omnigent_configuration(runtime):
     native = provider(runtime_id=runtime)
@@ -98,7 +98,9 @@ def test_direct_runtime_inventory_does_not_require_omnigent_configuration(runtim
         select_execution_configuration(native, [configuration()])
 
 
-@pytest.mark.parametrize("runtime", ["opencode", "omnigent", "codex_cloud", "unknown"])
+@pytest.mark.parametrize(
+    "runtime", ["opencode", "omnigent", "codex_cloud", "jules", "jules_api", "unknown"]
+)
 def test_unsupported_direct_runtime_keeps_configuration_requirement(runtime):
     assert profile_has_native_inventory_route(provider(runtime_id=runtime), []) is False
 
@@ -473,6 +475,17 @@ def test_stale_cloud_profile_cannot_resolve_through_codex_native(schema):
         select_execution_configuration(profile, [candidate])
 
 
+@pytest.mark.parametrize("runtime_id", ["jules", "jules_api"])
+def test_saved_jules_profile_stays_readable_but_never_executable(runtime_id):
+    """Retired Jules Profiles cannot resolve an execution configuration."""
+    retained = provider(runtime_id=runtime_id, provider_id=runtime_id)
+    row, version = configuration(providers=[runtime_id])
+    version.document["providerRequirements"]["runtimeId"] = runtime_id
+    assert not configuration_accepts_profile(version.document, retained)
+    with pytest.raises(HTTPException):
+        select_execution_configuration(retained, [(row, version)])
+
+
 @pytest.mark.parametrize("runtime", ["codex", "codex_cli"])
 def test_normal_codex_profile_keeps_native_harness_and_auth_authority(runtime):
     profile = provider(
@@ -495,7 +508,7 @@ def test_normal_codex_profile_keeps_native_harness_and_auth_authority(runtime):
     assert selected["providerProfileRef"] == profile.profile_id
 
 
-@pytest.mark.parametrize("runtime_id", ["jules", "jules_api", "openclaw"])
+@pytest.mark.parametrize("runtime_id", ["openclaw"])
 def test_cloud_removal_preserves_retained_profile_requirements(runtime_id):
     """#4644: legacy retained Profiles do not need a native harness mapping."""
     retained = provider(runtime_id=runtime_id, provider_id=runtime_id)

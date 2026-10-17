@@ -49,10 +49,6 @@ from moonmind.mcp.jira_tool_registry import (
     JiraToolExecutionContext,
     JiraToolRegistry,
 )
-from moonmind.mcp.jules_tool_registry import (
-    JulesToolExecutionContext,
-    JulesToolRegistry,
-)
 from moonmind.mcp.skills_on_demand_registry import (
     SkillsOnDemandToolExecutionContext,
     SkillsOnDemandToolRegistry,
@@ -72,7 +68,6 @@ from moonmind.mcp.tool_registry import (
 )
 from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
-from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +138,6 @@ _skills_on_demand_registry = SkillsOnDemandToolRegistry(
 _remediation_registry = RemediationToolRegistry()
 _jira_registry: JiraToolRegistry | None = None
 _jira_service: JiraToolService | None = None
-_jules_registry: JulesToolRegistry | None = None
-_jules_client: JulesClient | None = None
 
 _resources = (
     ResourceMetadata(
@@ -163,25 +156,6 @@ if settings.atlassian.jira.jira_tool_enabled:
         enabled_actions=_jira_service.discoverable_actions()
     )
 
-if settings.jules.jules_enabled:
-    _jules_api_url = settings.jules.jules_api_url
-    _jules_api_key = settings.jules.jules_api_key
-    if _jules_api_url and _jules_api_key:
-        _jules_client = JulesClient(
-            base_url=_jules_api_url,
-            api_key=_jules_api_key,
-            timeout=settings.jules.jules_timeout_seconds,
-            retry_attempts=settings.jules.jules_retry_attempts,
-            retry_delay_seconds=settings.jules.jules_retry_delay_seconds,
-        )
-        _jules_registry = JulesToolRegistry()
-        logger.info("Jules MCP tools enabled")
-    else:
-        logger.warning(
-            "JULES_ENABLED is true but JULES_API_URL or JULES_API_KEY is missing; "
-            "Jules tools will not be registered"
-        )
-
 def _to_http_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, ToolNotFoundError):
         return HTTPException(
@@ -197,20 +171,6 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         return HTTPException(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": str(exc)},
-        )
-    if isinstance(exc, JulesClientError):
-        if exc.status_code == 429:
-            http_status = status.HTTP_429_TOO_MANY_REQUESTS
-            code = "jules_rate_limited"
-        elif exc.status_code is not None and 400 <= exc.status_code < 500:
-            http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
-            code = "jules_request_failed"
-        else:
-            http_status = status.HTTP_502_BAD_GATEWAY
-            code = "jules_request_failed"
-        return HTTPException(
-            status_code=http_status,
-            detail={"code": code, "message": str(exc)},
         )
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -236,8 +196,6 @@ def _list_registered_tools() -> list[Any]:
     )
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
-    if _jules_registry is not None:
-        tools = tools + _jules_registry.list_tools()
     return tools
 
 
@@ -249,8 +207,6 @@ def _list_streamable_callable_tools() -> list[Any]:
     )
     if _jira_registry is not None:
         tools = tools + _jira_registry.list_tools()
-    if _jules_registry is not None:
-        tools = tools + _jules_registry.list_tools()
     return tools
 
 
@@ -330,15 +286,6 @@ async def _dispatch_tool_call(
             tool=payload.tool,
             arguments=payload.arguments,
             context=jira_context,
-        )
-    if payload.tool.startswith("jules.") and _jules_registry is not None:
-        if _jules_client is None:  # pragma: no cover
-            raise ToolNotFoundError(payload.tool)
-        jules_context = JulesToolExecutionContext(client=_jules_client)
-        return await _jules_registry.call_tool(
-            tool=payload.tool,
-            arguments=payload.arguments,
-            context=jules_context,
         )
     if payload.tool.startswith("moonmind.skills."):
         artifact_service = (
@@ -585,7 +532,7 @@ async def _handle_json_rpc_request(
         if method == "tools/call":
             return _json_rpc_result(request_id, _tool_error_payload(str(exc)))
         return _json_rpc_error(request_id, code=-32602, message=str(exc))
-    except (JiraToolError, JulesClientError) as exc:
+    except JiraToolError as exc:
         mapped = _to_http_exception(exc)
         if method == "tools/call":
             return _json_rpc_result(request_id, _tool_error_payload(mapped.detail))
