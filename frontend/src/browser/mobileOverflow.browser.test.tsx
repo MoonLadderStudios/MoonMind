@@ -441,7 +441,7 @@ beforeEach(async () => {
       return json({
         category: url.searchParams.get('category'),
         items,
-        total: items.length,
+        has_more: false,
         offset: 0,
         limit: 25,
         refreshed_at: '2026-10-01T00:01:00Z',

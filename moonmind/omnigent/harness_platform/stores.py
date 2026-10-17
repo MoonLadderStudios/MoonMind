@@ -863,7 +863,16 @@ class DbRuntimeBindingStore:
                     await session.scalars(
                         select(OmnigentRuntimeBindingRecord).where(
                             OmnigentRuntimeBindingRecord.host_lease_ref
-                            == host_lease_ref
+                            == host_lease_ref,
+                            # Generic-host stable bindings share this table
+                            # under their own snapshot-digest primary keys and
+                            # schema; only their own store can verify them.
+                            # Every other lookup here is keyed by a harness
+                            # ref or execution scope, which those rows never
+                            # carry, so only this host-lease lookup filters.
+                            OmnigentRuntimeBindingRecord.runtime_binding_ref.startswith(
+                                "omnigent-runtime-binding:sha256:"
+                            ),
                         )
                     )
                 ).all()

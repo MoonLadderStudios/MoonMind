@@ -31,6 +31,7 @@ from moonmind.schemas.temporal_artifact_models import (
     PresignUploadPartResponse,
 )
 from moonmind.workflows.temporal.artifacts import (
+    COLLECTION_CATEGORY_LINK_PREFIXES,
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
@@ -355,27 +356,16 @@ async def list_artifact_collection(
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactCollectionResponse:
     """List authorized evidence without storage paths, principals, or bodies."""
-    rows, total = await service.list_authorized_collection(
+    rows, has_more = await service.list_authorized_collection(
         principal=principal,
         category=category,
         query=q,
         offset=offset,
         limit=limit,
     )
+    prefixes = COLLECTION_CATEGORY_LINK_PREFIXES[category]
     items: list[ArtifactCollectionRowModel] = []
     for artifact, links in rows:
-        category_prefixes = {
-            "reports": ("report.",),
-            "observability": (
-                "output.logs",
-                "debug.",
-                "observability.",
-                "runtime.stderr",
-                "runtime.diagnostics",
-            ),
-            "artifacts": (),
-        }
-        prefixes = category_prefixes[category]
         link = next(
             (item for item in links if not prefixes or item.link_type.startswith(prefixes)),
             links[0] if links else None,
@@ -399,7 +389,7 @@ async def list_artifact_collection(
     return ArtifactCollectionResponse(
         category=category,
         items=items,
-        total=total,
+        has_more=has_more,
         offset=offset,
         limit=limit,
         refreshed_at=datetime.now(UTC),

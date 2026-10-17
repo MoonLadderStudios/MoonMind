@@ -134,6 +134,8 @@ digest, acquired provider authority, host, runner, provider session, and chat
 binding. Executions sharing an immutable plan retain independent chat authority.
 Active legacy parent-scoped bindings use the same host-lease lookup, and
 replacement acquisitions invalidate the previous session's write authority.
+Generic-host stable bindings share the binding table under their own schema and
+record no chat or runner authority, so their sessions resolve read-only.
 
 Representative browser-safe projection:
 
@@ -312,6 +314,8 @@ The existing MoonMind `ChatSessionView`, raw timeline, bridge event projection, 
 They belong under **Debug**, **Diagnostics**, or a clearly labeled read-only compatibility fallback. They must not present a second ordinary composer once native chat is available.
 
 When the native UI is unavailable, the Chat route shows the stable reason, a retry action, the authorized full-page native surface when available, and a read-only compatibility transcript when available. It must not silently switch to a behaviorally different custom chat implementation.
+
+A 5xx binding response is shown as a server error with its status and a diagnostics link, separately from an unreachable service. While the workflow runs, binding polls back off from 5 seconds, doubling per consecutive failure up to once a minute, and return to 5 seconds after a success. Polling never stops on failure, so a server fix recovers the panel without a reload.
 
 For runtimes without a native Omnigent session, the route may show a read-only compatibility transcript or a clear `Chat unavailable for this runtime` state.
 

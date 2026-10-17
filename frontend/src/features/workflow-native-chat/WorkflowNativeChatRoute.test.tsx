@@ -323,6 +323,47 @@ describe('WorkflowNativeChatRoute', () => {
     expect(screen.queryByText('Loading conversation…')).toBeNull();
   });
 
+  it('backs off repeated server errors, keeps polling, and retries on demand', async () => {
+    vi.useFakeTimers();
+    let status = 500;
+    mockBinding(() => (status === 200 ? { body: AVAILABLE } : { status, body: { detail: 'internal_error' } }));
+    renderRoute();
+    const calls = () =>
+      fetchSpy.mock.calls.filter(([input]) => String(input).includes('/chat-binding')).length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(calls()).toBe(1);
+    expect(screen.getByText('Chat service error')).toBeTruthy();
+    expect(screen.getByText(/HTTP 500/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open diagnostics' })).toBeTruthy();
+
+    // 5 s doubles per consecutive failure (10, 20, 40) and caps at 60 s, but
+    // never stops, so a server fix can recover the panel on its own.
+    for (const [elapsed, expected] of [
+      [9_999, 1],
+      [1, 2],
+      [20_000, 3],
+      [40_000, 4],
+      [60_000, 5],
+      [60_000, 6],
+    ] as const) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(elapsed); });
+      expect(calls()).toBe(expected);
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(calls()).toBe(7);
+
+    status = 200;
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(calls()).toBe(8);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.getByTitle('Ship the thing — Omnigent chat')).toBeTruthy();
+    // Success returns polling to the base interval.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(calls()).toBe(9);
+  });
+
   it('shows a polite starting placeholder without mounting the frame', async () => {
     mockBinding(() => ({
       body: {

@@ -3,10 +3,11 @@
 // /api/executions/{workflowId}/chat-binding and exposes the raw binding plus the
 // request error. Status derivation lives in `chatBindingModel` so it can be unit
 // tested without a query client. The browser never repairs the binding here.
+import { useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 
-import type { WorkflowChatBinding } from './chatBindingModel';
+import { chatBindingPollDelay, type WorkflowChatBinding } from './chatBindingModel';
 
 /** Error carrying the HTTP status of a failed chat-binding request. */
 export class ChatBindingRequestError extends Error {
@@ -115,15 +116,31 @@ export function useWorkflowChatBinding(args: {
     pollIntervalMs = 5000,
     requestTimeoutMs,
   } = args;
+  // React Query resets its failure count on every fetch when retry is off, so
+  // consecutive failures are counted here to drive the back-off.
+  const consecutiveFailures = useRef(0);
   return useQuery<WorkflowChatBinding, ChatBindingRequestError>({
     queryKey: workflowChatBindingQueryKey(workflowId),
-    queryFn: () => fetchWorkflowChatBinding(apiBase, workflowId, requestTimeoutMs),
+    queryFn: async () => {
+      try {
+        const binding = await fetchWorkflowChatBinding(apiBase, workflowId, requestTimeoutMs);
+        consecutiveFailures.current = 0;
+        return binding;
+      } catch (error) {
+        consecutiveFailures.current += 1;
+        throw error;
+      }
+    },
     enabled: enabled && Boolean(workflowId),
     retry: false,
     // Keep resolving the authoritative binding while the workflow is nonterminal
     // so a new active Step's session is discovered; stop only once the workflow
-    // is terminal, when no further chat-capable session can appear.
-    refetchInterval: () => (workflowTerminal ? false : pollIntervalMs),
+    // is terminal, when no further chat-capable session can appear. Failures
+    // back off but never stop polling.
+    refetchInterval: () =>
+      workflowTerminal
+        ? false
+        : chatBindingPollDelay(pollIntervalMs, consecutiveFailures.current),
     staleTime: pollIntervalMs,
   });
 }

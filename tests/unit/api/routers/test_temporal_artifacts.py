@@ -108,13 +108,14 @@ def test_artifact_collection_returns_compact_safe_rows() -> None:
     for test_client, service in _client_with_service():
         artifact = _build_artifact()
         link = _build_link(artifact.artifact_id)
-        service.list_authorized_collection.return_value = ([(artifact, [link])], 1)
+        service.list_authorized_collection.return_value = ([(artifact, [link])], True)
 
         response = test_client.get("/api/artifacts/collection?category=artifacts")
 
         assert response.status_code == 200
         body = response.json()
-        assert body["total"] == 1
+        assert body["has_more"] is True
+        assert "total" not in body
         row = body["items"][0]
         assert row["artifact_id"] == artifact.artifact_id
         assert row["workflow_id"] == "wf-1"
