@@ -13013,7 +13013,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             edges=plan_definition.edges,
         )
         # Retained only for recorded-history command order: every run reaches
-        # this marker. The retired Jules bundling it once gated is gone.
+        # this marker. The Jules bundling it once gated is gone, so a history
+        # that bundled Jules nodes cannot replay here; admitted Jules work
+        # drains on the installed release before this one replaces it.
         workflow.patched("jules-bundling-v1")
         dependency_map = self._plan_dependency_map(
             ordered_nodes=ordered_nodes,
