@@ -33,6 +33,9 @@ from redact import redact_mapping, redact_text
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
+# How long a restarted controller lets the previous owner's one-off finish.
+ONEOFF_EXIT_WAIT_SECONDS = 180
+ONEOFF_EXIT_POLL_SECONDS = 2
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # Behavior submitters require before trusting an answer. ``request-identity``:
@@ -40,10 +43,14 @@ OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # mutable tag such as ``latest`` applies again instead of returning an earlier
 # success. ``unversioned-routing-cutover``: an installation that still routes
 # through a Temporal Worker Deployment is moved to ordinary workers once.
+# ``controller-handoff``: the controller the requested release ships applies
+# it (see :func:`hand_off_to_requested_controller`), so later releases need no
+# new requirement here.
 CONTROLLER_CAPABILITIES = (
     "active-journal-transition",
     "request-identity",
     "unversioned-routing-cutover",
+    "controller-handoff",
 )
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
@@ -75,6 +82,7 @@ ROUTING_CUTOVER_RETRY_SECONDS = 15
 # One-offs whose release helper may predate the step: the selected image
 # answers ``unsupported`` instead of failing when it lacks the function.
 CAPABILITY_STEPS = {
+    "controller-handoff": ("controller_handoff_cli", "handoff"),
     "journal-prepare": ("controller_journal_cli", "journal-prepare"),
     "journal-quiesce": ("controller_journal_cli", "journal-quiesce"),
     "routing-cutover-probe": ("controller_routing_cutover_cli", "probe"),
@@ -188,7 +196,9 @@ def default_legacy_writer_probe() -> bool:
             (operation.get("target") or {}).get("project") or ""
         )
         for operation in (*store.list_open(), *store.list_terminal())
-        if operation.get("omnigentStep") in ("select", "migrate", "journal-prepare", "journal-quiesce")
+        if operation.get("omnigentStep") in (
+            "controller-handoff", "select", "migrate", "journal-prepare", "journal-quiesce",
+        )
         and operation.get("status") in (*record_mod.OPEN_STATUSES, "succeeded")
         and lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
     }
@@ -316,6 +326,52 @@ def converge_on_restart(
         "skippedInstalled": skipped,
         "superseded": superseded,
     }
+
+
+def resume_open_operations(
+    store: record_mod.OperationStore,
+    applier: Callable[[dict], Any],
+    *,
+    legacy_writer_probe: Callable[[], bool] | None = None,
+    runner=None,
+) -> dict:
+    """Converge unfinished work once a previous owner's one-offs have exited.
+
+    A handoff's one-off is still finishing when the controller it started
+    comes up; resuming first would mistake it for a competing writer. Each
+    resumed operation holds its stack lock, so a submission that arrives
+    meanwhile reattaches or is refused as usual, and an operation a
+    submission already owns is left to it.
+    """
+    runner = runner or engine.subprocess_runner()
+    deadline = time.monotonic() + ONEOFF_EXIT_WAIT_SECONDS
+    for operation in store.list_open():
+        while time.monotonic() < deadline:
+            try:
+                listed = engine.run_command(runner, (
+                    "docker", "ps", "--quiet", "--filter",
+                    f"label={OMNIGENT_OPERATION_LABEL}={operation['operationId']}",
+                ), timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS)
+            except (engine.CommandError, OSError):
+                break
+            if not engine.command_stdout(listed).strip():
+                break
+            time.sleep(ONEOFF_EXIT_POLL_SECONDS)
+
+    def resume(operation: dict) -> None:
+        try:
+            with lock_mod.StackLock(store.state_dir, operation["stack"]).acquire():
+                _apply_recording_failure(store, operation["operationId"], applier)
+        except lock_mod.LockBusyError:
+            # A submission owns the stack; it reattached to or replaced this work.
+            pass
+        except Exception as exc:  # noqa: BLE001 - keep the error on the record
+            store.record_attempt_error(
+                operation["operationId"],
+                error=redact_text(f"restart recovery failed: {exc}"),
+            )
+
+    return converge_on_restart(store, resume, legacy_writer_probe=legacy_writer_probe)
 
 
 def _reconcile_open_operations(
@@ -983,6 +1039,20 @@ def omnigent_channels_for_target(target: dict) -> list:
     return channels
 
 
+def _omnigent_step_error(phase: str, exit_status: int, output: str) -> engine.CommandError:
+    """Lead with the helper's final line, which states why the step failed.
+
+    Bounded summaries keep the head of the error; the output before that line
+    is Compose and traceback context.
+    """
+    output = redact_text(output)
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    reason = lines[-1] if lines else "no output"
+    return engine.CommandError(
+        f"omnigent-{phase}", exit_status, f"{reason}\n{output[-2000:]}"
+    )
+
+
 def run_omnigent_step(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1090,7 +1160,9 @@ def run_omnigent_step(
                 "--no-deps",
                 "-T",
                 "--pull",
-                "always" if phase == "select" else "never",
+                "always" if phase in ("controller-handoff", "select") else "never",
+                # Layer progress would fill the bounded diagnostic tail.
+                "--quiet-pull",
                 "--label",
                 f"{OMNIGENT_OPERATION_LABEL}={operation_id}",
                 "--entrypoint",
@@ -1100,13 +1172,13 @@ def run_omnigent_step(
             ),
             timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
         )
+    except engine.CommandError as exc:
+        raise _omnigent_step_error(phase, exc.exit_status, exc.output) from exc
     finally:
         store.record_omnigent_step(operation_id, None)
     output = str(result.get("output") or "")
     if int(result.get("exit", 0)) != 0:
-        raise engine.CommandError(
-            f"omnigent-{phase}", int(result.get("exit", 1)), redact_text(output)[-2000:]
-        )
+        raise _omnigent_step_error(phase, int(result.get("exit", 1)), output)
     for line in reversed(output.splitlines()):
         if line.startswith(OMNIGENT_RESULT_PREFIX):
             receipt = json.loads(line[len(OMNIGENT_RESULT_PREFIX) :])
@@ -1351,6 +1423,38 @@ def _routing_cutover_check(state: dict) -> dict:
             "detail": f"cutover pending ({outcome}): {state.get('detail', '')}"}
 
 
+def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> None:
+    """Let the controller the requested release ships apply it.
+
+    A release can need controller behavior the installed controller predates,
+    as the unversioned routing cutover did. Before this operation changes
+    anything, the requested image's one-off replaces a controller running
+    other code; this process ends and the replacement resumes the operation.
+    Any other answer leaves this controller applying: ``current``,
+    ``unsupported`` from a target predating handoff (a rollback), or
+    ``unavailable`` with the reason kept on the operation.
+    """
+    operation_id = operation["operationId"]
+    try:
+        receipt = run_omnigent_step(
+            store, operation, runner=runner, overlay=overlay, phase="controller-handoff"
+        )
+    except Exception as exc:  # noqa: BLE001 - the running controller still applies
+        receipt = {
+            "status": "unavailable",
+            "reason": redact_text(f"{exc} {getattr(exc, 'output', '')}")[-1000:],
+        }
+    marker = store.load(operation_id).get("controllerHandoff") or {}
+    if receipt.get("status") == "unavailable":
+        store.record_controller_handoff(
+            operation_id, {**marker, "unavailable": str(receipt.get("reason") or "")}
+        )
+    elif receipt.get("status") == "current" and marker and not marker.get("confirmedAt"):
+        store.record_controller_handoff(
+            operation_id, {**marker, "confirmedAt": record_mod._utc_now()}
+        )
+
+
 def production_apply(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1378,6 +1482,8 @@ def production_apply(
     overlay = write_image_overlay(
         str(store.state_dir), operation["operationId"], operation["desired"]["image"]
     )
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1":
+        hand_off_to_requested_controller(store, operation, runner=runner, overlay=overlay)
     channels = omnigent_channels_for_target(target)
     selection = store.load(operation["operationId"]).get("omnigentSelection") or {}
     if channels and not selection:
@@ -1676,7 +1782,6 @@ def main(argv=None) -> int:
     secret_file = args.secret_file or os.path.join(args.state_dir, "secrets", "controller-bearer")
     store = record_mod.OperationStore(args.state_dir)
     probe = None if args.no_legacy_probe else default_legacy_writer_probe
-    converge_on_restart(store, lambda operation: production_apply(store, operation), legacy_writer_probe=probe)
     app = build_app(
         store=store,
         secret_file=secret_file,
@@ -1684,6 +1789,14 @@ def main(argv=None) -> int:
         target_resolver=production_target_resolver,
     )
     httpd = make_http_server("0.0.0.0", args.port, app)
+    # Answer status reads while unfinished work resumes, such as an operation
+    # handed to this controller, instead of looking unreachable throughout.
+    threading.Thread(
+        target=resume_open_operations,
+        args=(store, lambda operation: production_apply(store, operation)),
+        kwargs={"legacy_writer_probe": probe},
+        daemon=True,
+    ).start()
     print(f"moonmind-controller listening on 0.0.0.0:{args.port}", flush=True)
     httpd.serve_forever()
     return 0

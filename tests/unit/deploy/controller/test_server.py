@@ -795,6 +795,191 @@ def test_journal_oneoff_runs_recorded_source_with_controller_transport(
         phase="journal-prepare", helper_image="sha256:recorded-source") == {"status": "prepared"}
 
 
+def test_failed_selection_leads_with_helper_error_not_pull_progress(
+    controller_path, tmp_path
+):
+    record = load("record")
+    server = load("server")
+    engine = server.engine
+    store = record.OperationStore(tmp_path / "state")
+    target = {"project": "moonmind-test", "projectDir": str(tmp_path),
+              "composeFiles": ["docker-compose.yaml"], "services": ["omnigent"]}
+    op = _begin_op(record, store, target)
+    refusal = ("RuntimeError: Refusing Omnigent select: the installed controller "
+               "does not provide unversioned-routing-cutover.")
+    seen = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            seen.append(args)
+            progress = "\n".join(f" {i:012x} Pull complete 0B" for i in range(300))
+            raise engine.CommandError(args[2], 1, f"{progress}\nTraceback:\n{refusal}")
+
+    with pytest.raises(engine.StageError) as failure:
+        server.production_apply(store, op, omnigent_selector=lambda operation:
+            server.run_omnigent_step(store, operation, runner=Runner(),
+                                     overlay="overlay", phase="select"))
+
+    assert "--quiet-pull" in seen[0]
+    error = store.load(op["operationId"])["errorSummary"]
+    assert error.startswith(
+        f"attempt 1: Omnigent selection failed: omnigent-select failed (exit 1) {refusal}"
+    )
+    assert refusal in str(failure.value.output)[:2000]
+
+
+@pytest.mark.parametrize("receipt", ["replaced", "current", "unsupported", "unavailable"])
+def test_managed_controller_hands_off_before_changing_anything(
+    controller_path, tmp_path, monkeypatch, receipt
+):
+    """The requested release's controller applies it; others keep applying."""
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    (tmp_path / ".env").write_text("OMNIGENT_IMAGE=example/omnigent\n")
+    op = _begin_op(record, store, {"project": "moonmind", "projectDir": str(tmp_path),
+                                   "composeFiles": ["docker-compose.yaml"],
+                                   "services": ["api"]})
+    monkeypatch.setenv("MOONMIND_CONTROLLER_MANAGED", "1")
+    runner = _verification_runner(server.engine)
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+
+    class Replaced(BaseException):
+        """The handoff ends this controller process."""
+
+    def step(store, operation, **kwargs):
+        assert kwargs["phase"] == "controller-handoff"
+        if receipt == "replaced":
+            raise Replaced
+        if receipt == "unavailable":
+            return {"status": "unavailable", "reason": "other deployment work is open"}
+        return {"status": receipt}
+
+    monkeypatch.setattr(server, "run_omnigent_step", step)
+    selections = []
+    options = {
+        "dispatch_probe": lambda: True,
+        "omnigent_selector": lambda operation: selections.append(1) or {"status": "skipped"},
+        "omnigent_migrator": lambda summary: {"status": "aligned"},
+    }
+    if receipt == "replaced":
+        with pytest.raises(Replaced):
+            server.production_apply(store, op, **options)
+        assert selections == [] and runner.commands == []
+        assert store.load(op["operationId"])["status"] == "staged"
+        return
+    server.production_apply(store, op, **options)
+    assert selections == [1]
+    handoff = store.load(op["operationId"]).get("controllerHandoff") or {}
+    assert handoff.get("unavailable") == (
+        "other deployment work is open" if receipt == "unavailable" else None
+    )
+
+
+def test_resumed_controller_confirms_the_handoff_once(controller_path, tmp_path, monkeypatch):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test"})
+    store.record_controller_handoff(
+        op["operationId"], {"image": "sha256:new", "from": "sha256:old", "attemptGroup": 1}
+    )
+    monkeypatch.setattr(server, "run_omnigent_step", lambda *a, **k: {"status": "current"})
+    server.hand_off_to_requested_controller(store, op, runner=None, overlay="overlay")
+    confirmed = store.load(op["operationId"])["controllerHandoff"]
+    assert confirmed["confirmedAt"] and confirmed["from"] == "sha256:old"
+    server.hand_off_to_requested_controller(store, op, runner=None, overlay="overlay")
+    assert store.load(op["operationId"])["controllerHandoff"] == confirmed
+
+
+def test_handoff_oneoff_runs_the_requested_image_with_controller_transport(
+    controller_path, tmp_path
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test",
+        "projectDir": str(tmp_path), "composeFiles": ["docker-compose.yaml"]})
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            assert args[args.index("--pull") + 1] == "always"
+            overlay = [args[i + 1] for i, arg in enumerate(args) if arg == "-f"][-1]
+            helper = json.loads(Path(overlay).read_text())["services"][server.LEGACY_CONTROL_SERVICE]
+            assert helper["image"] == op["desired"]["image"]
+            assert helper["environment"]["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+            assert args[-2] == "handoff" and "controller_handoff_cli" in args[-3]
+            return {"exit": 0, "output": 'MOONMIND_OMNIGENT_RESULT={"status":"current"}'}
+
+    assert server.run_omnigent_step(store, op, runner=Runner(), overlay="overlay",
+        phase="controller-handoff") == {"status": "current"}
+
+
+def test_restart_resumes_handed_off_work_after_the_previous_oneoff_exits(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    lock = load("lock")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+    polls = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            assert args[:3] == ("docker", "ps", "--quiet")
+            assert args[-1] == f"label={server.OMNIGENT_OPERATION_LABEL}={op['operationId']}"
+            polls.append(args)
+            return {"exit": 0, "output": "handoff-oneoff\n" if len(polls) < 3 else ""}
+
+    monkeypatch.setattr(server, "ONEOFF_EXIT_POLL_SECONDS", 0)
+    applied = []
+
+    def applier(operation):
+        # The one-off that started this controller is not a competing writer.
+        assert len(polls) == 3
+        assert lock.StackLock(store.state_dir, "moonmind").probe()
+        applied.append(operation["operationId"])
+        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+
+    result = server.resume_open_operations(store, applier, runner=Runner())
+    assert applied == [op["operationId"]] == result["converged"]
+    assert store.load(op["operationId"])["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("case", ["submission-owns-stack", "unexpected-error"])
+def test_restart_recovery_never_competes_or_crash_loops(
+    controller_path, tmp_path, monkeypatch, case
+):
+    record = load("record")
+    server = load("server")
+    lock = load("lock")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            return {"exit": 0, "output": ""}
+
+    def applier(operation):
+        if case == "submission-owns-stack":
+            pytest.fail("restart recovery competed with the stack owner")
+        raise ValueError("journal consumer inventory is incomplete")
+
+    if case == "submission-owns-stack":
+        with lock.StackLock(store.state_dir, "moonmind").acquire():
+            server.resume_open_operations(store, applier, runner=Runner())
+        assert store.load(op["operationId"])["attempts"] == []
+        return
+    server.resume_open_operations(store, applier, runner=Runner())
+    error = store.load(op["operationId"])["attempts"][-1]["error"]
+    assert error == "restart recovery failed: journal consumer inventory is incomplete"
+
+
 def _begin_op(record, store, target):
     return store.begin(
         stack="moonmind",
@@ -1012,7 +1197,7 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert payload["moonmindImage"] == op["desired"]["image"]
                 assert payload["controllerCapabilities"] == [
                     "active-journal-transition", "request-identity",
-                    "unversioned-routing-cutover",
+                    "unversioned-routing-cutover", "controller-handoff",
                 ]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase
