@@ -6998,6 +6998,84 @@ async def test_issue_implement_status_handoff_creates_pr_from_accepted_remote_he
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("patch_enabled", [False, True])
+async def test_issue_search_pr_is_titled_from_trusted_source_issue(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    patch_enabled: bool,
+) -> None:
+    search_text = "Resolve one eligible open issue created by the GitHub account"
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "patched", lambda _patch_id: patch_enabled
+    )
+    mock_run_workflow._repo = "MoonLadderStudios/MoonMind"
+    # Native publication runs while the live summary is still transient; the
+    # completed step's result is the recorded operator summary.
+    mock_run_workflow._summary = "Executing plan step 4/6"
+    mock_run_workflow._operator_summary = "Reconciled retargeted PR bases."
+    mock_run_workflow._assessment_context = {
+        "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
+        "assessmentArtifactRef": "art_assessment",
+    }
+    mock_run_workflow._trusted_issue_context = {
+        "trustedSource": "moonmind.github.get_issue",
+        "issue": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "number": 4443,
+            "title": "Resume the same candidate PR; fixes #12, Closes: o/r#3",
+            "url": "https://github.com/MoonLadderStudios/MoonMind/issues/4443",
+        },
+    }
+    mock_run_workflow._record_accepted_published_head(
+        {
+            "acceptedRepositoryEvidence": {
+                "publicationAuthorized": True,
+                "candidateContaminated": False,
+                "pushStatus": "pushed",
+                "branch": "moonmind-job-4443",
+                "headSha": "4e11c2fed" + ("0" * 30),
+                "baseBranch": "main",
+            }
+        }
+    )
+    execute_activity = AsyncMock(
+        return_value={"url": "https://github.com/MoonLadderStudios/MoonMind/pull/9"}
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", execute_activity
+    )
+
+    await mock_run_workflow._ensure_issue_implement_pr_before_status(
+        node={"annotations": {"issueImplementRole": "code-review-handoff"}},
+        parameters={
+            "publishMode": "pr",
+            "workflow": {
+                "instructions": search_text,
+                "publish": {"prBaseBranch": "main"},
+            },
+        },
+    )
+
+    payload = execute_activity.await_args.args[1]
+    if not patch_enabled:
+        # Retained histories keep the title they recorded.
+        assert payload["title"].startswith(search_text)
+        return
+    # A squash merge reuses the title, so neither text may close other issues.
+    neutral = "Resume the same candidate PR; fixes issue #12, Closes: issue o/r#3"
+    assert payload["title"] == f"MoonLadderStudios/MoonMind#4443: {neutral}"
+    assert search_text not in payload["body"]
+    assert payload["body"].startswith(
+        f"Source issue: MoonLadderStudios/MoonMind#4443 {neutral}"
+    )
+    assert "Reconciled retargeted PR bases." in payload["body"]
+    assert "Executing plan step" not in payload["body"]
+    assert payload["body"].splitlines()[-1] == (
+        "Closes MoonLadderStudios/MoonMind#4443"
+    )
+
+
+@pytest.mark.asyncio
 async def test_issue_implement_status_handoff_does_not_create_pr_for_fully_implemented_issue(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
