@@ -796,7 +796,7 @@ def test_journal_oneoff_runs_recorded_source_with_controller_transport(
 
 
 def test_failed_selection_leads_with_helper_error_not_pull_progress(
-    controller_path, tmp_path
+    controller_path, tmp_path, monkeypatch
 ):
     record = load("record")
     server = load("server")
@@ -817,6 +817,7 @@ def test_failed_selection_leads_with_helper_error_not_pull_progress(
             progress = "\n".join(f" {i:012x} Pull complete 0B" for i in range(300))
             raise engine.CommandError(args[2], 1, f"{progress}\nTraceback:\n{refusal}")
 
+    monkeypatch.setattr(engine, "subprocess_runner", lambda: Runner())
     with pytest.raises(engine.StageError) as failure:
         server.production_apply(store, op, omnigent_selector=lambda operation:
             server.run_omnigent_step(store, operation, runner=Runner(),
@@ -867,7 +868,9 @@ def test_managed_controller_hands_off_before_changing_anything(
     if receipt == "replaced":
         with pytest.raises(Replaced):
             server.production_apply(store, op, **options)
-        assert selections == [] and runner.commands == []
+        # Only the previous owner's release steps were observed.
+        assert selections == []
+        assert [command[:2] for command in runner.commands] == [("docker", "ps")]
         assert store.load(op["operationId"])["status"] == "staged"
         return
     server.production_apply(store, op, **options)
@@ -1315,9 +1318,10 @@ def test_conflict_bodies_never_expose_error_detail(
             body = json.loads(exc.read().decode() or "{}")
             assert body == {
                 "error": (
-                    "legacy application-owned writer may still be active; "
-                    "stop or reconcile it before the controller takes over "
-                    "(REQ-07)"
+                    "a legacy writer (an application-owned updater or a "
+                    "controller from the retired shell installer) may still be "
+                    "active; stop or reconcile it before the controller takes "
+                    "over (REQ-07)"
                 )
             }
     finally:
@@ -2058,3 +2062,191 @@ def test_uncertain_omnigent_launch_is_observed_before_a_bounded_retry(
     assert len(launches) == 1
     assert "acknowledgment timed out" in result["errorSummary"]
     assert "still running" in result["attempts"][-1]["error"]
+
+
+def test_restart_recovery_skips_work_another_owner_finished_before_the_lock(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    lock = server.lock_mod
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "services": ["api"]})
+    acquire = lock.StackLock.acquire
+
+    def finished_meanwhile(self):
+        # A submission reattached, applied and released the stack between the
+        # restart's snapshot of open work and this owner's exclusion.
+        store.confirm_installed(op["operationId"], image=op["desired"]["image"])
+        return acquire(self)
+
+    monkeypatch.setattr(lock.StackLock, "acquire", finished_meanwhile)
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            return {"exit": 0, "output": ""}
+
+    def applier(operation):
+        pytest.fail("restart recovery repeated a confirmed installation")
+
+    server.resume_open_operations(store, applier, runner=Runner())
+    assert store.load(op["operationId"])["attempts"] == []
+
+
+@pytest.mark.parametrize("observation", ["running", "unobservable"])
+def test_apply_never_starts_beside_a_previous_owners_release_step(
+    controller_path, tmp_path, monkeypatch, observation
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test", "projectDir": str(tmp_path),
+                                   "composeFiles": ["docker-compose.yaml"],
+                                   "services": ["api"]})
+    commands = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            commands.append(tuple(args))
+            if args[:2] == ("docker", "ps") and observation == "running":
+                return {"exit": 0, "output": "abc123\n", "stdout": "abc123\n"}
+            if args[:2] == ("docker", "ps"):
+                raise server.engine.CommandError("ps", 1, "daemon unavailable")
+            pytest.fail(f"a writer started beside the previous owner: {args}")
+
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: Runner())
+    # A handed-off or interrupted owner's one-off may still run: an observed
+    # or unobservable step is never proof of absence.
+    with pytest.raises(server.engine.StageError):
+        server.production_apply(store, op)
+    assert all(command[:2] == ("docker", "ps") for command in commands)
+    assert any(
+        f"label={server.OMNIGENT_OPERATION_LABEL}={op['operationId']}" in command
+        for command in commands
+    )
+    attempt = store.load(op["operationId"])["attempts"][-1]["error"]
+    assert "previous owner" in attempt
+
+
+def test_refused_submission_for_a_busy_stack_records_no_operation(
+    controller_path, tmp_path, monkeypatch
+):
+    lock = load("lock")
+    applied = []
+    harness = _ThreadedHarness(tmp_path, lambda operation: applied.append(operation))
+    # The writer takes the stack after the ownership probe answered.
+    monkeypatch.setattr(lock.StackLock, "probe", lambda self: False)
+    try:
+        with lock.StackLock(harness.store.state_dir, "moonmind").acquire():
+            status, body = harness.call(
+                "POST", "/v1/operations", {"stack": "moonmind", "desiredImage": "img"}
+            )
+        assert (status, body) == (409, {"error": "stack is owned by another writer"})
+        # No open record is left for restart recovery to apply later.
+        assert harness.store.list_open() == []
+        assert applied == []
+    finally:
+        harness.close()
+
+
+class _RetiredControllerDocker:
+    """Docker as seen beside a controller from the retired shell installer."""
+
+    def __init__(self, *, listed="retired1\n", state="idle", fail=None):
+        self.listed, self.state, self.fail = listed, state, fail
+        self.commands = []
+
+    def run(self, args, timeout_seconds):
+        self.commands.append(tuple(args))
+        if self.fail and args[1] == self.fail:
+            raise OSError("docker unavailable")
+        if args[1] == "ps":
+            return {"exit": 0, "output": self.listed, "stdout": self.listed}
+        if args[1] == "exec":
+            return {"exit": 0, "output": self.state, "stdout": self.state + "\n"}
+        return {"exit": 0, "output": ""}
+
+
+def test_idle_retired_shell_controller_is_stopped_with_its_state_kept(controller_path):
+    server = load("server")
+    docker = _RetiredControllerDocker()
+    assert server.reconcile_retired_shell_controller(docker) is False
+    assert docker.commands[0][:3] == ("docker", "ps", "--quiet")
+    assert f"volume={server.RETIRED_CONTROLLER_VOLUME}" in docker.commands[0]
+    assert docker.commands[1][:3] == ("docker", "exec", "retired1")
+    # Stopped, never removed: its container, logs, volume and secret remain.
+    assert docker.commands[2] == ("docker", "stop", "retired1")
+    assert len(docker.commands) == 3
+
+
+@pytest.mark.parametrize("state", ["unfinished", "locked", "unreadable", ""])
+def test_busy_or_unreadable_retired_shell_controller_defers_the_controller(
+    controller_path, state
+):
+    server = load("server")
+    docker = _RetiredControllerDocker(state=state)
+    assert server.reconcile_retired_shell_controller(docker) is True
+    assert not any(command[1] == "stop" for command in docker.commands)
+
+
+@pytest.mark.parametrize("fail", ["ps", "exec", "stop"])
+def test_uninspectable_retired_shell_controller_is_never_assumed_absent(
+    controller_path, fail
+):
+    server = load("server")
+    with pytest.raises(server.LegacyWriterUnknown):
+        server.reconcile_retired_shell_controller(_RetiredControllerDocker(fail=fail))
+
+
+def test_no_retired_shell_controller_needs_no_transition(controller_path):
+    server = load("server")
+    docker = _RetiredControllerDocker(listed="")
+    assert server.reconcile_retired_shell_controller(docker) is False
+    assert len(docker.commands) == 1
+
+
+@pytest.mark.parametrize(
+    "case, expected",
+    [
+        ("no-record", "idle"),
+        ("installed", "idle"),
+        ("unfinished", "unfinished"),
+        ("corrupt", "unreadable"),
+        ("held-lock", "locked"),
+    ],
+)
+def test_retired_controller_idle_check_reads_its_record_and_kernel_lock(
+    controller_path, tmp_path, case, expected
+):
+    import fcntl
+    import subprocess
+    import sys
+
+    server = load("server")
+    (tmp_path / "locks").mkdir()
+    lock_file = tmp_path / "locks" / "moonmind.lock"
+    lock_file.write_text('{"contract": "moonmind.deployment-kernel-lock.v1"}')
+    record = {
+        "schema": "moonmind-controller-operation/v1",
+        "status": "desired",
+        "desired": {"targetImage": "img:new"},
+        "installed": None,
+    }
+    if case == "installed":
+        record.update(status="installed", installed={"image": "img:new"})
+    if case in ("installed", "unfinished", "held-lock"):
+        (tmp_path / "operation.json").write_text(json.dumps(record))
+    if case == "corrupt":
+        (tmp_path / "operation.json").write_text("{not-json")
+    if case == "held-lock":
+        (tmp_path / "operation.json").write_text(
+            json.dumps({**record, "status": "installed", "installed": {"image": "img:new"}})
+        )
+    with open(lock_file, "a+b") as held:
+        if case == "held-lock":
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        completed = subprocess.run(
+            [sys.executable, "-c", server.RETIRED_CONTROLLER_IDLE_CHECK, str(tmp_path)],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+    assert completed.stdout.strip() == expected

@@ -1155,19 +1155,17 @@ def cmd_update(args, env) -> int:
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
     stack = args.stack
-    open_operations = _open_operations(state_dir, stack)
-    if open_operations:
-        raise ActiveOperationError(
-            f"Refusing controller update while {len(open_operations)} deployment "
-            f"operation(s) on stack {stack!r} are open; controller update is "
-            "serialized against active deployment mutation."
-        )
     # Controller replacement and stack mutation share one atomic exclusion
     # boundary: the target stack's lock, the same lock submissions hold
-    # across pull/apply. A submission that begins after the open-operation
-    # check above still blocks here instead of racing the recreation.
-    lock_candidate = lock_mod.StackLock(state_dir, stack)
-    with lock_candidate.acquire():
+    # while they record intent and apply. Open work is read only under it.
+    with lock_mod.StackLock(state_dir, stack).acquire():
+        open_operations = _open_operations(state_dir, stack)
+        if open_operations:
+            raise ActiveOperationError(
+                f"Refusing controller update while {len(open_operations)} deployment "
+                f"operation(s) on stack {stack!r} are open; controller update is "
+                "serialized against active deployment mutation."
+            )
         pinned, _ = pinned_controller_image(state_dir, args.image)
         repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
         identity = ensure_identity(
@@ -1198,31 +1196,39 @@ def cmd_update(args, env) -> int:
 
 
 def cmd_restore(args, env) -> int:
-    """Restore a missing/broken controller without touching deployment state."""
+    """Restore a missing/broken controller without touching deployment state.
+
+    A controller that still owns the stack is live, not broken: rerendering
+    could recreate it mid-apply, so restore takes the same stack lock. A
+    crashed controller's kernel lock ends with its process.
+    """
+    import lock as lock_mod
+
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
     repo = Path(args.repo).resolve() if args.repo else Path.cwd().resolve()
     ensure_secret(state_dir)
-    pinned, _ = pinned_controller_image(state_dir, args.image)
-    identity = ensure_identity(
-        state_dir,
-        repo,
-        getattr(args, "port", None),
-        target_network=args.target_network,
-        target_project=args.target_project,
-    )
-    render_compose_file(
-        state_dir=state_dir,
-        repo=repo,
-        image=pinned,
-        port=identity["port"],
-        project=identity["project"],
-        target_network=identity.get("targetNetwork"),
-        target_project=identity.get("targetProject"),
-    )
-    _ensure_identity_network(identity)
-    code = _compose_up(state_dir, identity["project"])
+    with lock_mod.StackLock(state_dir, args.stack).acquire():
+        pinned, _ = pinned_controller_image(state_dir, args.image)
+        identity = ensure_identity(
+            state_dir,
+            repo,
+            getattr(args, "port", None),
+            target_network=args.target_network,
+            target_project=args.target_project,
+        )
+        render_compose_file(
+            state_dir=state_dir,
+            repo=repo,
+            image=pinned,
+            port=identity["port"],
+            project=identity["project"],
+            target_network=identity.get("targetNetwork"),
+            target_project=identity.get("targetProject"),
+        )
+        _ensure_identity_network(identity)
+        code = _compose_up(state_dir, identity["project"])
     if code != 0:
         raise RuntimeError(f"Controller restore failed (exit {code}).")
     print("Controller restored independently of MoonMind health.", flush=True)
