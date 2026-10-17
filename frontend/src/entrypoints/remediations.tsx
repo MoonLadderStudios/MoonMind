@@ -21,6 +21,18 @@ type RemediationRow = {
   updatedAt: string;
 };
 
+type UnavailableRemediation = {
+  remediationWorkflowId: string;
+  targetWorkflowId: string;
+  message: string;
+};
+
+type RemediationInventory = {
+  rows: RemediationRow[];
+  unavailableCount: number;
+  unavailableItems: UnavailableRemediation[];
+};
+
 type RemediationEndpointConfig = {
   status: 'enabled' | 'disabled' | 'loading';
   endpoint: string | null;
@@ -31,7 +43,7 @@ function formatDateTime(value: string): string {
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
 }
 
-function compactText(record: Record<string, unknown>, key: keyof RemediationRow): string {
+function compactText(record: Record<string, unknown>, key: string): string {
   const value = record[key];
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -90,10 +102,47 @@ function remediationEndpointConfig(payload: BootPayload): RemediationEndpointCon
   return { status: 'loading', endpoint: null };
 }
 
-async function loadRemediations(endpoint: string): Promise<RemediationRow[]> {
+function compactInventory(payload: unknown): RemediationInventory {
+  const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const unavailableItems = (Array.isArray(record.unavailableItems) ? record.unavailableItems : []).flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const entry = item as Record<string, unknown>;
+    const remediationWorkflowId = compactText(entry, 'remediationWorkflowId');
+    if (!remediationWorkflowId) return [];
+    return [{
+      remediationWorkflowId,
+      targetWorkflowId: compactText(entry, 'targetWorkflowId') || 'unknown',
+      message: compactText(entry, 'message') || compactText(entry, 'code') || 'Could not be loaded.',
+    }];
+  });
+  const reportedCount = record.unavailableCount;
+  const unavailableCount = typeof reportedCount === 'number' && Number.isInteger(reportedCount)
+    ? Math.max(reportedCount, unavailableItems.length)
+    : unavailableItems.length;
+  return { rows: compactRows(payload), unavailableCount, unavailableItems };
+}
+
+async function responseErrorDetail(response: Response): Promise<string | null> {
+  try {
+    const detail = ((await response.json()) as { detail?: unknown } | null)?.detail;
+    if (typeof detail === 'string') return detail.trim() || null;
+    if (detail && typeof detail === 'object') {
+      const record = detail as Record<string, unknown>;
+      return compactText(record, 'message') || compactText(record, 'code') || null;
+    }
+  } catch {
+    // A body that is not JSON carries no server detail.
+  }
+  return null;
+}
+
+async function loadRemediations(endpoint: string): Promise<RemediationInventory> {
   const response = await fetch(endpoint, { credentials: 'same-origin' });
-  if (!response.ok) throw new Error(`Remediation inventory request failed: ${response.status}`);
-  return compactRows(await response.json());
+  if (!response.ok) {
+    const detail = await responseErrorDetail(response);
+    throw new Error(`Remediation inventory request failed: ${response.status}${detail ? ` — ${detail}` : ''}`);
+  }
+  return compactInventory(await response.json());
 }
 
 export default function Remediations({ payload }: { payload: BootPayload }) {
@@ -106,10 +155,13 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
   });
   const rows = useMemo(() => {
     const term = filter.trim().toLowerCase();
-    return term ? (query.data ?? []).filter((row) =>
+    const allRows = query.data?.rows ?? [];
+    return term ? allRows.filter((row) =>
       [row.title, row.status, row.targetTitle, row.targetWorkflowId, row.latestActionSummary, row.resolution]
-        .some((value) => String(value ?? '').toLowerCase().includes(term))) : (query.data ?? []);
+        .some((value) => String(value ?? '').toLowerCase().includes(term))) : allRows;
   }, [filter, query.data]);
+  const unavailableCount = query.data?.unavailableCount ?? 0;
+  const unavailableItems = query.data?.unavailableItems ?? [];
   const columns = useMemo<Column<RemediationRow>[]>(() => [
     { key: 'title', header: 'Remediation', render: (row) => <Link to={`/workflows/${encodeURIComponent(row.remediationWorkflowId)}`} aria-label={`${row.title} remediation workflow`}>{row.title}</Link> },
     { key: 'status', header: 'Lifecycle / attention', render: (row) => <><span>{row.status}</span>{row.attentionRequired ? <strong> · Attention</strong> : null}</> },
@@ -125,6 +177,11 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
   if (query.isError) return <DashboardErrorState title="Remediation inventory unavailable" description="MoonMind could not load remediations." detail={query.error instanceof Error ? query.error.message : null} onRetry={() => void query.refetch()} />;
   return <main className="data-wide-panel" aria-labelledby="remediations-title">
     <div className="page-header"><div><h2 id="remediations-title">Remediation</h2><p>Scan remediation workflows and their source Workflow provenance.</p></div><button type="button" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</button></div>
+    {unavailableCount > 0 ? <div className="notice error" role="status">
+      <p>{unavailableCount === 1 ? '1 remediation could not be loaded.' : `${unavailableCount} remediations could not be loaded.`}</p>
+      {unavailableItems.length ? <ul>{unavailableItems.map((item) => <li key={item.remediationWorkflowId}><code>{item.remediationWorkflowId}</code> (source <code>{item.targetWorkflowId}</code>): {item.message}</li>)}</ul> : null}
+      {unavailableCount > unavailableItems.length ? <p>{unavailableCount - unavailableItems.length} more not listed.</p> : null}
+    </div> : null}
     <label htmlFor="remediation-filter">Filter remediations</label>
     <input id="remediation-filter" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Title, status, source, or action" />
     <DataTable data={rows} columns={columns} getRowKey={(row) => row.remediationWorkflowId} ariaLabel="Remediation workflows" isLoading={endpointConfig.status === 'loading' || query.isPending} emptyMessage={filter ? 'No remediations match the current filter.' : 'No remediation workflows are visible.'} responsive />

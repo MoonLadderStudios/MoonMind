@@ -21,6 +21,7 @@ In scope: authenticated create/describe/list/update/signal/cancel, identifiers, 
 
 `workflowId` is the durable handle. Remediation uses ordinary `POST /api/executions` with canonical `task.remediation`, not a privileged one-click path. Related remediation routes:
 
+- `GET /api/executions/remediations` returns the Remediation page inventory: one compact row per link whose remediation and source executions are both visible. A link that cannot be loaded does not fail the response: `unavailableCount` counts such links, and `unavailableItems` names up to 25 of them by remediation and source workflow ID with a code and client-safe message. The raw error goes to the API log.
 - `GET /api/executions/{workflowId}/remediations?direction=inbound|outbound` returns bidirectional lineage and bounded remediation projections (authored intent, selected evidence, context availability, approvals, locks, operator controls, action results, verification, lifecycle artifacts, and Checkpoint Branch state).
 - `POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}` accepts an authenticated `decision` and optional `comment`. Takeover, pause, resume, and cancel remain normal workflow controls. Create admission independently validates target/run visibility, selected Step Executions, checkpoints, Agent Runs, profile and configuration snapshots, action and launch policy, and repository/branch/publication intent.
 
