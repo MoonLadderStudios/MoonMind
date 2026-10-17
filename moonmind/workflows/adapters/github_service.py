@@ -527,6 +527,7 @@ class GitHubService:
                     ):
                         raise _ActionsEvidenceGap("pull_request_identity_mismatch")
                     result["observedHeadSha"] = (pr.get("head") or {}).get("sha")
+                    result["observedBaseRef"] = (pr.get("base") or {}).get("ref")
                     if result["observedHeadSha"] != head_sha:
                         result["files"] = []
                         raise _ActionsEvidenceGap("pull_request_head_moved")

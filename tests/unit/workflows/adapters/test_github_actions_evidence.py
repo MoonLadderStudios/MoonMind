@@ -140,7 +140,12 @@ def fixture(monkeypatch, *, files=None):
                         else HEAD,
                         "repo": {"id": 10, "full_name": REPO},
                     },
-                    "base": {"repo": {"id": 10, "full_name": REPO}},
+                    "base": {
+                        "ref": state.get("retarget_base", "main")
+                        if state["pulls"] > 1
+                        else "main",
+                        "repo": {"id": 10, "full_name": REPO},
+                    },
                 },
             )
         if "/commits/" in path:
@@ -699,6 +704,14 @@ async def test_final_pr_read_projects_current_closed_state(monkeypatch):
     state["close_during_collection"] = True
     result = await collect(service)
     assert result["pullRequestOpen"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base", ["main", "release"])
+async def test_final_pr_read_projects_current_base_ref(monkeypatch, base):
+    service, state, _requests = fixture(monkeypatch)
+    state["retarget_base"] = base
+    assert (await collect(service))["observedBaseRef"] == base
 
 
 @pytest.mark.asyncio

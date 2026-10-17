@@ -235,6 +235,51 @@ async def test_moved_head_never_launches_verifier(admitted, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_moved_base_never_launches_verifier(admitted, monkeypatch):
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    # Same head and bytes, but the PR was retargeted away from the published base.
+    monkeypatch.setattr(
+        continuation,
+        "_activity",
+        AsyncMock(
+            return_value={
+                "status": "ready",
+                "headSha": "a" * 40,
+                "observedHeadSha": "a" * 40,
+                "observedBaseRef": "release",
+                "semanticDigest": "sha256:bytes",
+            }
+        ),
+    )
+    verify = AsyncMock()
+    monkeypatch.setattr(continuation, "_verify", verify)
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+    verify.assert_not_awaited()
+    record = owner._publish_context["issueEvidenceContinuation"]
+    assert record["nextAction"] == "reconcile-candidate"
+    assert record["baseRef"] == "main"
+    assert owner._remediation_loop_state.consumed_budgets.evidence_retries == 0
+    message = owner._moonspec_draft_terminal_message()
+    assert "Evidence continuation blocked; next action reconcile-candidate" in message
+    assert "operator review" not in message and "scheduled" not in message
+
+
+def test_draft_summary_without_continuation_names_the_next_action(owner):
+    message = owner._moonspec_draft_terminal_message()
+    assert "No evidence continuation was accepted" in message
+    assert "Exact-head CI proof was pending" in message
+    assert "operator review" not in message
+    owner._publish_context["moonSpecGate"]["recommendedNextAction"] = "needs_human"
+    assert "requested a human decision" in owner._moonspec_draft_terminal_message()
+
+
+@pytest.mark.asyncio
 async def test_adopted_draft_is_never_marked_ready_as_automation_owned(
     admitted, monkeypatch
 ):
