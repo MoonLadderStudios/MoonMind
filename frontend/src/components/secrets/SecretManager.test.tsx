@@ -226,6 +226,70 @@ describe('SecretManager', () => {
     expect(screen.queryByRole('button', { name: /re-enable github-pat-main/i })).toBeNull();
   });
 
+  it('encodes slugs with reserved characters in every secret request', async () => {
+    const slug = 'a/b c?#';
+    const encoded = '/api/v1/secrets/a%2Fb%20c%3F%23';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ secretRef: `db://${slug}`, usages: [], diagnostics: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SecretManager
+          secrets={[
+            {
+              slug,
+              status: 'disabled',
+              details: {},
+              createdAt: '2026-04-28T00:00:00Z',
+            },
+          ]}
+          onNotice={vi.fn()}
+          queryClient={queryClient}
+          permissions={new Set(['secrets.disable'])}
+        />
+      </QueryClientProvider>,
+    );
+    const expectRequest = (url: string, method?: string) =>
+      waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          url,
+          ...(method ? [expect.objectContaining({ method })] : []),
+        );
+      });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Secure value'), {
+      target: { value: 'edited-value' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save new value' }));
+    await expectRequest(encoded, 'PUT');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate' }));
+    const rotateForm = screen.getByRole('button', { name: 'Rotate now' }).closest('form');
+    fireEvent.change(rotateForm!.querySelector('input')!, {
+      target: { value: 'rotated-value' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate now' }));
+    await expectRequest(`${encoded}/rotate`, 'POST');
+
+    fireEvent.click(screen.getByRole('button', { name: `Re-enable ${slug}` }));
+    await expectRequest(`${encoded}/status`, 'PUT');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await expectRequest(encoded, 'DELETE');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View usage' }));
+    await expectRequest(`${encoded}/usage`);
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
   // MoonLadderStudios/MoonMind#4559: the stored-secrets table degrades to
   // stacked cards below 720px, so every row cell must expose the card label
   // and the row actions must own a wrapping area instead of one unwrapped row.

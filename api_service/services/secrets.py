@@ -662,6 +662,7 @@ class SecretsService:
         plaintext: str,
         *,
         expected_credential_revision: int | None = None,
+        expected_policy_revision: int | None = None,
         request_id: str | None = None,
         actor_user_id: UUID | None = None,
         workspace_id: UUID | None = None,
@@ -671,7 +672,9 @@ class SecretsService:
         """Update a secret value, advancing the credential revision.
 
         Refuses already-ROTATED records: they need the explicit reviewed
-        repair path instead of a silent overwrite.
+        repair path instead of a silent overwrite. Supplied expected
+        credential/policy revisions are compare-and-set fences, as for
+        rotation, so an edit admitted before a concurrent disable is refused.
         """
         fingerprint = _candidate_fingerprint(plaintext)
         if request_id is not None:
@@ -715,6 +718,19 @@ class SecretsService:
                         "expected credential revision "
                         f"{expected_credential_revision} != active "
                         f"{active_revision}"
+                    ),
+                )
+            active_policy = _policy_revision_of(secret)
+            if expected_policy_revision is not None and (
+                int(expected_policy_revision) != active_policy
+            ):
+                if commit:
+                    await db.rollback()
+                raise SecretFencedError(
+                    slug,
+                    reason=(
+                        "expected policy revision "
+                        f"{expected_policy_revision} != active {active_policy}"
                     ),
                 )
 
