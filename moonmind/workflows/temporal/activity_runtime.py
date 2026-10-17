@@ -4567,6 +4567,7 @@ class TemporalIntegrationActivities:
             repository=request["repository"], pr_number=request["prNumber"],
             head_sha=request["headSha"], admitted_workflow_id=request["admittedWorkflowId"],
             observe_only=request.get("observeOnly") is True,
+            base_ref=str(request.get("baseRef") or "") or None,
         )
 
     async def publication_recovery_observe(self, payload, /, **kwargs):

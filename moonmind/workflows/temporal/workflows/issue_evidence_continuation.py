@@ -657,6 +657,9 @@ async def resume_published_issue_evidence(
                     or {}
                 ).get("reportDigest"),
                 "evidenceSetDigest": observation.get("evidenceSetDigest"),
+                # The PR can be retargeted after the fresh read; the transition
+                # rereads and rejects a base other than the verified one.
+                **({"baseRef": base} if base else {}),
             }
             ready = await _activity(owner, ready_request)
             observe_ready = workflow.patched("run-issue-evidence-ready-observation-v1")
@@ -666,6 +669,7 @@ async def resume_published_issue_evidence(
                 while (
                     ready.get("reconciliationRequired")
                     and ready.get("observedHeadSha", head) == head
+                    and ready.get("observedBaseRef", base) == base
                     and not owner._cancel_requested
                     and workflow.now() < deadline
                 ):
@@ -686,17 +690,23 @@ async def resume_published_issue_evidence(
                     if owner._cancel_requested or workflow.now() >= deadline:
                         break
                     ready = await _activity(owner, {**ready_request, "observeOnly": True})
+            retargeted = ready.get("observedBaseRef", base) != base
             if (
                 ready.get("status") != "ready"
                 or ready.get("headSha") != head
                 or ready.get("observedHeadSha", head) != head
+                or retargeted
             ):
                 await _persist(
                     owner,
                     {
                         **record,
                         "status": "blocked",
-                        "nextAction": "confirm-publication",
+                        "nextAction": (
+                            "reconcile-candidate"
+                            if retargeted
+                            else "confirm-publication"
+                        ),
                         **({"publicationObservation": ready} if observe_ready else {}),
                     },
                 )

@@ -554,6 +554,53 @@ async def test_denied_admitted_route_does_not_fall_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retargeted_after_ready", [False, True])
+async def test_mark_ready_revalidates_the_published_base(
+    monkeypatch, retargeted_after_ready
+):
+    service = GitHubService()
+    service._repository_reader = AsyncMock(
+        return_value=("https://api.github.com", {"Authorization": "Bearer t"})
+    )
+    mutations = []
+    base = "release" if not retargeted_after_ready else "main"
+
+    def respond(request):
+        nonlocal base
+        if request.method == "POST":
+            import json
+
+            if "timelineItems" in json.loads(request.content)["query"]:
+                return httpx.Response(200, json={"data": {"node": {
+                    "id": "PR_7", "timelineItems": {"nodes": []},
+                }}})
+            mutations.append(request)
+            # The PR is retargeted while the ready mutation is in flight.
+            base = "release"
+            return httpx.Response(200, json={"data": {}})
+        return httpx.Response(200, json={
+            "number": 7, "node_id": "PR_7", "state": "open",
+            "draft": not mutations, "head": {"sha": HEAD},
+            "base": {"ref": base, "repo": {"full_name": REPO}},
+        })
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    result = await service.mark_automation_draft_ready(
+        REPO, 7, HEAD, admitted_workflow_id="work-1", base_ref="main"
+    )
+    assert result["ready"] is False
+    assert result["status"] != "ready"
+    assert result["observedBaseRef"] == "release"
+    # A PR already retargeted before the transition is never marked ready.
+    assert len(mutations) == int(retargeted_after_ready)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("moved", [False, True])
 async def test_mark_ready_uses_admitted_mutation_and_exact_head(monkeypatch, moved):
     service = GitHubService()

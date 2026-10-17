@@ -7009,7 +7009,10 @@ async def test_issue_search_pr_is_titled_from_trusted_source_issue(
         run_workflow_module.workflow, "patched", lambda _patch_id: patch_enabled
     )
     mock_run_workflow._repo = "MoonLadderStudios/MoonMind"
-    mock_run_workflow._summary = "Reconciled retargeted PR bases."
+    # Native publication runs while the live summary is still transient; the
+    # completed step's result is the recorded operator summary.
+    mock_run_workflow._summary = "Executing plan step 4/6"
+    mock_run_workflow._operator_summary = "Reconciled retargeted PR bases."
     mock_run_workflow._assessment_context = {
         "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
         "assessmentArtifactRef": "art_assessment",
@@ -7019,7 +7022,7 @@ async def test_issue_search_pr_is_titled_from_trusted_source_issue(
         "issue": {
             "repository": "MoonLadderStudios/MoonMind",
             "number": 4443,
-            "title": "Resume the same candidate PR",
+            "title": "Resume the same candidate PR; fixes #12, Closes: o/r#3",
             "url": "https://github.com/MoonLadderStudios/MoonMind/issues/4443",
         },
     }
@@ -7058,14 +7061,15 @@ async def test_issue_search_pr_is_titled_from_trusted_source_issue(
         # Retained histories keep the title they recorded.
         assert payload["title"].startswith(search_text)
         return
-    assert payload["title"] == (
-        "MoonLadderStudios/MoonMind#4443: Resume the same candidate PR"
-    )
+    # A squash merge reuses the title, so neither text may close other issues.
+    neutral = "Resume the same candidate PR; fixes issue #12, Closes: issue o/r#3"
+    assert payload["title"] == f"MoonLadderStudios/MoonMind#4443: {neutral}"
     assert search_text not in payload["body"]
     assert payload["body"].startswith(
-        "Source issue: MoonLadderStudios/MoonMind#4443 Resume the same candidate PR"
+        f"Source issue: MoonLadderStudios/MoonMind#4443 {neutral}"
     )
     assert "Reconciled retargeted PR bases." in payload["body"]
+    assert "Executing plan step" not in payload["body"]
     assert payload["body"].splitlines()[-1] == (
         "Closes MoonLadderStudios/MoonMind#4443"
     )

@@ -640,6 +640,14 @@ _ISSUE_EVIDENCE_NEXT_ACTIONS = {
     "continue-implementation": "continue implementation on the same pull request",
     "review": "review the verified pull request",
 }
+# GitHub closes an issue named right after one of these keywords in a PR
+# description or a default-branch commit message (a squash merge reuses the PR
+# title). A copied source-issue title must never close other issues.
+_GITHUB_CLOSING_REFERENCE = re.compile(
+    r"\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:)?\s*"
+    r"(?=(?:[\w.-]+/[\w.-]+)?#\d|https?://)",
+    re.IGNORECASE,
+)
 # MoonLadderStudios/MoonMind#4099: automatic "<base>: #<number>" display-title
 # enrichment for opt-in issue-search presets. Gated so in-flight histories
 # replay without the new memo/search-attribute commands.
@@ -4405,7 +4413,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 if isinstance(issue, Mapping):
                     compact_issue[key] = {
                         field: issue[field]
-                        for field in ("repository", "number", "url")
+                        for field in ("repository", "number", "url", "title")
                         if field in issue
                     }
             if compact_issue:
@@ -18047,6 +18055,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         title = self._coerce_text(
             issue.get("title") or context.get("title"), max_chars=240
         )
+        if title:
+            title = _GITHUB_CLOSING_REFERENCE.sub(r"\1\2 issue ", title)
         if not repository or not title or number <= 0:
             return None
         url = self._coerce_text(
@@ -18102,6 +18112,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if self._summary and not self._is_transient_summary(self._summary)
             else None
         )
+        # Native publication runs while the live summary still names the
+        # executing step; the completed result is recorded separately.
+        result_summary = next(
+            (
+                candidate
+                for candidate in (
+                    self._operator_summary,
+                    self._last_step_summary,
+                    summary,
+                )
+                if candidate
+                and not self._is_transient_summary(candidate)
+                and not is_generic_completion_summary(candidate)
+            ),
+            None,
+        )
         body = (
             self._coerce_text(publish_payload.get("prBody"), flatten=False)
             or (
@@ -18110,7 +18136,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     for part in (
                         f"Source issue: {source_issue['ref']} {source_issue['title']}"
                         + (f" ({source_issue['url']})" if source_issue["url"] else ""),
-                        summary,
+                        result_summary,
                     )
                     if part
                 )
