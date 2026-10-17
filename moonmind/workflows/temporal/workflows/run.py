@@ -621,6 +621,33 @@ RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 RUN_ACCEPTANCE_EVIDENCE_PATCH = "run-acceptance-evidence-v1"
 RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH = "run-acceptance-source-handoff-v1"
 RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH = "run-issue-evidence-continuation-v1"
+# Issue-driven PRs and preserved-draft summaries name the trusted source issue
+# and the continuation owner's recorded next action; retained histories keep
+# the search-instruction title and generic draft summary they recorded.
+RUN_ISSUE_SOURCE_PUBLICATION_TEXT_PATCH = "run-issue-source-publication-text-v1"
+_ISSUE_EVIDENCE_NEXT_ACTIONS = {
+    "collect-evidence": "collect CI evidence for the same pull request head",
+    "evidence-budget-exhausted": (
+        "the evidence-retry budget is spent; new evidence for the same head "
+        "needs a new authorized attempt"
+    ),
+    "reconcile-candidate": (
+        "reconcile the changed pull request head, base, or state before "
+        "verifying again"
+    ),
+    "repair-report": "repair the verification report for the same candidate",
+    "confirm-publication": "confirm the pull request's ready-for-review state",
+    "continue-implementation": "continue implementation on the same pull request",
+    "review": "review the verified pull request",
+}
+# GitHub closes an issue named right after one of these keywords in a PR
+# description or a default-branch commit message (a squash merge reuses the PR
+# title). A copied source-issue title must never close other issues.
+_GITHUB_CLOSING_REFERENCE = re.compile(
+    r"\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:)?\s*"
+    r"(?=(?:[\w.-]+/[\w.-]+)?#\d|https?://)",
+    re.IGNORECASE,
+)
 # MoonLadderStudios/MoonMind#4099: automatic "<base>: #<number>" display-title
 # enrichment for opt-in issue-search presets. Gated so in-flight histories
 # replay without the new memo/search-attribute commands.
@@ -4386,7 +4413,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 if isinstance(issue, Mapping):
                     compact_issue[key] = {
                         field: issue[field]
-                        for field in ("repository", "number", "url")
+                        for field in ("repository", "number", "url", "title")
                         if field in issue
                     }
             if compact_issue:
@@ -9898,6 +9925,44 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         }
         return summary
 
+    def _moonspec_draft_terminal_message(self) -> str:
+        """Name the preserved draft's actual next action, not generic review."""
+
+        prefix = (
+            "Workflow completed with a draft pull request; MoonSpec "
+            "verification is incomplete."
+        )
+        reason = self._moonspec_draft_publication_reason or ""
+        record = self._publish_context.get("issueEvidenceContinuation")
+        if isinstance(record, Mapping) and record.get("status"):
+            status = self._coerce_text(record.get("status"), max_chars=40)
+            next_action = self._coerce_text(record.get("nextAction"), max_chars=60)
+            detail = _ISSUE_EVIDENCE_NEXT_ACTIONS.get(str(next_action or ""))
+            summary = self._coerce_text(record.get("summary"), max_chars=240)
+            parts = [
+                prefix,
+                f"Evidence continuation {status}; next action {next_action}"
+                + (f": {detail}." if detail else "."),
+                f"{summary.rstrip('.')}." if summary else "",
+                reason,
+            ]
+        else:
+            gate = self._publish_context.get("moonSpecGate")
+            needs_human = (
+                isinstance(gate, Mapping)
+                and gate.get("recommendedNextAction") == "needs_human"
+            )
+            parts = [
+                prefix,
+                "The verifier requested a human decision."
+                if needs_human
+                else "No evidence continuation was accepted; next action: supply "
+                "the missing verification evidence for this pull request's "
+                "current head.",
+                reason,
+            ]
+        return " ".join(part for part in parts if part)
+
     def _moonspec_draft_publication_body_section(self) -> str:
         gate_context = self._publish_context.get("moonSpecGate")
         verdict = None
@@ -11978,11 +12043,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             # Draft publication completes the run but requires operator
             # attention: the verification evidence is incomplete.
             self._attention_required = True
-            output_message = (
-                "Workflow completed with a draft pull request; MoonSpec "
-                "verification is incomplete and requires operator review. "
-                f"{self._moonspec_draft_publication_reason}"
-            )
+            if self._patched_or_false_outside_workflow(
+                RUN_ISSUE_SOURCE_PUBLICATION_TEXT_PATCH
+            ):
+                output_message = self._moonspec_draft_terminal_message()
+            else:
+                output_message = (
+                    "Workflow completed with a draft pull request; MoonSpec "
+                    "verification is incomplete and requires operator review. "
+                    f"{self._moonspec_draft_publication_reason}"
+                )
         self._close_status = CLOSE_STATUS_COMPLETED
         self._set_state(terminal_state, summary=output_message)
         await self._record_terminal_state(
@@ -17960,6 +18030,40 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     return step_instructions
         return None
 
+    def _trusted_source_issue(self) -> dict[str, str] | None:
+        """Return the trusted GitHub source issue an issue-driven run publishes."""
+
+        context = self._trusted_issue_context
+        if (
+            not isinstance(context, Mapping)
+            or context.get("trustedSource") != "moonmind.github.get_issue"
+            or not self._patched_or_false_outside_workflow(
+                RUN_ISSUE_SOURCE_PUBLICATION_TEXT_PATCH
+            )
+        ):
+            return None
+        issue = context.get("issue")
+        issue = issue if isinstance(issue, Mapping) else {}
+        repository = self._coerce_text(
+            issue.get("repository") or context.get("repository"), max_chars=240
+        )
+        number = issue.get("number", context.get("issueNumber"))
+        try:
+            number = 0 if isinstance(number, bool) else int(number)
+        except (TypeError, ValueError):
+            number = 0
+        title = self._coerce_text(
+            issue.get("title") or context.get("title"), max_chars=240
+        )
+        if title:
+            title = _GITHUB_CLOSING_REFERENCE.sub(r"\1\2 issue ", title)
+        if not repository or not title or number <= 0:
+            return None
+        url = self._coerce_text(
+            issue.get("url") or context.get("issueUrl"), max_chars=400
+        )
+        return {"ref": f"{repository}#{number}", "title": title, "url": url or ""}
+
     def _resolve_native_pr_title(
         self,
         *,
@@ -17969,6 +18073,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         publish_title = self._coerce_text(publish_payload.get("prTitle"), max_chars=150)
         if publish_title:
             return publish_title
+        source_issue = self._trusted_source_issue()
+        if source_issue:
+            # An issue-driven task's instructions are often search text, not
+            # a description of the change it published.
+            return self._coerce_text(
+                f"{source_issue['ref']}: {source_issue['title']}", max_chars=150
+            )
         explicit_title = self._coerce_text(task_payload.get("title"), max_chars=150)
         if explicit_title:
             return explicit_title
@@ -17995,14 +18106,45 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         publish_payload: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> str:
+        source_issue = self._trusted_source_issue()
+        summary = (
+            self._summary
+            if self._summary and not self._is_transient_summary(self._summary)
+            else None
+        )
+        # Native publication runs while the live summary still names the
+        # executing step; the completed result is recorded separately.
+        result_summary = next(
+            (
+                candidate
+                for candidate in (
+                    self._operator_summary,
+                    self._last_step_summary,
+                    summary,
+                )
+                if candidate
+                and not self._is_transient_summary(candidate)
+                and not is_generic_completion_summary(candidate)
+            ),
+            None,
+        )
         body = (
             self._coerce_text(publish_payload.get("prBody"), flatten=False)
-            or self._resolve_task_body_instructions(task_payload)
             or (
-                self._summary
-                if self._summary and not self._is_transient_summary(self._summary)
+                "\n\n".join(
+                    part
+                    for part in (
+                        f"Source issue: {source_issue['ref']} {source_issue['title']}"
+                        + (f" ({source_issue['url']})" if source_issue["url"] else ""),
+                        result_summary,
+                    )
+                    if part
+                )
+                if source_issue
                 else None
             )
+            or self._resolve_task_body_instructions(task_payload)
+            or summary
             or "Automated changes by MoonMind."
         )
         unverified = self._moonspec_unverified_body_section()

@@ -192,11 +192,13 @@ preserve a coherent candidate on the existing PR under the admitted draft policy
 This is a checkpoint/evidence handoff, not completion, permission to merge, or a
 request for mandatory manual review. Explicit publication `none` stays `none`.
 A confirmed preserved draft defers the requested merge outcome for that attempt;
-it completes with attention required and the original non-pass verdict. The
+it completes with attention required, the original non-pass verdict, and a summary
+naming the continuation owner's recorded status and next action. The
 terminal outcome must not require the merge that draft publication intentionally
 disabled. Required reports and confirmed PR publication remain required.
 Continue the same PR from its validated current head; never create another PR to
-escape a failed gate or exhausted budget. Keep its actual issue/change title.
+escape a failed gate or exhausted budget. Title and describe it from the trusted
+source issue and actual change, never from search instructions.
 
 The existing continuation owner consumes new post-publication check and artifact
 results, distinguishes code failures from reporting or infrastructure failures,
@@ -206,7 +208,8 @@ The selected verifier decides coverage from actual evidence.
 
 Bind evidence to the candidate content, original scope, required tests and target,
 plus relevant locked content, package, topology, or render surface when the source
-requires them. A moved PR head invalidates affected evidence. A duplicate event for
+requires them. A moved PR head or retargeted base invalidates affected evidence
+and blocks for reconciliation. A duplicate event for
 the same job/attempt is idempotent, not another implementation attempt. Resume from
 the retained source/PR/candidate, not a fresh issue search or a default branch.
 

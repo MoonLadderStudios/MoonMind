@@ -527,6 +527,7 @@ class GitHubService:
                     ):
                         raise _ActionsEvidenceGap("pull_request_identity_mismatch")
                     result["observedHeadSha"] = (pr.get("head") or {}).get("sha")
+                    result["observedBaseRef"] = (pr.get("base") or {}).get("ref")
                     if result["observedHeadSha"] != head_sha:
                         result["files"] = []
                         raise _ActionsEvidenceGap("pull_request_head_moved")
@@ -714,6 +715,7 @@ class GitHubService:
 
     async def mark_automation_draft_ready(
         self, repository: str, pr_number: int, head_sha: str, *, admitted_workflow_id: str, observe_only: bool = False,
+        base_ref: str | None = None,
     ) -> dict[str, Any]:
         """Release an accepted workflow-owned draft without clearing later holds.
 
@@ -735,9 +737,14 @@ class GitHubService:
                 async def read(*, require_head: bool = True) -> dict[str, Any]:
                     pr = await _actions_json(client, f"{root}/repos/{repository}/pulls/{pr_number}", headers)
                     result["observedHeadSha"] = (pr.get("head") or {}).get("sha")
+                    result["observedBaseRef"] = (pr.get("base") or {}).get("ref")
+                    # The acceptance was verified against this base; a retarget
+                    # changes what it means, like a moved head.
                     if (pr.get("number") != pr_number
                         or str(((pr.get("base") or {}).get("repo") or {}).get("full_name") or "").lower() != repository.lower()
-                        or (require_head and result["observedHeadSha"] != head_sha) or pr.get("state") != "open"):
+                        or (require_head and (result["observedHeadSha"] != head_sha
+                            or (base_ref and result["observedBaseRef"] != base_ref)))
+                        or pr.get("state") != "open"):
                         raise _ActionsEvidenceGap("pull_request_identity_or_state_changed")
                     return pr
 
@@ -797,7 +804,7 @@ class GitHubService:
                             result["reasonCode"] = "github_ready_mutation_rejected"
                     except (httpx.HTTPError, ValueError):
                         result["reasonCode"] = "github_ready_mutation_unconfirmed"
-                    # Head movement does not erase a racing draft hold. Reconcile
+                    # Head or base movement does not erase a racing draft hold. Reconcile
                     # this same PR first, then report its changed candidate.
                     pr = await reconcile_read(lambda: read(require_head=False))
                     try:
@@ -823,7 +830,7 @@ class GitHubService:
                             "draft": pr.get("draft"), "draftHoldRestored": restored,
                             "reasonCode": ("pull_request_redrafted_hold" if restored
                                 else "pull_request_redrafted_hold_restore_unconfirmed")}
-                if result["observedHeadSha"] != head_sha:
+                if result["observedHeadSha"] != head_sha or (base_ref and result["observedBaseRef"] != base_ref):
                     raise _ActionsEvidenceGap("pull_request_identity_or_state_changed")
                 result["ready"] = pr.get("draft") is False
                 result["draft"] = pr.get("draft")

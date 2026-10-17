@@ -235,6 +235,116 @@ async def test_moved_head_never_launches_verifier(admitted, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_moved_base_never_launches_verifier(admitted, monkeypatch):
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    # Same head and bytes, but the PR was retargeted away from the published base.
+    monkeypatch.setattr(
+        continuation,
+        "_activity",
+        AsyncMock(
+            return_value={
+                "status": "ready",
+                "headSha": "a" * 40,
+                "observedHeadSha": "a" * 40,
+                "observedBaseRef": "release",
+                "semanticDigest": "sha256:bytes",
+            }
+        ),
+    )
+    verify = AsyncMock()
+    monkeypatch.setattr(continuation, "_verify", verify)
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+    verify.assert_not_awaited()
+    record = owner._publish_context["issueEvidenceContinuation"]
+    assert record["nextAction"] == "reconcile-candidate"
+    assert record["baseRef"] == "main"
+    assert owner._remediation_loop_state.consumed_budgets.evidence_retries == 0
+    message = owner._moonspec_draft_terminal_message()
+    assert "Evidence continuation blocked; next action reconcile-candidate" in message
+    assert "operator review" not in message and "scheduled" not in message
+
+
+@pytest.mark.asyncio
+async def test_base_retargeted_during_ready_transition_is_not_accepted(
+    admitted, monkeypatch
+):
+    from moonmind.workflows.skills.approval_policy import StepGateResult
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    subject = {"repository": "example/repo", "revision": "a" * 40}
+    observed = {
+        "status": "ready",
+        "headSha": "a" * 40,
+        "subject": subject,
+        "semanticDigest": "sha256:bytes",
+        "evidenceSetDigest": "sha256:inventory",
+        "evidenceRefs": ["artifact://proof"],
+    }
+    reader = AsyncMock(
+        side_effect=[
+            observed,
+            {"status": "ready", "headSha": "a" * 40},
+            # Retargeted after the fresh read, before the ready transition.
+            {
+                "status": "unavailable",
+                "headSha": "a" * 40,
+                "observedHeadSha": "a" * 40,
+                "observedBaseRef": "release",
+                "reconciliationRequired": True,
+            },
+        ]
+    )
+    monkeypatch.setattr(continuation, "_activity", reader)
+    waiting = AsyncMock()
+    monkeypatch.setattr(run_module.workflow, "wait_condition", waiting)
+    monkeypatch.setattr(
+        continuation, "_verify", AsyncMock(return_value={"gateResultRef": "g"})
+    )
+    gate = StepGateResult(
+        verdict="FULLY_IMPLEMENTED",
+        recommended_next_action="advance",
+        validated_refs={
+            "acceptance": {"subject": subject, "evidenceSetDigest": "sha256:inventory"}
+        },
+    )
+    monkeypatch.setattr(owner, "_moonspec_verify_gate_result", lambda _: gate)
+    monkeypatch.setattr(
+        owner, "_moonspec_verify_gate_result_ref", lambda _: "artifact://new-gate"
+    )
+    monkeypatch.setattr(owner, "_record_moonspec_verify_gate", lambda **_: None)
+    monkeypatch.setattr(owner, "_sync_pr_unverified_criteria", AsyncMock())
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+    ready_request = reader.await_args_list[-1].args[1]
+    assert ready_request["action"] == "mark_ready"
+    assert ready_request["baseRef"] == "main"
+    waiting.assert_not_awaited()
+    record = owner._publish_context["issueEvidenceContinuation"]
+    assert record["status"] == "blocked"
+    assert record["nextAction"] == "reconcile-candidate"
+    assert owner._moonspec_draft_publication_reason
+
+
+def test_draft_summary_without_continuation_names_the_next_action(owner):
+    message = owner._moonspec_draft_terminal_message()
+    assert "No evidence continuation was accepted" in message
+    assert "Exact-head CI proof was pending" in message
+    assert "operator review" not in message
+    owner._publish_context["moonSpecGate"]["recommendedNextAction"] = "needs_human"
+    assert "requested a human decision" in owner._moonspec_draft_terminal_message()
+
+
+@pytest.mark.asyncio
 async def test_adopted_draft_is_never_marked_ready_as_automation_owned(
     admitted, monkeypatch
 ):
@@ -854,3 +964,29 @@ async def test_unknown_ready_observes_without_repeating_verifier_or_mutation(
     assert (owner._moonspec_draft_publication_reason is None) is (outcome == "ready")
     observations = [call.kwargs["payload"].get("publicationObservation") for call in owner._write_json_artifact.await_args_list]
     assert sum(row is not None and row.get("reconciliationRequired") is True for row in observations) == 2
+
+
+def test_source_issue_title_survives_continue_as_new(admitted):
+    owner, _nodes = admitted
+    issue = {
+        "repository": "example/repo",
+        "number": 2740,
+        "title": "Resume the same candidate PR",
+        "url": "https://github.com/example/repo/issues/2740",
+    }
+    owner._trusted_issue_context = {
+        "trustedSource": "moonmind.github.get_issue",
+        "issue": issue,
+        "body": "Large issue body is not carried.",
+    }
+    payload = owner._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
+    restored = run_module.MoonMindRunWorkflow()
+    restored._remediation_loop_spec = owner._remediation_loop_spec
+    restored._remediation_loop_continuation = payload["remediation_loop_continuation"]
+    restored._restore_remediation_loop_continuation(ordered_nodes=[])
+    assert "body" not in restored._trusted_issue_context
+    assert restored._trusted_source_issue() == {
+        "ref": "example/repo#2740",
+        "title": "Resume the same candidate PR",
+        "url": issue["url"],
+    }
