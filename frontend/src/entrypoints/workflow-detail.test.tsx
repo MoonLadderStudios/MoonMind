@@ -382,54 +382,15 @@ describe('Workflow Detail Entrypoint', () => {
       remediationRunId: '01-run',
       targetWorkflowId: 'mm:target-rich',
       targetRunId: 'run-target-rich',
-      mode: 'snapshot_then_follow',
-      authorityMode: 'approval_gated',
-      status: 'awaiting_approval',
-      activeLockScope: 'target_execution',
-      activeLockHolder: 'test-remediation-rich',
-      latestActionSummary: 'Proposed session interrupt',
-      resolution: 'precondition_failed',
+      mode: 'snapshot',
+      authorityMode: 'observe_only',
+      status: 'created',
+      latestActionSummary: 'Created checkpoint branch cbr-rich.',
       contextArtifactRef: 'art_context_rich',
       selectedSteps: ['collect-context', 'repair-runtime'],
       currentTargetState: 'awaiting_external',
-      allowedActions: ['execution.pause', 'host.restart'],
-      actionCapabilities: ['execution.pause', 'host.restart'].map((actionKind) => ({
-        actionKind,
-        requestable: actionKind === 'execution.pause',
-        dryRunSupported: false,
-        executionBackendReady: true,
-        approvalBackendReady: true,
-        verificationBackendReady: actionKind === 'execution.pause',
-        supportedTargetRuntimes: ['omnigent'],
-        supportedHostModes: [],
-        requiredEvidenceClasses: [],
-        blockedReasons: actionKind === 'execution.pause' ? [] : ['authoritative_verifier_unavailable'],
-      })),
       evidenceDegraded: true,
       unavailableEvidenceClasses: ['runtime_stderr', 'provider_snapshot'],
-      liveObservation: {
-        status: 'active',
-        label: 'Live observation active',
-        sequenceCursor: 'stdout:42',
-        reconnectState: 'reconnected',
-        epoch: 'run-target-rich:2',
-        fallbackReason: 'Durable context remains authoritative.',
-      },
-      lockOutcome: {
-        state: 'conflict',
-        holder: 'test-remediation-rich',
-        releasedAt: null,
-      },
-      approvalState: {
-        requestId: 'approval-rich',
-        actionKind: 'session_interrupt',
-        riskTier: 'high',
-        preconditions: 'Target run is still awaiting an external session.',
-        blastRadius: 'One managed runtime session.',
-        decision: 'pending',
-        canDecide: true,
-        auditRef: 'audit-rich',
-      },
       createdAt: '2026-04-22T00:00:02Z',
       updatedAt: '2026-04-22T00:00:03Z',
       ...overrides,
@@ -5195,9 +5156,7 @@ describe('Workflow Detail Entrypoint', () => {
     }
   });
 
-  it('hides the Remediate action off the Artifacts surface where its controls are unavailable', async () => {
-    // The remediation mode/authority/action-policy controls only render on the Artifacts
-    // tab; surfacing Remediate elsewhere would submit default settings without operator choice.
+  it('offers the Remediate action on every tab because it opens an editable Create draft', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const actionPayload: BootPayload = {
       ...mockPayload,
@@ -5254,7 +5213,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const menu = await openWorkflowActionsMenu('Cancel');
     expect(within(menu).getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
-    expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
+    expect(within(menu).getByRole('menuitem', { name: 'Remediate' })).toBeTruthy();
   });
 
   it('routes menu selections through direct lifecycle handlers', async () => {
@@ -6713,22 +6672,17 @@ describe('Workflow Detail Entrypoint', () => {
                 remediationRunId: 'run-remediation-1',
                 targetWorkflowId: 'test-123',
                 targetRunId: '01-run',
-                mode: 'snapshot_then_follow',
-                authorityMode: 'approval_gated',
-                status: 'awaiting_approval',
-                activeLockScope: 'target_execution',
-                activeLockHolder: 'mm:remediation-1',
-                latestActionSummary: 'Proposed session interrupt',
-                deliveryStatus: 'applied',
-                verificationOutcome: 'verified_resolved',
-                resolution: null,
+                mode: 'snapshot',
+                authorityMode: 'observe_only',
+                status: 'created',
+                latestActionSummary: 'Created checkpoint branch cbr-remediation-inbound.',
                 contextArtifactRef: 'art_context',
                 selectedSteps: ['run-tests'],
                 currentTargetState: 'awaiting_external',
                 authoredContract: {
                   instructions: 'Repair the selected failed test step.',
                   runtime: { mode: 'omnigent' },
-                  remediation: { authorityMode: 'approval_gated' },
+                  remediation: { authorityMode: 'observe_only' },
                 },
                 selectedStepEvidence: [
                   { logicalStepId: 'run-tests', checkpointRef: 'artifact://checkpoints/inbound' },
@@ -6737,26 +6691,8 @@ describe('Workflow Detail Entrypoint', () => {
                 contextEvidenceAvailability: [
                   { class: 'step_ledger', status: 'available', bounded: true, freshness: 'source_reported' },
                 ],
-                contextBoundedness: { rawLogBodiesIncluded: false, maxTailLines: 2000 },
+                contextBoundedness: { rawLogBodiesIncluded: false, maxAgentRunIds: 20 },
                 diagnosisHints: ['Test runner state diverged after restart.'],
-                latestActionRequest: {
-                  actionKind: 'session.interrupt',
-                  riskTier: 'high',
-                  idempotencyKey: 'action-3623',
-                  expectedTargetState: 'awaiting_external',
-                },
-                latestActionResult: {
-                  actionKind: 'session.interrupt',
-                  status: 'applied',
-                  beforeStateRef: 'artifact://before',
-                  afterStateRef: 'artifact://after',
-                },
-                lifecycleSummary: {
-                  repair: { repairOutcome: 'repaired' },
-                  prevention: { status: 'reviewable_change_created', pullRequestUrl: 'https://github.com/example/pull/1' },
-                  lockRelease: 'released',
-                  unresolvedOperatorWork: 'Review prevention PR.',
-                },
                 lifecycleArtifacts: [
                   {
                     artifactRef: 'art_summary',
@@ -6767,14 +6703,6 @@ describe('Workflow Detail Entrypoint', () => {
                     metadata: {},
                   },
                 ],
-                operatorControls: {
-                  canCancel: true,
-                  canForceCancel: true,
-                  canTakeOver: true,
-                  canResume: false,
-                  paused: false,
-                  disabledReasons: {},
-                },
                 checkpointBranches: [
                   {
                     workflowId: 'test-123',
@@ -6844,20 +6772,6 @@ describe('Workflow Detail Entrypoint', () => {
                     },
                   },
                 ],
-                approvalState: {
-                  requestId: 'approval-1',
-                  actionKind: 'session.interrupt',
-                  riskTier: 'high',
-                  preconditions: 'Pinned target is current.',
-                  blastRadius: 'One managed session.',
-                  decision: 'pending',
-                  canDecide: true,
-                  requestingActor: 'operator:requester-3620',
-                  expectedTargetState: 'awaiting external session',
-                  checkpointRef: 'artifact://checkpoint/approval-3620',
-                  policyRef: 'omnigent-policy-3620@7',
-                  expiresAt: '2099-04-22T01:00:00Z',
-                },
                 createdAt: '2026-04-22T00:00:02Z',
                 updatedAt: '2026-04-22T00:00:03Z',
               },
@@ -6901,7 +6815,6 @@ describe('Workflow Detail Entrypoint', () => {
                     ],
                   },
                 ],
-                approvalState: null,
               },
             ],
           }),
@@ -6933,20 +6846,6 @@ describe('Workflow Detail Entrypoint', () => {
           json: async () => ({ workflowId: 'mm:remediation-created' }),
         } as Response);
       }
-      if (url.includes('/executions/mm%3Aremediation-1/remediation/approvals/approval-1') && init?.method === 'POST') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            accepted: true,
-            workflowId: 'mm:remediation-1',
-            requestId: 'approval-1',
-            decision: 'approved',
-          }),
-        } as Response);
-      }
-      if (url.includes('/executions/mm%3Aremediation-1/signal') && init?.method === 'POST') {
-        return Promise.resolve({ ok: true, json: async () => ({ accepted: true }) } as Response);
-      }
       return Promise.resolve({
         ok: true,
         json: async () => mockExecution,
@@ -6968,16 +6867,18 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('2 / 3')).toBeTruthy();
     expect(screen.getByText('artifact://workspace/C2 @ v3')).toBeTruthy();
     expect(screen.getByText('artifact://verification/V2#remainingWork')).toBeTruthy();
-    expect(screen.getByText('operator:requester-3620')).toBeTruthy();
-    expect(screen.getByText('awaiting external session')).toBeTruthy();
-    expect(screen.getByText('artifact://checkpoint/approval-3620')).toBeTruthy();
-    expect(screen.getByText('omnigent-policy-3620@7')).toBeTruthy();
+    expect(screen.getByText('Created checkpoint branch cbr-remediation-inbound.')).toBeTruthy();
     expect(screen.getByText('Authored remediation contract')).toBeTruthy();
-    expect(screen.getByText('Latest action request and authority decision')).toBeTruthy();
-    expect(screen.getByText('Repair, prevention, cleanup, and unresolved work')).toBeTruthy();
+    // An artifact retained from the retired typed-action lifecycle stays readable.
     expect(screen.getByRole('link', { name: 'art_summary' }).getAttribute('href')).toBe(
       '/api/artifacts/art_summary/download',
     );
+    // A remediation never acts on its target: no approval, takeover, or
+    // pre-submit mode/authority controls remain.
+    expect(screen.queryByRole('button', { name: 'Approve remediation action' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Take over and pause' })).toBeNull();
+    expect(screen.queryByText('Remediation create preview')).toBeNull();
+    expect(screen.queryByLabelText('Remediation authority')).toBeNull();
     expect(screen.getByText('Test runner state diverged after restart.')).toBeTruthy();
     expect(screen.getAllByText('remediation/test-123').length).toBeGreaterThan(0);
     const inboundTurns = screen.getByRole('list', {
@@ -6999,44 +6900,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'art_branch_output' }).getAttribute('href')).toBe(
       '/api/artifacts/art_branch_output/download',
     );
-    expect(screen.getByRole('button', { name: 'Take over and pause' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation Evidence' })).toBeTruthy();
     expect(screen.getByText('Context')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Evidence' }).getAttribute('href')).toBe(
       '/api/artifacts/art_context/download',
     );
-
-    fireEvent.change(screen.getByLabelText(/Decision rationale/), {
-      target: { value: 'Pinned evidence reviewed.' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Approve remediation action' }));
-
-    await waitFor(() => {
-      const approvalCall = fetchSpy.mock.calls.find(
-        ([url, init]) =>
-          String(url) === '/api/executions/mm%3Aremediation-1/remediation/approvals/approval-1' &&
-          init?.method === 'POST',
-      );
-      expect(approvalCall).toBeTruthy();
-      expect(JSON.parse(String(approvalCall?.[1]?.body))).toEqual({
-        decision: 'approved',
-        comment: 'Pinned evidence reviewed.',
-      });
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Take over and pause' }));
-    await waitFor(() => {
-      const takeoverCall = fetchSpy.mock.calls.find(
-        ([url, init]) =>
-          String(url) === '/api/executions/mm%3Aremediation-1/signal' &&
-          init?.method === 'POST',
-      );
-      expect(takeoverCall).toBeTruthy();
-      expect(JSON.parse(String(takeoverCall?.[1]?.body))).toMatchObject({
-        signalName: 'Pause',
-        payload: { reason: 'operator_takeover' },
-      });
-    });
 
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
 
@@ -7060,115 +6928,19 @@ describe('Workflow Detail Entrypoint', () => {
           profileId: 'claude_anthropic',
         },
         remediation: {
-          mode: 'snapshot_then_follow',
-          authorityMode: 'approval_gated',
           target: { runId: '01-run' },
           evidencePolicy: {
             includeStepLedger: true,
             includeDiagnostics: true,
-            tailLines: 2000,
           },
           trigger: { type: 'manual' },
         },
       });
+    expect(remediationDraft.remediation).not.toHaveProperty('authorityMode');
+    expect(remediationDraft.remediation).not.toHaveProperty('actionPolicyRef');
     expect(
       fetchSpy.mock.calls.some(
         ([url, init]) => String(url) === '/api/executions/test-123/remediation' && init?.method === 'POST',
-      ),
-    ).toBe(false);
-  });
-
-  it('lets operators choose remediation mode, authority, and action policy before submission', async () => {
-    window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-create-choices/artifacts?source=temporal');
-    const mockExecution = {
-      taskId: 'test-remediation-create-choices',
-      workflowId: 'test-remediation-create-choices',
-      namespace: 'default',
-      temporalRunId: '01-run',
-      runId: '01-run',
-      source: 'temporal',
-      workflowType: 'MoonMind.UserWorkflow',
-      entry: 'user_workflow',
-      title: 'Failed target with choices',
-      summary: 'Needs remediation.',
-      status: 'failed',
-      state: 'failed',
-      rawState: 'failed',
-      temporalStatus: 'failed',
-      repository: 'MoonLadderStudios/MoonMind',
-      createdAt: '2026-04-22T00:00:00Z',
-      updatedAt: '2026-04-22T00:00:01Z',
-      actions: {},
-    };
-
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/executions/test-remediation-create-choices/remediations?direction=')) {
-        return Promise.resolve({ ok: true, json: async () => ({ direction: 'inbound', items: [] }) } as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/executions/test-remediation-create-choices/remediation') && init?.method === 'POST') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ workflowId: 'mm:remediation-created' }),
-        } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-
-    expect(await screen.findByText('Remediation create preview')).toBeTruthy();
-    expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
-    expect((
-      within(screen.getByLabelText('Remediation authority')).getByRole('option', {
-        name: 'Administrator automatic (disabled)',
-      }) as HTMLOptionElement
-    ).disabled).toBe(true);
-
-    fireEvent.change(screen.getByLabelText('Remediation mode'), {
-      target: { value: 'snapshot' },
-    });
-    fireEvent.change(screen.getByLabelText('Remediation authority'), {
-      target: { value: 'observe_only' },
-    });
-    fireEvent.change(screen.getByLabelText('Remediation action policy'), {
-      target: { value: 'troubleshooting_only' },
-    });
-    const menu = await openWorkflowActionsMenu('Remediate');
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/workflows/new');
-      expect(window.location.search).toContain('intent=remediate');
-    });
-    const draftKey = Array.from({ length: window.sessionStorage.length })
-      .map((_, index) => window.sessionStorage.key(index) || '')
-      .find((key) => key.startsWith('moonmind.remediation-create-draft.'));
-    expect(draftKey).toBeTruthy();
-    expect(JSON.parse(String(window.sessionStorage.getItem(String(draftKey))))).toMatchObject({
-        remediation: {
-          mode: 'snapshot',
-          authorityMode: 'observe_only',
-          actionPolicyRef: 'troubleshooting_only',
-          target: { runId: '01-run' },
-          evidencePolicy: {
-            includeStepLedger: true,
-            includeDiagnostics: true,
-            tailLines: 2000,
-          },
-        },
-      });
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) =>
-          String(url) === '/api/executions/test-remediation-create-choices/remediation' &&
-          init?.method === 'POST',
       ),
     ).toBe(false);
   });
@@ -7217,87 +6989,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=outbound'))).toBe(true);
   });
 
-  it('renders approval-gated remediation as read-only when the operator cannot decide', async () => {
-    window.history.pushState({}, 'Artifacts Test', '/workflows/test-readonly-approval/artifacts?source=temporal');
-    const mockExecution = {
-      taskId: 'test-readonly-approval',
-      workflowId: 'test-readonly-approval',
-      namespace: 'default',
-      temporalRunId: '01-run',
-      runId: '01-run',
-      source: 'temporal',
-      workflowType: 'MoonMind.UserWorkflow',
-      entry: 'user_workflow',
-      title: 'Remediation target task',
-      summary: 'Needs remediation.',
-      status: 'failed',
-      state: 'failed',
-      rawState: 'failed',
-      temporalStatus: 'failed',
-      createdAt: '2026-04-22T00:00:00Z',
-      updatedAt: '2026-04-22T00:00:01Z',
-      actions: {},
-    };
-
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/executions/test-readonly-approval/remediations?direction=inbound')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            direction: 'inbound',
-            items: [
-              {
-                remediationWorkflowId: 'mm:remediation-readonly',
-                remediationRunId: 'run-remediation-readonly',
-                targetWorkflowId: 'test-readonly-approval',
-                targetRunId: '01-run',
-                mode: 'snapshot_then_follow',
-                authorityMode: 'approval_gated',
-                status: 'awaiting_approval',
-                activeLockScope: 'target_execution',
-                latestActionSummary: 'Proposed session interrupt',
-                approvalState: {
-                  requestId: 'approval-readonly',
-                  actionKind: 'session_interrupt',
-                  riskTier: 'high',
-                  preconditions: 'Target run is still active.',
-                  blastRadius: 'One managed session.',
-                  decision: 'pending',
-                  canDecide: false,
-                },
-                createdAt: '2026-04-22T00:00:02Z',
-                updatedAt: '2026-04-22T00:00:03Z',
-              },
-            ],
-          }),
-        } as Response);
-      }
-      if (url.includes('/executions/test-readonly-approval/remediations?direction=outbound')) {
-        return Promise.resolve({ ok: true, json: async () => ({ direction: 'outbound', items: [] }) } as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-
-    expect(await screen.findByText('mm:remediation-readonly')).toBeTruthy();
-    expect(screen.getByText('session_interrupt')).toBeTruthy();
-    expect(screen.getByText('high')).toBeTruthy();
-    expect(screen.getByText('Target run is still active.')).toBeTruthy();
-    expect(screen.getByText('One managed session.')).toBeTruthy();
-    expect(screen.getByText('Approval is read-only for this operator.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Approve remediation action' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Reject remediation action' })).toBeNull();
-  });
-
-  it('renders degraded remediation states for missing links, evidence, and live follow data', async () => {
+  it('renders degraded remediation states for missing links and evidence', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-degraded/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-remediation-degraded',
@@ -7335,11 +7027,10 @@ describe('Workflow Detail Entrypoint', () => {
                 remediationRunId: '01-run',
                 targetWorkflowId: 'mm:target-long-workflow-id-with-many-segments-for-mobile-containment',
                 targetRunId: 'run-target-with-a-very-long-identifier-for-mobile-containment',
-                mode: 'snapshot_then_follow',
-                authorityMode: 'approval_gated',
-                status: 'collecting_context',
+                mode: 'snapshot',
+                authorityMode: 'observe_only',
+                status: 'created',
                 contextArtifactRef: null,
-                approvalState: { requestId: 'approval-missing', decision: 'pending', canDecide: false },
               },
             ],
           }),
@@ -7359,14 +7050,13 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
     expect(screen.getByText('No inbound remediation workflows linked yet.')).toBeTruthy();
     expect(screen.getByText('Evidence bundle is missing.')).toBeTruthy();
-    expect(screen.getByText('Live follow is unavailable; durable remediation artifacts remain authoritative.')).toBeTruthy();
     expect(screen.getByText('No remediation evidence artifacts linked yet.')).toBeTruthy();
 
     const longTarget = screen.getByText('mm:target-long-workflow-id-with-many-segments-for-mobile-containment');
     expect(longTarget.closest('code')?.className).toContain('break-all');
   });
 
-  it('renders rich remediation target metadata for selected steps, live observation, evidence degradation, and locks', async () => {
+  it('renders rich remediation target metadata for selected steps and evidence degradation', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-rich/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-remediation-rich',
@@ -7389,10 +7079,6 @@ describe('Workflow Detail Entrypoint', () => {
     };
 
     const scoped = richOutboundRemediationLink();
-    scoped.actionCapabilities.push({
-      ...scoped.actionCapabilities[0], actionKind: 'session.cancel',
-      targetSelectorRequired: true, targetSelectorOptions: ['bridgeSessionId', 'stepExecutionId'],
-    } as typeof scoped.actionCapabilities[number]);
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/executions/test-remediation-rich/remediations?direction=inbound')) {
@@ -7422,20 +7108,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('mm:target-rich')).toBeTruthy();
     expect(screen.getByText('collect-context, repair-runtime')).toBeTruthy();
     expect(screen.getByText('awaiting_external')).toBeTruthy();
-    const available = screen.getByText('Available Actions:').parentElement!;
-    expect(within(available).getByText(/Cancel session \(select a session\)/)).toBeTruthy();
-    expect(within(available).getByText(/Pause workflow/)).toBeTruthy();
-    expect(within(available).queryByText('host.restart')).toBeNull();
-    const diagnostics = screen.getByText(/Action diagnostics/).closest('details')!;
-    expect(within(diagnostics).getByText('host.restart')).toBeTruthy();
-    expect(within(diagnostics).getByText(/authoritative_verifier_unavailable/)).toBeTruthy();
     expect(screen.getByText(/Unavailable: runtime_stderr, provider_snapshot/)).toBeTruthy();
-    expect(screen.getByText('Live observation active')).toBeTruthy();
-    expect(screen.getByText('stdout:42')).toBeTruthy();
-    expect(screen.getByText('reconnected')).toBeTruthy();
-    expect(screen.getByText('run-target-rich:2')).toBeTruthy();
-    expect(screen.getByText('conflict')).toBeTruthy();
-    expect(screen.getAllByText('test-remediation-rich').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Available Actions/)).toBeNull();
+    expect(screen.queryByText(/Action diagnostics/)).toBeNull();
     expect(screen.queryByText('/var/lib/moonmind/raw-context.json')).toBeNull();
   });
 

@@ -57,10 +57,6 @@ export const ExecutionActionsSchema = z
 
 export type ExecutionActionCapabilities = z.infer<typeof ExecutionActionsSchema>;
 
-export const DEFAULT_REMEDIATION_MODE = 'snapshot_then_follow';
-export const DEFAULT_REMEDIATION_AUTHORITY = 'approval_gated';
-export const DEFAULT_REMEDIATION_ACTION_POLICY = 'admin_healer_default';
-
 /**
  * Menu placement, in display order: safe actions, destructive actions after a
  * divider, the Troubleshooting group, then ineligible actions collapsed under

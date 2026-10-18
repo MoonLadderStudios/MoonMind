@@ -38,19 +38,15 @@ beforeEach(() => {
         </fieldset>
       </section>
     </form>
-    <section class="stack td-remediation-region td-evidence-region" aria-label="Authoritative remediation lifecycle">
+    <section class="stack td-remediation-region td-evidence-region" aria-label="Remediation context">
       <ul class="td-remediation-list">
         <li class="card">
           <code>artifact-with-a-very-long-unbroken-identity-that-must-wrap-inside-the-remediation-card-on-mobile</code>
           <div class="stack td-remediation-lifecycle">
             <details class="td-remediation-canonical">
               <summary>Authored remediation contract</summary>
-              <pre>{"authorityMode":"approval_gated","bounded":true}</pre>
+              <pre>{"authorityMode":"observe_only","bounded":true}</pre>
             </details>
-          </div>
-          <div class="stack td-remediation-approval-controls">
-            <label>Decision rationale<textarea rows="2"></textarea></label>
-            <button type="button" class="secondary">Approve remediation action</button>
           </div>
         </li>
       </ul>
@@ -73,15 +69,15 @@ describe('remediation authoring and lifecycle responsive layout', () => {
       const editable = host.querySelector<HTMLFieldSetElement>('.queue-remediation-repair-intent')!;
       const target = pinned.querySelector<HTMLInputElement>('input')!;
       const startingBranch = editable.querySelector<HTMLInputElement>('input')!;
-      const approval = host.querySelector<HTMLButtonElement>('.td-remediation-approval-controls button')!;
+      const contract = host.querySelector<HTMLElement>('.td-remediation-canonical summary')!;
 
       expect(pinned.getAttribute('aria-label')).toBe('Pinned target identity');
       expect(editable.getAttribute('aria-label')).toBe('Editable repair intent');
       expect(target.readOnly).toBe(true);
       expect(startingBranch.readOnly).toBe(false);
 
-      approval.focus();
-      expect(document.activeElement).toBe(approval);
+      contract.focus();
+      expect(document.activeElement).toBe(contract);
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
       expect(host.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
     }

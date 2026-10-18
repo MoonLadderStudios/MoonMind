@@ -1,10 +1,5 @@
 import { readModelSelection } from "./modelSelection";
-import {
-  buildRemediationRuntimeRequestFields,
-  DEFAULT_REMEDIATION_ACTION_POLICY,
-  DEFAULT_REMEDIATION_AUTHORITY,
-  DEFAULT_REMEDIATION_MODE,
-} from './workflowActions';
+import { buildRemediationRuntimeRequestFields } from './workflowActions';
 
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DRAFT_PRESENCE_PREFIX = 'moonmind.remediation-create-draft-presence.';
@@ -12,6 +7,14 @@ const MAX_REMEDIATION_STEP_SELECTORS = 25;
 export const REMEDIATION_CREATE_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 /** Skill that reads the remediation context MoonMind places in the workspace. */
 export const REMEDIATION_SKILL_ID = 'remediate-workflow';
+const RETIRED_REMEDIATION_INPUTS = [
+  'mode',
+  'authorityMode',
+  'actionPolicyRef',
+  'approvalPolicy',
+  'lockPolicy',
+  'verificationPolicy',
+] as const;
 
 export type RemediationCreateDraftReadResult =
   | { status: 'valid'; draft: RemediationCreateDraft }
@@ -65,13 +68,7 @@ export type RemediationCreateDraft = {
       stepSelectors?: Array<Record<string, unknown>>;
       agentRunIds?: string[];
     };
-    mode: 'snapshot' | 'live_follow' | 'snapshot_then_follow';
-    authorityMode: 'observe_only' | 'approval_gated' | 'admin_auto';
-    actionPolicyRef?: string;
     evidencePolicy?: Record<string, unknown>;
-    approvalPolicy?: Record<string, unknown>;
-    lockPolicy?: Record<string, unknown>;
-    verificationPolicy?: Record<string, unknown>;
     checkpointBranchPolicy?: Record<string, unknown>;
     trigger: { type: 'manual' };
   };
@@ -113,32 +110,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function remediationMode(value: unknown): RemediationCreateDraft['remediation']['mode'] {
-  const normalized = cleanText(value);
-  if (
-    normalized === 'snapshot' ||
-    normalized === 'live_follow' ||
-    normalized === 'snapshot_then_follow'
-  ) {
-    return normalized;
-  }
-  return DEFAULT_REMEDIATION_MODE;
-}
-
-function remediationAuthorityMode(
-  value: unknown,
-): RemediationCreateDraft['remediation']['authorityMode'] {
-  const normalized = cleanText(value);
-  if (
-    normalized === 'observe_only' ||
-    normalized === 'approval_gated' ||
-    normalized === 'admin_auto'
-  ) {
-    return normalized;
-  }
-  return DEFAULT_REMEDIATION_AUTHORITY;
 }
 
 function storageKey(draftId: string): string {
@@ -198,9 +169,6 @@ function checkpointSelectors(execution: RemediationDraftExecution): Array<Record
 export function buildRemediationCreateDraft(
   execution: RemediationDraftExecution,
   options: {
-    mode?: RemediationCreateDraft['remediation']['mode'] | string;
-    authorityMode?: RemediationCreateDraft['remediation']['authorityMode'] | string;
-    actionPolicyRef?: string;
     runId?: string;
     instructions?: string;
   } = {},
@@ -328,9 +296,6 @@ export function buildRemediationCreateDraft(
     skill: REMEDIATION_SKILL_ID,
     remediation: {
       target: remediationTarget,
-      mode: remediationMode(options.mode),
-      authorityMode: remediationAuthorityMode(options.authorityMode),
-      actionPolicyRef: cleanText(options.actionPolicyRef || DEFAULT_REMEDIATION_ACTION_POLICY),
       evidencePolicy: {
         includeStepLedger: true,
         includeDiagnostics: true,
@@ -338,16 +303,6 @@ export function buildRemediationCreateDraft(
         includeIncident: true,
         includeCheckpointBranches: true,
         includeAdapterRefs: true,
-        tailLines: 2000,
-      },
-      approvalPolicy: {
-        requiredForHighRisk: true,
-      },
-      lockPolicy: {
-        targetMutationLock: true,
-      },
-      verificationPolicy: {
-        verifyAppliedActions: true,
       },
       checkpointBranchPolicy: {
         actionKind: 'checkpoint_branch.create_from_remediation_context',
@@ -447,10 +402,9 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     optionalTextIsValid(draft.executionProfileRef) &&
     optionalTextIsValid(draft.launchPolicyRef) &&
     optionalTextIsValid(draft.skill) &&
-    (
-      remediation.actionPolicyRef === undefined ||
-      remediation.actionPolicyRef === DEFAULT_REMEDIATION_ACTION_POLICY
-    ) &&
+    // A draft from before typed remediation actions were retired is refused
+    // whole rather than submitted with inputs admission now rejects.
+    RETIRED_REMEDIATION_INPUTS.every((key) => remediation[key] === undefined) &&
     optionalRecordIsValid(draft.runtime) &&
     optionalRecordIsValid(draft.agentProfile) &&
     (
@@ -459,16 +413,7 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
         isNonEmptyText(agentProfile.providerProfileRef))
     ) &&
     optionalRecordIsValid(remediation.evidencePolicy) &&
-    optionalRecordIsValid(remediation.approvalPolicy) &&
-    optionalRecordIsValid(remediation.lockPolicy) &&
-    optionalRecordIsValid(remediation.verificationPolicy) &&
     optionalRecordIsValid(remediation.checkpointBranchPolicy) &&
-    ['snapshot', 'live_follow', 'snapshot_then_follow'].includes(
-      cleanText(remediation.mode),
-    ) &&
-    ['observe_only', 'approval_gated', 'admin_auto'].includes(
-      cleanText(remediation.authorityMode),
-    ) &&
     trigger.type === 'manual'
   );
 }
