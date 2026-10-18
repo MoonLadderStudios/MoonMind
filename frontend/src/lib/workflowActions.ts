@@ -1,3 +1,4 @@
+import { responseError } from './api/client';
 import { readModelSelection } from "./modelSelection";
 import { z } from 'zod';
 
@@ -457,7 +458,7 @@ export type RetryFromStepResult = {
 
 /**
  * Restart a closed run from one of its steps. Earlier steps are kept and the
- * workflow keeps its id; refusals carry a readable `detail.message`.
+ * workflow keeps its id; a refusal throws an ApiError with its reason code.
  */
 export async function requestRetryFromStep({
   apiBase,
@@ -479,17 +480,7 @@ export async function requestRetryFromStep({
     },
   );
   if (!response.ok) {
-    const text = await response.text();
-    let message = text || response.statusText;
-    try {
-      const detail = JSON.parse(text)?.detail;
-      if (typeof detail?.message === 'string' && detail.message) {
-        message = detail.message;
-      }
-    } catch {
-      // Keep the raw response text when it is not JSON.
-    }
-    throw new Error(message);
+    throw await responseError(response);
   }
   return response.json();
 }
