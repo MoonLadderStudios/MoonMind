@@ -523,6 +523,8 @@ describe('SourceControlConnections', () => {
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Renamed' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }));
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Connections' })).getByText('Work GitHub'));
+    // The unconfirmed edit is still a draft, so switching asks before leaving it.
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and continue' }));
     rejectSave(new TypeError('network connection lost'));
 
     await waitFor(() => expect(screen.getByRole('form', { name: 'Edit connection' })).toBeTruthy());
@@ -861,6 +863,77 @@ describe('SourceControlConnections', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Operations' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByTestId('location').textContent).toBe('/settings/operations');
+  });
+
+  it('asks before another connection replaces the selected connection draft, and discards only it', async () => {
+    stubApi({ items: [connection(), connection({ id: 'work-github', displayName: 'Work GitHub' })] });
+    renderSection();
+    const nav = await screen.findByRole('navigation', { name: 'Connections' });
+    const form = await screen.findByRole('form', { name: 'Edit connection' });
+    fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Unsaved name' } });
+
+    fireEvent.click(within(nav).getByText('Work GitHub'));
+    expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(screen.getByRole('heading', { name: 'Personal GitHub' })).toBeTruthy();
+    expect((within(form).getByLabelText('Connection name') as HTMLInputElement).value).toBe('Unsaved name');
+
+    fireEvent.click(within(nav).getByText('Work GitHub'));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and continue' }));
+    expect(await screen.findByRole('heading', { name: 'Work GitHub' })).toBeTruthy();
+
+    // A clean pane switches without asking, and the discarded draft is gone.
+    fireEvent.click(within(nav).getByText('Personal GitHub'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const reopened = await screen.findByRole('form', { name: 'Edit connection' });
+    expect((within(reopened).getByLabelText('Connection name') as HTMLInputElement).value).toBe('Personal GitHub');
+    fireEvent.click(screen.getByRole('link', { name: 'Operations' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('asks before Add token connection replaces an unsaved assignment draft', async () => {
+    stubApi({ items: [connection()] });
+    renderSection();
+    const assign = await screen.findByRole('form', { name: 'Assign repository' });
+    fireEvent.change(within(assign).getByLabelText(/Assign repository/), { target: { value: 'acme/widgets' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add token connection' }));
+    expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect((within(assign).getByLabelText(/Assign repository/) as HTMLInputElement).value).toBe('acme/widgets');
+    expect(screen.queryByRole('form', { name: 'Add token connection' })).toBeNull();
+  });
+
+  it('disables a connection reversibly and keeps its record', async () => {
+    const assigned = { repository: 'acme/widgets', providerRepoId: '7', operations: ['read'], revision: 1, verified: true };
+    const state = { items: [connection({ assignments: [assigned] })] };
+    const onNotice = vi.fn();
+    const fetchMock = stubApi(state, {
+      'POST /api/v1/repository-connections/personal-github/disable': () => {
+        state.items = [connection({ lifecycle: 'disabled', policyRevision: 2, assignments: [assigned] })];
+        return json(state.items[0]);
+      },
+      'POST /api/v1/repository-connections/personal-github/enable': () => {
+        state.items = [connection({ lifecycle: 'active', policyRevision: 3, assignments: [assigned] })];
+        return json(state.items[0]);
+      },
+    });
+    renderSection({ onNotice });
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable connection' }));
+    const enable = await screen.findByRole('button', { name: 'Enable connection' });
+    expect(screen.getByText(/Disabled: workflows cannot use it/)).toBeTruthy();
+    expect(screen.getByText('acme/widgets')).toBeTruthy();
+    expect(onNotice).toHaveBeenLastCalledWith(expect.objectContaining({ level: 'ok', text: expect.stringMatching(/Enable connection/) }));
+
+    fireEvent.click(enable);
+    expect(await screen.findByRole('button', { name: 'Disable connection' })).toBeTruthy();
+    const enables = calls(fetchMock, 'POST', '/api/v1/repository-connections/personal-github/enable');
+    expect(enables).toHaveLength(1);
+    expect(bodyOf(enables[0]).requestId).toEqual(expect.any(String));
+    expect(bodyOf(enables[0]).requestId).not.toBe(
+      bodyOf(calls(fetchMock, 'POST', '/api/v1/repository-connections/personal-github/disable')[0]).requestId,
+    );
+    expect(screen.queryByText(/Disabled: workflows cannot use it/)).toBeNull();
+    expect(onNotice).toHaveBeenLastCalledWith({ level: 'ok', text: 'Personal GitHub enabled.' });
   });
 
   it('keeps an unsaved assignment guarded when the connection edit is saved', async () => {
