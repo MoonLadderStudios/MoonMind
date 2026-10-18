@@ -15,6 +15,8 @@ PROVIDER_PROFILE_REF_KEYS: tuple[str, ...] = (
     "providerProfile",
     "executionProfileRef",
     "execution_profile_ref",
+    "profile_id",
+    "provider_profile",
 )
 
 MODEL_TIER_KEY = "modelTier"
@@ -81,7 +83,26 @@ def provider_profile_ref_from_mapping(source: Any) -> str | None:
 def has_profile_selector(runtime: Mapping[str, Any]) -> bool:
     """Whether account choice is explicitly delegated to a provider pool."""
     selector = runtime.get("profileSelector")
-    return isinstance(selector, Mapping) and bool(selector)
+    if not isinstance(selector, Mapping):
+        return False
+    for key, value in selector.items():
+        if key in (
+            "providerId",
+            "provider_id",
+            "runtimeMaterializationMode",
+            "runtime_materialization_mode",
+        ) and (value is None or (isinstance(value, str) and not value.strip())):
+            continue
+        if (
+            key in ("tagsAny", "tags_any", "tagsAll", "tags_all")
+            and isinstance(value, list)
+            and not value
+        ):
+            continue
+        # Unknown or malformed criteria remain authored so existing validation
+        # rejects them rather than silently falling back to another account.
+        return True
+    return False
 
 
 def merge_runtime_selection(
@@ -95,9 +116,13 @@ def merge_runtime_selection(
     """
     merged = dict(parent)
     if has_profile_selector(child) or provider_profile_ref_from_mapping(child):
-        # A child pool or exact account supersedes inherited exact aliases.
+        # A child pool or exact account supersedes inherited account constraints.
         # Keep any exact pin authored alongside the child's own selector.
-        for key in (*PROVIDER_PROFILE_REF_KEYS, "inheritedProfileId"):
+        for key in (
+            *PROVIDER_PROFILE_REF_KEYS,
+            "inheritedProfileId",
+            "profileSelector",
+        ):
             merged.pop(key, None)
     if "modelTier" in child or is_custom_selection(child):
         for key in (
@@ -110,7 +135,17 @@ def merge_runtime_selection(
             "effortSource",
         ):
             merged.pop(key, None)
-    merged.update(child)
+    merged.update(
+        (key, value)
+        for key, value in child.items()
+        if key not in PROVIDER_PROFILE_REF_KEYS
+        or (value is not None and str(value).strip())
+    )
+    if "profileSelector" in child and not has_profile_selector(child):
+        if not provider_profile_ref_from_mapping(child) and "profileSelector" in parent:
+            merged["profileSelector"] = parent["profileSelector"]
+        else:
+            merged.pop("profileSelector", None)
     if isinstance(parent.get("parameters"), Mapping) and isinstance(
         child.get("parameters"), Mapping
     ):

@@ -50,6 +50,7 @@ from moonmind.runtime_intent import (
 from moonmind.schemas.temporal_models import ObjectiveOutcomeValue
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
+    workflow_requires_agent,
     reject_retired_vector_fields,
     strip_absent_vector_fields,
 )
@@ -1467,6 +1468,19 @@ class RecurringWorkflowsService:
         """
 
         initial_parameters = dict(target.get("initialParameters") or {})
+        task_payload = initial_parameters.get("workflow") or initial_parameters.get(
+            "task"
+        )
+        if (
+            isinstance(task_payload, Mapping)
+            and not workflow_requires_agent(task_payload, initial_parameters)
+            and agent_profile_selection is None
+            and initial_parameters.get("agentProfileSnapshot") is None
+            and initial_parameters.get("omnigentExecutionPlan") is None
+        ):
+            # Direct-tool plans never enter agent execution. Retained or
+            # explicitly authored agent authority still follows validation below.
+            return None
         authored_profile = resolve_launch_target_profile_selection(target)
         # An omitted runtime that defaults to Omnigent is admitted like an
         # explicit one. Otherwise the schedule would launch plan-less work

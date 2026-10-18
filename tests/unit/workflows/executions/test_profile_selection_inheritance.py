@@ -13,6 +13,8 @@ PROFILE_KEYS = (
     "providerProfile",
     "executionProfileRef",
     "execution_profile_ref",
+    "profile_id",
+    "provider_profile",
 )
 
 
@@ -104,3 +106,106 @@ def test_account_override_preserves_workflow_model_merge_outputs(account_intent)
 def test_child_selector_keeps_its_own_exact_pin():
     child = {"providerProfileRef": "chosen", "profileSelector": {"tagsAll": ["chosen"]}}
     assert merge_runtime_selection({"profileId": "saved"}, child) == child
+
+
+@pytest.mark.parametrize(
+    "parent_intent",
+    [
+        {},
+        {"profileId": "parent"},
+        {"profileSelector": {"tagsAll": ["parent"]}},
+        {"profileId": "parent", "profileSelector": {"tagsAll": ["parent"]}},
+    ],
+)
+@pytest.mark.parametrize(
+    "child_intent",
+    [
+        {},
+        {"profile_id": "child"},
+        {"provider_profile": "child"},
+        {"profileSelector": {"tagsAll": ["child"]}},
+        {"profileId": "child", "profileSelector": {"tagsAll": ["child"]}},
+        {"profileSelector": {}},
+        {"profileSelector": None},
+        {"profileSelector": {"providerId": None, "tagsAny": [], "tagsAll": []}},
+    ],
+)
+def test_account_intent_inheritance_matrix(parent_intent, child_intent):
+    from moonmind.runtime_intent import provider_profile_ref_from_mapping
+
+    meaningful = bool(provider_profile_ref_from_mapping(child_intent)) or any(
+        (child_intent.get("profileSelector") or {}).values()
+    )
+    expected = child_intent if meaningful else parent_intent
+    merged = merge_runtime_selection(parent_intent, child_intent)
+    assert provider_profile_ref_from_mapping(
+        merged
+    ) == provider_profile_ref_from_mapping(expected)
+    assert (merged.get("profileSelector") or {}) == (
+        expected.get("profileSelector") or {}
+    )
+
+
+@pytest.mark.parametrize("alias", PROFILE_KEYS)
+@pytest.mark.parametrize("layer", ["runtime", "task", "payload"])
+def test_child_fanout_explicit_account_does_not_acquire_parent_pin(alias, layer):
+    from moonmind.runtime_intent import provider_profile_ref_from_mapping
+    from moonmind.workflows.executions.runtime_inheritance import (
+        InheritedRuntime,
+        apply_inherited_runtime_to_payload,
+    )
+
+    task = {"runtime": {}}
+    payload = {"workflow": task}
+    {"runtime": task["runtime"], "task": task, "payload": payload}[layer][
+        alias
+    ] = "child"
+    apply_inherited_runtime_to_payload(
+        payload=payload,
+        task_payload=task,
+        inherited=InheritedRuntime(profile_id="parent", execution_profile_ref="parent"),
+    )
+    assert provider_profile_ref_from_mapping(task["runtime"]) in (None, "child")
+    assert task["runtime"].get("executionProfileRef") != "parent"
+
+
+def test_child_fanout_pool_does_not_acquire_parent_pin():
+    from moonmind.workflows.executions.runtime_inheritance import (
+        InheritedRuntime,
+        apply_inherited_runtime_to_payload,
+    )
+
+    task = {"runtime": {"profileSelector": {"tagsAll": ["child"]}}}
+    apply_inherited_runtime_to_payload(
+        payload={"workflow": task},
+        task_payload=task,
+        inherited=InheritedRuntime(profile_id="parent", execution_profile_ref="parent"),
+    )
+    assert task["runtime"] == {"profileSelector": {"tagsAll": ["child"]}}
+
+
+@pytest.mark.parametrize("alias", PROFILE_KEYS)
+@pytest.mark.parametrize("neutral", ["", "   ", None])
+def test_neutral_child_exact_alias_inherits_parent(alias, neutral):
+    from moonmind.runtime_intent import provider_profile_ref_from_mapping
+
+    merged = merge_runtime_selection({alias: "parent"}, {alias: neutral})
+    assert provider_profile_ref_from_mapping(merged) == "parent"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "providerId",
+        "provider_id",
+        "runtimeMaterializationMode",
+        "runtime_materialization_mode",
+    ],
+)
+def test_whitespace_selector_criteria_are_omitted(key):
+    from moonmind.runtime_intent import has_profile_selector
+
+    child = {"profileSelector": {key: "  \t"}}
+    assert not has_profile_selector(child)
+    parent = {"profileId": "saved", "profileSelector": {"tagsAll": ["saved"]}}
+    assert merge_runtime_selection(parent, child) == parent
