@@ -22,7 +22,7 @@ import {
 } from '../components/ExecutionStatusPill';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, formatWorkflowSummary, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { AttachmentImagePreview } from '../components/AttachmentImagePreview';
-import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import { DashboardActionDialog, useActionConfirmation } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
 import {
@@ -64,6 +64,7 @@ import {
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
+  describeWorkflowActionDisabledReason,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
@@ -2205,9 +2206,13 @@ const KEBAB_ICON = (
 function IconMenuButton({
   items,
   ariaLabel,
+  subject,
+  subjectId,
 }: {
   items: WorkflowActionMenuItem[];
   ariaLabel: string;
+  subject: string;
+  subjectId: string;
 }) {
   return (
     <WorkflowActionsMenu
@@ -2215,6 +2220,8 @@ function IconMenuButton({
       triggerContent={KEBAB_ICON}
       triggerAriaLabel={ariaLabel}
       triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+      subject={subject}
+      subjectId={subjectId}
     />
   );
 }
@@ -7223,6 +7230,7 @@ function SessionContinuityPanel({
   const sessionId = sessionSnapshot?.sessionId ?? null;
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
+  const { requestConfirmation, confirmationDialog } = useActionConfirmation();
   const optimisticMessageSequenceRef = useRef(0);
 
   const projectionQuery = useQuery({
@@ -7412,16 +7420,26 @@ function SessionContinuityPanel({
   };
 
   const clearSession = () => {
-    if (!window.confirm('Clear this managed session and start a new context boundary?')) return;
-    const requestId = crypto.randomUUID();
-    setPanelError(null);
-    controlMutation.mutate({
-      schemaVersion: 1,
-      controlRequestId: requestId,
-      idempotencyKey: requestId,
-      action: 'clear_session',
-      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
-      reason: 'Operator confirmed clear session',
+    requestConfirmation({
+      title: 'Clear session?',
+      subject: 'Managed session',
+      compactId: projection.session_id,
+      consequence:
+        'Starts a new context boundary: the agent continues without the earlier conversation. This cannot be undone.',
+      confirmLabel: 'Clear session',
+      danger: true,
+      onConfirm: () => {
+        const requestId = crypto.randomUUID();
+        setPanelError(null);
+        controlMutation.mutate({
+          schemaVersion: 1,
+          controlRequestId: requestId,
+          idempotencyKey: requestId,
+          action: 'clear_session',
+          expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+          reason: 'Operator confirmed clear session',
+        });
+      },
     });
   };
 
@@ -7441,16 +7459,25 @@ function SessionContinuityPanel({
   };
 
   const cancelSession = () => {
-    if (!window.confirm('Stop this managed session?')) return;
-    const requestId = crypto.randomUUID();
-    setPanelError(null);
-    controlMutation.mutate({
-      schemaVersion: 1,
-      controlRequestId: requestId,
-      idempotencyKey: requestId,
-      action: 'cancel_session',
-      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
-      reason: 'Operator confirmed stop session',
+    requestConfirmation({
+      title: 'Cancel session?',
+      subject: 'Managed session',
+      compactId: projection.session_id,
+      consequence: 'Stops the managed session; it takes no further turns. This cannot be undone.',
+      confirmLabel: 'Cancel session',
+      danger: true,
+      onConfirm: () => {
+        const requestId = crypto.randomUUID();
+        setPanelError(null);
+        controlMutation.mutate({
+          schemaVersion: 1,
+          controlRequestId: requestId,
+          idempotencyKey: requestId,
+          action: 'cancel_session',
+          expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+          reason: 'Operator confirmed stop session',
+        });
+      },
     });
   };
 
@@ -7667,6 +7694,7 @@ function SessionContinuityPanel({
           })}
         </div>
       </div>
+      {confirmationDialog}
     </section>
   );
 }
@@ -9969,6 +9997,73 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     cancelMutation.mutate({ action: 'reject', graceful: true });
   };
 
+  const { requestConfirmation, confirmationDialog } = useActionConfirmation();
+  // Promoting, publishing and archiving a branch change shared or outside
+  // state the dashboard cannot undo, so they are confirmed first. The other
+  // branch actions start new work or only read.
+  const onBranchAction = (request: BranchMutationRequest) => {
+    const submit = () => {
+      setActionError(null);
+      checkpointBranchMutation.mutate(request);
+    };
+    if (request.kind !== 'promote' && request.kind !== 'publish' && request.kind !== 'archive') {
+      submit();
+      return;
+    }
+    const { branch } = request;
+    const confirmation = {
+      promote: {
+        title: 'Promote branch?',
+        consequence:
+          'Accepts this branch as the result for its step. Only one branch per step can be promoted, and the dashboard cannot undo it.',
+        confirmLabel: 'Promote branch',
+      },
+      publish: {
+        title: 'Publish branch?',
+        consequence: `Publishes this branch for review as a GitHub pull request from ${branch.gitWorkBranch} into ${branch.gitBaseBranch} in ${branch.gitRepository}.`,
+        confirmLabel: 'Publish branch',
+      },
+      archive: {
+        title: 'Archive branch?',
+        consequence:
+          'Archived branches cannot be continued, promoted, or published, and the dashboard cannot restore them.',
+        confirmLabel: 'Archive branch',
+        danger: true,
+      },
+    }[request.kind];
+    requestConfirmation({
+      ...confirmation,
+      subject: branch.label || branch.branchId,
+      compactId: branch.branchId,
+      onConfirm: submit,
+    });
+  };
+  // Takeover and resume pause or resume the remediation and stay reversible;
+  // only cancel ends it, so only cancel asks first.
+  const onRemediationOperatorControl = (
+    remediationWorkflowId: string,
+    action: 'cancel' | 'takeover' | 'resume',
+  ) => {
+    const submit = () => {
+      setActionError(null);
+      remediationOperatorMutation.mutate({ remediationWorkflowId, action });
+    };
+    if (action !== 'cancel') {
+      submit();
+      return;
+    }
+    requestConfirmation({
+      title: 'Cancel remediation?',
+      subject: 'Remediation workflow',
+      compactId: remediationWorkflowId,
+      consequence:
+        'The remediation workflow stops gracefully and ends as canceled. This cannot be undone.',
+      confirmLabel: 'Cancel remediation',
+      danger: true,
+      onConfirm: submit,
+    });
+  };
+
   const actions = execution?.actions;
   const busy =
     updateMutation.isPending ||
@@ -10050,10 +10145,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
-  const actionDisabledReason = (key: string): string | null => {
-    const reason = actions?.disabledReasons?.[key];
-    return reason ? formatStatusLabel(reason) : null;
-  };
+  const actionDisabledReason = (key: string): string | null =>
+    describeWorkflowActionDisabledReason(actions?.disabledReasons?.[key]);
   const workflowActionMenuItems: WorkflowActionMenuItem[] = buildWorkflowActionMenuItems({
     actionsOn,
     actions,
@@ -10063,15 +10156,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     editHref,
     compareHref,
     canShowEditWorkflow,
-    editTaskDisabledReason: editTaskUnavailableReason
-      ? formatStatusLabel(editTaskUnavailableReason)
-      : null,
-    rerunDisabledReason: rerunUnavailableReason ? formatStatusLabel(rerunUnavailableReason) : null,
+    editTaskDisabledReason: describeWorkflowActionDisabledReason(editTaskUnavailableReason),
+    rerunDisabledReason: describeWorkflowActionDisabledReason(rerunUnavailableReason),
     selectedRecoveryOptionCount: selectedRecoveryOptions.length,
     selectedRecoveryStepEligible: Boolean(selectedRecoveryStep?.eligible),
-    selectedRecoveryStepDisabledReason: selectedRecoveryStep?.reason
-      ? formatStatusLabel(selectedRecoveryStep.reason)
-      : 'selected step is not eligible',
+    selectedRecoveryStepDisabledReason:
+      describeWorkflowActionDisabledReason(selectedRecoveryStep?.reason) ??
+      'The selected step is not eligible.',
     canCreateRemediation: remediationActionAvailable,
     handlers: {
       onRename,
@@ -10198,6 +10289,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             <IconMenuButton
               items={toolbarMenuItems}
               ariaLabel="Workflow actions"
+              subject={workflowDialogSubject}
+              subjectId={workflowDialogId}
             />
           ) : null}
         </div>
@@ -10263,6 +10356,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         onCancel={closeWorkflowDialog}
         onConfirm={confirmWorkflowDialog}
       />
+      {confirmationDialog}
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
       {actionNotice ? (
@@ -11001,10 +11095,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     busy={busy}
                     latestCompare={latestBranchCompare}
                     onSelectBranch={setSelectedBranchId}
-                    onBranchAction={(request) => {
-                      setActionError(null);
-                      checkpointBranchMutation.mutate(request);
-                    }}
+                    onBranchAction={onBranchAction}
                   />
                 </>
               ) : (
@@ -11195,10 +11286,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   ...(comment ? { comment } : {}),
                 });
               }}
-              onOperatorControl={(remediationWorkflowId, action) => {
-                setActionError(null);
-                remediationOperatorMutation.mutate({ remediationWorkflowId, action });
-              }}
+              onOperatorControl={onRemediationOperatorControl}
             />
           ) : null}
 

@@ -34,6 +34,47 @@ type DashboardActionDialogProps = {
   onConfirm: (value: string) => void;
 };
 
+export type ActionConfirmationRequest = {
+  title: string;
+  subject: string;
+  compactId?: string | null | undefined;
+  /** One line stating what happens. */
+  consequence: ReactNode;
+  confirmLabel: string;
+  danger?: boolean | undefined;
+  onConfirm: () => void;
+};
+
+/**
+ * Holds one pending confirmation and renders its dialog. A guarded control
+ * calls `requestConfirmation`; its action runs only from the dialog's confirm
+ * button. Render `confirmationDialog` anywhere in the component.
+ */
+export function useActionConfirmation(): {
+  requestConfirmation: (request: ActionConfirmationRequest) => void;
+  confirmationDialog: ReactNode;
+} {
+  const [pending, setPending] = useState<ActionConfirmationRequest | null>(null);
+  const confirmationDialog = pending ? (
+    <DashboardActionDialog
+      open
+      title={pending.title}
+      subject={pending.subject}
+      compactId={pending.compactId ?? null}
+      consequence={pending.consequence}
+      confirmLabel={pending.confirmLabel}
+      cancelLabel="Go back"
+      danger={pending.danger ?? false}
+      onCancel={() => setPending(null)}
+      onConfirm={() => {
+        setPending(null);
+        pending.onConfirm();
+      }}
+    />
+  ) : null;
+  return { requestConfirmation: setPending, confirmationDialog };
+}
+
 export function DashboardActionDialog({
   open,
   title,
