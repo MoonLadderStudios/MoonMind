@@ -3,8 +3,7 @@
 
 MoonLadderStudios/MoonMind#4356. ``tools/first_run_journey_3938.sh`` boots
 ``docker-compose.yaml`` and calls this helper against the published API. It
-drives the real application over HTTP with no seeded person, dependency
-override, or provider credential, and exits non-zero on the first failed,
+drives the real application over HTTP with no seeded person or live provider credential, and exits non-zero on the first failed,
 missing, or unobserved outcome. It never reports a skipped step as passing.
 
 Phases (state is carried in ``--state-file`` so a later phase, possibly on a
@@ -19,6 +18,13 @@ recreated stack, can verify what an earlier phase saved):
     run-now, and save a preset. Without a provider credential no model-backed
     step can stay in flight, so the deferred start is what the dashboard
     later cancels (``tools/single_user_journey_browser.mjs ... cancel``).
+``generate``
+    Submit an immediate scratch task to the controlled provider installed by
+    the runner. Require successful compute, its real saved checkpoint and host
+    cleanup, and verify the downloaded archive contains the computed report.
+``generated_verify``
+    Download again after the worker's owned-workspace cleanup receipt. This
+    checks persistence independently of the execution host and local workspace.
 ``canceled``
     Confirm the dashboard cancellation: each execution marked for
     cancellation must have been canceled through the dashboard before its
@@ -79,9 +85,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.parse
@@ -674,6 +682,231 @@ def conversion(state: dict[str, Any], *, api_log: Path) -> None:
     )
 
 
+def generate_output(
+    api: Api, state: dict[str, Any], *, label: str, timeout: float
+) -> None:
+    """Admit ordinary scratch work; only the worker's provider is controlled."""
+    wait_for_default_agent_profile(api, timeout=timeout)
+    marker = f"first-run-generated:{uuid.uuid4().hex}"
+    submission = journey_submission(
+        title=f"Generated scratch report {label}",
+        scheduled_for=datetime.now(timezone.utc),
+        idempotency_key=marker,
+    )
+    submission["payload"].pop("schedule")
+    submission["payload"]["task"]["instructions"] = (
+        f"Create report.md with a report of the SHA-256 of this request marker: {marker}. "
+        "Save the result in MoonMind without publishing or using a repository."
+    )
+    created = api.json("POST", "/api/executions", body=submission, expect=(200, 201))
+    workflow_id = created.get("workflowId")
+    if not workflow_id:
+        raise JourneyFailure("generated task returned no workflow identity")
+    state["generatedOutput"] = {"workflowId": workflow_id, "marker": marker}
+    repeated = api.json("POST", "/api/executions", body=submission, expect=(200, 201))
+    if repeated.get("workflowId") != workflow_id:
+        raise JourneyFailure("generated task redelivery created another execution")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        execution = describe(api, workflow_id)
+        _, statuses = execution_state(execution)
+        if statuses & (TERMINAL_FAILURE | CANCELED):
+            raise JourneyFailure(
+                f"generated compute failed: {execution.get('summary')!r}"
+            )
+        if statuses & COMPLETED:
+            verify_generated_output(api, state)
+            return
+        time.sleep(3)
+    raise JourneyFailure("generated task did not complete within the bounded wait")
+
+
+def verify_generated_output(
+    api: Api, state: dict[str, Any], *, cleanup_receipt: Path | None = None
+) -> None:
+    """Check actual compute, saved archive, owned cleanup and downloaded bytes."""
+    generated = state.get("generatedOutput") or {}
+    workflow_id, marker = generated.get("workflowId"), generated.get("marker")
+    if not workflow_id or not re.fullmatch(
+        r"first-run-generated:[0-9a-f]{32}", marker or ""
+    ):
+        raise JourneyFailure("generated task identity is missing")
+    execution = describe(api, workflow_id)
+    _, statuses = execution_state(execution)
+    if not statuses & COMPLETED or statuses & (TERMINAL_FAILURE | CANCELED):
+        raise JourneyFailure("generated compute has no successful terminal execution")
+    run_id = execution.get("runId")
+    namespace = execution.get("namespace") or "default"
+    if not run_id:
+        raise JourneyFailure("generated task has no run identity")
+    listed = api.json(
+        "GET",
+        f"/api/executions/{quote(namespace)}/{quote(workflow_id)}/{quote(run_id)}/artifacts",
+    )
+    artifacts = listed.get("artifacts") or []
+
+    def read_named(name: str) -> list[tuple[str, dict[str, Any]]]:
+        found = []
+        for artifact in artifacts:
+            if (artifact.get("metadata") or {}).get("name") != name:
+                continue
+            if str(artifact.get("status")).lower() != "complete":
+                raise JourneyFailure(f"generated {name} artifact is incomplete")
+            artifact_id = artifact.get("artifact_id")
+            if not artifact_id:
+                raise JourneyFailure(f"generated {name} has no artifact identity")
+            payload = api.json("GET", f"/api/artifacts/{quote(artifact_id)}/download")
+            if not isinstance(payload, dict):
+                raise JourneyFailure(f"generated {name} is not an evidence object")
+            found.append((artifact_id, payload))
+        return found
+
+    computes = [
+        (ref, item)
+        for ref, item in read_named("first-run-generated-compute.json")
+        if item.get("marker") == marker
+    ]
+    # A lost artifact-write acknowledgement can leave identical receipts;
+    # conflicting computations are never collapsed into a successful result.
+    computes = list(
+        {
+            json.dumps(item, sort_keys=True): (ref, item) for ref, item in computes
+        }.values()
+    )
+    if len(computes) != 1:
+        raise JourneyFailure(
+            "generated compute must have one consistent accepted provider receipt"
+        )
+    _, compute = computes[0]
+    if compute.get("exitCode") != 0 or compute.get("outputPath") != "report.md":
+        raise JourneyFailure("generated compute command did not succeed")
+    if compute.get("workflowId") != workflow_id or compute.get("runId") != run_id:
+        raise JourneyFailure("generated compute belongs to another execution")
+    if not all(
+        compute.get(key) for key in ("bindingId", "sessionId", "hostId", "workspaceId")
+    ):
+        raise JourneyFailure(
+            "generated compute lacks admitted host/session/workspace authority"
+        )
+    checkpoints = [
+        (ref, item)
+        for ref, item in read_named("step_execution_checkpoint")
+        if item.get("boundary") == "after_execution"
+        and all(
+            (item.get("source") or {}).get(key) == compute.get(key)
+            for key in ("workflowId", "runId", "logicalStepId", "executionOrdinal")
+        )
+    ]
+    # Saves may upload equivalent archives before an acknowledgement is lost.
+    # The cleanup owner independently checks authoritative binding save refs.
+    if (
+        not checkpoints
+        or len(
+            {
+                (item.get("workspace") or {}).get("archiveDigest")
+                for _, item in checkpoints
+            }
+        )
+        != 1
+    ):
+        raise JourneyFailure(
+            "generated compute has no consistent matching saved checkpoint"
+        )
+    checkpoint_id, checkpoint = checkpoints[0]
+    workspace = checkpoint.get("workspace") or {}
+    archive_ref, archive_digest = workspace.get("archiveRef"), workspace.get(
+        "archiveDigest"
+    )
+    if not isinstance(archive_ref, str) or not archive_ref.startswith("artifact://"):
+        raise JourneyFailure("generated save has no durable archive reference")
+    cleanups = [
+        item
+        for _, item in read_named("generic-host-cleanup.json")
+        if item.get("bindingId") == compute["bindingId"]
+    ]
+    if not cleanups:
+        raise JourneyFailure("generated host has no cleanup evidence")
+    # A retry after lease cleanup can emit a receipt without a host section.
+    # Keep the successful original, but never ignore contradictory host evidence.
+    hosts = [
+        (item.get("results") or {}).get("host")
+        for item in cleanups
+        if "host" in (item.get("results") or {})
+    ]
+    if not hosts or any(
+        not isinstance(host, dict) or host.get(key) is not True
+        for host in hosts
+        for key in ("containerRemoved", "stateVolumeRemoved")
+    ):
+        raise JourneyFailure("generated execution host cleanup is not confirmed")
+    if cleanup_receipt is not None:
+        try:
+            receipt = json.loads(cleanup_receipt.read_text())
+        except (OSError, ValueError) as exc:
+            raise JourneyFailure(
+                "owned workspace cleanup receipt is unavailable"
+            ) from exc
+        if (
+            not isinstance(receipt, dict)
+            or any(
+                receipt.get(key) != compute[key] for key in ("bindingId", "workspaceId")
+            )
+            or receipt.get("workspaceRemoved") is not True
+            or receipt.get("hostRemoved") is not True
+        ):
+            raise JourneyFailure(
+                "owned workspace cleanup does not match generated execution"
+            )
+    _, archive_bytes = api.request(
+        "GET",
+        f"/api/artifacts/{quote(archive_ref.removeprefix('artifact://'))}/download",
+    )
+    if "sha256:" + hashlib.sha256(archive_bytes).hexdigest() != archive_digest:
+        raise JourneyFailure("generated saved archive digest changed")
+    expected = (
+        f"# Generated scratch report\n\nRequest: {marker}\n"
+        f"SHA-256: {hashlib.sha256(marker.encode()).hexdigest()}\n"
+    ).encode()
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes)) as archive:
+            member = archive.getmember("report.md")
+            if not member.isfile() or member.size != len(expected):
+                raise JourneyFailure("generated report has invalid type or size")
+            stream = archive.extractfile(member)
+            content = stream.read(len(expected) + 1) if stream else b""
+    except (tarfile.TarError, KeyError, OSError) as exc:
+        raise JourneyFailure("generated save has no readable report.md") from exc
+    if content != expected or hashlib.sha256(content).hexdigest() != compute.get(
+        "sha256"
+    ):
+        raise JourneyFailure("download differs from actual generated compute bytes")
+    generated.update(
+        {
+            key: compute[key]
+            for key in ("bindingId", "sessionId", "hostId", "workspaceId", "sha256")
+        }
+    )
+    generated.update(
+        {
+            "runId": run_id,
+            "namespace": namespace,
+            "checkpointRef": f"artifact://{checkpoint_id}",
+            "archiveRef": archive_ref,
+            "archiveDigest": archive_digest,
+        }
+    )
+    if cleanup_receipt is not None:
+        generated["downloadAfterCleanup"] = True
+    log(
+        "generated compute, durable save and download verified"
+        + (
+            " after owned workspace cleanup"
+            if cleanup_receipt
+            else " before workspace cleanup"
+        )
+    )
+
+
 def verify(api: Api, state: dict[str, Any]) -> None:
     credential = state.get("credential")
     if not credential:
@@ -1116,6 +1349,8 @@ def main(argv: list[str] | None = None) -> int:
         "phase",
         choices=(
             "populate",
+            "generate",
+            "generated_verify",
             "canceled",
             "credential",
             "verify",
@@ -1133,6 +1368,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--defer-seconds", type=float, default=150.0)
     parser.add_argument("--api-log", type=Path)
+    parser.add_argument("--cleanup-receipt", type=Path)
     parser.add_argument(
         "--pre-upgrade-release",
         action="store_true",
@@ -1155,6 +1391,12 @@ def main(argv: list[str] | None = None) -> int:
                 defer_seconds=args.defer_seconds,
                 pre_upgrade_release=args.pre_upgrade_release,
             )
+        elif args.phase == "generate":
+            generate_output(api, state, label=args.label, timeout=args.timeout)
+        elif args.phase == "generated_verify":
+            if args.cleanup_receipt is None:
+                raise JourneyFailure("generated_verify requires --cleanup-receipt")
+            verify_generated_output(api, state, cleanup_receipt=args.cleanup_receipt)
         elif args.phase == "canceled":
             canceled(api, state, timeout=args.timeout)
         elif args.phase == "conversion":

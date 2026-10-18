@@ -24,7 +24,9 @@
 # dashboard on that work; the workflow worker restarts; the browser cancels
 # the deferred task from its workflow page and the API must report it
 # canceled; a synthetic credential is bound through an instance setting;
-# everything saved is read back; the binding is released.
+# everything saved is read back; the binding is released. A controlled-provider
+# scratch task then generates and saves a report, with API download checked
+# after its host and owned workspace are removed.
 #
 # Upgrade: an account-era release from before the guarded single-user
 # conversion (FIRST_RUN_3938_UPGRADE_FROM_REVISION, its published image and
@@ -52,10 +54,12 @@
 # workflow-backed update. The controller has no Docker daemon, so every
 # attempt fails at image staging and no stack is mutated.
 #
-# Any failed, missing, or unobserved step exits non-zero. There is no smoke
-# mode. A model-backed step needs a provider credential, which this
-# credential-free run does not have, so no step runs to completion: the task
-# is deferred and canceled, and the recurring run is observed as dispatched.
+# Any failed, missing, or unobserved step exits non-zero. Deferred/canceled
+# startup coverage is followed by a scratch task on a controlled provider:
+# an actual process generates bytes inside its admitted host, then production
+# save/finalization and owned cleanup run. The saved archive is downloaded
+# before and after workspace removal. External model/native-turn execution is
+# substituted; no live-provider availability claim is made.
 # The conversion outcome is printed either way. It publishes only when every
 # retained subsystem has a registered transform; until then it refuses
 # without mutation and the journey reports it as not published.
@@ -131,10 +135,19 @@ UPGRADE_FROM_REVISION="${FIRST_RUN_3938_UPGRADE_FROM_REVISION:-2c67aeb959482d17a
 UPGRADE_FROM="${FIRST_RUN_3938_UPGRADE_FROM:-ghcr.io/moonladderstudios/moonmind:sha-$UPGRADE_FROM_REVISION}"
 LOG_DIR="${FIRST_RUN_3938_LOG_DIR:-$REPO_ROOT/var/artifacts/first-run-3938}/$MODE"
 
-export CODEX_VOLUME_NAME="${CODEX_VOLUME_NAME:-$PROJECT_NAME-codex-auth}"
-export CLAUDE_VOLUME_NAME="${CLAUDE_VOLUME_NAME:-$PROJECT_NAME-claude-auth}"
-export MOONMIND_SECRETS_VOLUME_NAME="${MOONMIND_SECRETS_VOLUME_NAME:-$PROJECT_NAME-secrets}"
-export MOONMIND_SESSION_KEYS_VOLUME_NAME="${MOONMIND_SESSION_KEYS_VOLUME_NAME:-$PROJECT_NAME-session-keys}"
+export CODEX_VOLUME_NAME="$PROJECT_NAME-codex-auth"
+export CLAUDE_VOLUME_NAME="$PROJECT_NAME-claude-auth"
+export MOONMIND_SECRETS_VOLUME_NAME="$PROJECT_NAME-secrets"
+export MOONMIND_SESSION_KEYS_VOLUME_NAME="$PROJECT_NAME-session-keys"
+
+# Never attach generated execution to a caller's named workspace or networks.
+export MOONMIND_AGENT_WORKSPACES_VOLUME_NAME="$PROJECT_NAME-agent-workspaces"
+export MOONMIND_CONTROL_PLANE_NETWORK="${PROJECT_NAME}_control-plane-network"
+export MOONMIND_DOCKER_PROXY_NETWORK="${PROJECT_NAME}_docker-proxy-network"
+export MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK="${PROJECT_NAME}_deployment-controller-network"
+export MOONMIND_SANDBOX_EGRESS_NETWORK="${PROJECT_NAME}_sandbox-egress-network"
+export MOONMIND_RESTRICTED_EGRESS_NETWORK="${PROJECT_NAME}_restricted-egress-network"
+export MOONMIND_OMNIGENT_EGRESS_NETWORK="${PROJECT_NAME}_omnigent-egress-network"
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   COMPOSE_CMD=(docker compose)
@@ -151,8 +164,8 @@ for tool in python3 node curl; do
   fi
 done
 
-# The deployment directory. The fresh journey deploys this checkout; the
-# upgrade journey deploys a worktree that starts at the old release.
+# Deploy from disposable worktrees so runtime state cannot change the caller
+# checkout. The upgrade starts at the old release and retains that worktree.
 DEPLOY_DIR="$REPO_ROOT"
 COMPOSE_OVERRIDES=()
 
@@ -169,7 +182,7 @@ compose() {
     shift
   fi
   ${bound[@]+"${bound[@]}"} "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" \
-    -f "$DEPLOY_DIR/docker-compose.yaml" ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} \
+    -f "$DEPLOY_DIR/docker-compose.yaml" -f "$ISOLATION_OVERRIDE" ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} \
     --project-directory "$DEPLOY_DIR" "$@"
 }
 
@@ -216,8 +229,29 @@ for inherited in GOOGLE_API_KEY GEMINI_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY 
   unset "$inherited" || true
 done
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR/state"
+LOG_DIR="$(cd "$LOG_DIR" && pwd)"
 STATE_DIR="$LOG_DIR/state"
+ISOLATION_OVERRIDE="$STATE_DIR/isolation.json"
+# Compose creates the scoped networks above; their consumers must receive the
+# same names rather than resolve production defaults inside their containers.
+python3 - "$ISOLATION_OVERRIDE" <<'EOF'
+import json, os, sys
+from pathlib import Path
+keys = (
+    "MOONMIND_CONTROL_PLANE_NETWORK", "MOONMIND_DOCKER_PROXY_NETWORK",
+    "MOONMIND_SANDBOX_EGRESS_NETWORK", "MOONMIND_RESTRICTED_EGRESS_NETWORK",
+    "MOONMIND_OMNIGENT_EGRESS_NETWORK",
+)
+environment = {key: os.environ[key] for key in keys}
+services = ("api", "temporal-worker-agent-runtime", "temporal-worker-sandbox",
+            "temporal-worker-deployment-control", "temporal-worker-workflow",
+            "temporal-worker-artifacts", "temporal-worker-llm",
+            "temporal-worker-integrations", "omnigent-runtime-bootstrap")
+Path(sys.argv[1]).write_text(json.dumps({"services": {
+    name: {"environment": environment} for name in services
+}}))
+EOF
 
 record_provenance() {
   {
@@ -431,17 +465,14 @@ browser() {
   node "$SCRIPT_DIR/single_user_journey_browser.mjs" "$API_BASE" "$STATE_DIR/$1.json" "${2:-view}"
 }
 
-# MoonLadderStudios/MoonMind#4502: deploy committed HEAD from a disposable
-# worktree, so the controller state this journey installs (bearer secret,
-# identity, operation records under deploy/state/controller) never lands in
-# the operator's checkout, and give the controller link its own network so
-# the journey never joins a live deployment's.
-prepare_controller_source() {
+# Deploy committed HEAD without writing runtime or controller state into the
+# caller checkout. The same disposable-source owner serves fresh/controller runs.
+prepare_disposable_source() {
   CANDIDATE_REVISION="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]]; then
-    echo "Note: the controller journey deploys committed HEAD ($CANDIDATE_REVISION); uncommitted changes are not deployed." >&2
+    echo "Note: the journey deploys committed HEAD ($CANDIDATE_REVISION); uncommitted changes are not deployed." >&2
   fi
-  DEPLOY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-controller-4502.XXXXXX")"
+  DEPLOY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-first-run.XXXXXX")"
   git -C "$REPO_ROOT" worktree add --detach --quiet "$DEPLOY_DIR" "$CANDIDATE_REVISION"
   export MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK="${PROJECT_NAME}_deployment-controller-network"
 }
@@ -563,6 +594,38 @@ restart_workflow_worker() {
   compose up -d --wait --wait-timeout 300 temporal-worker-workflow 2>&1 | redact | tail -n 5
 }
 
+# The provider process is controlled using the same session-driver seam as the
+# exact-artifact recovery journey. Admission, host/session transport, compute
+# receipts, save/finalization and cleanup remain production-owned. No live
+# provider turn or free-model availability is claimed.
+generated_output_journey() {
+  local label="$1" override="$STATE_DIR/generated-provider.json"
+  python3 - "$override" "$SCRIPT_DIR/single_user_journey_provider.py" "$STATE_DIR" "$PROJECT_NAME" <<'EOF'
+import json, sys
+from pathlib import Path
+output, provider, state, project = sys.argv[1:]
+Path(output).write_text(json.dumps({"services": {"temporal-worker-agent-runtime": {
+    "environment": {
+        "FIRST_RUN_JOURNEY_PROJECT": project,
+        "TEMPORAL_WORKER_COMMAND": "python /opt/moonmind-journey/provider.py worker",
+    },
+    "volumes": [
+        {"type": "bind", "source": provider, "target": "/opt/moonmind-journey/provider.py", "read_only": True},
+        {"type": "bind", "source": state, "target": "/opt/moonmind-journey/state", "read_only": True},
+    ],
+}}}))
+EOF
+  COMPOSE_OVERRIDES+=(-f "$override")
+  compose up -d --no-deps --force-recreate --wait --wait-timeout 300 temporal-worker-agent-runtime 2>&1 | redact | tail -n 10
+  checks generate "$label" --timeout 600
+  # The helper verified the saved archive through the operator API first.
+  # Cleanup rechecks the durable binding and removes only its saved workspace.
+  compose exec -T temporal-worker-agent-runtime python /opt/moonmind-journey/provider.py \
+    cleanup --state-file "/opt/moonmind-journey/state/$label.json" \
+    > "$STATE_DIR/$label-generated-cleanup.json"
+  checks generated_verify "$label" --cleanup-receipt "$STATE_DIR/$label-generated-cleanup.json"
+}
+
 fresh_journey() {
   local label="$1"
   checks populate "$label"
@@ -576,14 +639,16 @@ fresh_journey() {
   checks credential "$label"
   checks verify "$label"
   checks release "$label"
+  generated_output_journey "$label"
 }
 
 if [[ "$MODE" == "fresh" ]]; then
+  prepare_disposable_source
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
   bring_up
   fresh_journey fresh
 elif [[ "$MODE" == "controller" ]]; then
-  prepare_controller_source
+  prepare_disposable_source
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
   bring_up
   controller_journey controller
