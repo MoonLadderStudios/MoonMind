@@ -55,7 +55,7 @@ A new unconfigured draft may show an authorized default or sole compatible profi
 
 Choices come from supported catalog data, not page-local enums or combined options such as Omnigent Codex and Direct Codex. Registration alone is not launch permission. Settings may show disabled or disconnected profiles with their setup state. Unavailable capacity, failed advisory discovery, and revoked credentials mean different things and never select a different identity.
 
-The selected profile supplies its configured tiers and actual default tier. [Workflow Model Selection](WorkflowModelSelection.md) owns the Tier/Model/Effort interaction; the Harness control adds no second model policy. Steps inherit the workflow selection unless explicitly specialized through the supported override boundary, and viewing or saving an inherited value does not pin it. Tools and container jobs without an agent get no Harness or Provider Profile.
+The selected profile supplies its configured tiers and actual default tier. [Workflow Model Selection](WorkflowModelSelection.md) owns the Tier/Model/Effort interaction; the Harness control adds no second model policy. Steps inherit the workflow selection unless explicitly specialized; a step's account pin or nonempty selector replaces the inherited account without changing omitted siblings. Viewing or saving an inherited value does not pin it. Tools and container jobs without an agent get no Harness or Provider Profile.
 
 ## Backend disclosure
 

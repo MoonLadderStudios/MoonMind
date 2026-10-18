@@ -117,6 +117,7 @@ from api_service.services.provider_profile_runtime import (
     ProviderProfileNotFoundError,
     ProviderProfileRuntimeMismatchError,
     load_provider_profile_for_runtime,
+    provider_profile_ref_from_mapping,
     require_provider_profile_runtime,
     resolve_launch_target_profile_selection,
 )
@@ -8774,15 +8775,7 @@ async def _saved_default_provider_profile_ref(
         selector = payload.get("profileSelector")
         if isinstance(selector, Mapping) and selector:
             return None
-        if any(
-            str(payload.get(key) or "").strip()
-            for key in (
-                "providerProfileRef",
-                "profileId",
-                "providerProfile",
-                "executionProfileRef",
-            )
-        ):
+        if provider_profile_ref_from_mapping(payload):
             return None
     from api_service.services.settings_catalog import (
         SettingsCatalogService,
@@ -9747,7 +9740,7 @@ async def _resolve_step_runtime_selections(
         if not runtime_payload:
             continue
 
-        from moonmind.runtime_intent import merge_runtime_selection
+        from moonmind.runtime_intent import has_profile_selector, merge_runtime_selection
 
         effective_runtime_payload = merge_runtime_selection(
             task_runtime, runtime_payload
@@ -9794,7 +9787,10 @@ async def _resolve_step_runtime_selections(
         if raw_requested_model is not None:
             raw_requested_model = str(raw_requested_model)
 
-        effective_profile_id = raw_step_profile_id or task_profile_id
+        step_selects_pool = has_profile_selector(runtime_payload)
+        effective_profile_id = raw_step_profile_id or (
+            None if step_selects_pool else task_profile_id
+        )
         provider_profile = None
         default_profile_id = None
         if effective_profile_id and session is not None:
@@ -9820,7 +9816,7 @@ async def _resolve_step_runtime_selections(
                 profile_id=effective_profile_id,
                 selected_runtime=canonical_step_runtime,
             )
-        elif _runtime_model_tier(runtime_payload) is not None:
+        elif _runtime_model_tier(runtime_payload) is not None and not step_selects_pool:
             # Resolve profile-less tier intent only after the step runtime is
             # known, then persist that selection for the eventual launch.
             provider_profile = await _load_default_provider_profile_for_runtime(
@@ -9864,8 +9860,8 @@ async def _resolve_step_runtime_selections(
             resolved_runtime["profileId"] = raw_step_profile_id
             resolved_runtime["providerProfile"] = raw_step_profile_id
             resolved_runtime["providerProfileRef"] = raw_step_profile_id
-        elif task_profile_id and not raw_step_profile_id:
-            resolved_runtime.setdefault("inheritedProfileId", task_profile_id)
+        elif effective_profile_id:
+            resolved_runtime.setdefault("inheritedProfileId", effective_profile_id)
         elif default_profile_id:
             resolved_runtime["profileId"] = default_profile_id
             resolved_runtime["providerProfile"] = default_profile_id
