@@ -1,17 +1,28 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { WorkflowWorkspaceShell } from '../components/workflows/WorkflowWorkspaceShell';
 import WorkflowListPage from './workflow-list';
-import WorkflowDetailEntrypoint, { WorkflowWorkspaceShell } from './workflow-detail';
-import WorkflowStartPage from './workflow-start';
 import {
   readWorkflowListDisplayMode,
 } from '../lib/collectionListDisplayMode';
 import { decodeWorkflowIdFromPath } from '../lib/workflowDetailRoutes';
 
+// Create and Detail are separate chunks, fetched only when their route renders,
+// so the list route does not download them.
+const WorkflowDetailEntrypoint = lazy(() => import('./workflow-detail'));
+const WorkflowDetailPage = lazy(async () => ({
+  default: (await import('./workflow-detail')).WorkflowDetailPage,
+}));
+const WorkflowStartPage = lazy(() => import('./workflow-start'));
+
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
+
+function DetailLoading() {
+  return <LoadingPlaceholder surface="workflow-detail" region="details" variant="detail" preserveContext />;
+}
 
 function useIsDesktop(): boolean {
   const [isDesktop, setIsDesktop] = useState(() => {
@@ -80,7 +91,9 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
         aria-label="Workflows workspace"
         data-jira-issue="MM-1115"
       >
-        <WorkflowStartPage payload={payload} />
+        <Suspense fallback={<LoadingPlaceholder surface="workflow-start" region="form" variant="form-controls" />}>
+          <WorkflowStartPage payload={payload} />
+        </Suspense>
       </section>
     );
   }
@@ -121,7 +134,11 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
   }
 
   if (!isDesktop || !workspaceShellEnabled || !listEnabled) {
-    return <WorkflowDetailEntrypoint payload={payload} />;
+    return (
+      <Suspense fallback={<DetailLoading />}>
+        <WorkflowDetailEntrypoint payload={payload} />
+      </Suspense>
+    );
   }
 
   return (
@@ -135,7 +152,11 @@ export function WorkflowsWorkspacePage({ payload }: { payload: BootPayload }) {
         workflowId={workflowId}
         search={search}
         displayMode={displayMode}
-      />
+      >
+        <Suspense fallback={<DetailLoading />}>
+          <WorkflowDetailPage payload={payload} />
+        </Suspense>
+      </WorkflowWorkspaceShell>
     </section>
   );
 }

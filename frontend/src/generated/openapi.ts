@@ -25333,7 +25333,10 @@ export interface operations {
     };
     download_artifact_api_artifacts__artifact_id__download_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Preview inert content types instead of downloading them. */
+                inline?: boolean;
+            };
             header?: never;
             path: {
                 artifact_id: string;

@@ -346,7 +346,6 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     endpoints: {
       workflows: '/api/executions',
       workflowUpdatesPoll: '/api/executions',
-      workflowUpdatesStream: '/api/workflows/updates/stream',
     },
     dashboardConfig: {
       initialPath: '/workflows/new',
@@ -887,6 +886,42 @@ describe('Dashboard shared entry', () => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
       expect(document.querySelector('.dashboard-alerts-region')).toBeTruthy();
     });
+  });
+
+  it('MoonLadderStudios/MoonMind#4870 opens no update stream and leaves list refresh to the list query', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    const eventSourceSpy = vi.fn();
+    vi.stubGlobal('EventSource', eventSourceSpy);
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input) === '/api/ui/info') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => uiInfo({
+            dashboardConfig: { pollIntervalsMs: { list: 20, detail: 20, events: 20 } },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, text: async () => '' } as Response);
+    });
+    const payload: BootPayload = { page: 'dashboard', apiBase: '/api', initialData: {} };
+
+    try {
+      const { queryClient } = renderWithClient(<DashboardApp payload={payload} />);
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+      expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/ui/info', expect.anything()));
+
+      // Several list poll intervals pass with no shell-level refresh owner.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+
+      expect(eventSourceSpy).not.toHaveBeenCalled();
+      expect(invalidateSpy).not.toHaveBeenCalled();
+      expect(fetchSpy.mock.calls.some(([url]) => /stream/.test(String(url)))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('renders one workflow list display radio group on covered workflow surfaces', async () => {

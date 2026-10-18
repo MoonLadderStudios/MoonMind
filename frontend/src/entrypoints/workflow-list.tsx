@@ -1891,11 +1891,16 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   // Track the desktop breakpoint so the toolbar layout (Filters trigger vs.
   // per-column filters, results header vs. Actions-header "View options") stays
-  // in sync with the active responsive surface.
+  // in sync with the active responsive surface. Leaving desktop unmounts the
+  // table, so an open column filter closes too rather than pausing polling
+  // behind a popover nobody can see or dismiss.
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const query = window.matchMedia(DESKTOP_MEDIA_QUERY);
-    const onChange = (event: MediaQueryListEvent) => setIsDesktop(event.matches);
+    const onChange = (event: MediaQueryListEvent) => {
+      setIsDesktop(event.matches);
+      if (!event.matches) setDesktopFilterField(null);
+    };
     setIsDesktop(query.matches);
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);
@@ -3163,6 +3168,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           </>
         ) : (
           <>
+            {/* Mount only the layout this viewport shows; list state lives above
+                both, so a breakpoint change keeps sort, filters and density. */}
+            {isDesktop ? (
             <div className="queue-table-wrapper" data-layout="table" data-density={density}>
                 <table>
                   <colgroup>
@@ -3373,6 +3381,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   </tbody>
                 </table>
               </div>
+            ) : (
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
                       const statusSupplements = statusSupplementItems(row);
@@ -3447,6 +3456,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       );
                     })}
               </ul>
+            )}
               {sortedItems.length === 0 ? (
                 data?.nextPageToken ? (
                   // MoonLadderStudios/MoonMind#3947 (R2): an excluded-only page

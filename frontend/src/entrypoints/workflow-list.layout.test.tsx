@@ -19,6 +19,19 @@ describe('Workflows Entrypoint layout', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    // These assertions cover the desktop table; the list mounts only the
+    // layout for the current viewport, and jsdom has no matchMedia.
+    vi.unstubAllGlobals();
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }));
     window.localStorage.clear();
     window.history.pushState({}, 'Test', '/workflows');
     fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
@@ -175,6 +188,16 @@ describe('Workflows Entrypoint layout', () => {
   });
 
   it('keeps mobile task cards constrained to the viewport width', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }));
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     const titleLinks = await screen.findAllByRole('link', { name: 'Example task' });
