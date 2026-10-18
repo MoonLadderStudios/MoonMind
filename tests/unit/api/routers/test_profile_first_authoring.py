@@ -9,13 +9,14 @@ credential availability, deployment evidence and Temporal transport are controll
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from api_service.api.routers import executions
 from api_service.db.base import get_async_session
-from api_service.db.models import ManagedAgentProviderProfile
+from api_service.db.models import ManagedAgentProviderProfile, SettingsOverride
 from api_service.services import omnigent_agent_profile_selection as selection
 from api_service.services import omnigent_execution_plan_service as plans
 from api_service.services.profile_execution_selection import (
@@ -44,6 +45,15 @@ FIXTURE = json.loads(
 )
 
 
+class _AuthoringSession(_Session):
+    async def execute(self, statement):
+        entities = [column.get("entity") for column in statement.column_descriptions]
+        if entities == [SettingsOverride]:
+            # This authoring fixture has no saved Settings overrides.
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+        return await super().execute(statement)
+
+
 @pytest.mark.parametrize(
     "authored, policy_override",
     [(None, None), (False, None), (True, None), (True, "opencode-on-demand@1")],
@@ -64,7 +74,7 @@ def test_rendered_profile_request_reaches_matching_immutable_plan(
     client, monkeypatch, authored, change, policy_override
 ):
     test_client, temporal, user = client
-    session = _Session()
+    session = _AuthoringSession()
     fixture = copy.deepcopy(FIXTURE)
     reference = fixture["provider"]["execution_selection"]
     session.profile.profile_id = reference["profileId"]

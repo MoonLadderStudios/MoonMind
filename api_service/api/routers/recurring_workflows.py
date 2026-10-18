@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Optional
@@ -689,6 +690,7 @@ async def list_recurring_workflows(
         attention_count=attention_count_value,
     )
 
+
 @router.post(
     "",
     response_model=RecurringWorkflowDefinitionModel,
@@ -697,6 +699,7 @@ async def list_recurring_workflows(
 async def create_recurring_workflow(
     payload: CreateRecurringWorkflowRequest,
     service: RecurringWorkflowsService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowDefinitionModel:
     # Single-user (#4351): admission owns access. Stored scope_type is legacy
@@ -706,6 +709,49 @@ async def create_recurring_workflow(
     owner_user_id = None
 
     try:
+        # Only new authoring reads today's defaults. Updates, deployment
+        # refresh and occurrences keep their recorded service-owned targets.
+        from api_service.api.routers.executions import (
+            _recurring_workflow_payload,
+            _resolve_recurring_runtime_selection,
+        )
+
+        target = copy.deepcopy(payload.target)
+        selection = await _resolve_recurring_runtime_selection(
+            target, session=session, user=user
+        )
+        if selection is not None:
+            metadata, runtime_intent, _, _, _ = selection
+            parameters = target.get("initialParameters")
+            if parameters is None:
+                parameters = target.get("initial_parameters")
+            if parameters is None:
+                parameters = target["initialParameters"] = {}
+            if isinstance(parameters, dict):
+                runtime_was_authored = (
+                    metadata["runtimeCutover"]["selectionSource"] == "authored"
+                )
+                # Fill canonical defaults without erasing any authored runtime
+                # evidence. The service owns final admission and model intent.
+                current_runtime = parameters.get("targetRuntime")
+                if not runtime_was_authored or not (
+                    isinstance(current_runtime, str) and current_runtime.strip()
+                ):
+                    parameters["targetRuntime"] = metadata["targetRuntime"]
+                if not runtime_was_authored:
+                    parameters["runtimeCutover"] = metadata["runtimeCutover"]
+                if metadata.get("profileId") and not parameters.get("profileId"):
+                    parameters["profileId"] = metadata["profileId"]
+                task_key, task = _recurring_workflow_payload(parameters)
+                if task_key is not None:
+                    runtime = dict(runtime_intent)
+                    mode = runtime.get("mode")
+                    if not runtime_was_authored or not (
+                        isinstance(mode, str) and mode.strip()
+                    ):
+                        runtime["mode"] = metadata["targetRuntime"]
+                    task["runtime"] = runtime
+                    parameters[task_key] = task
         definition = await service.create_definition(
             name=payload.name,
             description=payload.description,
@@ -716,7 +762,7 @@ async def create_recurring_workflow(
             scope_type=payload.scope_type,
             scope_ref=payload.scope_ref,
             owner_user_id=owner_user_id,
-            target=payload.target,
+            target=target,
             policy=payload.policy,
             agent_profile_selection=(
                 payload.target.get("agentProfile")
@@ -751,6 +797,7 @@ async def create_recurring_workflow(
         definition,
         action_permissions=_action_permissions_for_definition(definition),
     )
+
 
 @router.get("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
 async def get_recurring_workflow(
