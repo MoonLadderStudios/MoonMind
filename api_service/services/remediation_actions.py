@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.services.checkpoint_branch_service import CheckpointBranchService
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
+    CheckpointBranchTurnLaunchError,
 )
 from moonmind.omnigent.policies import (
     bind_approval_request,
@@ -252,12 +253,56 @@ class TemporalRemediationControlPlane:
             ),
             remediation_context_ref=context_ref,
         )
-        launched = await self._checkpoint_branch_turn_owner.launch(
-            workflow_id=target.workflow_id,
-            branch_id=branch_id,
-            branch_turn_id=turn_id,
-            intent={"idempotencyKey": action_id},
-        )
+        try:
+            launched = await self._checkpoint_branch_turn_owner.launch(
+                workflow_id=target.workflow_id,
+                branch_id=branch_id,
+                branch_turn_id=turn_id,
+                intent={"idempotencyKey": action_id},
+            )
+        except CheckpointBranchTurnLaunchError as exc:
+            if exc.code != "execution_owner_start_failed":
+                raise
+            # The owner committed its claim before attempting Temporal start.
+            # A lost acknowledgment is not a precondition rejection or a no-op.
+            # Retain the exact claim for the existing verifier; never launch it
+            # again merely to recover delivery evidence.
+            result: dict[str, Any] = {
+                "status": "delivery_unknown",
+                "message": f"Checkpoint Branch dispatch is unconfirmed: {exc.reason}.",
+                "beforeEvidenceRefs": before,
+                "afterEvidenceRefs": [],
+                "verificationRequired": True,
+                "verificationHint": "Read the exact claimed branch turn; do not repeat its dispatch.",
+                "deliveryStage": "branch_turn_dispatch_unconfirmed",
+                "terminalBranchResultAvailable": False,
+            }
+            claim = exc.claimed_execution
+            if (
+                claim.get("workflowId") == target.workflow_id
+                and claim.get("runId") == target.current_run_id
+                and claim.get("branchId") == branch_id
+                and claim.get("branchTurnId") == turn_id
+                and claim.get("actionId") == action_id
+                and claim.get("checkpointRef") == checkpoint_ref
+                and claim.get("instructionRef") == instruction_ref
+                and claim.get("instructionDigest") == instruction_digest
+                and claim.get("stepExecutionId")
+                and claim.get("agentRunId")
+            ):
+                result["resultingIdentity"] = {
+                    "workflowId": target.workflow_id,
+                    "runId": target.current_run_id,
+                    "branchId": branch_id,
+                    "branchTurnId": turn_id,
+                    "stepExecutionId": claim["stepExecutionId"],
+                }
+                result["afterEvidenceRefs"] = [
+                    f"checkpoint-branch:{branch_id}",
+                    f"checkpoint-branch-turn:{turn_id}",
+                    f"step-execution:{claim['stepExecutionId']}",
+                ]
+            return result
         # Delivery and target repair remain distinct.  The existing verifier
         # decides repair success from the exact terminal branch head.
         return {
