@@ -1017,6 +1017,7 @@ async def _admit_stock_native_catalog(client, factory, host_class, monkeypatch):
     repository = DbHarnessCatalogRepository(factory)
     # Enable this isolated OpenCode catalog check without starting a provider turn.
     with monkeypatch.context() as scoped:
+        scoped.delenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", raising=False)
         scoped.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
         catalog = await OmnigentHarnessCatalogService(
             client=client,
@@ -1098,6 +1099,7 @@ async def _admit_stock_native_catalog(client, factory, host_class, monkeypatch):
             model_normalized_options={},
         )
         assert plan.payload.harnessId == harness_id
+        assert plan.payload.executionRealizerRef == "generic-omnigent-host@1"
         assert plan.payload.agentSource["upstreamId"] == agent["id"]
         assert plan.payload.harnessCatalogRef == catalog.snapshot.catalogRef
         return agents

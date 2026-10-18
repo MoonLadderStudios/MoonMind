@@ -426,7 +426,7 @@ def _protected_support_evidence(plan_payload) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("harness", "policy", "realizer"),
     [
-        ("codex-native", "codex-on-demand@1", "codex-profile-bound@1"),
+        ("codex-native", "codex-on-demand@1", "generic-omnigent-host@1"),
         ("claude-native", "claude-on-demand@1", "generic-omnigent-host@1"),
         ("opencode-native", "opencode-on-demand@1", "generic-omnigent-host@1"),
         ("opencode-native", "opencode-on-demand@2", "generic-omnigent-host@1"),

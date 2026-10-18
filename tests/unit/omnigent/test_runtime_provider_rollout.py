@@ -169,18 +169,17 @@ def test_unregistered_combination_is_explicit_only_never_promoted():
     assert decision.explicit_selection_allowed is True
 
 
-def test_codex_generic_is_disabled_until_the_deployment_qualifies_it():
+def test_codex_generic_is_default_unless_explicitly_disabled():
     denied = resolve_rollout_decision(
-        policy=_policy(), combination=_combination()
+        policy=_policy({_CODEX_GATE: "false"}), combination=_combination()
     )
     assert denied.state is RolloutState.disabled
     assert denied.explicit_selection_allowed is False
     assert RolloutReason.rollout_disabled in denied.unavailable_reasons
 
     promoted = resolve_rollout_decision(
-        policy=_policy({_CODEX_GATE: "true"}),
+        policy=_policy(),
         combination=_combination(),
-        context=_qualified_context(),
     )
     assert promoted.state is RolloutState.new_work_default
     assert promoted.default_eligible is True
@@ -215,7 +214,7 @@ def test_claude_generic_is_admitted_by_default_until_explicitly_stopped():
 
 
 def test_claude_and_opencode_rows_are_independent():
-    policy = _policy({_CLAUDE_GATE: "true"})
+    policy = _policy({_CLAUDE_GATE: "true", _CODEX_GATE: "false"})
     claude = resolve_rollout_decision(
         policy=policy,
         combination=_combination(
@@ -685,7 +684,7 @@ def test_changing_the_live_policy_does_not_reinterpret_a_frozen_record():
     )
     frozen = freeze_rollout_record(promoted)
     rolled_back = resolve_rollout_decision(
-        policy=_policy({}),
+        policy=_policy({_CODEX_GATE: "false"}),
         combination=_combination(),
         context=_qualified_context(),
     )
