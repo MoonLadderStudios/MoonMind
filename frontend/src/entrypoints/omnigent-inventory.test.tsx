@@ -91,7 +91,95 @@ describe('OmnigentInventoryPage', () => {
       initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
     });
 
-    expect((await screen.findAllByRole('button', { name: 'Activate Team Codex' })).length).toBeGreaterThanOrEqual(1);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'More actions for Team Codex' }))[0]!);
+    expect(screen.getByRole('menuitem', { name: 'Activate' })).toBeTruthy();
+  });
+
+  it('keeps execution configuration rows to View plus a short-label actions menu', async () => {
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+    await screen.findAllByText('Team Codex');
+
+    expect(screen.getAllByRole('button', { name: 'View Team Codex' }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole('button', { name: /as new version/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Clone/ })).toBeNull();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'More actions for Team Codex' })[0]!);
+    const labels = screen.getAllByRole('menuitem').map((item) => item.getAttribute('aria-label') ?? '');
+    expect(labels).toEqual(expect.arrayContaining(['Clone', 'Validate', 'Smoke test', 'Disable', 'Deprecate']));
+    for (const label of labels) {
+      expect(label).not.toContain('Team Codex');
+      expect(label.length).toBeLessThanOrEqual(20);
+    }
+  });
+
+  it('keeps readiness failures beside the lifecycle actions', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/omnigent/agent-profiles') {
+        return {
+          ok: true,
+          json: async () => [{ ...listResponse[0], versions: [{ ...listResponse[0]!.versions[0]!, validationResult: { ready: false } }] }],
+        } as Response;
+      }
+      return { ok: true, json: async () => [] } as Response;
+    });
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+
+    const trigger = (await screen.findAllByRole('button', { name: 'More actions for Team Codex' }))[0]!;
+    const actions = trigger.closest('.omnigent-inventory__row-actions') as HTMLElement;
+    expect(actions.textContent).toContain('Validate before smoke test or activation');
+  });
+
+  it('keeps raw IDs, digests and usage JSON out of the default view', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/omnigent/agent-profiles') return { ok: true, json: async () => listResponse } as Response;
+      if (url.endsWith('/usage')) {
+        return { ok: true, json: async () => [{ consumerType: 'workflow', consumerId: 'mm:0f3a9c', version: 2, digest: 'sha256:abc', createdAt: '2026-10-01T00:00:00Z' }] } as Response;
+      }
+      if (url.endsWith('/audit')) {
+        return { ok: true, json: async () => [{ action: 'activated', version: 2, actorId: 'user-77', metadata: { reason: 'rollout' }, createdAt: '2026-10-01T00:00:00Z' }] } as Response;
+      }
+      return { ok: true, json: async () => [{ id: '9f8e7d6c5b4a', name: 'Codex', status: 'ready' }] } as Response;
+    });
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+    await screen.findAllByText('Team Codex');
+
+    const isDisclosed = (element: Element) => Boolean(element.closest('details:not([open])'));
+    for (const raw of ['codex-team', '9f8e7d6c5b4a']) {
+      for (const match of screen.queryAllByText(raw, { exact: false })) expect(isDisclosed(match)).toBe(true);
+    }
+    expect(screen.queryByText(/sha256:a{8}/)).toBeNull();
+    expect(screen.queryByText('No summary provided.')).toBeNull();
+    expect(screen.queryByText('Not reported')).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: 'Freshness' })).toBeNull();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'View Team Codex' })[0]!);
+    expect(await screen.findByText('Workflow · version 2')).toBeTruthy();
+    expect(await screen.findByText(/Activated · version 2/)).toBeTruthy();
+    for (const raw of ['"consumerId"', '"actorId"']) {
+      for (const match of screen.queryAllByText(raw, { exact: false })) expect(isDisclosed(match)).toBe(true);
+    }
+  });
+
+  it('renders a single page heading and sets the tab title', async () => {
+    document.title = '';
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
+      initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
+    });
+    await screen.findAllByText('Team Codex');
+
+    expect(screen.getAllByRole('heading', { level: 1 }).map((heading) => heading.textContent)).toEqual(['Agents']);
+    expect(document.title).toBe('Agents | MoonMind');
   });
 
   it('creates a generic v2 profile through guided controls without client-authored authority', async () => {
@@ -142,6 +230,18 @@ describe('OmnigentInventoryPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Policies' })).toBeTruthy();
     expect(fetch).toHaveBeenCalledWith('/api/omnigent/api/policies', { credentials: 'same-origin' });
+  });
+
+  it('explains policy versioning in plain language', async () => {
+    window.history.replaceState({}, '', '/omnigent/policies');
+    renderPage({
+      page: 'omnigent-inventory', apiBase: '/api', features: { omnigentPolicies: true },
+      initialData: { uiEndpoints: { omnigentPolicies: '/api/omnigent/api/policies' } },
+    });
+
+    await screen.findAllByText('Codex');
+    expect(document.body.textContent).not.toMatch(/policy editor API/i);
+    expect(screen.getByText(/Saving a policy always creates a new version/)).toBeTruthy();
   });
 
   it('renders immutable policy inspection and lifecycle actions', async () => {

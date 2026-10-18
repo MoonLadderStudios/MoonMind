@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { QueryClient } from '@tanstack/react-query';
 
 import type { ProviderProfile } from './ProviderProfilesManager';
@@ -71,6 +71,8 @@ describe('ProviderProfilesManager mobile journey (MoonMind#4559)', () => {
         defaultTaskModelByRuntime={{}}
       />,
     );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
 
     // Normalized UI state: tiers keep order, default marker stays on Tier 2.
     const mapping = screen.getByLabelText(`${LONG_ID} model tier mapping`);

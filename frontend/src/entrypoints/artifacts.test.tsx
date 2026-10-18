@@ -44,7 +44,9 @@ describe('ArtifactsPage', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('heading', { name: 'Artifacts & Observability' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'Artifacts & Observability' })).toBeTruthy();
+    expect(document.querySelectorAll('h1')).toHaveLength(1);
+    expect(document.title).toBe('Artifacts & Observability | MoonMind');
     expect(await screen.findByText('art_SAFE')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Final output' }).getAttribute('href')).toBe('/workflows/mm%3Aworkflow-1');
     expect(window.fetch).toHaveBeenCalledTimes(3);
@@ -108,6 +110,7 @@ describe('ArtifactsPage', () => {
         <ArtifactsPage payload={{ page: 'artifacts', apiBase: '/api', features: { artifacts: false } }} />
       </MemoryRouter>,
     );
+    expect(screen.getByRole('heading', { level: 1, name: 'Artifacts & Observability' })).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('not enabled');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
