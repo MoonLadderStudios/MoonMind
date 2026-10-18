@@ -9,7 +9,7 @@ import {
 } from './statusVocabulary';
 
 // Values the API emits for each domain (moonmind/statuses/checkpoint_branch.py,
-// the MoonMind.Run dependency gate and step-ledger check results).
+// the MoonMind.UserWorkflow dependency gate and step-ledger check results).
 const EMITTED: Array<[string, StatusVocabulary, string[]]> = [
   ['checkpoint branch', CHECKPOINT_BRANCH_STATUS, [
     'created', 'preparing', 'active', 'blocked', 'failed', 'succeeded', 'promotable', 'promoted', 'archived', 'superseded',

@@ -3,7 +3,7 @@
  * lifecycle nor step ledger states: checkpoint branches and their turns,
  * dependency gate outcomes, and step checks. Keys mirror what the API emits
  * (`moonmind/statuses/checkpoint_branch.py`, the dependency gate in
- * `MoonMind.Run`, and step-ledger check results). An unlisted value still
+ * `MoonMind.UserWorkflow`, and step-ledger check results). An unlisted value still
  * renders readably, humanized on a neutral pill, and warns once per value.
  */
 type StatusEntry = readonly [label: string, className: string];
