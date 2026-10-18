@@ -123,7 +123,7 @@ These commands cover:
 
 * `ui:test` — Vitest unit tests
 * `ui:typecheck` — TypeScript type checking
-* `ui:lint` — ESLint
+* `ui:lint` — ESLint, including React hook-order errors and the jsx-a11y rules that the dashboard already passes; a11y rules with existing violations only warn until they are fixed
 * `ui:build:check` — clean rebuild plus manifest validation
 
 Run real-browser regressions locally with `npm run ui:test:browser`; it defaults to Chromium and Firefox. To reproduce one CI matrix leg, set `MOONMIND_BROWSER_ENGINES=chromium` or `MOONMIND_BROWSER_ENGINES=firefox`. For the WebKit leg, which includes the form/fieldset/overlay cases, set `MOONMIND_BROWSER_ENGINES=webkit`. CI supplies the matching browsers from its pinned Playwright container and runs the whole browser suite in its Chromium and WebKit matrix legs, adding Firefox for browser-sensitive changes.
