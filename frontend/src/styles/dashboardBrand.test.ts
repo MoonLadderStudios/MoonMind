@@ -125,7 +125,7 @@ describe('dashboard masthead brand styles', () => {
     expect(cssRuleBlock('.masthead-brand:focus-visible')).toContain('text-decoration: none;');
     expect(cssRuleBlock('.masthead-brand-moon')).toContain('color: rgb(255 255 255);');
     expect(cssRuleBlock('.masthead-brand-mind')).toContain('color: inherit;');
-    expect(cssRuleBlock('.masthead-brand h1')).toContain(
+    expect(cssRuleBlock('.masthead-wordmark')).toContain(
       'font-size: clamp(1.12rem, 1.7vw, 1.52rem);',
     );
   });

@@ -72,8 +72,8 @@ The Workflows List page is an operator scanning surface, not a generic Temporal 
 | Active query row | Active filter chips and a clear/reset action. No Scope, Workflow Type, Entry, or top-level Status/Repository form controls. |
 | Results toolbar / footer | Row range and count, page size (shared `PageSizeSelector`), pagination, and the current-page sort notice when it applies. |
 | Desktop table | Sortable and filterable column headers. |
-| Advanced filters drawer | The full filter set, including fields not visible in the table (ID, Skill, Scheduled, Created, Finished). |
-| Mobile cards | Card presentation with filters available through the mobile filter sheet. |
+| Advanced filters drawer | The full filter set, including fields not visible in the table (ID, Skill, Scheduled, Created, Finished). Each section is collapsed unless it holds an active filter and summarizes its current value. Facets with more values than the first page offer **More values…**, which searches and pages the facet endpoint. Sorting stays on the column headers (and a sort select in card layouts), not in the drawer. |
+| Mobile cards | Compact cards whose title is the only detail link, with the `More actions` menu as a separate target, so no control nests inside another. Filters are available through the mobile filter sheet. |
 | View options | Density, column visibility, and live-update preference. |
 
 The page reads `dashboardConfig.pollIntervalsMs.list` (default five seconds) and is disabled when `dashboardConfig.features.temporalDashboard.listEnabled === false`.

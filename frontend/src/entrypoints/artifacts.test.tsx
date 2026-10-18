@@ -44,7 +44,9 @@ describe('ArtifactsPage', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('heading', { name: 'Artifacts & Observability' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'Artifacts & Observability' })).toBeTruthy();
+    expect(document.querySelectorAll('h1')).toHaveLength(1);
+    expect(document.title).toBe('Artifacts & Observability | MoonMind');
     expect(await screen.findByText('art_SAFE')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Final output' }).getAttribute('href')).toBe('/workflows/mm%3Aworkflow-1');
     expect(window.fetch).toHaveBeenCalledTimes(3);

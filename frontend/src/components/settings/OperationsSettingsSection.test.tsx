@@ -305,9 +305,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(workerCard).getByText('codex-worker-1')).toBeTruthy();
     expect(within(workerCard).getByText('codex-shard-1')).toBeTruthy();
     expect(within(workerCard).getByText(/auth volume missing/i)).toBeTruthy();
-    expect(await within(workerCard).findByText('Pause Workers')).toBeTruthy();
-    expect(within(workerCard).getByText('Resume Workers')).toBeTruthy();
-    expect(within(workerCard).getByText('Enable Maintenance Mode')).toBeTruthy();
+    expect(await within(workerCard).findByText('Enable Maintenance Mode')).toBeTruthy();
     expect(within(workerCard).getAllByText(/requires confirmation/i).length).toBeGreaterThan(0);
     expect(within(workerCard).getByText(/maintenance mode subsystem is not connected/i)).toBeTruthy();
     expect(within(workerCard).getAllByText(/target: workers/i).length).toBeGreaterThan(0);
@@ -458,6 +456,97 @@ describe('OperationsSettingsSection deployment update card', () => {
       '/api/artifacts/logs',
     );
     expect(within(card).queryByRole('link', { name: /raw command/i })).toBeNull();
+  });
+
+  function mockStackState(state: unknown) {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/workers') {
+        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
+      }
+      if (url === '/api/v1/operations/codex/shards') {
+        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
+        return Promise.resolve({ ok: true, json: async () => state } as Response);
+      }
+      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
+        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
+    });
+  }
+
+  it('shows recent updates first and keeps older history and the legacy disclaimer behind one disclosure', async () => {
+    const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+    const legacyReason =
+      'Rollback through the retired workflow updater is unavailable; update to an earlier image instead.';
+    const legacy = Array.from({ length: 6 }, (_, index) => ({
+      status: 'SUCCEEDED',
+      owner: 'workflow',
+      requestedImage: `ghcr.io/moonladderstudios/moonmind:legacy-${index}`,
+      operator: NIL_UUID,
+      startedAt: `2026-04-0${index + 1}T10:00:00Z`,
+      completedAt: `2026-04-0${index + 1}T10:05:00Z`,
+      runDetailUrl: `/workflows/legacy-${index}`,
+      rollbackEligibility: { eligible: false, sourceActionId: `legacy-${index}`, targetImage: null, reason: legacyReason },
+    }));
+    const running = {
+      status: 'RUNNING',
+      requestedImage: 'ghcr.io/moonladderstudios/moonmind:latest',
+      startedAt: '2026-04-26T09:00:00Z',
+      runDetailUrl: '/workflows/running-update',
+    };
+    mockStackState({ ...stackState, recentActions: [running, recentAction, ...legacy] });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(card).findByRole('heading', { name: /update history/i });
+    // The ongoing update stays visible in the default view.
+    const runningLink = within(card).getAllByRole('link', { name: /run detail/i })
+      .find((link) => link.getAttribute('href') === '/workflows/running-update');
+    expect(runningLink?.closest('details')).toBeNull();
+
+    const older = card.querySelector<HTMLDetailsElement>('details.deployment-history-older');
+    expect(older).not.toBeNull();
+    expect(older?.open).toBe(false);
+    expect(older?.querySelector('summary')?.textContent).toBe('Show 5 older updates');
+    // The repeated legacy disclaimer and the nil operator UUID are not repeated per row.
+    expect(within(card).getAllByText(legacyReason)).toHaveLength(1);
+    expect(within(card).queryByText(new RegExp(NIL_UUID))).toBeNull();
+  });
+
+  it('renders update timestamps as readable dates with the ISO value kept for inspection', async () => {
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(card).findByRole('heading', { name: /update history/i });
+    const stamp = card.querySelector<HTMLTimeElement>('time[datetime="2026-04-25T18:04:00Z"]');
+    expect(stamp).not.toBeNull();
+    expect(stamp?.getAttribute('title')).toBe('2026-04-25T18:04:00Z');
+    expect(stamp?.textContent).not.toContain('2026-04-25T18:04:00Z');
+    expect(within(card).queryByText(/2026-04-25T18:04:00Z/)).toBeNull();
+  });
+
+  it('keeps worker forms and drain state visible while the catalog hides duplicates and unavailable commands', async () => {
+    renderOperations();
+
+    const workerCard = await screen.findByRole('region', { name: /worker operations/i });
+    await within(workerCard).findByRole('heading', { name: /command catalog/i });
+    expect(within(workerCard).getByText('Drained')).toBeTruthy();
+    expect(within(workerCard).getByRole('button', { name: 'Pause workers' })).toBeTruthy();
+    expect(within(workerCard).getByRole('button', { name: 'Resume workers' })).toBeTruthy();
+
+    const catalog = within(workerCard).getByRole('heading', { name: /command catalog/i }).closest('section')!;
+    // Pause and resume already have forms above; the catalog does not repeat them.
+    expect(within(catalog).queryByText('Pause Workers')).toBeNull();
+    expect(within(catalog).queryByText('Resume Workers')).toBeNull();
+    const unavailable = catalog.querySelector<HTMLDetailsElement>('details.operations-unavailable-commands');
+    expect(unavailable?.open).toBe(false);
+    expect(unavailable?.querySelector('summary')?.textContent).toBe('Unavailable commands (1)');
+    expect(unavailable?.contains(within(catalog).getByText('Enable Maintenance Mode'))).toBe(true);
+    expect(within(catalog).queryByText(/Permission:/)).toBeNull();
   });
 
   it('keeps workflow-backed history readable with rollback unavailable', async () => {
