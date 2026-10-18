@@ -66,22 +66,6 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
                     ],
                 }
             ],
-            "recovery": {
-                "resumed": True,
-                "sourceWorkflowId": "mm:source",
-                "sourceRunId": "run-source",
-                "checkpointRef": "artifact://resume/checkpoint",
-                "preservedSteps": [
-                    {
-                        "logicalStepId": "prepare",
-                        "title": "Prepare context",
-                        "sourceExecutionOrdinal": 1,
-                        "sourceWorkflowId": "mm:source",
-                        "sourceRunId": "run-source",
-                    }
-                ],
-                "failedRecoveryPhase": "checkpoint_validation",
-            },
             "degradedReason": None,
         },
     )
@@ -93,16 +77,9 @@ def test_execution_model_preserves_target_diagnostics_alias_contract() -> None:
         payload["targetDiagnostics"]["targets"][0]["attachments"][0]["artifactRef"]
         == "artifact://input/objective"
     )
-    assert payload["targetDiagnostics"]["recovery"]["preservedSteps"][0][
-        "logicalStepId"
-    ] == "prepare"
     assert (
         payload["targetDiagnostics"]["targets"][0]["failures"][0]["phase"]
         == "degraded"
-    )
-    assert (
-        payload["targetDiagnostics"]["recovery"]["failedRecoveryPhase"]
-        == "checkpoint_validation"
     )
 
 
@@ -133,7 +110,6 @@ def test_execution_model_preserves_alias_shaped_target_semantics() -> None:
                     ],
                 },
             ],
-            "recovery": None,
             "degraded_reason": None,
         },
     )
@@ -146,38 +122,6 @@ def test_execution_model_preserves_alias_shaped_target_semantics() -> None:
     assert step["targetKind"] == "step"
     assert step["stepId"] == "inspect"
     assert step["attachments"][0]["artifactRef"] == "artifact://input/step"
-
-
-def test_execution_model_preserves_failed_step_execution_recovery_phase() -> None:
-    execution = ExecutionModel(
-        **_base_execution_payload(),
-        targetDiagnostics={
-            "targets": [],
-            "recovery": {
-                "resumed": True,
-                "sourceWorkflowId": "mm:source",
-                "sourceRunId": "run-source",
-                "checkpointRef": "artifact://resume/checkpoint",
-                "preservedSteps": [
-                    {
-                        "logicalStepId": "prepare",
-                        "title": "Prepare context",
-                        "sourceExecutionOrdinal": 1,
-                        "sourceWorkflowId": "mm:source",
-                        "sourceRunId": "run-source",
-                    }
-                ],
-                "failedRecoveryPhase": "failed_step_execution",
-            },
-            "degradedReason": None,
-        },
-    )
-
-    payload = execution.model_dump(by_alias=True)
-    recovery = payload["targetDiagnostics"]["recovery"]
-
-    assert recovery["failedRecoveryPhase"] == "failed_step_execution"
-    assert recovery["preservedSteps"][0]["logicalStepId"] == "prepare"
 
 
 def test_execution_model_preserves_generated_context_and_bounded_failures() -> None:
@@ -205,7 +149,6 @@ def test_execution_model_preserves_generated_context_and_bounded_failures() -> N
                     ],
                 }
             ],
-            "recovery": None,
             "degradedReason": None,
         },
     )

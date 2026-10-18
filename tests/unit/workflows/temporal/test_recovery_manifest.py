@@ -118,54 +118,6 @@ def test_missing_checkpoint_evidence_blocks_resume() -> None:
     assert manifest.recovery_eligibility.default_action == "full_retry"
 
 
-@pytest.mark.parametrize(
-    ("failure_code", "expected_result", "expected_reason", "expected_status"),
-    [
-        ("artifact_corrupted", "corrupted", "checkpoint_corrupted", "invalid"),
-        ("artifact_unauthorized", "unauthorized", "checkpoint_unauthorized", "unauthorized"),
-        ("policy_incompatible", "incompatible", "workspace_policy_incompatible", "incompatible"),
-        ("workspace_incompatible", "incompatible", "workspace_policy_incompatible", "incompatible"),
-        ("artifact_missing", "missing", "no_checkpoint_evidence", "missing"),
-    ],
-)
-def test_degraded_checkpoint_evidence_blocks_resume(
-    failure_code: str,
-    expected_result: str,
-    expected_reason: str,
-    expected_status: str,
-) -> None:
-    manifest = _build(
-        checkpoint_validation_failure={
-            "failureCode": failure_code,
-            "checkpointRef": "artifact://checkpoint/before",
-        }
-    )
-
-    assert manifest.validation.result == expected_result
-    assert manifest.validation.failure_code == failure_code
-    assert manifest.resume_allowed is False
-    assert manifest.blocked_reason == expected_reason
-    assert manifest.recovery_eligibility.eligible is False
-    # The degraded checkpoint ref is surfaced with its degraded evidence status.
-    statuses = {ref.status for ref in manifest.checkpoint_refs}
-    assert expected_status in statuses
-
-
-def test_unknown_checkpoint_failure_code_falls_back_to_invalid_and_blocks() -> None:
-    # A newly introduced / unrecognized failure code must fail closed.
-    manifest = _build(
-        checkpoint_validation_failure={
-            "failureCode": "some_future_failure_mode",
-            "checkpointRef": "artifact://checkpoint/before",
-        }
-    )
-
-    assert manifest.validation.result == "invalid"
-    assert manifest.validation.failure_code == "some_future_failure_mode"
-    assert manifest.resume_allowed is False
-    assert manifest.blocked_reason == "checkpoint_invalid"
-
-
 def test_planning_failure_without_steps_still_emits_blocked_manifest() -> None:
     manifest = build_failed_run_recovery_manifest(
         workflow_id="wf-1",
@@ -363,26 +315,6 @@ def test_idempotent_accepted_side_effect_does_not_block_resume() -> None:
 
     assert manifest.resume_allowed is True
     assert manifest.blocked_reason is None
-
-
-def test_recovery_source_failed_step_used_when_no_failed_ledger_row() -> None:
-    rows = [
-        {
-            "logicalStepId": "implement",
-            "order": 1,
-            "status": "running",
-            "executionOrdinal": 1,
-        }
-    ]
-    manifest = build_failed_run_recovery_manifest(
-        workflow_id="wf-1",
-        run_id="run-1",
-        created_at=_NOW,
-        step_ledger_rows=rows,
-        recovery_failed_step_id="implement",
-        checkpoint_refs_by_boundary={},
-    )
-    assert manifest.failed_logical_step_id == "implement"
 
 
 def test_manifest_payload_is_compact_and_round_trips() -> None:

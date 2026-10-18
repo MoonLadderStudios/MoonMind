@@ -4971,19 +4971,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 /* MM-815: compact preserved/resumed provenance marker shown in the default row */
-.step-provenance-marker {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 0.12rem 0.48rem;
-  border: 1px solid rgb(var(--mm-accent) / 0.45);
-  background: rgb(var(--mm-accent) / 0.12);
-  color: rgb(var(--mm-accent));
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
 .step-timing-chip {
   display: inline-flex;
   align-items: center;

@@ -432,16 +432,6 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
         status="failed",
         terminalDisposition="retryable",
     )
-    recovery_manifest = _valid_manifest_payload(
-        reason="recover_from_failed_step",
-        lineage={
-            "sourceWorkflowId": "workflow-0",
-            "sourceRunId": "run-0",
-            "sourceLogicalStepId": "implement-story",
-            "sourceExecutionOrdinal": 1,
-            "relationship": "recover_from_failed_step",
-        },
-    )
     degraded_checkpoint = _valid_checkpoint_payload(boundary="after_future_gate")
     source = _identity().model_dump(by_alias=True)
     memory_failed = _valid_manifest_payload(
@@ -658,16 +648,6 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
             ),
         },
         {
-            "fixtureId": "recovery-with-preserved-steps",
-            "decision": _classify_manifest_payload(
-                "recovery-with-preserved-steps",
-                recovery_manifest,
-                category="golden",
-                expected="valid",
-                traceability=("FR-003", "SC-003", "DESIGN-REQ-003"),
-            ),
-        },
-        {
             "fixtureId": "degraded-checkpoint-payload",
             "decision": _classify_checkpoint_payload(
                 "degraded-checkpoint-payload",
@@ -823,16 +803,6 @@ def _terminology_decisions() -> list[dict[str, Any]]:
             traceability=("FR-006", "SC-005", "DESIGN-REQ-003"),
         ),
         _decision(
-            fixture_id="term-recover_from_failed_step",
-            category="terminology",
-            contract_surface="terminology",
-            decision="valid",
-            expected="valid",
-            failure_code=None,
-            message="canonical recovery action token accepted",
-            traceability=("FR-006", "SC-005", "DESIGN-REQ-003"),
-        ),
-        _decision(
             fixture_id="term-step-attempt",
             category="terminology",
             contract_surface="terminology",
@@ -853,7 +823,6 @@ def api_contract_fixture() -> dict[str, Any]:
             "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
             "logicalStepId": "implement-story",
             "executionOrdinal": 2,
-            "recoveryAction": "recover_from_failed_step",
             "artifactRefs": {
                 "manifestRef": "artifact://manifest",
                 "checkpointRef": "artifact://checkpoint",

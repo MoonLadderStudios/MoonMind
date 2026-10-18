@@ -64,9 +64,6 @@ from moonmind.schemas.temporal_models import (
     has_user_workflow_plan_source,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
-from moonmind.workflows.executions.runtime_capabilities import (
-    resolve_runtime_execution_capabilities,
-)
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     canonicalize_workflow_state_alias,
@@ -4259,24 +4256,12 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
             failure_policy=None,
             initial_parameters={
                 "agentRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
-                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
-                "recoveryCheckpointRef": "artifact://checkpoint/old",
-                "preservedSteps": [{"id": "step-1"}],
-                "completedSteps": [{"id": "step-0"}],
                 "workflow": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "recover_from_failed_step",
+                        "kind": "exact_full_rerun",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
-                    },
-                    "resume": {
-                        "kind": "recover_from_failed_step",
-                        "sourceWorkflowId": "mm:source",
-                        "sourceRunId": "run-old",
-                        "failedStepId": "implement",
-                        "recoveryCheckpointRef": "artifact://checkpoint/old",
-                        "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
             },
@@ -4312,10 +4297,6 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(
         assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id
         assert "agentRunId" not in refreshed.memo
         assert "agentRunId" not in refreshed.parameters
-        assert "recoverySource" not in refreshed.parameters
-        assert "recoveryCheckpointRef" not in refreshed.parameters
-        assert "preservedSteps" not in refreshed.parameters
-        assert "completedSteps" not in refreshed.parameters
         assert refreshed.parameters["workflow"] == {
             "instructions": "Original task",
             "recovery": {
@@ -4513,24 +4494,12 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
                 },
                 "agentRunId": "old-agent-run",
                 "agent_run_id": "old-agent-run-snake",
-                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
-                "recoveryCheckpointRef": "artifact://checkpoint/old",
-                "preservedSteps": [{"id": "step-1"}],
-                "completedSteps": [{"id": "step-0"}],
                 "workflow": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "recover_from_failed_step",
+                        "kind": "exact_full_rerun",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
-                    },
-                    "resume": {
-                        "kind": "recover_from_failed_step",
-                        "sourceWorkflowId": "mm:source",
-                        "sourceRunId": "run-old",
-                        "failedStepId": "implement",
-                        "recoveryCheckpointRef": "artifact://checkpoint/old",
-                        "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
             },
@@ -4575,10 +4544,6 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         }
         assert "agentRunId" not in rerun.parameters
         assert "agent_run_id" not in rerun.parameters
-        assert "recoverySource" not in rerun.parameters
-        assert "recoveryCheckpointRef" not in rerun.parameters
-        assert "preservedSteps" not in rerun.parameters
-        assert "completedSteps" not in rerun.parameters
         assert rerun.parameters["workflow"] == {
             "instructions": "Original task",
             "recovery": {
@@ -4977,7 +4942,6 @@ def test_full_rerun_preserves_immutable_omnigent_plan_authority() -> None:
         {
             "omnigentExecutionPlan": plan,
             "agentRunId": "old-agent-run",
-            "recoveryCheckpointRef": "art_stale_checkpoint",
             "workflow": {
                 "instructions": "Preserve the planned choices.",
                 "dependsOn": ["old-step"],
@@ -4988,7 +4952,6 @@ def test_full_rerun_preserves_immutable_omnigent_plan_authority() -> None:
 
     assert rerun["omnigentExecutionPlan"] == plan
     assert "agentRunId" not in rerun
-    assert "recoveryCheckpointRef" not in rerun
     assert rerun["workflow"] == {
         "instructions": "Preserve the planned choices."
     }
@@ -6591,24 +6554,12 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
-                "recoveryCheckpointRef": "artifact://checkpoint/old",
-                "preservedSteps": [{"id": "step-1"}],
-                "completedSteps": [{"id": "step-0"}],
                 "workflow": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "recover_from_failed_step",
+                        "kind": "exact_full_rerun",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
-                    },
-                    "resume": {
-                        "kind": "recover_from_failed_step",
-                        "sourceWorkflowId": "mm:source",
-                        "sourceRunId": "run-old",
-                        "failedStepId": "implement",
-                        "recoveryCheckpointRef": "artifact://checkpoint/old",
-                        "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
             },
@@ -6633,10 +6584,6 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == (
             "major_reconfiguration"
         )
-        assert "recoverySource" not in refreshed.parameters
-        assert "recoveryCheckpointRef" not in refreshed.parameters
-        assert "preservedSteps" not in refreshed.parameters
-        assert "completedSteps" not in refreshed.parameters
         assert refreshed.parameters["workflow"] == {"instructions": "Original task"}
 
 
@@ -6657,24 +6604,12 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters={
-                "recoverySource": {"workflowId": "mm:source", "runId": "run-old"},
-                "recoveryCheckpointRef": "artifact://checkpoint/old",
-                "preservedSteps": [{"id": "step-1"}],
-                "completedSteps": [{"id": "step-0"}],
                 "workflow": {
                     "instructions": "Original task",
                     "recovery": {
-                        "kind": "recover_from_failed_step",
+                        "kind": "exact_full_rerun",
                         "sourceWorkflowId": "mm:source",
                         "sourceRunId": "run-old",
-                    },
-                    "resume": {
-                        "kind": "recover_from_failed_step",
-                        "sourceWorkflowId": "mm:source",
-                        "sourceRunId": "run-old",
-                        "failedStepId": "implement",
-                        "recoveryCheckpointRef": "artifact://checkpoint/old",
-                        "taskInputSnapshotRef": "artifact://snapshot/old",
                     },
                 },
             },
@@ -6695,19 +6630,11 @@ async def test_update_inputs_continue_as_new_preserves_recovery_provenance_for_r
         assert response["accepted"] is True
         assert response["applied"] == "continue_as_new"
         assert response["continue_as_new_cause"] == "major_reconfiguration"
-        assert refreshed.parameters["recoverySource"] == {
-            "workflowId": "mm:source",
-            "runId": "run-old",
+        assert refreshed.parameters["workflow"]["recovery"] == {
+            "kind": "exact_full_rerun",
+            "sourceWorkflowId": "mm:source",
+            "sourceRunId": "run-old",
         }
-        assert refreshed.parameters["recoveryCheckpointRef"] == "artifact://checkpoint/old"
-        assert refreshed.parameters["preservedSteps"] == [{"id": "step-1"}]
-        assert refreshed.parameters["completedSteps"] == [{"id": "step-0"}]
-        assert refreshed.parameters["workflow"]["recovery"]["kind"] == (
-            "recover_from_failed_step"
-        )
-        assert refreshed.parameters["workflow"]["resume"]["recoveryCheckpointRef"] == (
-            "artifact://checkpoint/old"
-        )
 
 
 @pytest.mark.asyncio
@@ -8231,468 +8158,3 @@ async def test_create_execution_rejects_read_only_plan_with_managed_publish(
                 },
                 idempotency_key=None,
             )
-
-
-def test_recovery_phase_boundaries_dispatch_to_existing_owners_3510() -> None:
-    """MoonLadderStudios/MoonMind#3510 R2/R7: phases map to existing owners only."""
-
-    from moonmind.schemas.workflow_recovery_models import (
-        TARGET_PHASE_BOUNDARIES as _BOUNDARIES,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        BOUNDARY_RESUME_PHASE as _RESUME,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        decide_checkpoint_recovery as _decide,
-    )
-    from moonmind.workflows.executions.runtime_capabilities import (
-        resolve_runtime_execution_capabilities as _caps,
-    )
-
-    # Exact supported wiring; unsupported phases stay unavailable.
-    assert _BOUNDARIES["failed_step"] == {"rerun_failed_step": ("before_execution",)}
-    assert _BOUNDARIES["control_stop"]["continue_to_gate"] == ("after_execution",)
-    assert _BOUNDARIES["control_stop"]["continue_after_gate"] == ("after_gate",)
-    assert _BOUNDARIES["publication"] == {
-        "resume_publication": ("before_publication",)
-    }
-    assert _BOUNDARIES["restoration_failure"] == {
-        "retry_restoration": ("before_recovery_restoration",)
-    }
-    assert "continue_after_gate" not in _BOUNDARIES["failed_step"]
-    assert "rerun_failed_step" not in _BOUNDARIES["control_stop"]
-
-    # Decision compiler resolves the same boundary vocabulary once.
-    assert _RESUME["before_execution"] == "rerun_failed_step"
-    assert _RESUME["after_execution"] == "continue_to_gate"
-    assert _RESUME["after_gate"] == "continue_after_gate"
-    assert _RESUME["before_publication"] == "resume_publication"
-    assert _RESUME["before_recovery_restoration"] == "retry_restoration"
-
-    capabilities = _caps("omnigent")
-    eligible = _decide(
-        checkpoint_ref="artifact://checkpoint/3510",
-        checkpoint_boundary="before_execution",
-        checkpoint_kind="worktree_archive",
-        capabilities=capabilities,
-        restore_route_registered=True,
-        artifact_valid=True,
-        side_effect_safe=True,
-    )
-    assert eligible.eligible is True
-    assert eligible.resume_phase == "rerun_failed_step"
-
-    # Unknown capability / missing content stay explicit, never guessed retry.
-    assert (
-        _decide(
-            checkpoint_ref="artifact://checkpoint/3510",
-            checkpoint_boundary="before_execution",
-            checkpoint_kind="worktree_archive",
-            capabilities=None,
-            restore_route_registered=True,
-            artifact_valid=True,
-            side_effect_safe=True,
-        ).disabled_reason_code
-        == "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
-    )
-    assert (
-        _decide(
-            checkpoint_ref=None,
-            checkpoint_boundary="before_execution",
-            checkpoint_kind="worktree_archive",
-            capabilities=capabilities,
-            restore_route_registered=True,
-            artifact_valid=False,
-            side_effect_safe=True,
-        ).disabled_reason_code
-        == "CHECKPOINT_ARTIFACT_INVALID"
-    )
-    assert (
-        _decide(
-            checkpoint_ref="artifact://checkpoint/3510",
-            checkpoint_boundary="no_such_boundary",
-            checkpoint_kind="worktree_archive",
-            capabilities=capabilities,
-            restore_route_registered=True,
-            artifact_valid=True,
-            side_effect_safe=True,
-        ).disabled_reason_code
-        == "CHECKPOINT_BOUNDARY_INCOMPATIBLE"
-    )
-    # Unsafe effects keep their exact boundary rejection.
-    assert (
-        _decide(
-            checkpoint_ref="artifact://checkpoint/3510",
-            checkpoint_boundary="before_execution",
-            checkpoint_kind="worktree_archive",
-            capabilities=capabilities,
-            restore_route_registered=True,
-            artifact_valid=True,
-            side_effect_safe=False,
-        ).disabled_reason_code
-        == "CHECKPOINT_SIDE_EFFECT_UNSAFE"
-    )
-
-
-def test_single_recovery_decision_reused_with_explicit_unknown_3510() -> None:
-    """MoonLadderStudios/MoonMind#3510 R5: one decision reused across consumers."""
-
-    from moonmind.workflows.temporal.recovery_decision import (
-        admit_recovery_target as _admit,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        require_admitted_recovery_target as _require,
-    )
-    from tests.unit.schemas.test_workflow_recovery_models import _payload
-
-    payload = _payload("failed_step")
-    first = _admit(payload)
-    second = _admit(payload)
-    # One computation: identical dimensions for both UI/API consumers.
-    assert [item.model_dump(by_alias=True) for item in first] == [
-        item.model_dump(by_alias=True) for item in second
-    ]
-    assert all(item.admitted for item in first)
-    assert _require(payload).target.kind == "failed_step"
-
-    # Omitted/default preserved refs stay consistent (default empty tuple).
-    omitted = dict(payload)
-    omitted.pop("preservedStepRefs", None)
-    omitted_dimensions = _admit(omitted)
-    assert all(item.admitted for item in omitted_dimensions)
-
-    # Unknown capability and missing content are explicit rejections.
-    missing_capability = dict(payload)
-    missing_capability["capabilitySnapshot"] = {}
-    denied = {
-        item.reason_code for item in _admit(missing_capability) if not item.admitted
-    }
-    assert "RECOVERY_CAPABILITY_SNAPSHOT_MISSING" in denied
-
-    # An empty checkpoint ref fails closed at the typed contract boundary
-    # (parse-time rejection), never a guessed full retry.
-    from pydantic import ValidationError as _ValidationError
-
-    missing_checkpoint = dict(payload)
-    checkpoint = dict(missing_checkpoint["checkpoint"])
-    checkpoint["ref"] = ""
-    missing_checkpoint["checkpoint"] = checkpoint
-    with __import__("pytest").raises(_ValidationError):
-        _admit(missing_checkpoint)
-
-
-def test_3510_recovery_typed_per_phase_admission_executes_existing_owners() -> None:
-    """MoonLadderStudios/MoonMind#3510 R2/R7: each failure class executes owners.
-
-    Every supported target kind is admitted through the shared decision helper,
-    compiled to its existing execution route at the destination entry, and the
-    publication owner reconciles without mutation. Unsupported phases stay
-    rejected by execution, not by vocabulary assertion alone.
-    """
-
-    from types import SimpleNamespace as _NS
-
-    import api_service.api.routers.executions as _executions  # noqa: F401
-    from moonmind.workflows.temporal.publication_recovery import (
-        PublicationObservation as _Observation,
-    )
-    from moonmind.workflows.temporal.publication_recovery import (
-        publication_operation_key as _op_key,
-    )
-    from moonmind.workflows.temporal.publication_recovery import (
-        reconcile_publication_state as _reconcile,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        BOUNDARY_RESUME_PHASE as _RESUME,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        admit_recovery_target as _admit,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        decide_checkpoint_recovery as _decide,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        require_admitted_recovery_target as _require,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        validate_recovery_contract as _validate_contract,
-    )
-    from moonmind.workflows.temporal.recovery_entry import (
-        compile_recovery_entry_policy as _compile_entry,
-    )
-    from tests.unit.schemas.test_workflow_recovery_models import _payload
-
-    expected_routes = {
-        "failed_step": "failed_step",
-        "control_stop": "post_gate",
-        "publication": "publication",
-        "restoration_failure": "restoration",
-    }
-    for kind, route in expected_routes.items():
-        payload = _payload(kind)
-        if kind == "control_stop":
-            payload["continuation"]["newBudgetRef"] = "artifact://new-budget-3510"
-        admitted = _require(payload)
-        assert all(item.admitted for item in _admit(payload))
-        entry = _compile_entry(
-            payload, destination_workflow_id=payload["destination"]["workflowId"]
-        )
-        assert entry.execution_route == route
-        assert admitted.target.kind == kind
-
-    # Each checkpoint boundary executes its decision owner with the exact phase.
-    for boundary, phase in _RESUME.items():
-        decision = _decide(
-            checkpoint_ref="artifact://checkpoint/3510-owner",
-            checkpoint_boundary=boundary,
-            checkpoint_kind="worktree_archive",
-            capabilities=resolve_runtime_execution_capabilities("omnigent"),
-            restore_route_registered=True,
-            artifact_valid=True,
-            side_effect_safe=True,
-        )
-        assert decision.eligible is True
-        assert decision.resume_phase == phase
-
-    # The workflow preflight executes the same vocabulary before mutation.
-    proof = _decide(
-        checkpoint_ref="artifact://checkpoint/3510-preflight",
-        checkpoint_boundary="before_execution",
-        checkpoint_kind="worktree_archive",
-        capabilities=resolve_runtime_execution_capabilities("omnigent"),
-        restore_route_registered=True,
-        artifact_valid=True,
-        side_effect_safe=True,
-    ).model_dump(by_alias=True, mode="json")
-    contract = {
-        **proof,
-        "recoveryAction": "resume_from_workspace_checkpoint",
-        "selectedCheckpointBoundary": "before_execution",
-        "checkpointRestoreActivity": proof["restoreActivity"],
-        "recoveryCheckpointRef": proof["checkpointRef"],
-        "selectedTargetRuntimeId": proof["targetRuntimeId"],
-        "selectedCapabilityDigest": proof["capabilityDigest"],
-        "registeredRestoreActivity": proof["restoreActivity"],
-        "sourceWorkflowId": "workflow-3510",
-        "sourceRunId": "run-3510",
-        "checkpointSourceWorkflowId": "workflow-3510",
-        "checkpointSourceRunId": "run-3510",
-        "sideEffectSafe": True,
-    }
-    _validate_contract(contract)
-    stale = dict(contract, resumePhase="continue_after_gate")
-    with pytest.raises(ValueError, match="CHECKPOINT_BOUNDARY_INCOMPATIBLE"):
-        _validate_contract(stale)
-
-    # Publication failures execute the publisher owner deterministically.
-    key_kwargs = {
-        "source_workflow_id": "mm:source-3510",
-        "source_run_id": "run-3510",
-        "publication_kind": "pull_request",
-        "repository": "MoonLadderStudios/MoonMind",
-        "head_ref": "feature-3510",
-        "base_ref": "main",
-    }
-    assert _op_key(**key_kwargs) == _op_key(**key_kwargs)
-    fake_contract = _NS(
-        continuation=_NS(expected_head_sha="sha-3510"),
-        intent=_NS(head_ref="feature-3510", base_ref="main", mode="pr"),
-    )
-    absent = _Observation.model_validate(
-        {
-            "authoritative": True,
-            "authorityAvailable": True,
-            "remoteBranchExists": False,
-            "pullRequestExists": False,
-        }
-    )
-    reconciled = _reconcile(fake_contract, absent)
-    assert reconciled.outcome == "safe_to_retry"
-    assert reconciled.mutation_allowed is True
-
-    # Unsupported phases stay rejected at execution time.
-    bad = _payload("failed_step")
-    bad["continuation"] = {**bad["continuation"], "phase": "continue_after_gate"}
-    denied = {item.reason_code for item in _admit(bad) if not item.admitted}
-    assert "RECOVERY_PHASE_UNSUPPORTED" in denied
-
-
-def test_3510_recovery_cold_restore_semantics_execute_with_load_order() -> None:
-    """MoonLadderStudios/MoonMind#3510 R6: cold/live rules plus load ordering.
-
-    Live reattachment executes its stricter session checks, the frozen
-    checkpoint contract discriminates capability/side-effect mismatches, cold
-    targets reacquire their generation, branches require new authorities, and
-    the destination ledger loads accepted semantic outputs before downstream
-    work runs.
-    """
-
-    from datetime import UTC as _UTC
-    from datetime import datetime as _datetime
-
-    from moonmind.workflows.executions.runtime_capabilities import (
-        RuntimeExecutionCapabilities as _Caps,
-    )
-    from moonmind.workflows.executions.runtime_capabilities import (
-        resolve_runtime_execution_capabilities as _caps,
-    )
-    from moonmind.workflows.temporal.recovery_decision import (
-        decide_same_session_recovery as _decide_session,
-    )
-    from moonmind.workflows.temporal.recovery_state import (
-        CHECKPOINT_CAPABILITY_INVALID as _CAP_INVALID,
-    )
-    from moonmind.workflows.temporal.recovery_state import (
-        CHECKPOINT_SIDE_EFFECT_UNSAFE as _UNSAFE,
-    )
-    from moonmind.workflows.temporal.recovery_state import (
-        CheckpointRecoveryContract as _Contract,
-    )
-    from moonmind.workflows.temporal.recovery_state import (
-        RecoveryContractError as _ContractError,
-    )
-    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-
-    live_caps = _caps("codex_cli")
-    live = _decide_session(
-        live_session_id="session-3510",
-        session_reachable=True,
-        capabilities=live_caps,
-    )
-    assert live.eligible is True
-    assert live.default_action == "continue_same_session"
-    dead = _decide_session(
-        live_session_id="session-3510",
-        session_reachable=False,
-        capabilities=live_caps,
-    )
-    assert dead.disabled_reason_code == "SAME_SESSION_UNREACHABLE"
-
-    def _snapshot() -> dict:
-        return _Caps(
-            runtimeId="codex_cli",
-            runtimeFamily="managed_cli",
-            workspaceAuthority="managed_runtime",
-            checkpointRestoreKinds=("worktree_archive",),
-            checkpointRestoreActivity="agent_runtime.restore_workspace_checkpoint",
-            checkpointArtifactContractVersion="managed-worktree-archive-v1",
-            supportsSameSessionContinuation=True,
-            postExecutionCheckpointCriticality="recoverability_only",
-        ).with_digest().model_dump(by_alias=True)
-
-    valid_payload = {
-        "recoveryAction": "resume_from_workspace_checkpoint",
-        "resumePhase": "rerun_failed_step",
-        "sourceCheckpointRef": "artifact://checkpoint/3510-cold",
-        "sourceCheckpointBoundary": "before_execution",
-        "sourceCheckpointKind": "worktree_archive",
-        "workspacePolicy": "restore_pre_execution",
-        "capabilitySnapshot": _snapshot(),
-        "restoreActivity": "agent_runtime.restore_workspace_checkpoint",
-        "sideEffectDispositions": [
-            {"disposition": "accepted", "idempotent": True},
-        ],
-    }
-    contract = _Contract.model_validate(valid_payload)
-    assert contract.resume_phase == "rerun_failed_step"
-
-    # Incompatible history (digest mismatch) is rejected; the frozen snapshot
-    # digest must be recomputed, so a stale digest fails closed.
-    tampered = dict(valid_payload)
-    tampered_snapshot = dict(valid_payload["capabilitySnapshot"])
-    tampered_snapshot["capabilityDigest"] = "0" * 64
-    tampered["capabilitySnapshot"] = tampered_snapshot
-    with pytest.raises(ValueError) as digest_exc:
-        _Contract.model_validate(tampered)
-    assert _CAP_INVALID in str(digest_exc.value)
-
-    # Unsafe effects keep their exact boundary rejection at execution time.
-    unsafe = dict(valid_payload)
-    unsafe["sideEffectDispositions"] = [
-        {"disposition": "accepted", "idempotent": False},
-    ]
-    with pytest.raises(ValueError) as unsafe_exc:
-        _Contract.model_validate(unsafe)
-    assert _UNSAFE in str(unsafe_exc.value)
-
-    # Cold targets reacquire the checkpoint generation; branches need new hosts.
-    from moonmind.omnigent.checkpoints import validate_branch_identity as _branch
-    from moonmind.omnigent.checkpoints import validate_cold_restore_target as _cold
-
-    checkpoint = SimpleNamespace(
-        provider_profile_id="profile-3510",
-        credential_generation=3,
-        host_lease_ref="lease-source-3510",
-        omnigent_session_id="session-source-3510",
-    )
-    _cold(
-        checkpoint,
-        provider_profile_id="profile-3510",
-        credential_generation=3,
-    )
-    with pytest.raises(ValueError, match="credential generation"):
-        _cold(checkpoint, provider_profile_id="profile-3510", credential_generation=4)
-    with pytest.raises(ValueError, match="new host lease"):
-        _branch(
-            checkpoint,
-            new_host_lease_ref="lease-source-3510",
-            new_session_id="session-new-3510",
-        )
-    _branch(
-        checkpoint,
-        new_host_lease_ref="lease-new-3510",
-        new_session_id="session-new-3510",
-    )
-
-    # Destination ledger: accepted semantic outputs load before downstream work.
-    workflow = MoonMindRunWorkflow()
-    workflow._recovery_source = {
-        "sourceWorkflowId": "mm:source-3510",
-        "sourceRunId": "run-source-3510",
-        "sourceTaskInputSnapshotRef": "artifact://snapshot/3510",
-        "failedStepId": "implement",
-        "failedStepExecution": 1,
-        "recoveryCheckpointRef": "artifact://workspace/before-implement-3510",
-        "failedRunRecoveryManifestRef": "artifact://recovery/manifest-3510",
-        "sourcePlanRef": "artifact://plan/3510",
-        "recoveryWorkspace": {
-            "checkpointRef": "artifact://workspace/before-implement-3510",
-        },
-        "preservedSteps": [
-            {
-                "logicalStepId": "prepare",
-                "status": "succeeded",
-                "sourceExecutionOrdinal": 1,
-                "artifacts": {
-                    "outputSummary": "artifact://prepare-summary-3510",
-                    "outputPrimary": "artifact://prepare-output-3510",
-                },
-                "stateCheckpointRef": "artifact://workspace/prepare-3510",
-            }
-        ],
-    }
-    workflow._initialize_step_ledger(
-        ordered_nodes=[
-            {"id": "prepare", "title": "Prepare"},
-            {"id": "implement", "title": "Implement"},
-            {"id": "verify", "title": "Verify"},
-        ],
-        dependency_map={
-            "prepare": [],
-            "implement": ["prepare"],
-            "verify": ["implement"],
-        },
-        updated_at=_datetime.now(_UTC),
-    )
-    # Workspace owner restores first; semantic outputs are available to the
-    # failed step while downstream stays pending.
-    assert workflow._restore_recovery_workspace_for_failed_step("implement") == (
-        "artifact://workspace/before-implement-3510"
-    )
-    outputs = workflow._preserved_outputs_for_step("implement")
-    assert outputs["prepare"]["outputSummary"] == "artifact://prepare-summary-3510"
-    rows = {row["logicalStepId"]: row for row in workflow._step_ledger_rows}
-    assert rows["prepare"]["attempt"] == 0
-    assert rows["implement"]["status"] == "ready"
-    assert rows["verify"]["status"] == "pending"
-

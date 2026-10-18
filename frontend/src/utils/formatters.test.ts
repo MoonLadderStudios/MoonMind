@@ -9,7 +9,6 @@ describe('formatStatusLabel', () => {
     expect(formatStatusLabel('no_commit')).toBe('no commit');
     expect(formatStatusLabel('awaiting_external')).toBe('awaiting external');
     expect(formatStatusLabel('validating_token')).toBe('validating token');
-    expect(formatStatusLabel('failed_step_execution')).toBe('Failed step execution');
     expect(formatStatusLabel('constructor')).toBe('constructor');
     expect(formatStatusLabel(null)).toBe('—');
   });
