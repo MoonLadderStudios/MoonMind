@@ -473,8 +473,11 @@ def build_failed_run_recovery_manifest(
         checkpoint_kind=checkpoint_kind,
         capabilities=runtime_capabilities,
         restore_route_registered=restore_route_registered,
-        artifact_valid=validation.result == "valid" and bool(failed_step_id),
+        artifact_valid=validation.result == "valid",
         side_effect_safe=side_effect_block_reason is None,
+        # A failure outside any step has nothing to restart; its checkpoints
+        # are still valid evidence.
+        recovery_target_available=bool(failed_step_id),
         source_workflow_id=workflow_id,
         source_run_id=run_id,
         evidence=checkpoint_evidence,

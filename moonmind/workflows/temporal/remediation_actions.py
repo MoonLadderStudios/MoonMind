@@ -1077,10 +1077,12 @@ class RemediationActionAuthorityService:
         existing = raw_existing if isinstance(raw_existing, Mapping) else None
         if existing is not None and existing.get("requestDigest") != request_shape_hash:
             raise ValueError("approval_idempotency_conflict")
-        safe_parameters = redact_sensitive_payload(dict(parameters or {}))
-        target = await self._session.get(
-            db_models.TemporalExecutionCanonicalRecord, link.target_workflow_id
+        from moonmind.workflows.temporal.remediation_context import (
+            load_remediation_target,
         )
+
+        safe_parameters = redact_sensitive_payload(dict(parameters or {}))
+        target = await load_remediation_target(self._session, link.target_workflow_id)
         target_state = _enum_value(getattr(target, "state", None))
         bridge = (
             await self._session.execute(
