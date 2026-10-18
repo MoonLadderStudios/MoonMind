@@ -23,7 +23,11 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from api_service.api.routers import executions
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
-from api_service.db.models import Base
+from api_service.db.models import (
+    Base,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionRecord,
+)
 from moonmind.workflows.temporal import retry_from_step
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
@@ -212,6 +216,32 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     )
                     assert repeated.status_code == 202
                     assert repeated.json()["runId"] == new_run_id
+
+                    # Temporal accepted the reset but MoonMind lost its response
+                    # (crash or failed commit), with the row either still on the
+                    # failed run or already synced to the successor.
+                    for row_run_id in (failed_run_id, new_run_id):
+                        for model in (TemporalExecutionCanonicalRecord, TemporalExecutionRecord):
+                            row = await session.get(model, workflow_id)
+                            if row is not None:
+                                row.run_id = row_run_id
+                                row.last_update_idempotency_key = None
+                                row.last_update_response = None
+                        await session.commit()
+                        recovered = await client.post(
+                            f"/api/executions/{workflow_id}/retry-from-step",
+                            json={"idempotencyKey": "retry-1", "sourceRunId": failed_run_id},
+                        )
+                        assert recovered.status_code == 202, recovered.text
+                        assert recovered.json()["runId"] == new_run_id
+                        assert recovered.json()["stepId"] == "step-3"
+
+                    other = await client.post(
+                        f"/api/executions/{workflow_id}/retry-from-step",
+                        json={"idempotencyKey": "retry-2", "sourceRunId": failed_run_id},
+                    )
+                    assert other.status_code == 409
+                    assert other.json()["detail"]["reason"] == "run_changed"
 
                     detail = await client.get(f"/api/executions/{workflow_id}")
                     assert detail.status_code == 200

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import pytest
-from temporalio.api.enums.v1 import EventType
+from temporalio.api.enums.v1 import EventType, WorkflowTaskFailedCause
 from temporalio.api.history.v1 import HistoryEvent
 
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.retry_from_step import (
     STEP_ORDER_MEMO_KEY,
     RetryFromStepUnavailable,
+    accepted_retry_step,
     plan_retry_from_step,
     retry_candidates,
+    retry_reset_reason,
     step_boundaries,
 )
 
@@ -65,6 +67,18 @@ class _History:
         for key, value in fields.items():
             attributes.upserted_memo.fields[key].CopyFrom(_CONVERTER.to_payload(value))
         self.events.append(event)
+
+
+def _reset_failure(
+    base_run_id: str, started_event_id: int, message: str
+) -> HistoryEvent:
+    event = HistoryEvent(event_type=EventType.EVENT_TYPE_WORKFLOW_TASK_FAILED)
+    attributes = event.workflow_task_failed_event_attributes
+    attributes.cause = WorkflowTaskFailedCause.WORKFLOW_TASK_FAILED_CAUSE_RESET_WORKFLOW
+    attributes.base_run_id = base_run_id
+    attributes.started_event_id = started_event_id
+    attributes.failure.message = message
+    return event
 
 
 def _rows(*statuses: str) -> list[dict]:
@@ -143,6 +157,29 @@ def test_failed_step_from_the_failure_diagnostic_wins_over_ledger_status() -> No
     assert plan.logical_step_id == "step-2"
 
 
+def test_default_plan_restarts_the_earliest_unresolved_failure() -> None:
+    history, wt_by_order = _three_step_failure()
+    # A CONTINUE plan kept going after step 1 failed; a reset after step 1
+    # would replay that failure and leave the retried run failed again.
+    rows = _rows("failed", "completed", "failed", "pending")
+
+    for failed_step_id in (None, "step-3"):
+        plan = plan_retry_from_step(
+            events=history.events,
+            ledger_rows=rows,
+            decode_memo_value=_decode,
+            failed_step_id=failed_step_id,
+        )
+        assert (plan.logical_step_id, plan.reset_event_id) == ("step-1", wt_by_order[1])
+
+    assert [
+        item.logical_step_id
+        for item in retry_candidates(
+            rows, step_boundaries(history.events, _decode), failed_step_id="step-3"
+        )
+    ] == ["step-1"]
+
+
 def test_without_a_failed_row_the_last_started_step_is_restarted() -> None:
     history, wt_by_order = _three_step_failure()
 
@@ -184,3 +221,34 @@ def test_a_run_that_never_started_a_step_cannot_restart_from_one() -> None:
         )
 
     assert raised.value.reason == "no_step_started"
+
+
+def test_a_retry_accepted_before_its_response_was_saved_is_recognized() -> None:
+    history, wt_by_order = _three_step_failure()
+    rows = _rows("completed", "completed", "failed", "pending")
+    started = wt_by_order[3] - 1
+    successor = [
+        # The failed run was itself a retry of an earlier run.
+        _reset_failure("run-0", 2, retry_reset_reason("step-1", "retry-0")),
+        _reset_failure("run-1", started, retry_reset_reason("step-3", "retry-1")),
+    ]
+
+    def accepted(events, *, source_run_id="run-1", request_id="retry-1"):
+        return accepted_retry_step(
+            successor_events=events,
+            source_events=history.events,
+            ledger_rows=rows,
+            source_run_id=source_run_id,
+            request_id=request_id,
+            decode_memo_value=_decode,
+        )
+
+    step = accepted(successor)
+    assert step is not None
+    assert (step.logical_step_id, step.order) == ("step-3", 3)
+    # Another request, another base run, or a run created by something else
+    # is a changed run, never this request's result.
+    assert accepted(successor, request_id="retry-2") is None
+    assert accepted(successor, source_run_id="run-x") is None
+    assert accepted(successor[:1]) is None
+    assert accepted([]) is None
