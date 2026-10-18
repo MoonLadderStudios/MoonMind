@@ -956,7 +956,7 @@ jobs:
         # settings/catalog, synthetic credential binding, submit/observe,
         # artifacts, recurring dispatch, presets, worker restart, dashboard
         # cancellation, and generated scratch output downloaded after host/workspace
-        # cleanup. Only the provider turn is controlled; failed or missing evidence fails.
+        # cleanup. Provider catalog/turn are controlled; failed or missing evidence fails.
         # MOONMIND_IMAGE pins the candidate build above.
         if: matrix.suite == 'fresh-journey'
         timeout-minutes: 20

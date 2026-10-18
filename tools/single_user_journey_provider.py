@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Test-only deterministic provider for the real first-run Compose journey.
 
-Only the provider turn is controlled. Admission, profile resolution, host launch,
-workspace saves and finalization remain owned by the normal production worker.
+The external-provider catalog observation and turn are controlled. Admission,
+profile resolution, host attestation, workspace saves and finalization remain
+owned by the normal production worker.
 """
 from __future__ import annotations
 
@@ -13,11 +14,13 @@ import json
 import os
 import re
 import shutil
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 
 PHASE = "firstRunGenerated"
+_CONTROLLED_CATALOG: ContextVar[bool] = ContextVar("first_run_catalog", default=False)
 _MARKER = re.compile(r"(?<![\w-])first-run-generated:[0-9a-f]{32}(?![\w-])")
 
 # Compute inside the admitted host, rather than uploading expected output bytes.
@@ -66,7 +69,7 @@ def _expected_report(marker: str) -> bytes:
     )
 
 
-async def _marker(request: Any, artifacts: Any) -> str:
+async def _marker(request: Any, artifacts: Any, *, required: bool = True) -> str | None:
     from moonmind.omnigent.execute import (
         _build_omnigent_first_message,
         _first_message_text,
@@ -78,6 +81,8 @@ async def _marker(request: Any, artifacts: Any) -> str:
     )
     markers = set(_MARKER.findall(_first_message_text(message)))
     if len(markers) != 1:
+        if not required:
+            return None
         raise RuntimeError(
             "Controlled first-run provider requires exactly one first-run-generated:<32 lowercase hex> prompt marker; use the normal worker for other requests"
         )
@@ -98,6 +103,85 @@ async def _owned_lease(binding: Any, leases: Any) -> Any:
     return lease
 
 
+def install_controlled_catalog() -> None:
+    """Pair only marked first-run turns with their fixed external-provider catalog.
+
+    The production attestor still owns every host probe, membership check,
+    retry and evidence artifact. Only the test provider's catalog observation
+    changes, and it must execute successfully inside that same exact host.
+    """
+    from moonmind.omnigent import production
+    from moonmind.omnigent.bootstrap.opencode import ZEN_FREE_QUALIFIED
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+    from moonmind.omnigent.host_services import attestation
+
+    require_test_project()
+    original_reader = attestation._read_exact_host_model_options
+
+    async def read_model_options(**kwargs: Any):
+        if not _CONTROLLED_CATALOG.get() or kwargs["harness_id"] != "opencode-native":
+            return await original_reader(**kwargs)
+        require_test_project()
+        # This literal advertises the controlled provider's supported model.
+        # It never reads the request's selected model or upstream catalog.
+        fixed_catalog = {"models": [{"id": ZEN_FREE_QUALIFIED}]}
+        probe = attestation._substrate_guarded_probe(
+            "import json; print(json.dumps(" + repr(fixed_catalog) + "))"
+        )
+        code, stdout, stderr = await kwargs["backend"].run(
+            [
+                "docker",
+                "exec",
+                kwargs["container_name"],
+                "/opt/venv/bin/python",
+                "-c",
+                probe,
+            ],
+            timeout_seconds=45.0,
+            check=False,
+        )
+        attestation._raise_if_probe_substrate_unavailable(
+            code, stderr, boundary="Controlled first-run provider model catalog"
+        )
+        if code != 0:
+            raise HarnessPlatformError(
+                "exact host controlled provider catalog probe failed",
+                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+            )
+        try:
+            payload = json.loads(stdout)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HarnessPlatformError(
+                "exact host controlled provider catalog returned invalid JSON",
+                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+            ) from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+            raise HarnessPlatformError(
+                "exact host controlled provider probe returned an invalid catalog",
+                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+            )
+        return payload, "exact-host-controlled-first-run-provider"
+
+    class JourneyScopedAttestor(attestation.DockerOmnigentHostAttestor):
+        async def attest(self, **kwargs: Any):
+            controlled = (
+                kwargs["plan"].payload.harnessId == "opencode-native"
+                and await _marker(kwargs["request"], self._artifacts, required=False)
+                is not None
+            )
+            token = _CONTROLLED_CATALOG.set(controlled)
+            try:
+                return await super().attest(**kwargs)
+            finally:
+                _CONTROLLED_CATALOG.reset(token)
+
+    attestation._read_exact_host_model_options = read_model_options
+    production.DockerOmnigentHostAttestor = JourneyScopedAttestor
+
+
 class ControlledProvider:
     def __init__(self, client: Any, leases: Any, docker: Any):
         self.client, self.leases, self.docker = client, leases, docker
@@ -111,6 +195,7 @@ class ControlledProvider:
         **_continuation: Any,
     ):
         from moonmind.schemas.agent_runtime_models import AgentRunResult
+        from moonmind.omnigent.bootstrap.opencode import ZEN_FREE_QUALIFIED
 
         require_test_project()
         marker = await _marker(request, artifact_gateway)
@@ -123,6 +208,15 @@ class ControlledProvider:
             )
         omni = request.parameters["omnigent"]
         session_options = omni["session"]
+        if (
+            request.parameters.get("model") != ZEN_FREE_QUALIFIED
+            or session_options.get("modelOverride") != ZEN_FREE_QUALIFIED
+            or omni["agent"].get("harnessOverride") != "opencode-native"
+        ):
+            raise RuntimeError(
+                "Controlled first-run execution requires its supported model "
+                f"{ZEN_FREE_QUALIFIED} and opencode-native harness"
+            )
         locator = request.workspace_spec.get("workspaceLocator", {})
         if session_options["hostId"] != binding.omnigentHostId or not locator.get(
             "workspaceId"
@@ -130,6 +224,8 @@ class ControlledProvider:
             raise RuntimeError("Request does not name the admitted host and workspace")
         identity = {
             "marker": marker,
+            "model": ZEN_FREE_QUALIFIED,
+            "provider": "controlled-first-run-provider",
             "bindingId": binding.bindingId,
             "hostId": binding.omnigentHostId,
             "workspaceId": locator["workspaceId"],
@@ -467,6 +563,7 @@ def main() -> None:
         # isort: on
 
         production.run_omnigent_execution = controlled_provider
+        install_controlled_catalog()
         worker_runtime._configure_worker_logging(
             enable_opentelemetry=os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0")
             == "1"

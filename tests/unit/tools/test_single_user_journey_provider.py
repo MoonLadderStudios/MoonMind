@@ -15,6 +15,8 @@ REPORT = f"# Generated scratch report\n\nRequest: {MARKER}\nSHA-256: {hashlib.sh
 
 @pytest.fixture
 def setup(monkeypatch):
+    from moonmind.omnigent.bootstrap.opencode import ZEN_FREE_QUALIFIED
+
     monkeypatch.setenv("FIRST_RUN_JOURNEY_PROJECT", "moonmind-test-first-run")
     binding = SimpleNamespace(
         bindingId="binding",
@@ -38,14 +40,16 @@ def setup(monkeypatch):
         instruction_ref=MARKER,
         resolved_skillset_ref=None,
         parameters={
+            "model": ZEN_FREE_QUALIFIED,
             "omnigent": {
-                "agent": {"agentId": "agent", "harnessOverride": "codex"},
+                "agent": {"agentId": "agent", "harnessOverride": "opencode-native"},
                 "session": {
                     "hostId": "host",
                     "hostType": "external",
                     "workspace": "/workspaces/run",
+                    "modelOverride": ZEN_FREE_QUALIFIED,
                 },
-            }
+            },
         },
         workspace_spec={"workspaceLocator": {"workspaceId": "workspace"}},
         step_execution=SimpleNamespace(
@@ -488,7 +492,8 @@ async def test_cleanup_serializes_deletion_with_new_workspace_claim(
         admitted_during_deletion = await asyncio.to_thread(reader_finished.wait, 0.2)
     finally:
         release_deletion.set()
-        await cleanup
+        cleanup_receipt = await cleanup
+        assert cleanup_receipt["workspaceRemoved"] is True
     assert reader is not None
     outcome = await reader
     assert not admitted_during_deletion
@@ -590,3 +595,214 @@ def test_cleanup_entrypoint_imports_real_dependencies_in_fresh_process(tmp_path)
     )
     assert result.returncode == 0, result.stderr
     assert "CLEANUP_DEPENDENCIES_READY" in result.stdout
+
+
+@pytest.fixture
+def controlled_catalog(monkeypatch):
+    from moonmind.omnigent import production
+    from moonmind.omnigent.host_services import attestation
+
+    original = AsyncMock(return_value=({"models": []}, "real-provider"))
+    monkeypatch.setattr(attestation, "_read_exact_host_model_options", original)
+    monkeypatch.setattr(
+        production, "DockerOmnigentHostAttestor", attestation.DockerOmnigentHostAttestor
+    )
+    monkeypatch.setenv("FIRST_RUN_JOURNEY_PROJECT", "moonmind-test-first-run")
+    provider.install_controlled_catalog()
+    return attestation, production, original
+
+
+@pytest.mark.asyncio
+async def test_controlled_catalog_exact_host_and_real_membership(
+    controlled_catalog, setup, monkeypatch
+):
+    import subprocess
+    import sys
+    from moonmind.omnigent.bootstrap.opencode import ZEN_FREE_QUALIFIED
+
+    attestation, production, original = controlled_catalog
+    request, _sink, _client, _leases, _docker, artifacts = setup
+    backend = SimpleNamespace(run=AsyncMock())
+
+    async def execute_probe(argv, **kwargs):
+        assert argv[:5] == [
+            "docker",
+            "exec",
+            "exact-admitted-host",
+            "/opt/venv/bin/python",
+            "-c",
+        ]
+        result = subprocess.run(
+            [sys.executable, "-c", argv[5]], capture_output=True, text=True, check=True
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    backend.run.side_effect = execute_probe
+
+    async def real_boundary(self, **kwargs):
+        return await attestation._read_exact_host_model_options(
+            backend=backend,
+            client=None,
+            container_name="exact-admitted-host",
+            omnigent_host_id="host",
+            harness_id=kwargs["plan"].payload.harnessId,
+        )
+
+    monkeypatch.setattr(attestation.DockerOmnigentHostAttestor, "attest", real_boundary)
+    wrapped = production.DockerOmnigentHostAttestor(
+        backend=backend, client=None, artifacts=artifacts
+    )
+    payload, source = await wrapped.attest(
+        request=request,
+        plan=SimpleNamespace(payload=SimpleNamespace(harnessId="opencode-native")),
+    )
+    assert payload == {"models": [{"id": ZEN_FREE_QUALIFIED}]}
+    assert source == "exact-host-controlled-first-run-provider"
+    original.assert_not_awaited()
+    for model, expected in [
+        (ZEN_FREE_QUALIFIED, True),
+        ("opencode/unsupported", False),
+        ("", False),
+    ]:
+        _, present = await attestation.confirm_exact_host_model(
+            backend=backend,
+            container_name="exact-admitted-host",
+            harness_id="opencode-native",
+            model_options=payload,
+            selected_model=model,
+        )
+        assert present is expected
+    _, present = await attestation.confirm_exact_host_model(
+        backend=backend,
+        container_name="exact-admitted-host",
+        harness_id="opencode-native",
+        model_options={"models": []},
+        selected_model=ZEN_FREE_QUALIFIED,
+    )
+    assert not present
+    # No active request scope may inherit the controlled provider catalog.
+    assert (
+        await attestation._read_exact_host_model_options(
+            backend=backend,
+            client=None,
+            container_name="another-host",
+            omnigent_host_id="other",
+            harness_id="opencode-native",
+        )
+    )[1] == "real-provider"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "harness,marked", [("opencode-native", False), ("codex-native", True)]
+)
+async def test_catalog_delegates_unrelated_requests(
+    controlled_catalog, setup, monkeypatch, harness, marked
+):
+    attestation, production, original = controlled_catalog
+    request, _sink, _client, _leases, docker, artifacts = setup
+    if not marked:
+        request.instruction_ref = "ordinary task"
+
+    async def real_boundary(self, **kwargs):
+        return await attestation._read_exact_host_model_options(
+            backend=docker,
+            client=None,
+            container_name="host",
+            omnigent_host_id="host",
+            harness_id=harness,
+        )
+
+    monkeypatch.setattr(attestation.DockerOmnigentHostAttestor, "attest", real_boundary)
+    wrapped = production.DockerOmnigentHostAttestor(
+        backend=docker, client=None, artifacts=artifacts
+    )
+    assert (
+        await wrapped.attest(
+            request=request,
+            plan=SimpleNamespace(payload=SimpleNamespace(harnessId=harness)),
+        )
+    )[1] == "real-provider"
+    original.assert_awaited_once()
+    docker.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response,code",
+    [
+        ((1, "", "private-provider-diagnostic"), "OMNIGENT_MODEL_UNAVAILABLE"),
+        ((0, "not-json", ""), "OMNIGENT_MODEL_UNAVAILABLE"),
+        ((0, '{"models": {}}', ""), "OMNIGENT_MODEL_UNAVAILABLE"),
+        (
+            (
+                97,
+                "",
+                "moonmind-attestation-substrate-unavailable: ImportError: missing helper",
+            ),
+            "OMNIGENT_HARNESS_BUILD_MISMATCH",
+        ),
+    ],
+)
+async def test_catalog_preserves_probe_failures(
+    controlled_catalog, setup, monkeypatch, response, code
+):
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    attestation, production, original = controlled_catalog
+    request, _sink, _client, _leases, docker, artifacts = setup
+    docker.run.side_effect = None
+    docker.run.return_value = response
+
+    async def real_boundary(self, **kwargs):
+        return await attestation._read_exact_host_model_options(
+            backend=docker,
+            client=None,
+            container_name="exact-host",
+            omnigent_host_id="host",
+            harness_id="opencode-native",
+        )
+
+    monkeypatch.setattr(attestation.DockerOmnigentHostAttestor, "attest", real_boundary)
+    wrapped = production.DockerOmnigentHostAttestor(
+        backend=docker, client=None, artifacts=artifacts
+    )
+    with pytest.raises(HarnessPlatformError) as error:
+        await wrapped.attest(
+            request=request,
+            plan=SimpleNamespace(payload=SimpleNamespace(harnessId="opencode-native")),
+        )
+    assert str(error.value.code) == code
+    assert "private-provider-diagnostic" not in str(error.value)
+    # Even failure must reset the task-local scope.
+    await attestation._read_exact_host_model_options(
+        backend=docker,
+        client=None,
+        container_name="other",
+        omnigent_host_id="other",
+        harness_id="opencode-native",
+    )
+    original.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["model", "session", "harness", "missing"])
+async def test_execution_rejects_unadvertised_model_before_effects(setup, mismatch):
+    request, sink, client, leases, docker, artifacts = setup
+    if mismatch == "model":
+        request.parameters["model"] = "opencode/unsupported"
+    elif mismatch == "session":
+        request.parameters["omnigent"]["session"][
+            "modelOverride"
+        ] = "opencode/unsupported"
+    elif mismatch == "harness":
+        request.parameters["omnigent"]["agent"]["harnessOverride"] = "codex-native"
+    else:
+        del request.parameters["model"]
+    with pytest.raises(RuntimeError, match="supported model"):
+        await provider.ControlledProvider(client, leases, docker)(
+            request, session_authority_sink=sink, artifact_gateway=artifacts
+        )
+    client.create_session.assert_not_awaited()
+    leases.get.assert_not_awaited()
+    docker.run.assert_not_awaited()
