@@ -8777,14 +8777,8 @@ async def _workflow_creation_defaults(
     """Resolve submission fallbacks once, preserving explicit account intent."""
     from api_service.services.settings_catalog import (
         SettingsCatalogService,
-        WorkflowCreationDefaults,
         coerce_settings_subject_id,
     )
-
-    if not workflow_requires_agent(task_payload, parameter_payload):
-        return WorkflowCreationDefaults(
-            default_runtime=settings.workflow.default_runtime, provider_profile_ref=None
-        )
 
     user_id = coerce_settings_subject_id(getattr(user, "id", None))
     catalog = SettingsCatalogService(
@@ -8795,7 +8789,11 @@ async def _workflow_creation_defaults(
     defaults = await catalog.workflow_creation_defaults(
         scope="user" if user_id is not None else "workspace"
     )
-    if agent_profile is not None:
+    # Account-free work still needs the saved runtime for its admission route.
+    if (
+        not workflow_requires_agent(task_payload, parameter_payload)
+        or agent_profile is not None
+    ):
         return replace(defaults, provider_profile_ref=None)
     for payload in payloads:
         if payload.get("agentProfile") is not None:

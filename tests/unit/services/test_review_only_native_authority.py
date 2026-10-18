@@ -176,8 +176,7 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
                 side_effect=AssertionError("unexpected account default")
             )
             monkeypatch.setattr(
-                "api_service.services.settings_catalog."
-                "SettingsCatalogService.workflow_creation_defaults",
+                "api_service.api.routers.executions._load_provider_profile_for_runtime",
                 saved_account,
             )
     try:
