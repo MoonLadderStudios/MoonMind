@@ -1050,6 +1050,102 @@ async def test_materializer_retries_transient_clone_dns_failure(
 
 
 @pytest.mark.asyncio
+async def test_materializer_retries_clone_interrupted_mid_transfer(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A clone cut off mid-transfer retries instead of failing the run.
+
+    Regression for a Batch PR Resolver run whose initial clone died with an
+    HTTP/2 stream cancel and ``early EOF``. A clone has no remote side
+    effects and starts from an emptied target, so retrying it is safe.
+    """
+    import asyncio
+    import pathlib
+
+    _real_sleep = asyncio.sleep
+
+    async def _no_sleep(_delay: float) -> None:
+        await _real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=None, workspace_root=tmp_path  # type: ignore[arg-type]
+    )
+
+    calls: list[list[str]] = []
+
+    async def flaky_runner(argv, input_bytes=None):
+        calls.append(argv)
+        if input_bytes is not None:
+            local = tmp_path / pathlib.Path(argv[-3].removeprefix("/work/"))
+            if len([c for c in calls if c[0] == "docker"]) == 1:
+                # The interrupted clone leaves a partial ``.git`` behind.
+                (local / ".git" / "objects").mkdir(parents=True, exist_ok=True)
+                return (
+                    128,
+                    "",
+                    "Cloning into '/work/temporal_sandbox/abc/repo'...\n"
+                    "error: RPC failed; curl 92 HTTP/2 stream 5 was not closed "
+                    "cleanly: CANCEL (err 8)\n"
+                    "error: 11862 bytes of body are still expected\n"
+                    "fetch-pack: unexpected disconnect while reading sideband packet\n"
+                    "fatal: early EOF\n"
+                    "fatal: fetch-pack: invalid index-pack output",
+                )
+            assert not local.exists(), "partial clone must be removed before retry"
+            local.mkdir(parents=True, exist_ok=True)
+            (local / "README.md").write_text("cloned", encoding="utf-8")
+            return 0, "", ""
+        return 0, "", ""
+
+    object.__setattr__(materializer, "_runner", flaky_runner)
+
+    async def fake_token(*args, **kwargs):
+        return "tok" * 5
+
+    materializer._repository_credentials = _SelectedRepositoryCredentials(fake_token)
+    workspace = await materializer.materialize(
+        _request(
+            {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": _workspace_id(),
+                    "relativePath": "repo",
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "main",
+            }
+        ),
+        plan=object(),
+    )
+
+    assert workspace["kind"] == "bind"
+    # Two clone attempts plus the ownership handoff.
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "fatal: Authentication failed for 'https://github.com/o/r.git/'",
+        "error: RPC failed; HTTP 401 curl 22 The requested URL returned error: 401",
+        "fatal: Remote branch does-not-exist not found in upstream origin",
+        "fatal: unable to access 'https://github.com/o/r.git/': "
+        "SSL certificate problem: unable to get local issuer certificate",
+    ],
+)
+def test_clone_failure_classification_keeps_deterministic_errors_fail_closed(
+    stderr: str,
+):
+    from moonmind.omnigent.host_services.workspace import (
+        _is_transient_clone_failure,
+    )
+
+    assert not _is_transient_clone_failure(stderr)
+
+
+@pytest.mark.asyncio
 async def test_materializer_gives_up_after_repeated_transient_clone_failures(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ):
