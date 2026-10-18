@@ -1410,23 +1410,21 @@ class OmnigentProfileBoundExecutionCoordinator:
                 runtime_binding_ref = runtime_binding.runtimeBindingRef
             current_stage = "host_binding_resolution"
             selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
+            repair_missing_launch_ref = bool(
+                selected_on_demand
+                and binding is not None
+                and not binding.host_launch_profile_ref
+                and not binding.static_host_id
+            )
             binding = await self._hosts.create_or_update_static_binding(
                 profile_id=profile_id,
                 endpoint_ref=str(effective_launch["endpointRef"]),
                 static_host_id=binding.static_host_id if binding is not None else None,
                 host_launch_profile_ref=(
                     binding.host_launch_profile_ref
-                    if binding is not None
+                    if binding is not None and not repair_missing_launch_ref
                     else (
-                        (
-                            str(effective_launch["launchPolicyRef"])
-                            if requested_target
-                            else os.getenv(
-                                "OMNIGENT_CLAUDE_HOST_LAUNCH_PROFILE"
-                                if provider_runtime == "claude_code"
-                                else "OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"
-                            )
-                        )
+                        str(effective_launch["launchPolicyRef"])
                         if selected_on_demand
                         else None
                     )
@@ -1434,6 +1432,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 execution_profile_ref=str(effective_launch["executionProfileRef"]),
                 launch_policy_ref=str(effective_launch["launchPolicyRef"]),
                 effective_launch_snapshot=effective_launch,
+                # Older omitted-target launches could persist an on-demand
+                # snapshot without its mode marker. Repair only an idle
+                # binding, under the same lock as host lease admission.
+                require_idle=repair_missing_launch_ref,
             )
             await emit(
                 current_stage,

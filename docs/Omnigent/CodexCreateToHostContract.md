@@ -45,7 +45,7 @@ A selected launch-ready Codex OAuth Provider Profile becomes `executionProfileRe
 
 The compiler rejects a missing or ineligible profile and never chooses another profile.
 
-The form selects versioned `hostProfileRef` and `launchPolicyRef` values. The policy chooses exactly one mode: `static_compose` binds a compatible registered profile host, while `on_demand_docker` launches and later removes one lease-owned host. No host in the chosen mode is a failure; it does not trigger the other mode. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` is bootstrap configuration only, never durable product authority.
+The admitted plan selects the launch policy; callers need not repeat its target. Its mode determines the durable binding: `static_compose` binds a compatible registered host, while `on_demand_docker` launches and removes one lease-owned host. An unavailable host does not trigger the other mode. `OMNIGENT_CODEX_HOST_LAUNCH_PROFILE` is bootstrap configuration only; creating the binding does not re-read it. An older on-demand binding missing its launch marker is repaired only while idle; active leases retain their authority.
 
 Before host realization, the trusted launcher persists an immutable `effectiveLaunchSnapshot`: schema version, the selected execution profile and credential generation, resolved mode, profile and policy versions, image digest, machine target, resource limits, network/egress policy, safe mount targets, capture policy, and resolution time. Retries reuse it only while the selected credential generation remains current; a generation change makes the snapshot stale and requires reconciliation.
 
