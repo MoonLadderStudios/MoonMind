@@ -1,4 +1,4 @@
-"""Content contract tests for the document-author skill."""
+"""Frontmatter and capability parsing for the document-author skill."""
 
 from pathlib import Path
 
@@ -23,40 +23,3 @@ def test_document_author_skill_exists_with_front_matter() -> None:
     assert extract_required_capabilities_from_skill_markdown(
         _read_skill(), skill_name="document-author"
     ) == ("git",)
-
-
-def test_document_author_chooses_docs_architecture_fields() -> None:
-    text = _read_skill()
-
-    for expected in (
-        "document class",
-        "location",
-        "filename",
-        "viewpoint template",
-        "metadata header",
-        "stable claims",
-        "embedded rationale",
-    ):
-        assert expected in text
-
-
-def test_document_author_routes_broad_work_to_docs_tmp() -> None:
-    text = _read_skill()
-
-    assert "genuinely spans multiple documents" in text
-    assert "improvement plan" in text
-
-
-def test_document_author_never_creates_docs_native_spec() -> None:
-    text = _read_skill()
-
-    assert "Do not create `spec.md`" in text
-    assert "or writes under `specs/`" in text
-    assert "Confirmation that no docs-native `spec.md` was created" in text
-
-
-def test_document_author_defines_traceability_guidance() -> None:
-    text = _read_skill()
-
-    assert "traceability" in text
-    assert "issue keys" in text

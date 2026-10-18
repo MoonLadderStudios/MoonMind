@@ -1,41 +1,19 @@
-# \<System / Feature Name\> — System / Feature Design View
+# <Feature name> design
 
-**Status:** Proposed
-**Document Class:** Canonical declarative
-**Viewpoint:** System / Feature Design View
-**Updated:** \<YYYY-MM-DD\>
-**Audience:** \<primary readers\>
-**Authority:** \<feature design claims this document owns while transitional\>
-**Owning Surface:** \<system, module, or feature surface\>
-**Related Docs:** \<links to adjacent canonical docs\>
-**Related Implementation:** \<code modules, entrypoints, or tracking issues\>
+Optional outline from the [documentation guide](../DocumentationArchitecture.md). Keep only useful sections, then remove this note. Make clear whether the behavior is proposed or implemented when that distinction matters.
 
-> Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
+## Outcome
 
-## 1. Purpose
+The problem being solved and intended user-visible result.
 
-The problem this system or feature solves and the intended user-visible outcome.
+## Behavior
 
-## 2. Desired behavior
+The important scenarios, constraints, and failure cases. Describe the desired outcome separately from implementation sequencing.
 
-How it should behave, including the primary scenarios and edge cases that matter.
+## Interfaces and decisions
 
-## 3. Shape
+The relevant entities, states, and boundaries. Link to existing interface definitions and explain non-obvious choices or unresolved decisions.
 
-The key entities, states, and interfaces involved in the design.
+## Scope
 
-## 4. Non-goals
-
-What this design deliberately does not do.
-
-### NON-GOAL-001 <concise stable non-goal heading>
-
-The durable exclusion this design owns.
-
-## 5. Constraints & decisions
-
-Constraints that bound the design and the decisions made within them.
-
-### QUALITY-001 <concise stable quality heading>
-
-The durable quality attribute this design owns.
+Important exclusions that prevent misunderstanding. Keep delivery plans and progress in issues, PRs, or gitignored artifacts.

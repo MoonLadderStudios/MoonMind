@@ -1,37 +1,19 @@
-# \<Module Name\> — Module Architecture View
+# <Module name> architecture
 
-**Status:** Draft
-**Document Class:** Canonical declarative
-**Viewpoint:** Module Architecture View
-**Updated:** \<YYYY-MM-DD\>
-**Audience:** \<primary readers\>
-**Authority:** \<module architecture claims this document owns\>
-**Owning Surface:** \<module directory or ownership surface\>
-**Related Docs:** \<links to adjacent canonical docs\>
-**Related Implementation:** \<code modules, entrypoints, or tracking issues\>
+Optional outline from the [documentation guide](../DocumentationArchitecture.md). Keep only useful sections, then remove this note.
 
-> Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
+## Responsibility
 
-## 1. Purpose
+What the module provides and how it fits into the system.
 
-What this module does and where it sits in the wider system.
+## Structure and collaborators
 
-## 2. Internal structure
+The important internal pieces, their responsibilities, and dependencies. Link to interfaces used by other modules.
 
-The main internal pieces (packages, classes, services) and their responsibilities.
+## Key flows
 
-## 3. Collaborators
+The request, background-work, and failure paths needed to understand or operate the module.
 
-What this module depends on and what depends on it.
+## Design reasons
 
-## 4. Key flows
-
-The important paths through the module (request handling, background work, error paths).
-
-## 5. Constraints & decisions
-
-Invariants the module must uphold and the design decisions behind its structure.
-
-### INV-001 <concise stable invariant heading>
-
-The durable module invariant this document owns.
+Why the boundaries and non-obvious choices exist.

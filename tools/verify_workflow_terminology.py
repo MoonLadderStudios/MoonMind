@@ -166,7 +166,6 @@ RUNTIME_RULES = (
         paths=(
             "api_service/data/presets",
             "frontend/src",
-            "docs/Workflows/SkillAndPlanContracts.md",
         ),
         pattern=re.compile(r"\bMoon Spec\b"),
         message="Spell MoonSpec consistently in public copy.",
@@ -182,24 +181,6 @@ RUNTIME_RULES = (
         message="Use recurring workflow contract names.",
     ),
 )
-
-DOC_RULES = (
-    Rule(
-        name="canonical-doc-unqualified-task",
-        paths=(
-            "docs/Temporal/WorkflowExecutionProductModel.md",
-            "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
-            "docs/Temporal/ManagedAndExternalAgentExecutionModel.md",
-            "docs/MoonMindArchitecture.md",
-        ),
-        pattern=re.compile(
-            r"\b(MoonMind task|task detail|create task|task status|task-oriented|task-first|task-compatible)\b",
-            re.IGNORECASE,
-        ),
-        message="Canonical docs must not use unqualified MoonMind task terminology.",
-    ),
-)
-
 
 REMOVED_FOLLOW_UP_IDENTIFIERS = tuple(
     term
@@ -229,21 +210,16 @@ REMOVED_FOLLOW_UP_PATTERN = re.compile(
 REMOVED_FOLLOW_UP_SCAN_ROOTS = (
     ".agents/skills",
     "api_service",
-    "docs",
     "frontend/src",
     "moonmind",
     "tools",
 )
 
 REMOVED_FOLLOW_UP_ALLOWED_PREFIXES = (
-    ".agents/skills/code-improvement-proposal/",
     "api_service/migrations/versions/",
-    "docs/Archive/ProposalSystem/",
-    "docs/tmp/",
 )
 
 REMOVED_FOLLOW_UP_ALLOWED_FILES = {
-    "docs/Workflows/FollowUpWorkSystem.md",
     "tools/verify_workflow_terminology.py",
 }
 
@@ -258,7 +234,6 @@ REMOVED_FOLLOW_UP_SUFFIXES = {
     ".html",
     ".js",
     ".json",
-    ".md",
     ".py",
     ".sh",
     ".sql",
@@ -505,8 +480,6 @@ def run(mode: str, *, root: Path = REPO_ROOT) -> list[Finding]:
         findings.extend(check_rules(RUNTIME_RULES, root=root))
         findings.extend(check_required_test_guard_sets(root=root))
         findings.extend(check_removed_follow_up_identifiers(root=root))
-    if mode in {"docs", "all"}:
-        findings.extend(check_rules(DOC_RULES, root=root))
     return findings
 
 
@@ -514,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("runtime", "docs", "all"),
+        choices=("runtime", "all"),
         default="all",
         help="Check scope.",
     )

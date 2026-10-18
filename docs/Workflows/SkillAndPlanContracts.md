@@ -221,37 +221,15 @@ Check supported schema, unique node IDs, valid acyclic edges, resolved includes,
 
 Consume the flattened recorded graph and declared policy. Do not re-expand live presets, infer runtime choice from a label, or use optional provenance to change execution. No artifact, progress summary, comparison score, or review verdict can authorize additional tools or publication.
 
-## 12) Open questions — resolved with recommended solutions
+## 12) Compatibility and validation rationale
 
-### Q1) Do we pin Plans to a tool registry snapshot or resolve “latest” tools at runtime?
+Preserve selected definition snapshots and serialized intent where required. Digests identify those definitions; they do not demand equal deployment build IDs. A freshly admitted operation may use a compatible installed implementation without rewriting the retained plan. Incompatible schemas, corrupt artifacts, and missing capabilities remain actionable failures.
 
-Preserve the selected definition snapshot and original serialized intent where the current contract requires it. Its digest identifies the definition used. It does not require all deployed components to have equal build IDs or create another rollout policy. A fresh admitted operation may use a compatible installed implementation under the existing compiler, without rewriting the old plan. Incompatible schemas, corrupted artifacts, or missing required capabilities remain actionable failures.
+Keep cheap deterministic structural checks in the existing Workflow/compiler. External reads and deep validation use Activities, reusing `plan.validate` where it is the owner. Validator changes do not automatically preserve replayed decisions. Registry-declared dispatcher routes and curated bindings remain authoritative; distinct bindings need actual protocol, credential, or isolation reasons. Retained Activity names serve their real history consumers.
 
-### Q2) Do we allow conditional edges in v1?
+Optional configuration comparison and quality/risk assessment reuse ordinary admitted runs and artifact readers. They neither authorize inference from a read request nor become default gates on deterministic tools. Advisory model assessments cannot replace tests, security enforcement, or explicit approval.
 
-No new conditional semantics are introduced here. Keep the existing dependency behavior. A future actual requirement belongs in a deliberately scoped change, not speculative reserved fields or a new branching framework.
-
-### Q3) How much validation happens in workflow code vs in an Activity?
-
-Keep cheap deterministic structural checks in the existing Workflow/compiler where appropriate. External reads and required deep validation use the current Activity boundary. Reuse `plan.validate` where it is the actual owner rather than add a second mandatory validation workflow or independently repeat every check at each layer. Changing a validator does not automatically make changed recorded decisions replay-compatible.
-
-### Q4) Should `mm.tool.execute` / `mm.skill.execute` be the only Activity Type, or should there be per-tool activity types?
-
-Reuse the existing dispatcher and curated bindings. The registry declares the route; the interpreter does not guess from names. Keep a distinct binding only where a real protocol, credential, or isolation need justifies it. Existing legacy Activity names remain solely for their actual history consumers. No new universal executor or per-tool worker fleet is required.
-
-## 13) Deliverables (this doc’s outputs)
-
-The deliverable is a consistent contract used by existing code, not a second collection of schemas, catalogs, or mandatory status reports.
-
-Optional configuration comparison and quality/risk assessment reuse ordinary admitted runs, artifact readers, and reports. They do not create an experiment platform, authorize new inference from a read request, or become default gates on deterministic tools. A model's advisory assessment cannot replace required tests, security enforcement, or explicit approval.
-
-## 14) Engineering backlog
-
-Inspect current code and existing PRs before adding a component named in the historical backlog. The registry, plan model, dispatcher bindings, progress schema, and container-job path already have owners. Extend or remove a proven gap, not a duplicate implementation. An evidence-backed no-code disposition is valid where the requested behavior already works.
-
-Use focused development tests and existing broader GitHub Actions. A mixed deterministic-tool/agent journey should prove actual dispatch, output dependencies, least privilege, bounded failure/cancellation, and preserved results without unnecessary model calls. Add only missing integration and replay cases. Do not unit-test document wording, headings, counts, or metadata, or require a full local suite before opening a PR.
-
-Missing local tools use the existing authorized CI/container continuation path. Preserve the candidate, accepted work, concrete gap, original error, and consumed budget. Do not replace that handoff with mandatory human-only review or claim a continuation was scheduled unless its owner accepted it. This document authorizes no live provider spending, production mutation, or weakened execution safeguards.
+Verify mixed deterministic-tool/agent journeys through actual dispatch and output dependencies, including least privilege, bounded failure/cancellation, preserved results, and retained-history replay. Report missing evidence and the next authorized continuation without claiming it was scheduled. Development and publication procedure remains in [AGENTS.md](../../AGENTS.md).
 
 ## Objective acceptance evidence
 
