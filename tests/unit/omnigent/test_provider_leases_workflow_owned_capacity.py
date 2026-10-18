@@ -259,6 +259,24 @@ async def _consume(coordinator, client, *profile_refs: str, admitted=None):
 
 
 @pytest.mark.asyncio
+async def test_admitted_capacity_preserves_observed_grant_fence():
+    client = _LeaseClient(inspection=_inspection(fencingGeneration=7))
+    acquired = await _consume(_coordinator(client), client)
+    assert acquired[0].lease.fencing_generation == 7
+    assert acquired[0].runtime_binding_value()["leaseFencingGeneration"] == 7
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fence", [0, -1, "7", True])
+async def test_admitted_capacity_rejects_malformed_observed_grant_fence(fence):
+    client = _LeaseClient(inspection=_inspection(fencingGeneration=fence))
+    with pytest.raises(HarnessPlatformError, match="grant fence is invalid"):
+        await _consume(_coordinator(client), client)
+    assert client.acquired == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("epoch", [0, 1, 2, 3])
 @pytest.mark.parametrize("run_id", [None, "original-run", "reset-run"])
 async def test_admitted_capacity_is_consumed_without_any_acquisition(epoch, run_id):
