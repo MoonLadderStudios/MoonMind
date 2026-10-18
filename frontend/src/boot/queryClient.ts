@@ -7,8 +7,11 @@ import { getErrorStatus } from '../lib/api/client';
  * Shared React Query defaults for the dashboard shell (MM-960).
  *
  * Goals:
- * - Retry only transient failures (network errors and 5xx responses).
- * - Never retry permission (401/403) or validation (400/422 and other 4xx) errors.
+ * - Retry only transient failures (network errors, 5xx, 408 and 429 responses).
+ * - Never retry missing (404), permission (401/403) or validation (400/422 and
+ *   other 4xx) errors. Fetchers must throw `responseError(response)` (or another
+ *   error carrying `status`) for this to apply; a bare `Error(statusText)` reads
+ *   as a network failure and is retried.
  *
  * The retry policy is the only client-wide default: it is safe for every query.
  * Stale-time / focus-refetch tuning is opt-in per query via {@link configQueryDefaults}
@@ -24,9 +27,9 @@ export const MAX_QUERY_RETRIES = 3;
 export const CONFIG_STALE_TIME_MS = 5 * 60 * 1000;
 
 /**
- * A 4xx status indicates a client error (permission or validation) that will
- * not succeed on retry. 5xx and network-level failures (no status) are treated
- * as transient.
+ * A 4xx status indicates a client error (missing, permission or validation)
+ * that will not succeed on retry, except request timeouts (408) and rate limits
+ * (429). 5xx and network-level failures (no status) are treated as transient.
  */
 export function isTransientError(error: unknown): boolean {
   const status = getErrorStatus(error);
@@ -34,7 +37,7 @@ export function isTransientError(error: unknown): boolean {
     // No HTTP status (network error, timeout, unexpected throw) — treat as transient.
     return true;
   }
-  return status >= 500 && status <= 599;
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
 /** React Query `retry` predicate implementing the shared default policy. */
