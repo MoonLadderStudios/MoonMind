@@ -176,7 +176,8 @@ def test_rendered_profile_request_reaches_matching_immutable_plan(
     elif change == "unavailable":
         session.version.validation_result = {"ready": False}
     elif change == "target":
-        request["payload"]["requestedTargetId"] = "codex.legacy-profile-bound-omnigent"
+        # A selectable Codex target must still conflict with the OpenCode Profile.
+        request["payload"]["requestedTargetId"] = "codex.generic-omnigent"
     elif change == "backend":
         # The UI offers a direct Backend only for its own Harness. An authored
         # direct Claude Backend for this OpenCode Profile fails before effects;
