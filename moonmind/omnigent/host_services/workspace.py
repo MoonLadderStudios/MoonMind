@@ -41,6 +41,9 @@ from moonmind.omnigent.workspace_sources import (
     verify_existing_workspace_grant,
     verify_existing_workspace_grant_signature,
 )
+from moonmind.omnigent.workspace_publication import (
+    publication_failure_is_transient,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.workflows.temporal.runtime.workspace_locators import (
@@ -56,25 +59,18 @@ _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _LOGGER = logging.getLogger(__name__)
 
 # Bounded recovery for transient git transport failures during the initial
-# sandbox clone: DNS/connect failures (``Could not resolve host: github.com``)
-# and connections dropped mid-transfer (``RPC failed; curl 92 HTTP/2 stream
-# ... CANCEL``, ``early EOF``). Unlike publication, a clone has no remote side
-# effects and retries into an emptied target, so a mid-transfer cut is as safe
-# to repeat as a failed connect. curl 22 is an HTTP status error, so 401/404
-# responses stay excluded. Authentication, not-found, TLS, and repository
-# errors fail closed without retry, per docs/Temporal/ErrorTaxonomy.md.
+# sandbox clone: DNS/connect failures (``Could not resolve host: github.com``),
+# hosting outages, and connections dropped mid-transfer (``RPC failed; curl 92
+# HTTP/2 stream ... CANCEL``, ``early EOF``). Unlike a push, a clone has no
+# remote side effects and retries into an emptied target, so it shares the
+# publication outage classifier. Authentication, TLS, configuration, and
+# repository errors fail closed without retry, per docs/Temporal/ErrorTaxonomy.md.
 _CLONE_MAX_ATTEMPTS = 4
-_CLONE_TRANSIENT_FAILURE = re.compile(
-    r"Could not resolve (?:host|proxy): |Failed to connect to "
-    r"|RPC failed; curl (?!22\b)\d+|\bearly EOF\b"
-    r"|unexpected disconnect while reading sideband packet",
-    re.IGNORECASE,
-)
 
 
 def _is_transient_clone_failure(stderr: str) -> bool:
     """Return True when git stderr shows a transient transport failure."""
-    return _CLONE_TRANSIENT_FAILURE.search(stderr or "") is not None
+    return publication_failure_is_transient(stderr)
 
 
 def _is_complete_checkout(path: Path) -> bool:
