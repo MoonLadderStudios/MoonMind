@@ -481,3 +481,45 @@ async def test_raw_empty_task_runtime_owns_parameter_runtime_fallback(
     parameters = await stored_parameters(context, response)
     request = next(iter(agent_requests(parameters).values()))
     assert request.execution_profile_ref == "saved-codex_cli"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_runtime", ["codex_cli", "claude_code"])
+async def test_nested_alias_precedence_matches_ownership_and_dispatch(
+    saved_profile_submission, selected_runtime
+):
+    context = saved_profile_submission
+    selected_id = f"alternative-{selected_runtime}"
+    child_runtime = {
+        "providerProfileRef": selected_id,
+        "profileId": "saved-codex_cli",
+    }
+    response = await context.client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Use the selected step account.",
+                    "runtime": {"mode": "codex_cli"},
+                    "steps": [
+                        {"id": "saved", "instructions": "Use saved account."},
+                        {
+                            "id": "selected",
+                            "instructions": "Use explicit account.",
+                            "runtime": child_runtime,
+                        },
+                    ],
+                }
+            },
+        },
+    )
+    if selected_runtime == "claude_code":
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["profileId"] == selected_id
+        context.service._client_adapter.start_workflow.assert_not_awaited()
+    else:
+        parameters = await stored_parameters(context, response)
+        requests = agent_requests(parameters)
+        assert requests["saved"].execution_profile_ref == "saved-codex_cli"
+        assert requests["selected"].execution_profile_ref == selected_id

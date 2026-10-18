@@ -9776,13 +9776,7 @@ async def _resolve_step_runtime_selections(
                     f"payload.workflow.steps[{index}].runtime.mode: {exc}"
                 ) from exc
 
-        raw_step_profile_id = str(
-            runtime_payload.get("profileId")
-            or runtime_payload.get("providerProfile")
-            or runtime_payload.get("providerProfileRef")
-            or runtime_payload.get("executionProfileRef")
-            or ""
-        ).strip() or None
+        raw_step_profile_id = provider_profile_ref_from_mapping(runtime_payload)
         raw_requested_model: str | None = runtime_payload.get("model") or None
         if raw_requested_model is not None:
             raw_requested_model = str(raw_requested_model)
