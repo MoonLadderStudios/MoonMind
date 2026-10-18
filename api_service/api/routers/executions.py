@@ -13102,10 +13102,7 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             "agentProfile is supported only for targetRuntime='omnigent'."
         )
-    if canonical_target_runtime == "omnigent" and (
-        workflow_requires_agent(normalized_task_for_planner, initial_parameters)
-        or agent_profile_selection is not None
-    ):
+    if canonical_target_runtime == "omnigent":
         if agent_profile_selection is not None and not isinstance(
             agent_profile_selection, Mapping
         ):
@@ -13248,10 +13245,7 @@ async def _create_execution_from_workflow_request(
 
     persisted_omnigent_plan = None
     prelaunch_task_input_snapshot_ref = ""
-    if canonical_target_runtime == "omnigent" and (
-        workflow_requires_agent(normalized_task_for_planner, initial_parameters)
-        or agent_profile_selection is not None
-    ):
+    if canonical_target_runtime == "omnigent":
         if session is None:
             raise _invalid_workflow_request(
                 "Omnigent execution-plan compilation requires durable storage."
@@ -15687,20 +15681,6 @@ def _raw_request_selects_omnigent(
     reaching the legacy no-plan session supervisor.
     """
 
-    if workflow_type == "MoonMind.UserWorkflow":
-        _, task_payload = _recurring_workflow_payload(parameters)
-        if not workflow_requires_agent(task_payload, parameters) and not any(
-            source.get("agentProfile") is not None
-            or "agentProfileSnapshot" in source
-            or "omnigentExecutionPlan" in source
-            for source in (
-                _coerce_mapping(task_payload.get("runtime")),
-                _coerce_mapping(parameters.get("runtime")),
-                task_payload,
-                parameters,
-            )
-        ):
-            return False
     runtime_ids = resolve_launch_target_profile_selection(
         {"initialParameters": parameters}
     ).runtime_ids
@@ -15859,7 +15839,7 @@ async def create_execution(
                 },
             )
 
-        if _raw_request_selects_omnigent(
+        if existing is None and _raw_request_selects_omnigent(
             workflow_type=request.workflow_type,
             parameters=skill_validation.parameters,
         ):

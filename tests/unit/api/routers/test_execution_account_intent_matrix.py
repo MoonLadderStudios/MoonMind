@@ -354,7 +354,7 @@ async def test_child_pool_replaces_parent_exact_and_pool(matrix_context, entrypo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", ["raw", "api", "recurring"])
-async def test_agent_free_omitted_omnigent_default_needs_no_account(
+async def test_agent_free_omnigent_default_retains_product_admission(
     matrix_context, monkeypatch, entrypoint
 ):
     from moonmind.config.settings import settings
@@ -382,14 +382,18 @@ async def test_agent_free_omitted_omnigent_default_needs_no_account(
     body = body_for(entrypoint, task)
     body.get("initialParameters", body.get("payload")).pop("targetRuntime")
     response = await ctx.client.post("/api/executions", json=body)
-    assert response.status_code == 201, response.text
-    recorded = (
-        ctx.schedule.await_args.kwargs["workflow_input"]["initial_parameters"]
-        if entrypoint == "recurring"
-        else await stored_parameters(ctx, response)
-    )
-    assert not agent_requests(recorded)
+    assert "saved-codex_cli" not in response.text
+    if entrypoint == "raw":
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
+    else:
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == (
+            "default Omnigent Agent Profile is unavailable"
+        )
     assert not ctx.settings_reads
+    ctx.schedule.assert_not_awaited()
+    ctx.service._client_adapter.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

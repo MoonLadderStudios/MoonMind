@@ -246,3 +246,110 @@ def test_workflow_agent_requirement_leaves_invalid_steps_to_validation() -> None
                 digest="reg:test", artifact_ref="art_registry_test"
             ),
         )
+
+
+def _tool_workflow():
+    return {
+        "instructions": "Resolve the pull request target",
+        "steps": [
+            {"type": "tool", "tool": {"id": "github.resolve_pull_request_target"}}
+        ],
+    }
+
+
+def _assert_finishing_account_requirement(parameters, expected):
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    original = deepcopy(parameters)
+    request = MoonMindRunWorkflow()._merge_automation_request(parameters)
+    assert (request is not None and request["finishMode"] != "review_only") is expected
+    assert execution_contract.workflow_requires_agent(
+        parameters["workflow"], parameters
+    ) is expected
+    assert parameters == original
+
+
+@pytest.mark.parametrize(
+    "location", ["parameters", "workflow", "publish", "workflow_publish"]
+)
+@pytest.mark.parametrize("alias", ["mergeAutomation", "merge_automation"])
+def test_account_requirement_follows_finishing_owner_locations(location, alias):
+    task = _tool_workflow()
+    parameters = {"workflow": task}
+    sources = {
+        "parameters": parameters,
+        "workflow": task,
+        "publish": parameters.setdefault("publish", {}),
+        "workflow_publish": task.setdefault("publish", {}),
+    }
+    sources[location][alias] = {"enabled": True, "finish_mode": "fix_only"}
+    _assert_finishing_account_requirement(parameters, True)
+
+
+@pytest.mark.parametrize(
+    "enabled,finish_mode,expected",
+    [
+        (True, None, True),
+        ("yes", "", True),
+        ("1", "  ", True),
+        (1, "merge", True),
+        (" TRUE ", "fix_only", True),
+        (True, "review_only", False),
+        (True, " review_only ", False),
+        (False, "merge", False),
+        (None, "merge", False),
+        ("off", "merge", False),
+        ("0", "merge", False),
+        (0, "merge", False),
+        ("false", "merge", False),
+    ],
+)
+def test_account_requirement_follows_finishing_coercion(
+    enabled, finish_mode, expected
+):
+    task = _tool_workflow()
+    task["mergeAutomation"] = {"enabled": enabled, "finishMode": finish_mode}
+    _assert_finishing_account_requirement({"workflow": task}, expected)
+
+
+@pytest.mark.parametrize("top_publish", [None, {"mode": "none"}])
+@pytest.mark.parametrize("first_mode", ["review_only", "fix_only"])
+def test_account_requirement_follows_first_enabled_finishing_candidate(
+    top_publish, first_mode
+):
+    task = _tool_workflow()
+    parameters = {"workflow": task}
+    task["mergeAutomation"] = {"enabled": True, "finishMode": first_mode}
+    nested_mode = "fix_only" if first_mode == "review_only" else "review_only"
+    task["publish"] = {
+        "mergeAutomation": {"enabled": True, "finishMode": nested_mode}
+    }
+    if top_publish is not None:
+        parameters["publish"] = top_publish
+    expected_mode = first_mode if top_publish else nested_mode
+    _assert_finishing_account_requirement(parameters, expected_mode != "review_only")
+
+
+@pytest.mark.parametrize(
+    "enabled,finish_mode", [("not-a-bool", "review_only"), (True, "fix-only"), (True, 23)]
+)
+def test_account_requirement_defers_malformed_finishing_to_existing_owner(
+    enabled, finish_mode
+):
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    task = _tool_workflow()
+    task["mergeAutomation"] = {"enabled": enabled, "finishMode": finish_mode}
+    parameters = {"workflow": task}
+    with pytest.raises((ValueError, ApplicationError)):
+        MoonMindRunWorkflow()._merge_automation_request(parameters)
+    assert execution_contract.workflow_requires_agent(task, parameters)
+
+
+def test_native_review_does_not_hide_authored_agent_account_requirement():
+    task = _tool_workflow()
+    task["mergeAutomation"] = {"enabled": True, "finishMode": "review_only"}
+    task["steps"].append({"id": "agent", "instructions": "Use an agent"})
+    assert execution_contract.workflow_requires_agent(task, {"workflow": task})
