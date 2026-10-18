@@ -13,7 +13,7 @@ from api_service.api.routers.executions import (
     router,
 )
 from api_service.db.base import get_async_session
-from api_service.db.models import TemporalArtifactStatus
+from api_service.db.models import SettingsOverride, TemporalArtifactStatus
 from moonmind.config.settings import settings
 from tests.unit.api.routers.test_executions import (
     _ExecuteResult,
@@ -33,14 +33,17 @@ def _client() -> tuple[TestClient, AsyncMock]:
     service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: service
     app.dependency_overrides[get_temporal_client] = AsyncMock
+    app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
     _override_user_dependencies(app, is_superuser=False)
     return TestClient(app), service
 
 
 class _SkillContractSession:
     def __init__(self) -> None:
-        self.execute = AsyncMock(
-            return_value=_ExecuteResult(
+        async def execute(statement):
+            if statement.column_descriptions[0].get("entity") is SettingsOverride:
+                return _ExecuteResult([])
+            return _ExecuteResult(
                 [
                     SimpleNamespace(
                         slug="issue-implement",
@@ -49,7 +52,8 @@ class _SkillContractSession:
                     )
                 ]
             )
-        )
+
+        self.execute = AsyncMock(side_effect=execute)
         self.get = AsyncMock(
             return_value=SimpleNamespace(
                 metadata_json={

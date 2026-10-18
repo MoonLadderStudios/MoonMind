@@ -1742,7 +1742,7 @@ async def test_provider_profile_override_preserves_resettable_source(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "profile_state, expected",
-    [("missing", None), ("disabled", None), ("unready", "saved"), ("ready", "saved")],
+    [("missing", "saved"), ("disabled", "saved"), ("unready", "saved"), ("ready", "saved")],
 )
 async def test_default_provider_profile_ref_uses_saved_settings_without_changing_account(
     settings_session_maker, profile_state, expected

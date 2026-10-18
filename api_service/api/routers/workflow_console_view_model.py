@@ -1745,7 +1745,18 @@ async def resolve_dashboard_runtime_config(
             runtime_override = runtime_eff.value.strip()
 
         profile_scope = "user" if user_id is not None else "workspace"
-        profile_ref = await service.default_provider_profile_ref(scope=profile_scope)
+        profile_eff = await service.effective_value_async(
+            "workflow.default_provider_profile_ref", scope=profile_scope
+        )
+        # This is a form suggestion only. Submission preserves the configured
+        # account even when unavailable, so unattended callers cannot switch it.
+        if isinstance(profile_eff.value, str) and profile_eff.value.strip():
+            if not any(
+                diagnostic.code
+                in {"provider_profile_not_found", "provider_profile_disabled"}
+                for diagnostic in profile_eff.diagnostics
+            ):
+                profile_ref = profile_eff.value.strip()
     except Exception:
         # Settings overrides are best-effort. If the DB is unreachable or the
         # catalog service raises, fall back to the env/settings-only defaults
