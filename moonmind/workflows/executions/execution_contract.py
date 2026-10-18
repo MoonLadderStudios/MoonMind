@@ -214,6 +214,7 @@ def workflow_requires_agent(
         if step_count is not None and int(step_count) > 1:
             return True
     except (ValueError, TypeError):
+        # Invalid stepCount follows the planner's existing single-task fallback.
         pass
     return workflow_step_tool_name(task).lower() not in STORY_OUTPUT_TASK_TOOLS
 
