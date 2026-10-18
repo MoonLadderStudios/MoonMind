@@ -77,9 +77,7 @@ async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
     else:
         monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
     expected_realizer = (
-        "generic-omnigent-host@1"
-        if shared_default
-        else "codex-profile-bound@1"
+        "generic-omnigent-host@1" if shared_default else "codex-profile-bound@1"
     )
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     monkeypatch.setattr(settings.workflow, "github_repository", "")
