@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardErrorState } from '../components/DashboardErrorState';
 import { DataTable, type Column } from '../components/tables/DataTable';
+import { responseError } from '../lib/api/client';
 
 type RemediationRow = {
   remediationWorkflowId: string;
@@ -122,25 +123,10 @@ function compactInventory(payload: unknown): RemediationInventory {
   return { rows: compactRows(payload), unavailableCount, unavailableItems };
 }
 
-async function responseErrorDetail(response: Response): Promise<string | null> {
-  try {
-    const detail = ((await response.json()) as { detail?: unknown } | null)?.detail;
-    if (typeof detail === 'string') return detail.trim() || null;
-    if (detail && typeof detail === 'object') {
-      const record = detail as Record<string, unknown>;
-      return compactText(record, 'message') || compactText(record, 'code') || null;
-    }
-  } catch {
-    // A body that is not JSON carries no server detail.
-  }
-  return null;
-}
-
 async function loadRemediations(endpoint: string): Promise<RemediationInventory> {
   const response = await fetch(endpoint, { credentials: 'same-origin' });
   if (!response.ok) {
-    const detail = await responseErrorDetail(response);
-    throw new Error(`Remediation inventory request failed: ${response.status}${detail ? ` — ${detail}` : ''}`);
+    throw await responseError(response, `Remediation inventory request failed (${response.status})`);
   }
   return compactInventory(await response.json());
 }
