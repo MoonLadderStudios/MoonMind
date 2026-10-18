@@ -351,6 +351,42 @@ function ControllerOperationDetails({ action }: { action: DeploymentAction }) {
   );
 }
 
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+// Recent updates stay in view; anything older sits behind one disclosure.
+const VISIBLE_UPDATE_HISTORY = 3;
+// Pause and resume are already offered as forms in Worker controls.
+const COMMANDS_WITH_FORMS = new Set(['pause-workers', 'resume-workers']);
+const ACTIVE_UPDATE_STATUSES = new Set(['queued', 'pending', 'running', 'in_progress', 'started']);
+
+function readableTimestamp(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function knownActor(value: string | null | undefined): string | null {
+  const actor = String(value || '').trim();
+  return actor && actor !== NIL_UUID ? actor : null;
+}
+
+function isActiveUpdate(action: DeploymentAction): boolean {
+  return ACTIVE_UPDATE_STATUSES.has(String(action.status || '').toLowerCase());
+}
+
+/** A readable local date and time; the exact ISO value stays in the tooltip. */
+function Timestamp({ value }: { value: string | null | undefined }) {
+  if (!value) {
+    return <>-</>;
+  }
+  return (
+    <time dateTime={value} title={value}>
+      {readableTimestamp(value)}
+    </time>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -865,7 +901,7 @@ export function OperationsSettingsSection({
   const latestActionSummary = latestAction
     ? [
         formatStatusLabel(latestAction.status, 'UNKNOWN'),
-        latestAction.completedAt || latestAction.startedAt,
+        readableTimestamp(latestAction.completedAt || latestAction.startedAt),
       ]
         .filter(Boolean)
         .join(' · ')
@@ -873,7 +909,161 @@ export function OperationsSettingsSection({
 
   const system = snapshot?.system ?? {};
   const metrics = snapshot?.metrics ?? {};
+  const updateHistory = deploymentState?.recentActions ?? [];
+  const recentUpdates = updateHistory.filter(
+    (action, index) => index < VISIBLE_UPDATE_HISTORY || isActiveUpdate(action),
+  );
+  const olderUpdates = updateHistory.filter((action) => !recentUpdates.includes(action));
+  // Retired-updater rows all carry the same rollback disclaimer; say it once.
+  const legacyRollbackNote =
+    updateHistory.find(
+      (action) =>
+        action.owner === 'workflow' &&
+        action.rollbackEligibility &&
+        !action.rollbackEligibility.eligible &&
+        action.rollbackEligibility.reason,
+    )?.rollbackEligibility?.reason ?? null;
+  const renderUpdate = (action: DeploymentAction) => {
+    const target =
+      action.rollbackEligibility?.targetImage?.reference ||
+      action.requestedImage ||
+      'Requested image unavailable';
+    const digest = shortenDigest(action.resolvedDigest);
+    const beforeBuild = action.beforeBuildId
+      ? `v${action.beforeBuildId}`
+      : null;
+    const afterBuild = action.afterBuildId
+      ? `v${action.afterBuildId}`
+      : null;
+    return (
+      <div
+        key={deploymentActionKey(action)}
+        className="rounded-2xl bg-slate-50 p-4 text-sm dark:bg-slate-800/50"
+      >
+        <div className="font-semibold text-slate-900 dark:text-white">
+          {formatStatusLabel(action.status, 'UNKNOWN')}
+          <span className="font-normal text-slate-600 dark:text-slate-400">
+            {' '}
+            · {target}
+          </span>
+        </div>
+        {digest ? (
+          <div className="mt-1 break-all font-mono text-xs text-slate-500 dark:text-slate-400">
+            {action.requestedImage ? `${action.requestedImage} → ` : ''}
+            {digest}
+          </div>
+        ) : null}
+        {beforeBuild || afterBuild ? (
+          <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {beforeBuild || 'unknown'} {'→'} {afterBuild || 'unknown'}
+          </div>
+        ) : null}
+        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <Timestamp value={action.completedAt || action.startedAt} />
+          {knownActor(action.operator) ? ` · ${knownActor(action.operator)}` : ''}
+        </div>
+        {action.owner === 'controller' ? (
+          <ControllerOperationDetails action={action} />
+        ) : null}
+        <div className="mt-3 flex flex-wrap gap-3">
+          {action.runDetailUrl ? (
+            <a
+              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+              href={action.runDetailUrl}
+            >
+              Run detail
+            </a>
+          ) : null}
+          {action.logsArtifactUrl ? (
+            <a
+              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+              href={action.logsArtifactUrl}
+            >
+              Logs
+            </a>
+          ) : null}
+          {action.rawCommandLogPermitted && action.rawCommandLogUrl ? (
+            <a
+              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+              href={action.rawCommandLogUrl}
+            >
+              Raw command log
+            </a>
+          ) : null}
+          {action.retryAllowed && action.operationId ? (
+            <button
+              type="button"
+              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+              disabled={
+                !canInvokeOperations ||
+                retryMutation.isPending ||
+                controllerUnavailable
+              }
+              onClick={() => retryMutation.mutate(String(action.operationId))}
+            >
+              Retry operation
+            </button>
+          ) : null}
+          {action.owner !== 'workflow' &&
+          action.rollbackEligibility &&
+          !action.rollbackEligibility.eligible &&
+          action.rollbackEligibility.reason ? (
+            <span className="text-sm text-slate-500 dark:text-slate-400">
+              {action.rollbackEligibility.reason}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    );
+};
   const commands = snapshot?.commands ?? [];
+  const catalogCommands = commands.filter((command) => !COMMANDS_WITH_FORMS.has(command.id));
+  const availableCatalogCommands = catalogCommands.filter((command) => command.available);
+  const unavailableCatalogCommands = catalogCommands.filter((command) => !command.available);
+  const renderCommand = (command: (typeof commands)[number]) => (
+      <div
+        key={command.id}
+        className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900 dark:text-white">
+              {command.label}
+            </div>
+            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Target: {command.target}
+            </div>
+          </div>
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+              command.available
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+            }`}
+          >
+            {command.available ? 'Available' : 'Unavailable'}
+          </span>
+        </div>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+          {command.impact}
+        </p>
+        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+          {command.requiresConfirmation
+            ? 'Requires confirmation'
+            : 'No confirmation required'}
+        </div>
+        {command.unavailableReason ? (
+          <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+            {command.unavailableReason}
+          </div>
+        ) : null}
+        {command.rollbackAction ? (
+          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Rollback/resume: {command.rollbackAction}
+          </div>
+        ) : null}
+      </div>
+  );
   const hasShardHealthConfig = Boolean(workerPauseConfig?.shardHealth);
   const workerShards = shardHealth?.shards ?? [];
   const unavailableCommands = commands.filter((command) => !command.available);
@@ -1066,99 +1256,21 @@ export function OperationsSettingsSection({
               </h5>
               <div className="mt-3 space-y-3">
                 {renderDeploymentNotice(retryNotice)}
-                {deploymentState?.recentActions.length ? (
-                  deploymentState.recentActions.map((action) => {
-                    const target =
-                      action.rollbackEligibility?.targetImage?.reference ||
-                      action.requestedImage ||
-                      'Requested image unavailable';
-                    const digest = shortenDigest(action.resolvedDigest);
-                    const beforeBuild = action.beforeBuildId
-                      ? `v${action.beforeBuildId}`
-                      : null;
-                    const afterBuild = action.afterBuildId
-                      ? `v${action.afterBuildId}`
-                      : null;
-                    return (
-                      <div
-                        key={deploymentActionKey(action)}
-                        className="rounded-2xl bg-slate-50 p-4 text-sm dark:bg-slate-800/50"
-                      >
-                        <div className="font-semibold text-slate-900 dark:text-white">
-                          {formatStatusLabel(action.status, 'UNKNOWN')}
-                          <span className="font-normal text-slate-600 dark:text-slate-400">
-                            {' '}
-                            · {target}
-                          </span>
-                        </div>
-                        {digest ? (
-                          <div className="mt-1 break-all font-mono text-xs text-slate-500 dark:text-slate-400">
-                            {action.requestedImage ? `${action.requestedImage} → ` : ''}
-                            {digest}
-                          </div>
-                        ) : null}
-                        {beforeBuild || afterBuild ? (
-                          <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            {beforeBuild || 'unknown'} {'→'} {afterBuild || 'unknown'}
-                          </div>
-                        ) : null}
-                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          {action.completedAt || action.startedAt || '-'}
-                          {action.operator ? ` · ${action.operator}` : ''}
-                        </div>
-                        {action.owner === 'controller' ? (
-                          <ControllerOperationDetails action={action} />
-                        ) : null}
-                        <div className="mt-3 flex flex-wrap gap-3">
-                          {action.runDetailUrl ? (
-                            <a
-                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
-                              href={action.runDetailUrl}
-                            >
-                              Run detail
-                            </a>
-                          ) : null}
-                          {action.logsArtifactUrl ? (
-                            <a
-                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
-                              href={action.logsArtifactUrl}
-                            >
-                              Logs
-                            </a>
-                          ) : null}
-                          {action.rawCommandLogPermitted && action.rawCommandLogUrl ? (
-                            <a
-                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
-                              href={action.rawCommandLogUrl}
-                            >
-                              Raw command log
-                            </a>
-                          ) : null}
-                          {action.retryAllowed && action.operationId ? (
-                            <button
-                              type="button"
-                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
-                              disabled={
-                                !canInvokeOperations ||
-                                retryMutation.isPending ||
-                                controllerUnavailable
-                              }
-                              onClick={() => retryMutation.mutate(String(action.operationId))}
-                            >
-                              Retry operation
-                            </button>
-                          ) : null}
-                          {action.rollbackEligibility &&
-                          !action.rollbackEligibility.eligible &&
-                          action.rollbackEligibility.reason ? (
-                            <span className="text-sm text-slate-500 dark:text-slate-400">
-                              {action.rollbackEligibility.reason}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })
+                {legacyRollbackNote ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">{legacyRollbackNote}</p>
+                ) : null}
+                {recentUpdates.length ? (
+                  <>
+                    {recentUpdates.map(renderUpdate)}
+                    {olderUpdates.length ? (
+                      <details className="deployment-history-older">
+                        <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">
+                          {`Show ${olderUpdates.length} older update${olderUpdates.length === 1 ? '' : 's'}`}
+                        </summary>
+                        <div className="mt-3 space-y-3">{olderUpdates.map(renderUpdate)}</div>
+                      </details>
+                    ) : null}
+                  </>
                 ) : (
                   <p className="text-sm text-slate-500 dark:text-slate-400">
                     No previous updates.
@@ -1276,7 +1388,7 @@ export function OperationsSettingsSection({
               <p className="text-sm text-slate-600 dark:text-slate-400">{system.reason || 'Normal operation'}</p>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Mode: {system.mode || (isPaused ? 'paused' : 'running')} | Version:{' '}
-                {system.version || '-'} | Updated: {system.updatedAt || '-'}
+                {system.version || '-'} | Updated: <Timestamp value={system.updatedAt} />
               </p>
               {noEligibleTargets ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -1444,9 +1556,12 @@ export function OperationsSettingsSection({
                                 {shard.volumeStatus ? (
                                   <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                                     {formatStatusLabel(shard.volumeStatus)}
-                                    {shard.volumeLastVerifiedAt
-                                      ? ` | Verified ${shard.volumeLastVerifiedAt}`
-                                      : ''}
+                                    {shard.volumeLastVerifiedAt ? (
+                                      <>
+                                        {' | Verified '}
+                                        <Timestamp value={shard.volumeLastVerifiedAt} />
+                                      </>
+                                    ) : null}
                                   </div>
                                 ) : null}
                               </td>
@@ -1562,52 +1677,18 @@ export function OperationsSettingsSection({
                   Command catalog
                 </h4>
                 <div className="mt-4 space-y-3">
-                  {commands.length > 0 ? (
-                    commands.map((command) => (
-                      <div
-                        key={command.id}
-                        className="rounded-2xl bg-slate-50 dark:bg-slate-800/50 p-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                              {command.label}
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              Target: {command.target}
-                            </div>
-                          </div>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                              command.available
-                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-                                : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
-                            }`}
-                          >
-                            {command.available ? 'Available' : 'Unavailable'}
-                          </span>
-                        </div>
-                        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
-                          {command.impact}
-                        </p>
-                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                          {command.requiresConfirmation
-                            ? 'Requires confirmation'
-                            : 'No confirmation required'}{' '}
-                          | Permission: {command.requiredPermission}
-                        </div>
-                        {command.unavailableReason ? (
-                          <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-                            {command.unavailableReason}
-                          </div>
-                        ) : null}
-                        {command.rollbackAction ? (
-                          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                            Rollback/resume: {command.rollbackAction}
-                          </div>
-                        ) : null}
-                      </div>
-                    ))
+                  {catalogCommands.length > 0 ? (
+                    <>
+                      {availableCatalogCommands.map(renderCommand)}
+                      {unavailableCatalogCommands.length > 0 ? (
+                        <details className="operations-unavailable-commands">
+                          <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">
+                            {`Unavailable commands (${unavailableCatalogCommands.length})`}
+                          </summary>
+                          <div className="mt-3 space-y-3">{unavailableCatalogCommands.map(renderCommand)}</div>
+                        </details>
+                      ) : null}
+                    </>
                   ) : (
                     <p className="text-sm text-slate-500 dark:text-slate-400">
                       No operation commands are advertised by this deployment.
@@ -1637,9 +1718,9 @@ export function OperationsSettingsSection({
                         <div className="mt-1 text-sm text-slate-600 dark:text-slate-400">
                           {event.reason || '(no reason)'}
                         </div>
-                        {event.actorUserId ? (
+                        {knownActor(event.actorUserId) ? (
                           <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Actor: {event.actorUserId}
+                            Actor: {knownActor(event.actorUserId)}
                           </div>
                         ) : null}
                         {event.idempotencyKey ? (
@@ -1647,12 +1728,9 @@ export function OperationsSettingsSection({
                             Idempotency: {event.idempotencyKey}
                           </div>
                         ) : null}
-                        <time
-                          dateTime={event.createdAt}
-                          className="mt-2 block text-xs text-slate-500 dark:text-slate-400"
-                        >
-                          {event.createdAt || '-'}
-                        </time>
+                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          <Timestamp value={event.createdAt} />
+                        </div>
                       </div>
                     ))
                   ) : (

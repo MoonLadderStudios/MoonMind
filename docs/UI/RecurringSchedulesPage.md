@@ -298,10 +298,10 @@ Recommended desktop table columns:
 
 | Order | Column | Contents | Sort/filter expectation |
 | --- | --- | --- | --- |
-| 1 | `Schedule` | schedule name link, compact definition ID, optional description clamp | title/id search |
+| 1 | `Schedule` | schedule name link, optional description clamp | title/id search |
 | 2 | `State` | Active, Paused, Needs attention | state filter |
 | 3 | `Target` | target kind plus repository/runtime/model when available | target/repository filter |
-| 4 | `Cadence` | cron or human-readable cadence plus timezone | cadence/timezone filter later |
+| 4 | `Cadence` | human-readable cadence for common cron shapes (raw cron otherwise, and in the tooltip) plus timezone | cadence/timezone filter later |
 | 5 | `Next run` | `nextRunAt` | date sort/filter |
 | 6 | `Last scheduled` | `lastScheduledFor` | date sort/filter |
 | 7 | `Dispatch` | last dispatch status plus compact error supplement | dispatch status filter |
@@ -444,7 +444,7 @@ Summary cards:
 | Card | Source |
 | --- | --- |
 | Next run | `nextRunAt`. |
-| Cadence | `cron` plus `timezone` or a human-readable cadence. |
+| Cadence | Human-readable cadence plus `timezone`; raw `cron` stays in the editor and the Details disclosure. |
 | Last run | `lastScheduledFor` or latest run history. |
 | Dispatch / Attention | `lastDispatchStatus` and `lastDispatchError`. |
 
@@ -456,7 +456,7 @@ Main sections or tabs:
 | `Runs` | Schedule-owned run history; spawned workflows link to Workflow detail. |
 | `Configuration` | Read-only configuration by default; edit mode, drawer, or modal when editing. |
 | `Activity` | Optional future audit, reconciliation, and Temporal describe events. |
-| `Target payload` | Advanced/debug payload, collapsible by default when noisy. |
+| `Target payload` | Advanced/debug payload in a closed disclosure. Definition and Temporal schedule IDs, scope, and raw cron sit in a closed Details disclosure; overlap and catch-up policy stay visible. |
 
 Rules:
 

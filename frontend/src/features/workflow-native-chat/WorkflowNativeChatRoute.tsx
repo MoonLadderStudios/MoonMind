@@ -7,7 +7,6 @@
 // session lifecycle. Ordinary native messages never invoke Workflow actions and
 // this route never calls /chat-instructions.
 import { useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
 
 import {
   workflowDetailSubrouteFromPath,
@@ -35,7 +34,6 @@ interface WorkflowNativeChatRouteProps {
   routeWorkflowId: string;
   search: URLSearchParams;
   workflowTitle: string;
-  statusPill?: ReactNode;
   runtimeLabel?: string | null;
   enabled?: boolean;
   /** Whether the parent workflow has reached a terminal state. */
@@ -50,7 +48,6 @@ export function WorkflowNativeChatRoute({
   routeWorkflowId,
   search,
   workflowTitle,
-  statusPill = null,
   runtimeLabel = null,
   enabled = true,
   workflowTerminal = false,
@@ -118,8 +115,6 @@ export function WorkflowNativeChatRoute({
   return (
     <section className="stack wf-native-chat" aria-label="Workflow chat">
       <WorkflowChatContextBar
-        workflowTitle={workflowTitle}
-        statusPill={statusPill}
         stepLabel={stepLabel}
         runtimeLabel={runtimeLabel}
         statusLabel={nativeChatContextStatusLabel(status)}

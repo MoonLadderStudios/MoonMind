@@ -12,11 +12,7 @@ export type DashboardPage =
   | 'settings-providers-secrets'
   | 'settings-instance'
   | 'skills'
-  | 'workflow-start'
-  | 'workflows-workspace'
-  | 'workflow-detail'
-  | 'workflows-home'
-  | 'workflow-list';
+  | 'workflows-workspace';
 
 export type DashboardRoute = {
   page: DashboardPage;
@@ -159,24 +155,21 @@ export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
   ]),
 );
 
+/**
+ * Detects version skew between this bundle and the server. Only the contract
+ * the two sides share is compared — destination keys, paths and capability
+ * keys — so a wording or icon change on either side is not reported as skew.
+ */
 export function matchesDashboardDestinationRegistry(
   destinations: DashboardDestinationInfo[] | undefined,
 ): boolean {
   if (!destinations || destinations.length !== DASHBOARD_DESTINATIONS.length) return false;
-  return DASHBOARD_DESTINATIONS.every((local, index) => {
-    const remote = destinations[index];
-    if (!remote) return false;
-    return (
-      local.key === remote.key &&
-      local.label === remote.label &&
-      local.iconKey === remote.iconKey &&
-      local.canonicalPath === remote.canonicalPath &&
-      local.navigationGroup === remote.navigationGroup &&
-      local.pageClassification === remote.pageClassification &&
+  const remoteByKey = new Map(destinations.map((remote) => [remote.key, remote]));
+  return DASHBOARD_DESTINATIONS.every((local) => {
+    const remote = remoteByKey.get(local.key);
+    return Boolean(remote) && (
+      local.canonicalPath === remote?.canonicalPath &&
       local.capabilityKey === remote.capabilityKey &&
-      local.endpointKey === remote.endpointKey &&
-      local.displayMode === remote.displayMode &&
-      local.menuGroupKey === remote.menuGroupKey &&
       JSON.stringify(local.pathPatterns) === JSON.stringify(remote.pathPatterns)
     );
   });
@@ -204,110 +197,72 @@ function decodePathSegment(segment: string): string | null {
   }
 }
 
-function pathParts(path: string): string[] {
-  return path.split('/').slice(1);
+/**
+ * Routes that are not navigation destinations but still render a page. Every
+ * other route comes from {@link DASHBOARD_DESTINATIONS}.
+ */
+const DASHBOARD_UTILITY_ROUTES: readonly { path: string; page: DashboardPage }[] = [
+  { path: '/settings', page: 'settings-entry' },
+  { path: '/oauth-terminal', page: 'oauth-terminal' },
+];
+
+const ROUTE_PARAM_VALIDATORS: Record<string, (value: string) => boolean> = {
+  workflowId: (value) => WORKFLOW_ID_SEGMENT.test(value),
+  detailTab: (value) => WORKFLOW_DETAIL_TABS.has(value),
+  definitionId: (value) => DETAIL_SEGMENT.test(value),
+};
+
+function isDynamicPattern(pattern: string): boolean {
+  return pattern.includes(':') || pattern.endsWith('/*');
 }
 
-function isWorkflowDetailPath(path: string): boolean {
-  const parts = pathParts(path);
-  if (parts.length !== 2 && parts.length !== 3) {
-    return false;
+function matchesPathPattern(path: string, pattern: string): boolean {
+  if (pattern.endsWith('/*')) {
+    const base = pattern.slice(0, -2);
+    return path === base || path.startsWith(`${base}/`);
   }
-  if (parts[0] !== 'workflows') {
-    return false;
-  }
-  const workflowIdSegment = parts[1];
-  if (!workflowIdSegment) {
-    return false;
-  }
-  const workflowId = decodePathSegment(workflowIdSegment);
-  if (!workflowId || !WORKFLOW_ID_SEGMENT.test(workflowId)) {
-    return false;
-  }
-  if (parts.length === 2) {
-    return true;
-  }
-  const tabSegment = parts[2];
-  if (!tabSegment) {
-    return false;
-  }
-  const tab = decodePathSegment(tabSegment);
-  return Boolean(tab && WORKFLOW_DETAIL_TABS.has(tab));
+  const patternParts = pattern.split('/');
+  const parts = path.split('/');
+  if (patternParts.length !== parts.length) return false;
+  return patternParts.every((patternPart, index) => {
+    const part = parts[index] ?? '';
+    if (!patternPart.startsWith(':')) return patternPart === part;
+    const value = decodePathSegment(part);
+    const validate = ROUTE_PARAM_VALIDATORS[patternPart.slice(1)];
+    return Boolean(value && validate?.(value));
+  });
 }
 
-function isDetailPath(path: string, prefix: 'schedules'): boolean {
-  const parts = pathParts(path);
-  if (parts.length !== 2 || parts[0] !== prefix) {
-    return false;
-  }
-  const detailIdSegment = parts[1];
-  if (!detailIdSegment) {
-    return false;
-  }
-  const detailId = decodePathSegment(detailIdSegment);
-  return Boolean(detailId && DETAIL_SEGMENT.test(detailId));
-}
-
-export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
-  const path = withoutTrailingSlash(pathname || '/');
-  if (hasExtension(path)) {
-    return null;
-  }
-  if (path === '/workflows') {
-    return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/artifacts' || path.startsWith('/artifacts/') || path === '/observability' || path.startsWith('/observability/')) {
-    return { page: 'artifacts', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/workflows/new') {
-    return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
-  }
-  if (isWorkflowDetailPath(path) && path !== '/workflows/new') {
-    return { page: 'workflows-workspace', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/settings') {
-    return { page: 'settings-entry', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/settings/providers-secrets') {
-    return { page: 'settings-providers-secrets', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/settings/instance') {
-    return { page: 'settings-instance', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/settings/operations') {
-    return { page: 'settings-operations', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/skills' || path.startsWith('/skills/')) {
-    return { page: 'skills', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/schedules' || isDetailPath(path, 'schedules')) {
-    return { page: 'schedules', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/omnigent/agents' || path.startsWith('/omnigent/agents/') || path === '/omnigent/policies' || path.startsWith('/omnigent/policies/')) {
-    return { page: 'omnigent-inventory', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/remediations' || path.startsWith('/remediations/')) {
-    return { page: 'remediations', dataWidePanel: true, currentPath: path };
-  }
-  if (path === '/oauth-terminal') {
-    return { page: 'oauth-terminal', dataWidePanel: true, currentPath: path };
+/** The destination owning a normalized path; static paths win over dynamic ones. */
+function matchDestination(path: string): DashboardDestination | null {
+  for (const dynamic of [false, true]) {
+    const match = DASHBOARD_DESTINATIONS.find((destination) => destination.pathPatterns.some(
+      (pattern) => isDynamicPattern(pattern) === dynamic && matchesPathPattern(path, pattern),
+    ));
+    if (match) return match;
   }
   return null;
 }
 
+function normalizedRoutePath(pathname: string): string | null {
+  const path = withoutTrailingSlash(pathname || '/');
+  return hasExtension(path) ? null : path;
+}
+
+export function resolveDashboardRoute(pathname: string): DashboardRoute | null {
+  const path = normalizedRoutePath(pathname);
+  if (!path) return null;
+  const destination = matchDestination(path);
+  if (destination) {
+    return { page: destination.page, dataWidePanel: destination.dataWidePanel, currentPath: path };
+  }
+  const utility = DASHBOARD_UTILITY_ROUTES.find((route) => route.path === path);
+  return utility ? { page: utility.page, dataWidePanel: true, currentPath: path } : null;
+}
+
 export function destinationForPath(pathname: string): DashboardDestination | null {
-  const route = resolveDashboardRoute(pathname);
-  if (!route) return null;
-  if (pathname === '/workflows/new') return DASHBOARD_DESTINATIONS[1] ?? null;
-  return DASHBOARD_DESTINATIONS.find((destination) => (
-    destination.page === route.page && (
-      destination.key !== 'artifacts' || pathname.startsWith('/artifacts') || pathname.startsWith('/observability')
-    ) && (
-      destination.key !== 'omnigent-agents' || pathname.startsWith('/omnigent/agents')
-    ) && (
-      destination.key !== 'omnigent-policies' || pathname.startsWith('/omnigent/policies')
-    )
-  )) ?? null;
+  const path = normalizedRoutePath(pathname);
+  return path ? matchDestination(path) : null;
 }
 
 const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {

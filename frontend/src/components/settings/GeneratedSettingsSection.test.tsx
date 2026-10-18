@@ -399,12 +399,35 @@ describe('GeneratedSettingsSection', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps activation and overrides visible while per-setting metadata sits in Details', async () => {
+    renderWithClient(<ControlledGeneratedSettingsSection />);
+
+    const title = await screen.findByText('Skills Canary Percent');
+    const row = title.closest<HTMLElement>('[data-setting-key]');
+    expect(row?.getAttribute('data-setting-key')).toBe('skills.canary_percent');
+    const details = row?.querySelector<HTMLDetailsElement>('details.setting-details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+
+    const visible = within(row!);
+    // Pending activation and the active workspace override stay in the default view.
+    expect(details?.contains(visible.getByText('Pending next boundary'))).toBe(false);
+    expect(details?.contains(visible.getByText('Workspace override'))).toBe(false);
+    expect(details?.contains(visible.getByText('Affects skills'))).toBe(false);
+    // Source explanation, key and Applies-to targets are one disclosure away,
+    // and the affected targets are no longer repeated as both text and chips.
+    expect(details?.contains(visible.getByText('Resolved from a workspace override.'))).toBe(true);
+    expect(details?.contains(visible.getByText('skills.canary_percent'))).toBe(true);
+    for (const target of visible.queryAllByText('skills')) {
+      expect(details?.contains(target)).toBe(true);
+    }
+  });
+
   it('renders descriptor rows with metadata, badges, diagnostics, and filters', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
     expect(await screen.findByText('Default Publish Mode')).toBeTruthy();
-    expect(screen.getByText('Config')).toBeTruthy();
-    expect(screen.getAllByText('Workspace')).not.toHaveLength(0);
+    expect(screen.getByText('Config · Workspace')).toBeTruthy();
     expect(screen.getAllByText('Applies on next task')).not.toHaveLength(0);
     expect(screen.getAllByText('Pending next boundary')).not.toHaveLength(0);
     expect(screen.getAllByText('New tasks will use this value when they are created.')).not.toHaveLength(0);
@@ -414,7 +437,7 @@ describe('GeneratedSettingsSection', () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText('Pending: Not set')).toBeTruthy();
-    expect(screen.getByText('task_creation')).toBeTruthy();
+    expect(screen.getByText('task_creation, publishing')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Search settings'), { target: { value: 'github' } });
     expect(screen.getByText('GitHub Token Reference')).toBeTruthy();
@@ -555,14 +578,15 @@ describe('GeneratedSettingsSection', () => {
     expect(requests.some((request) => request.url.startsWith('/api/v1/settings/audit'))).toBe(false);
   });
 
-  it('keeps long setting keys inside the narrow row without squeezing actions', async () => {
+  it('keeps long setting keys wrapped inside row Details, out of the action row', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
 
     await screen.findByText('Default Publish Mode');
     const keyLabel = screen.getByText('workflow.default_publish_mode');
     expect(keyLabel.className).toContain('break-all');
-    const actionRow = keyLabel.closest('div.flex');
-    expect(actionRow?.className).toContain('flex-wrap');
+    expect(keyLabel.closest('details.setting-details')).not.toBeNull();
+    const auditButton = screen.getByRole('button', { name: 'View audit for Default Publish Mode' });
+    expect(auditButton.closest('div.flex')?.className).toContain('flex-wrap');
   });
 
   it('keeps a cleared number field empty and blocks Save when the setting has a default', async () => {

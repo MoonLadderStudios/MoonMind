@@ -92,8 +92,9 @@ describe('WorkflowNativeChatRoute', () => {
     // No legacy custom composer/transcript is rendered on the native path.
     expect(document.querySelector('textarea')).toBeNull();
     expect(screen.queryByTestId('chat-session-blocks')).toBeNull();
-    // Context bar exposes bounded workflow context + actions.
-    expect(screen.getByText('Ship the thing')).toBeTruthy();
+    // Context bar exposes bounded workflow context + actions; the page header
+    // above already owns the workflow title and status, so they are not repeated.
+    expect(screen.queryByText('Ship the thing')).toBeNull();
     expect(screen.getByText('Omnigent')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Back to Overview' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'View captured evidence' })).toBeTruthy();
