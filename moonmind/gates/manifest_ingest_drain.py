@@ -13,11 +13,10 @@ registration so no new worker polls for it, and ``manifest.compile`` /
 ``manifest.write_summary`` activity bindings are removed with it.
 
 This module defines what counts as *drained* for that removal and gates
-deployment of the removal. It mirrors the repository's existing drain rule
-instead of inventing another topology mode: the decision predicate mirrors
-``moonmind.workflows.executions.checkpoint_promotion.evaluate_worker_drain``
-(``outstanding == 0`` → safe to deploy the removal, otherwise retain and
-drain on the old release first). The deployment feeds the counts from live
+deployment of the removal. It uses the repository's drain rule instead of
+inventing another topology mode: ``outstanding == 0`` → safe to deploy the
+removal, otherwise retain and drain on the old release first. The deployment
+feeds the counts from live
 probes — open ManifestIngest histories, pending manifest activity tasks,
 and existing ManifestIngest-targeted schedules — rather than from fixture
 replay or failed probes. Missing visibility or failed probes are not a
@@ -49,8 +48,7 @@ MANIFEST_INGEST_ACTIVITY_TYPES = (
     "manifest.write_summary",
 )
 
-#: Removal requires every outstanding dimension to reach zero, mirroring
-#: ``evaluate_worker_drain`` (``mayRemove == (outstanding == 0)``).
+#: Removal requires every outstanding dimension to reach zero.
 REQUIRED_ACTION_RETAIN = "retain_and_drain"
 REQUIRED_ACTION_REMOVE = "safe_to_remove"
 
@@ -107,9 +105,8 @@ def evaluate_manifest_ingest_drain(
 ) -> ManifestIngestDrainDecision:
     """Decide whether the ManifestIngest removal may be deployed.
 
-    The predicate is deliberately the same shape as
-    ``evaluate_worker_drain``: deployment of the removal is allowed only
-    when every outstanding dimension is zero. Any nonzero — or
+    Deployment of the removal is allowed only when every outstanding
+    dimension is zero. Any nonzero — or
     unobservable — dimension retains the old release for draining.
     """
 
@@ -181,8 +178,7 @@ def evaluate_manifest_ingest_drain_observations(
     """Evaluate the drain gate from possibly-unobservable probe results.
 
     Fully observable inputs delegate to :func:`evaluate_manifest_ingest_drain`
-    so the removal predicate stays identical to the canonical
-    ``evaluate_worker_drain`` rule. Any ``None`` (unobservable/failed probe)
+    so there is one removal predicate. Any ``None`` (unobservable/failed probe)
     dimension retains the old release and is named in
     ``blocking_dimensions``; each such dimension contributes one unit to
     ``outstanding`` so the verdict is never zero-outstanding while

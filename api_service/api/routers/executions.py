@@ -191,19 +191,13 @@ from moonmind.schemas.temporal_models import (
     ExecutionRefreshEnvelope,
     ExecutionRelatedRunModel,
     ExecutionReportProjectionModel,
-    ExecutionResumeSummaryModel,
+    ExecutionRetryFromStepSummaryModel,
     ExecutionSkillEvidenceSummaryModel,
     ExecutionSkillLifecycleIntentModel,
     ExecutionSkillProvenanceModel,
     ExecutionSkillRuntimeModel,
-    FailedRunRecoveryManifestModel,
     ObjectiveOutcomeValue,
     PollIntegrationRequest,
-    RecoverExecutionResponse,
-    RecoverFromFailedStepRequest,
-    RecoverFromFailedStepResponse,
-    RecoverFromSelectedStepRequest,
-    RecoveryEligibilityDiagnosticModel,
     RescheduleExecutionRequest,
     RetryFromStepRequest,
     RetryFromStepResponse,
@@ -220,7 +214,6 @@ from moonmind.schemas.temporal_models import (
     WorkflowInputSnapshotDescriptorModel,
     normalize_dependency_ids,
 )
-from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
 from moonmind.services.control_stop_continuation import admit_control_stop_continuation
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.statuses.compat import (
@@ -232,14 +225,6 @@ from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_te
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
-from moonmind.workflows.executions.checkpoint_promotion import (
-    bounded_checkpoint_metric_tags,
-)
-from moonmind.workflows.executions.checkpoint_resume_admission import (
-    CheckpointResumeReadiness,
-    evaluate_checkpoint_resume_admission,
-    rollout_policy_from_settings,
-)
 from moonmind.workflows.executions.control_stop_continuation import (
     ContinuationBudgetGrant,
     ControlStopContinuationContract,
@@ -298,9 +283,6 @@ from moonmind.workflows.executions.repository_contract import (
     repository_name_from_value,
 )
 from moonmind.workflows.executions.routing import _coerce_bool
-from moonmind.workflows.executions.runtime_capabilities import (
-    resolve_runtime_execution_capabilities,
-)
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 from moonmind.workflows.executions.runtime_inheritance import (
     ExecutionPrincipal,
@@ -322,7 +304,6 @@ from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
     TemporalExecutionHistoricalTypeError,
     TemporalExecutionNotFoundError,
-    TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionRerunPlanError,
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionRetryUnavailableError,
@@ -358,6 +339,7 @@ from moonmind.workflows.temporal.title_search import tokenize_title
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
+_RETRYABLE_CLOSED_STATES = frozenset({"failed", "canceled", "terminated", "timed_out"})
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _SUPPORTED_TASK_RUNTIMES = frozenset({
     "codex_cli",
@@ -5133,13 +5115,8 @@ def _serialize_execution(
         if workflow_type_value == "MoonMind.UserWorkflow"
         else None
     )
-    resume_summary = _build_recovery_summary(record, actions=actions)
     related_runs = _build_related_runs(record, params=params)
-    target_diagnostics = _build_target_diagnostics(
-        record,
-        params=params,
-        resume_summary=resume_summary,
-    )
+    target_diagnostics = _build_target_diagnostics(record, params=params)
     memo_finish_summary = _finish_summary_from_memo(memo)
     finish_summary_json = getattr(record, "finish_summary_json", None)
     finish_summary = (
@@ -5148,6 +5125,9 @@ def _serialize_execution(
         else memo_finish_summary
     )
     finish_summary = _normalize_no_commit_finish_summary(finish_summary)
+    retry_from_step = _build_retry_from_step_summary(
+        record, actions=actions, finish_summary=finish_summary
+    )
     finish_outcome_code = canonicalize_finish_outcome_code_alias(
         getattr(record, "finish_outcome_code", None),
         logger=logger,
@@ -5184,7 +5164,6 @@ def _serialize_execution(
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
     scheduled_for = getattr(record, "scheduled_for", None)
 
-    recovery_eligibility = _project_recovery_eligibility(record, target_runtime)
     omnigent_execution_plan = params.get("omnigentExecutionPlan")
     if not isinstance(omnigent_execution_plan, Mapping):
         plan_ref = str(memo.get("omnigent_execution_plan_ref") or "").strip()
@@ -5316,8 +5295,7 @@ def _serialize_execution(
         queued_at=created_at,
         steps_href=steps_href,
         actions=actions,
-        resume=resume_summary,
-        recovery_eligibility=recovery_eligibility,
+        retry_from_step=retry_from_step,
         related_runs=related_runs,
         recurrence=_execution_recurrence_provenance(params, memo),
         target_diagnostics=target_diagnostics,
@@ -5652,51 +5630,6 @@ def _recommended_next_action(
     return "Monitor execution until a terminal outcome is available."
 
 
-def _recovery_checkpoint_ref_from_record(record) -> str | None:
-    memo = dict(getattr(record, "memo", None) or {})
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    params = dict(getattr(record, "parameters", None) or {})
-    recovery_manifest = _recovery_manifest_summary_from_record(record)
-    recovery_block = params.get("recoverySource")
-    if not isinstance(recovery_block, Mapping):
-        recovery_block = params.get("recovery_source")
-    if not isinstance(recovery_block, Mapping):
-        recovery_block = {}
-    for value in (
-        memo.get("recovery_checkpoint_ref"),
-        memo.get("recoveryCheckpointRef"),
-        search_attributes.get("mm_recovery_checkpoint_ref"),
-        recovery_manifest.get("checkpointRef"),
-        recovery_manifest.get("checkpoint_ref"),
-        _nested_recovery_manifest_text(
-            recovery_manifest,
-            "validation",
-            "checkpointRef",
-        ),
-        _nested_recovery_manifest_text(
-            recovery_manifest,
-            "validation",
-            "checkpoint_ref",
-        ),
-        _nested_recovery_manifest_text(
-            recovery_manifest,
-            "recoveryEligibility",
-            "checkpointRef",
-        ),
-        _nested_recovery_manifest_text(
-            recovery_manifest,
-            "recoveryEligibility",
-            "checkpoint_ref",
-        ),
-        recovery_block.get("recoveryCheckpointRef"),
-        recovery_block.get("recovery_checkpoint_ref"),
-    ):
-        candidate = str(value or "").strip()
-        if candidate:
-            return candidate
-    return None
-
-
 def _recovery_manifest_summary_from_record(record) -> Mapping[str, Any]:
     finish_summary = getattr(record, "finish_summary_json", None)
     if not isinstance(finish_summary, Mapping):
@@ -5705,161 +5638,6 @@ def _recovery_manifest_summary_from_record(record) -> Mapping[str, Any]:
     if not isinstance(recovery_manifest, Mapping):
         recovery_manifest = finish_summary.get("recovery_manifest")
     return recovery_manifest if isinstance(recovery_manifest, Mapping) else {}
-
-
-def _project_recovery_eligibility(
-    record, target_runtime: str | None
-) -> RecoveryEligibilityDiagnosticModel | None:
-    raw = _recovery_manifest_summary_from_record(record).get("recoveryEligibility")
-    if not isinstance(raw, Mapping):
-        return None
-    projected = dict(raw)
-    flags = settings.feature_flags
-    projected_runtime = normalize_runtime_id(target_runtime or "codex_cli")
-    try:
-        capabilities = resolve_runtime_execution_capabilities(projected_runtime)
-    except ValueError:
-        capabilities = None
-    projected.update(
-        runtimeId=projected_runtime,
-        deploymentGeneration=(
-            str(flags.checkpoint_resume_deployment_generation or "").strip()
-            or "unavailable"
-        ),
-        capabilitySetVersion=(
-            capabilities.capability_set_version if capabilities else None
-        ),
-        capabilityDigest=(capabilities.capability_digest if capabilities else None),
-        checkpointKind="worktree_archive",
-        promotionState=flags.checkpoint_resume_promotion_state,
-    )
-    if (
-        flags.checkpoint_resume_promotion_state
-        in {"disabled", "shadow_capture", "shadow_restore", "paused"}
-        or not flags.checkpoint_resume_action_enabled
-    ):
-        projected.update(
-            eligible=False,
-            defaultAction="full_retry",
-            disabledReasonCode="rollout_action_hidden",
-            operatorGuidance="full_retry",
-        )
-    try:
-        return RecoveryEligibilityDiagnosticModel.model_validate(projected)
-    except ValidationError:
-        return None
-
-
-def _nested_recovery_manifest_text(
-    manifest: Mapping[str, Any],
-    block_key: str,
-    key: str,
-) -> str | None:
-    block = manifest.get(block_key)
-    if not isinstance(block, Mapping):
-        return None
-    value = block.get(key)
-    candidate = str(value or "").strip()
-    return candidate or None
-
-
-def _recovery_manifest_summary_allows_resume(
-    record,
-    checkpoint_ref: str | None = None,
-    failed_step_id: str | None = None,
-    manifest_ref: str | None = None,
-) -> bool:
-    manifest = _recovery_manifest_summary_from_record(record)
-    if not manifest:
-        return False
-    if not _coerce_bool(manifest.get("resumeAllowed"), default=False):
-        return False
-    validation_result = str(
-        manifest.get("validationResult")
-        or manifest.get("validation_result")
-        or _nested_recovery_manifest_text(manifest, "validation", "result")
-        or ""
-    ).strip().lower()
-    if validation_result != "valid":
-        return False
-    if checkpoint_ref is None:
-        checkpoint_ref = _recovery_checkpoint_ref_from_record(record)
-    if failed_step_id is None:
-        failed_step_id = _recovery_failed_step_id_from_record(record)
-    if manifest_ref is None:
-        manifest_ref = _recovery_manifest_ref_from_record(record)
-    return bool(checkpoint_ref and failed_step_id and manifest_ref)
-
-
-def _recovery_manifest_ref_from_record(record) -> str | None:
-    memo = dict(getattr(record, "memo", None) or {})
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    params = dict(getattr(record, "parameters", None) or {})
-    recovery_manifest = _recovery_manifest_summary_from_record(record)
-    recovery_block = params.get("recoverySource")
-    if not isinstance(recovery_block, Mapping):
-        recovery_block = params.get("recovery_source")
-    if not isinstance(recovery_block, Mapping):
-        recovery_block = {}
-    for value in (
-        recovery_manifest.get("manifestRef"),
-        recovery_manifest.get("manifest_ref"),
-        recovery_manifest.get("failedRunRecoveryManifestRef"),
-        recovery_manifest.get("failed_run_recovery_manifest_ref"),
-        memo.get("failed_run_recovery_manifest_ref"),
-        memo.get("failedRunRecoveryManifestRef"),
-        memo.get("recovery_manifest_ref"),
-        memo.get("recoveryManifestRef"),
-        search_attributes.get("mm_failed_run_recovery_manifest_ref"),
-        recovery_block.get("failedRunRecoveryManifestRef"),
-        recovery_block.get("failed_run_recovery_manifest_ref"),
-    ):
-        candidate = str(value or "").strip()
-        if candidate:
-            return candidate
-    return None
-
-
-def _canonical_recovery_manifest_ref(
-    request: RecoverFromFailedStepRequest | RecoverFromSelectedStepRequest,
-    canonical: TemporalExecutionCanonicalRecord,
-) -> str | None:
-    manifest_ref = _recovery_manifest_ref_from_record(canonical)
-    requested_ref = str(request.failed_run_recovery_manifest_ref or "").strip()
-    if requested_ref and manifest_ref and requested_ref != manifest_ref:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Recovery request fields do not match recovery manifest evidence.",
-                "reason": "recovery_manifest_inconsistent",
-                "fields": ["failedRunRecoveryManifestRef"],
-            },
-        )
-    return manifest_ref
-
-
-def _recovery_failed_step_id_from_record(record) -> str | None:
-    memo = dict(getattr(record, "memo", None) or {})
-    params = dict(getattr(record, "parameters", None) or {})
-    recovery_manifest = _recovery_manifest_summary_from_record(record)
-    recovery_block = params.get("recoverySource")
-    if not isinstance(recovery_block, Mapping):
-        recovery_block = params.get("recovery_source")
-    if not isinstance(recovery_block, Mapping):
-        recovery_block = {}
-    for value in (
-        memo.get("resume_failed_step_id"),
-        memo.get("resumeFailedStepId"),
-        recovery_manifest.get("failedLogicalStepId"),
-        recovery_manifest.get("failed_logical_step_id"),
-        recovery_block.get("failedStepId"),
-        recovery_block.get("failed_step_id"),
-    ):
-        candidate = str(value or "").strip()
-        if candidate:
-            return candidate
-    return None
 
 
 def _recovery_source_block_from_record(record) -> Mapping[str, Any]:
@@ -5872,164 +5650,25 @@ def _recovery_source_block_from_record(record) -> Mapping[str, Any]:
     return recovery_block
 
 
-def _first_nonempty_text(*values: Any) -> str | None:
-    for value in values:
-        candidate = str(value or "").strip()
-        if candidate:
-            return candidate
-    return None
-
-
-def _recovery_completed_step_refs_from_record(record) -> list[str]:
-    memo = dict(getattr(record, "memo", None) or {})
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    recovery_block = _recovery_source_block_from_record(record)
-    candidates = (
-        memo.get("resume_completed_step_refs"),
-        memo.get("resumeCompletedStepRefs"),
-        memo.get("resume_preserved_step_refs"),
-        memo.get("resumePreservedStepRefs"),
-        search_attributes.get("mm_recovery_completed_step_refs"),
-        recovery_block.get("completedStepRefs"),
-        recovery_block.get("completed_step_refs"),
-    )
-    refs: list[str] = []
-    for value in candidates:
-        if isinstance(value, str):
-            parts = [item.strip() for item in value.split(",")]
-        elif isinstance(value, list):
-            parts = [str(item or "").strip() for item in value]
-        else:
-            parts = []
-        refs.extend(part for part in parts if part)
-    if refs:
-        return refs
-    preserved_steps = recovery_block.get("preservedSteps") or recovery_block.get(
-        "preserved_steps"
-    )
-    if not isinstance(preserved_steps, list):
-        return []
-    for step in preserved_steps:
-        if not isinstance(step, Mapping):
-            continue
-        artifacts = step.get("artifacts")
-        if isinstance(artifacts, Mapping):
-            refs.extend(
-                str(value or "").strip()
-                for value in artifacts.values()
-                if str(value or "").strip()
-            )
-    return refs
-
-
-def _recovery_workspace_checkpoint_ref_from_record(record) -> str | None:
-    memo = dict(getattr(record, "memo", None) or {})
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    recovery_block = _recovery_source_block_from_record(record)
-    workspace = recovery_block.get("recoveryWorkspace") or recovery_block.get(
-        "recovery_workspace"
-    )
-    if not isinstance(workspace, Mapping):
-        workspace = {}
-    return _first_nonempty_text(
-        memo.get("recovery_workspace_checkpoint_ref"),
-        memo.get("recoveryWorkspaceCheckpointRef"),
-        memo.get("recovery_workspace_ref"),
-        memo.get("recoveryWorkspaceRef"),
-        search_attributes.get("mm_recovery_workspace_checkpoint_ref"),
-        search_attributes.get("mm_recovery_workspace_ref"),
-        recovery_block.get("recoveryWorkspaceCheckpointRef"),
-        recovery_block.get("recovery_workspace_checkpoint_ref"),
-        workspace.get("checkpointRef"),
-        workspace.get("checkpoint_ref"),
-        workspace.get("ref"),
-    )
-
-
-def _recovery_plan_identity_from_record(record) -> str | None:
-    memo = dict(getattr(record, "memo", None) or {})
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    recovery_block = _recovery_source_block_from_record(record)
-    return _first_nonempty_text(
-        getattr(record, "plan_ref", None),
-        memo.get("resume_plan_ref"),
-        memo.get("resumePlanRef"),
-        memo.get("resume_plan_digest"),
-        memo.get("resumePlanDigest"),
-        memo.get("plan_ref"),
-        memo.get("plan_digest"),
-        _coerce_artifact_ref(memo.get("plan_artifact_ref")),
-        _coerce_artifact_ref(memo.get("planArtifactRef")),
-        search_attributes.get("mm_recovery_plan_ref"),
-        search_attributes.get("mm_recovery_plan_digest"),
-        recovery_block.get("sourcePlanRef"),
-        recovery_block.get("source_plan_ref"),
-        recovery_block.get("sourcePlanDigest"),
-        recovery_block.get("source_plan_digest"),
-    )
-
-
-def _recovery_evidence_marked_stale(record) -> bool:
-    memo = dict(getattr(record, "memo", None) or {})
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    recovery_block = dict(_recovery_source_block_from_record(record) or {})
-    for value in (
-        memo.get("resume_evidence_stale"),
-        memo.get("resumeEvidenceStale"),
-        search_attributes.get("mm_recovery_evidence_stale"),
-        recovery_block.get("resumeEvidenceStale"),
-        recovery_block.get("resume_evidence_stale"),
-    ):
-        if isinstance(value, bool):
-            if value:
-                return True
-            continue
-        if value is None:
-            continue
-        if str(value).strip().lower() in {"1", "true", "yes", "stale"}:
-            return True
-    return False
-
-
-def _recovery_evidence_disabled_reason(record) -> str | None:
-    if _recovery_evidence_marked_stale(record):
-        return "stale_recovery_evidence"
-    checkpoint_ref = _recovery_checkpoint_ref_from_record(record)
-    failed_step_id = _recovery_failed_step_id_from_record(record)
-    if _recovery_manifest_summary_allows_resume(
-        record,
-        checkpoint_ref=checkpoint_ref,
-        failed_step_id=failed_step_id,
-    ):
-        if not _recovery_plan_identity_from_record(record):
-            return "plan_identity_missing"
-        return None
-    if not checkpoint_ref:
-        return "recovery_checkpoint_missing"
-    if not failed_step_id:
-        return "failed_step_identity_missing"
-    if not _recovery_completed_step_refs_from_record(record):
-        return "completed_step_refs_missing"
-    if not _recovery_workspace_checkpoint_ref_from_record(record):
-        return "workspace_checkpoint_missing"
-    if not _recovery_plan_identity_from_record(record):
-        return "plan_identity_missing"
-    return None
-
-
-def _build_recovery_summary(
+def _build_retry_from_step_summary(
     record,
     *,
     actions: ExecutionActionCapabilityModel,
-) -> ExecutionResumeSummaryModel | None:
+    finish_summary: Mapping[str, Any] | None,
+) -> ExecutionRetryFromStepSummaryModel | None:
     if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.UserWorkflow":
         return None
-    return ExecutionResumeSummaryModel(
-        available=actions.can_failed_step_resume,
-        checkpointRef=_recovery_checkpoint_ref_from_record(record),
-        failedStepId=_recovery_failed_step_id_from_record(record),
+    failure = finish_summary.get("failure") if isinstance(finish_summary, Mapping) else None
+    failed_step_id = (
+        str(failure.get("stepId") or "").strip() if isinstance(failure, Mapping) else ""
+    ) or str(
+        _recovery_manifest_summary_from_record(record).get("failedLogicalStepId") or ""
+    ).strip()
+    return ExecutionRetryFromStepSummaryModel(
+        available=actions.can_retry_from_step,
+        failedStepId=failed_step_id or None,
         sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
-        disabledReason=actions.disabled_reasons.get("canResumeFromFailedStep"),
+        disabledReason=actions.disabled_reasons.get("canRetryFromStep"),
     )
 
 
@@ -6576,22 +6215,6 @@ def _preserved_steps_from_recovery_source(
     return preserved_steps
 
 
-def _failed_recovery_phase(disabled_reason: str | None) -> str | None:
-    if not disabled_reason:
-        return None
-    if disabled_reason == "workspace_checkpoint_missing":
-        return "workspace_restoration"
-    if disabled_reason == "completed_step_refs_missing":
-        return "preserved_output_injection"
-    if disabled_reason in {
-        "recovery_checkpoint_missing",
-        "failed_step_identity_missing",
-        "plan_identity_missing",
-    }:
-        return "checkpoint_validation"
-    return None
-
-
 def _normalize_failed_recovery_phase(value: Any) -> str | None:
     phase = str(value or "").strip().lower().replace("-", "_")
     if phase in {
@@ -6625,7 +6248,6 @@ def _build_target_diagnostics(
     record,
     *,
     params: Mapping[str, Any],
-    resume_summary: ExecutionResumeSummaryModel | None,
 ) -> dict[str, Any] | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
@@ -6707,28 +6329,15 @@ def _build_target_diagnostics(
         _mapping_str_value(
             diagnostics_recovery, "failedRecoveryPhase", "failed_recovery_phase"
         )
-    ) or _failed_recovery_phase(
-        resume_summary.disabled_reason if resume_summary else None
     )
-    checkpoint_ref = (
-        resume_summary.checkpoint_ref if resume_summary else None
-    ) or _mapping_str_value(diagnostics_recovery, "checkpointRef", "checkpoint_ref")
+    checkpoint_ref = _mapping_str_value(
+        diagnostics_recovery, "checkpointRef", "checkpoint_ref"
+    )
     preserved_steps = _preserved_steps_from_recovery_source(
         recovery_source
     ) or _preserved_steps_from_recovery_source(diagnostics_recovery)
     recovery = None
-    has_recovery_evidence = bool(
-        recovery_source
-        or diagnostics_recovery
-        or (
-            resume_summary
-            and (
-                checkpoint_ref
-                or resume_summary.failed_step_id
-                or failed_recovery_phase
-            )
-        )
-    )
+    has_recovery_evidence = bool(recovery_source or diagnostics_recovery)
     if has_recovery_evidence:
         recovery = {
             "resumed": bool(
@@ -8232,7 +7841,7 @@ def _build_action_capabilities(
                     "approve",
                     "pause",
                     "resume",
-                    "canResumeFromFailedStep",
+                    "canRetryFromStep",
                     "cancel",
                     "reject",
                     "sendMessage",
@@ -8311,21 +7920,21 @@ def _build_action_capabilities(
     has_workflow_input_snapshot = bool(
         _workflow_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
     )
-    resume_evidence_disabled_reason = _recovery_evidence_disabled_reason(record)
     if (
         workflow_type_value != "MoonMind.UserWorkflow"
         or not temporal_workflow_editing_enabled
         or not has_workflow_input_snapshot
     ):
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
+    # Retry from a step resets the closed run's own history, so it needs no
+    # input snapshot. A parent workflow owns its children's retries.
+    retry_owned_by_parent = bool(memo.get("objectiveParentId"))
     if (
         workflow_type_value == "MoonMind.UserWorkflow"
-        and temporal_workflow_editing_enabled
-        and raw_state == "failed"
-        and has_workflow_input_snapshot
-        and resume_evidence_disabled_reason is None
+        and raw_state in _RETRYABLE_CLOSED_STATES
+        and not retry_owned_by_parent
     ):
-        enabled = enabled | {"can_failed_step_resume"}
+        enabled = enabled | {"can_retry_from_step"}
     git_publication = auxiliary_outcomes.get("gitPublication")
     if raw_state == "failed":
         enabled = enabled | {"can_full_retry"}
@@ -8375,7 +7984,7 @@ def _build_action_capabilities(
         "can_approve": "canApprove",
         "can_pause": "canPause",
         "can_resume": "canResume",
-        "can_failed_step_resume": "canResumeFromFailedStep",
+        "can_retry_from_step": "canRetryFromStep",
         "can_continue_remediation": "canContinueRemediation",
         "can_retry_publication": "canRetryPublication",
         "can_publish_saved_work": "canPublishSavedWork",
@@ -8393,11 +8002,18 @@ def _build_action_capabilities(
         if historical:
             disabled_reasons[alias] = "historical_workflow_type"
             continue
+        if field_name == "can_retry_from_step":
+            if workflow_type_value != "MoonMind.UserWorkflow":
+                disabled_reasons[alias] = "unsupported_workflow_type"
+            elif raw_state in _RETRYABLE_CLOSED_STATES and retry_owned_by_parent:
+                disabled_reasons[alias] = "child_workflow"
+            else:
+                disabled_reasons[alias] = "state_not_eligible"
+            continue
         if field_name in {
             "can_update_inputs",
             "can_edit_for_rerun",
             "can_rerun",
-            "can_failed_step_resume",
         }:
             if workflow_type_value != "MoonMind.UserWorkflow":
                 disabled_reasons[alias] = "unsupported_workflow_type"
@@ -8405,16 +8021,6 @@ def _build_action_capabilities(
             if not temporal_workflow_editing_enabled:
                 disabled_reasons[alias] = "temporal_workflow_editing_disabled"
                 continue
-            if field_name == "can_failed_step_resume":
-                if raw_state != "failed":
-                    disabled_reasons[alias] = "state_not_eligible"
-                    continue
-                if not has_workflow_input_snapshot:
-                    disabled_reasons[alias] = "original_task_input_snapshot_missing"
-                    continue
-                if resume_evidence_disabled_reason is not None:
-                    disabled_reasons[alias] = resume_evidence_disabled_reason
-                    continue
             if field_name == "can_update_inputs" and not has_workflow_input_snapshot:
                 disabled_reasons[alias] = "original_task_input_snapshot_missing"
                 continue
@@ -8530,7 +8136,7 @@ def _build_action_capabilities(
         can_approve="can_approve" in enabled,
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
-        can_failed_step_resume="can_failed_step_resume" in enabled,
+        can_retry_from_step="can_retry_from_step" in enabled,
         can_continue_remediation="can_continue_remediation" in enabled,
         can_retry_publication="can_retry_publication" in enabled,
         can_publish_saved_work="can_publish_saved_work" in enabled,
@@ -11037,240 +10643,6 @@ async def _validate_model_selection_submission(
         )
     except RuntimeIntentValidationError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
-
-
-async def _hydrate_recovery_checkpoint_payload(
-    *,
-    session: AsyncSession,
-    user: User,
-    checkpoint_ref: str | None,
-) -> Mapping[str, Any]:
-    artifact_id = _artifact_id_from_ref(checkpoint_ref)
-    if not artifact_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": "recovery_checkpoint_missing",
-            },
-        )
-    try:
-        artifact_service = get_temporal_artifact_service(session)
-        _artifact, body = await artifact_service.read(
-            artifact_id=artifact_id,
-            principal=str(getattr(user, "id", "") or "system"),
-            allow_restricted_raw=True,
-        )
-        decoded = json.loads(body.decode("utf-8"))
-    except (PermissionError, TemporalArtifactAuthorizationError) as exc:
-        logger.warning(
-            "Failed to hydrate Recovery checkpoint artifact %s: %s",
-            artifact_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": "checkpoint_unauthorized",
-            },
-        ) from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        logger.warning(
-            "Failed to hydrate Recovery checkpoint artifact %s: %s",
-            artifact_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": "checkpoint_corrupted",
-            },
-        ) from exc
-    except Exception as exc:
-        logger.warning(
-            "Failed to hydrate Recovery checkpoint artifact %s: %s",
-            artifact_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": "recovery_checkpoint_missing",
-            },
-        ) from exc
-    if not isinstance(decoded, Mapping):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": "recovery_checkpoint_missing",
-            },
-        )
-    return decoded
-
-
-async def _hydrate_failed_run_recovery_manifest_payload(
-    *,
-    session: AsyncSession,
-    user: User,
-    manifest_ref: str | None,
-) -> Mapping[str, Any]:
-    artifact_id = _artifact_id_from_ref(manifest_ref)
-    if not artifact_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery manifest is required.",
-                "reason": "recovery_manifest_missing",
-            },
-        )
-    try:
-        artifact_service = get_temporal_artifact_service(session)
-        _artifact, body = await artifact_service.read(
-            artifact_id=artifact_id,
-            principal=str(getattr(user, "id", "") or "system"),
-            allow_restricted_raw=True,
-        )
-        decoded = json.loads(body.decode("utf-8"))
-    except (PermissionError, TemporalArtifactAuthorizationError) as exc:
-        logger.warning(
-            "Failed to hydrate failed-run recovery manifest artifact %s: %s",
-            artifact_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery manifest is not readable.",
-                "reason": "recovery_manifest_unauthorized",
-            },
-        ) from exc
-    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
-        logger.warning(
-            "Failed to hydrate failed-run recovery manifest artifact %s: %s",
-            artifact_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery manifest is invalid.",
-                "reason": "recovery_manifest_corrupted",
-            },
-        ) from exc
-    except Exception as exc:
-        logger.warning(
-            "Failed to hydrate failed-run recovery manifest artifact %s: %s",
-            artifact_id,
-            exc,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery manifest is not readable.",
-                "reason": "recovery_manifest_missing",
-            },
-        ) from exc
-    if not isinstance(decoded, Mapping):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery manifest is invalid.",
-                "reason": "recovery_manifest_corrupted",
-            },
-        )
-    try:
-        manifest = FailedRunRecoveryManifestModel.model_validate(decoded)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery manifest is invalid.",
-                "reason": "recovery_manifest_corrupted",
-            },
-        ) from exc
-    if not manifest.resume_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery manifest blocks resume.",
-                "reason": manifest.blocked_reason or "recovery_manifest_blocks_resume",
-            },
-        )
-    return decoded
-
-
-def _reject_recovery_manifest_mismatch(
-    request: RecoverFromFailedStepRequest | RecoverFromSelectedStepRequest,
-    *,
-    canonical: TemporalExecutionCanonicalRecord,
-    manifest_payload: Mapping[str, Any],
-    checkpoint_ref: str,
-) -> None:
-    manifest = FailedRunRecoveryManifestModel.model_validate(manifest_payload)
-    expected_run_id = str(canonical.run_id or "")
-    mismatches: list[str] = []
-    if manifest.workflow_id != canonical.workflow_id:
-        mismatches.append("sourceWorkflowId")
-    if manifest.run_id != expected_run_id:
-        mismatches.append("sourceRunId")
-    if manifest.validation.checkpoint_ref != checkpoint_ref:
-        mismatches.append("recoveryCheckpointRef")
-    logical_step_id = getattr(request, "logical_step_id", None)
-    if logical_step_id and logical_step_id != manifest.failed_logical_step_id:
-        mismatches.append("logicalStepId")
-    source_execution_ordinal = getattr(request, "source_execution_ordinal", None)
-    if (
-        source_execution_ordinal is not None
-        and source_execution_ordinal != manifest.failed_execution_ordinal
-    ):
-        mismatches.append("sourceExecutionOrdinal")
-    if mismatches:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Recovery request fields do not match recovery manifest evidence.",
-                "reason": "recovery_manifest_inconsistent",
-                "fields": sorted(set(mismatches)),
-            },
-        )
-
-
-def _recovery_not_available_reason(exc: Exception) -> str:
-    message = str(exc).lower()
-    if "selected start step" in message:
-        return "selected_step_not_eligible"
-    if "does not match" in message:
-        return "checkpoint_inconsistent"
-    if "plan" in message:
-        return "plan_identity_missing"
-    if "workspace" in message:
-        return "workspace_checkpoint_missing"
-    if "preserved step" in message or "completed" in message:
-        return "completed_step_refs_missing"
-    if "failed step" in message:
-        return "failed_step_identity_missing"
-    if "snapshot" in message:
-        return "original_task_input_snapshot_missing"
-    if "payload" in message or "invalid" in message:
-        return "checkpoint_corrupted"
-    return "recovery_checkpoint_missing"
 
 
 def _snapshot_workflow_from_artifact_payload(
@@ -20917,178 +20289,6 @@ _RECOVERY_PAYLOAD_FORBIDDEN_FIELDS = {
 }
 
 
-def _reject_recovery_task_payload_edits(
-    request: RecoverFromFailedStepRequest,
-    *,
-    action: str,
-) -> None:
-    extras = request.model_extra or {}
-    forbidden = sorted(key for key in extras if key in _RECOVERY_PAYLOAD_FORBIDDEN_FIELDS)
-    if forbidden:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "recovery_payload_not_allowed",
-                "message": (
-                    f"{action} does not accept edited workflow payload fields. "
-                    "Use an execution update for changes."
-                ),
-                "fields": forbidden,
-            },
-        )
-
-
-def _checkpoint_failed_step_execution(checkpoint_payload: Mapping[str, Any]) -> int | None:
-    failed_step = checkpoint_payload.get("failedStep")
-    if not isinstance(failed_step, Mapping):
-        return None
-    value = failed_step.get("executionOrdinal")
-    if value is None:
-        value = failed_step.get("attempt")
-    if isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _reject_recovery_contract_mismatch(
-    request: RecoverFromFailedStepRequest,
-    *,
-    canonical: TemporalExecutionCanonicalRecord,
-    checkpoint_payload: Mapping[str, Any],
-) -> None:
-    expected_run_id = str(canonical.run_id or "")
-    mismatches: list[str] = []
-    if request.source_workflow_id and request.source_workflow_id != canonical.workflow_id:
-        mismatches.append("sourceWorkflowId")
-    if request.source_run_id and request.source_run_id != expected_run_id:
-        mismatches.append("sourceRunId")
-
-    source = checkpoint_payload.get("source")
-    if isinstance(source, Mapping):
-        if (
-            request.source_workflow_id
-            and request.source_workflow_id != source.get("workflowId")
-        ):
-            mismatches.append("sourceWorkflowId")
-        if request.source_run_id and request.source_run_id != source.get("runId"):
-            mismatches.append("sourceRunId")
-
-    failed_step = checkpoint_payload.get("failedStep")
-    if isinstance(failed_step, Mapping):
-        if (
-            request.logical_step_id
-            and request.logical_step_id != failed_step.get("logicalStepId")
-        ):
-            mismatches.append("logicalStepId")
-        if request.source_execution_ordinal is not None:
-            checkpoint_execution = _checkpoint_failed_step_execution(checkpoint_payload)
-            if checkpoint_execution != request.source_execution_ordinal:
-                mismatches.append("sourceExecutionOrdinal")
-
-    if (
-        request.task_input_snapshot_ref
-        and request.task_input_snapshot_ref != checkpoint_payload.get("taskInputSnapshotRef")
-    ):
-        mismatches.append("taskInputSnapshotRef")
-    if request.plan_ref and request.plan_ref != checkpoint_payload.get("planRef"):
-        mismatches.append("planRef")
-    if request.plan_digest and request.plan_digest != checkpoint_payload.get("planDigest"):
-        mismatches.append("planDigest")
-
-    if mismatches:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Recovery request fields do not match checkpoint evidence.",
-                "reason": "checkpoint_inconsistent",
-                "fields": sorted(set(mismatches)),
-            },
-        )
-
-
-def _checkpoint_resume_admission_for_request(
-    *, canonical: TemporalExecutionCanonicalRecord,
-    checkpoint_payload: Mapping[str, Any], repository: str | None,
-):
-    """Revalidate mutable rollout/readiness once, immediately before creation."""
-
-    params = canonical.parameters if isinstance(canonical.parameters, Mapping) else {}
-    workflow = params.get("workflow") if isinstance(params.get("workflow"), Mapping) else {}
-    runtime = workflow.get("runtime") if isinstance(workflow.get("runtime"), Mapping) else {}
-    runtime_id = normalize_runtime_id(
-        params.get("targetRuntime")
-        or runtime.get("mode")
-        or runtime.get("id")
-        or runtime.get("runtimeId")
-        or params.get("runtimeId")
-        or ""
-    )
-    capabilities = resolve_runtime_execution_capabilities(runtime_id)
-    flags = settings.feature_flags
-    generation = str(flags.checkpoint_resume_deployment_generation or "").strip()
-    readiness = CheckpointResumeReadiness(
-        runtimeId=runtime_id,
-        deploymentGeneration=generation or "unavailable",
-        captureRouteReady=flags.checkpoint_resume_capture_route_ready,
-        restoreRouteReady=flags.checkpoint_resume_restore_route_ready,
-        artifactStoreReady=flags.checkpoint_resume_artifact_store_ready,
-        managedRunStoreReady=flags.checkpoint_resume_managed_run_store_ready,
-        capabilitySetVersion=capabilities.capability_set_version,
-        capabilityDigest=capabilities.capability_digest,
-        checkedAt=datetime.now(UTC),
-    )
-    workspace = checkpoint_payload.get("recoveryWorkspace")
-    workspace = workspace if isinstance(workspace, Mapping) else {}
-    raw_size = workspace.get("archiveBytes", checkpoint_payload.get("archiveBytes", 0))
-    try:
-        archive_bytes = int(raw_size)
-    except (TypeError, ValueError):
-        archive_bytes = 0
-    decision = evaluate_checkpoint_resume_admission(
-        capabilities=capabilities,
-        policy=rollout_policy_from_settings(flags),
-        readiness=readiness,
-        checkpoint_kind="worktree_archive",
-        checkpoint_boundary="before_recovery_restoration",
-        resume_phase="retry_restoration",
-        archive_bytes=archive_bytes,
-        owner_id=str(canonical.owner_id or "") or None,
-        repository=repository,
-    )
-    metric_tags = bounded_checkpoint_metric_tags(
-        runtime_id=runtime_id,
-        generation=readiness.deployment_generation,
-        outcome=decision.reason_code,
-    )
-    metrics = get_metrics_emitter()
-    metrics.increment("checkpoint_resume.eligibility_total", tags=metric_tags)
-    metrics.increment("checkpoint_resume.admission_total", tags=metric_tags)
-    if not decision.admitted:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Checkpoint Resume is not admitted by current rollout readiness.",
-                "reason": decision.reason_code,
-            },
-        )
-    return decision
-
-
-def _canonical_execution_repository(
-    canonical: TemporalExecutionCanonicalRecord,
-) -> str | None:
-    params = canonical.parameters if isinstance(canonical.parameters, Mapping) else {}
-    task = params.get("task") if isinstance(params.get("task"), Mapping) else {}
-    value = params.get("repository") or task.get("repository")
-    candidate = str(value or "").strip()
-    return candidate or None
-
-
 def _csv_setting(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
@@ -21579,303 +20779,3 @@ async def retry_execution_from_step(
         ) from exc
     return RetryFromStepResponse.model_validate(result)
 
-
-@router.post(
-    "/{workflow_id}/recover",
-    response_model=RecoverExecutionResponse,
-    status_code=status.HTTP_201_CREATED,
-    response_model_exclude_none=True,
-)
-async def recover_execution(
-    workflow_id: str,
-    request: WorkflowRecoveryTargetModel = Body(...),
-    service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
-    _submit_enabled: None = Depends(_ensure_submit_enabled),
-) -> RecoverExecutionResponse:
-    """Create a typed recovery destination without mutating its terminal source."""
-
-    canonical = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user
-    )
-    if request.source.workflow_id != canonical.workflow_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "recovery_not_available",
-                "message": "Typed recovery source workflow does not match.",
-                "reasons": ["RECOVERY_TARGET_IDENTITY_MISMATCH"],
-            },
-        )
-    try:
-        result = await service.create_typed_recovery_execution(
-            canonical,
-            recovery_target=request,
-        )
-    except ProviderProfileRuntimeMismatchError as exc:
-        # A recovery destination inherits the source execution's authored
-        # runtime and Provider Profile. A pair persisted before the shared
-        # invariant existed is rejected at
-        # TemporalExecutionService.create_execution, and this route returns
-        # the identical 409 contract every other launch-authoring path
-        # returns rather than surfacing an unmapped server error.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=exc.detail,
-        ) from exc
-    except TemporalExecutionRecoveryCheckpointError as exc:
-        reasons = [reason for reason in str(exc).split(",") if reason]
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "recovery_not_available",
-                "message": "Typed recovery admission failed.",
-                "reasons": reasons,
-            },
-        ) from exc
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "recovery_not_available",
-                "message": str(exc),
-                "reasons": ["RECOVERY_TARGET_IDENTITY_MISMATCH"],
-            },
-        ) from exc
-    return RecoverExecutionResponse.model_validate(result)
-
-
-@router.post(
-    "/{workflow_id}/recover-from-failed-step",
-    response_model=RecoverFromFailedStepResponse,
-    status_code=status.HTTP_201_CREATED,
-    response_model_exclude_none=True,
-)
-async def recover_execution_from_failed_step(
-    workflow_id: str,
-    request: RecoverFromFailedStepRequest = Body(...),
-    service: TemporalExecutionService = Depends(_get_service),
-    session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
-    _submit_enabled: None = Depends(_ensure_submit_enabled),
-) -> RecoverFromFailedStepResponse:
-    _reject_recovery_task_payload_edits(request, action="Recover from failed step")
-
-    source = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user
-    )
-    canonical = await _recovery_source_record(
-        source=source, service=service, session=session
-    )
-    checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
-        canonical
-    )
-    manifest_ref = _canonical_recovery_manifest_ref(request, canonical)
-    if _recovery_evidence_marked_stale(canonical):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": "stale_recovery_evidence",
-            },
-        )
-    manifest_payload = await _hydrate_failed_run_recovery_manifest_payload(
-        session=session,
-        user=user,
-        manifest_ref=manifest_ref,
-    )
-    _reject_recovery_manifest_mismatch(
-        request,
-        canonical=canonical,
-        manifest_payload=manifest_payload,
-        checkpoint_ref=str(checkpoint_ref or "").strip(),
-    )
-    checkpoint_payload = await _hydrate_recovery_checkpoint_payload(
-        session=session,
-        user=user,
-        checkpoint_ref=checkpoint_ref,
-    )
-    _reject_recovery_contract_mismatch(
-        request,
-        canonical=canonical,
-        checkpoint_payload=checkpoint_payload,
-    )
-    admission = _checkpoint_resume_admission_for_request(
-        canonical=canonical,
-        checkpoint_payload=checkpoint_payload,
-        repository=_canonical_execution_repository(canonical),
-    )
-    try:
-        result = await service.create_failed_step_recovery_execution(
-            canonical,
-            recovery_checkpoint_ref=request.recovery_checkpoint_ref,
-            idempotency_key=request.idempotency_key,
-            checkpoint_payload=checkpoint_payload,
-            failed_run_recovery_manifest_ref=manifest_ref,
-            failed_run_recovery_manifest=manifest_payload,
-            admitted_checkpoint_resume_decision=admission,
-        )
-    except ProviderProfileRuntimeMismatchError as exc:
-        # A recovery destination inherits the source execution's authored
-        # runtime and Provider Profile. A pair persisted before the shared
-        # invariant existed is rejected at
-        # TemporalExecutionService.create_execution, and this route returns
-        # the identical 409 contract every other launch-authoring path
-        # returns rather than surfacing an unmapped server error.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=exc.detail,
-        ) from exc
-    except TemporalExecutionRecoveryCheckpointError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": _recovery_not_available_reason(exc),
-            },
-        ) from exc
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Failed-step recovery is not available for this execution.",
-                "reason": "state_not_eligible",
-            },
-        ) from exc
-    await session.commit()
-    return RecoverFromFailedStepResponse.model_validate(result)
-
-
-@router.post(
-    "/{workflow_id}/recover-from-selected-step",
-    response_model=RecoverFromFailedStepResponse,
-    status_code=status.HTTP_201_CREATED,
-    response_model_exclude_none=True,
-)
-async def recover_execution_from_selected_step(
-    workflow_id: str,
-    request: RecoverFromSelectedStepRequest = Body(...),
-    service: TemporalExecutionService = Depends(_get_service),
-    session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
-    _submit_enabled: None = Depends(_ensure_submit_enabled),
-) -> RecoverFromFailedStepResponse:
-    _reject_recovery_task_payload_edits(request, action="Recover from selected step")
-
-    canonical = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user
-    )
-    if request.source_workflow_id != canonical.workflow_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Selected-step recovery source workflow does not match.",
-                "reason": "checkpoint_inconsistent",
-            },
-        )
-    if request.source_run_id != str(canonical.run_id or ""):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Selected-step recovery source run does not match.",
-                "reason": "checkpoint_inconsistent",
-            },
-        )
-    checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
-        canonical
-    )
-    manifest_ref = _canonical_recovery_manifest_ref(request, canonical)
-    if not checkpoint_ref:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Selected-step recovery requires a valid checkpoint reference.",
-                "reason": "checkpoint_missing",
-            },
-        )
-    if _recovery_evidence_marked_stale(canonical):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Selected-step recovery is not available for this execution.",
-                "reason": "stale_recovery_evidence",
-            },
-        )
-    manifest_payload = await _hydrate_failed_run_recovery_manifest_payload(
-        session=session,
-        user=user,
-        manifest_ref=manifest_ref,
-    )
-    _reject_recovery_manifest_mismatch(
-        request,
-        canonical=canonical,
-        manifest_payload=manifest_payload,
-        checkpoint_ref=str(checkpoint_ref or "").strip(),
-    )
-    checkpoint_payload = await _hydrate_recovery_checkpoint_payload(
-        session=session,
-        user=user,
-        checkpoint_ref=checkpoint_ref,
-    )
-    _reject_recovery_contract_mismatch(
-        request,
-        canonical=canonical,
-        checkpoint_payload=checkpoint_payload,
-    )
-    admission = _checkpoint_resume_admission_for_request(
-        canonical=canonical,
-        checkpoint_payload=checkpoint_payload,
-        repository=_canonical_execution_repository(canonical),
-    )
-    try:
-        result = await service.create_failed_step_recovery_execution(
-            canonical,
-            recovery_checkpoint_ref=checkpoint_ref,
-            idempotency_key=request.idempotency_key,
-            checkpoint_payload=checkpoint_payload,
-            failed_run_recovery_manifest_ref=manifest_ref,
-            failed_run_recovery_manifest=manifest_payload,
-            selected_start_step_id=request.selected_start_step_id,
-            admitted_checkpoint_resume_decision=admission,
-        )
-    except ProviderProfileRuntimeMismatchError as exc:
-        # A recovery destination inherits the source execution's authored
-        # runtime and Provider Profile. A pair persisted before the shared
-        # invariant existed is rejected at
-        # TemporalExecutionService.create_execution, and this route returns
-        # the identical 409 contract every other launch-authoring path
-        # returns rather than surfacing an unmapped server error.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=exc.detail,
-        ) from exc
-    except TemporalExecutionRecoveryCheckpointError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Selected-step recovery is not available for this execution.",
-                "reason": _recovery_not_available_reason(exc),
-            },
-        ) from exc
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "resume_not_available",
-                "message": "Selected-step recovery is not available for this execution.",
-                "reason": "state_not_eligible",
-            },
-        ) from exc
-    await session.commit()
-    return RecoverFromFailedStepResponse.model_validate(result)
-
-
-__all__ = ["router"]

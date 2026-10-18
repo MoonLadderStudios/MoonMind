@@ -344,59 +344,6 @@ async def _row_counts(session) -> dict[str, int]:
     }
 
 
-def _recover_body(record) -> dict:
-    from moonmind.schemas.workflow_recovery_models import (
-        deterministic_recovery_creation_key,
-    )
-    from moonmind.workflows.executions.runtime_capabilities import (
-        resolve_runtime_execution_capabilities,
-    )
-
-    digest = "sha256:historical-checkpoint"
-    return {
-        "target": {
-            "kind": "failed_step",
-            "logicalStepId": "implement",
-            "sourceStepExecutionId": "step-execution-1",
-        },
-        "source": {
-            "workflowId": record.workflow_id,
-            "runId": record.run_id,
-            "planRef": "artifact://plan/source",
-            "planDigest": "sha256:plan",
-            "taskInputSnapshotRef": "artifact://snapshot/source",
-        },
-        "checkpoint": {
-            "ref": "artifact://checkpoint/source",
-            "boundary": "before_execution",
-            "kind": "worktree_archive",
-            "digest": digest,
-            "validationRef": "artifact://checkpoint-validation",
-            "sourceWorkspaceRef": "workspace://source",
-        },
-        "continuation": {"phase": "rerun_failed_step"},
-        "capabilitySnapshot": resolve_runtime_execution_capabilities(
-            "omnigent"
-        ).model_dump(by_alias=True, mode="json"),
-        "preservedStepRefs": [],
-        "sideEffectDispositionRef": "artifact://side-effects",
-        "sideEffectSafe": True,
-        "destination": {
-            "workflowId": "mm:historical-recovery-destination",
-            "creationKey": deterministic_recovery_creation_key(
-                record.workflow_id,
-                record.run_id,
-                "failed_step",
-                digest,
-                "rerun_failed_step",
-            ),
-            "runtimeId": "omnigent",
-            "executionProfileRef": "provider-profile:primary",
-            "workspaceReservationId": "workspace-reservation:destination",
-        },
-    }
-
-
 # Each body passes route validation and each row state meets the route's own
 # precondition for an ordinary run, so only the historical denial can reject
 # the request. An open row is used where a live control would signal Temporal.
@@ -413,18 +360,7 @@ _MUTATIONS = [
     ("reschedule", MoonMindWorkflowState.SCHEDULED, lambda r: {"scheduledFor": "2030-01-01T00:00:00Z"}),
     ("rerun", _FAILED, lambda r: None),
     ("continue", _FAILED, lambda r: {"idempotencyKey": "historical-continue"}),
-    ("recover", _FAILED, _recover_body),
-    ("recover-from-failed-step", _FAILED, lambda r: {"idempotencyKey": "historical-recover"}),
-    (
-        "recover-from-selected-step",
-        _FAILED,
-        lambda r: {
-            "idempotencyKey": "historical-resume",
-            "sourceWorkflowId": r.workflow_id,
-            "sourceRunId": r.run_id,
-            "selectedStartStepId": "step-1",
-        },
-    ),
+    ("retry-from-step", _FAILED, lambda r: {"idempotencyKey": "historical-retry"}),
     ("retry-publication", _FAILED, lambda r: None),
     (
         "checkpoint-branches",

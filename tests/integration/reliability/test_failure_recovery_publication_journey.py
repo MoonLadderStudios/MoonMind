@@ -38,9 +38,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal.recovery_manifest import (
-    build_failed_run_recovery_manifest,
-)
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
@@ -61,7 +58,6 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
-from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
@@ -265,80 +261,17 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
         saved.remove_source()  # the failed host cannot supply recovery content
 
         capabilities = resolve_runtime_execution_capabilities("omnigent")
-        manifest = build_failed_run_recovery_manifest(
-            workflow_id=target.workflow_id,
-            run_id=target.run_id,
-            created_at=now,
-            step_ledger_rows=source._step_ledger_rows,
-            failure_diagnostic=diagnostic,
-            terminal_dispositions={"prepare": "accepted"},
-            checkpoint_refs_by_boundary={"implement": {"after_execution": root_ref}},
-            checkpoint_kind=root_checkpoint["workspace"]["kind"],
-            runtime_capabilities=capabilities,
-            restore_route_registered=True,
-        ).model_dump(by_alias=True, mode="json")
-        assert manifest["resumeAllowed"] is True
-
-        async def start_recovery(**kwargs):
-            links = await service._repository.list_links(
-                objective_ref.removeprefix("artifact://")
-            )
-            assert any(link.workflow_id == kwargs["workflow_id"] for link in links)
-            return SimpleNamespace(run_id="recovery-run")
-
-        client.start_workflow.side_effect = start_recovery
-        recovered = await TemporalExecutionService(
-            session, client_adapter=client
-        ).create_failed_step_recovery_execution(
-            target,
-            recovery_checkpoint_ref=root_ref,
-            idempotency_key="3512-recovery",
-            failed_run_recovery_manifest_ref=await put(manifest),
-            failed_run_recovery_manifest=manifest,
-            checkpoint_payload={
-                "source": {"workflowId": target.workflow_id, "runId": target.run_id},
-                "taskInputSnapshotRef": objective_ref,
-                "planDigest": "sha256:3512",
-                "failedStep": {
-                    "logicalStepId": "implement",
-                    "order": 2,
-                    "executionOrdinal": 1,
-                },
-                "recoveryWorkspace": {"checkpointRef": root_ref},
-                "preservedSteps": [
-                    {
-                        "logicalStepId": "prepare",
-                        "order": 1,
-                        "status": "completed",
-                        "sourceExecutionOrdinal": 1,
-                        "artifacts": {"outputPrimary": saved.saved_work_ref},
-                        "stateCheckpointRef": root_ref,
-                    }
-                ],
-            },
-        )
-        recovery_record = await session.get(
-            models.TemporalExecutionCanonicalRecord,
-            recovered["execution"]["workflowId"],
-        )
-        assert recovery_record.workflow_id != target.workflow_id
-        run_module.workflow.info().workflow_id = recovery_record.workflow_id
-        run_module.workflow.info().run_id = recovery_record.run_id
-        for key, value in intent.items():
-            assert recovery_record.parameters["workflow"][key] == value
-        recovery_source = recovery_record.parameters["recoverySource"]
+        # Retrying from the failed step continues the same workflow: Temporal
+        # replays the accepted prepare step from history, so the retried run
+        # starts with it completed and executes only the failed implementation.
+        run_module.workflow.info().run_id = "run-retried"
         workflow = MoonMindRunWorkflow()
-        workflow._recovery_source = recovery_source
         workflow._initialize_step_ledger(
             ordered_nodes=_ordered_nodes(),
             dependency_map=_dependency_map(),
             updated_at=now,
         )
-        assert workflow._step_ledger_row_for("prepare")["executionOrdinal"] == 0
-        assert (
-            workflow._restore_recovery_workspace_for_failed_step("implement")
-            == root_ref
-        )
+        workflow._step_ledger_row_for("prepare")["status"] = "completed"
         spec = _journey_remediation_spec()
         tool_inputs = dict(spec.remediation_tool.inputs)
         instructions = (

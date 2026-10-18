@@ -26601,6 +26601,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "verified": True,
                 }
         if isinstance(self._step_count, int) and self._step_count > 0:
+            # Retry from a step finds each step's start in history by the
+            # first memo change to its order (retry_from_step.py).
             memo_dict["mm_current_step_order"] = self._step_count
         if workflow.patched("run-memo-runtime-skill-visibility"):
             if self._target_runtime:

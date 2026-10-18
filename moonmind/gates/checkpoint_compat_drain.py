@@ -10,11 +10,9 @@ replay (``test_checkpoint_queue_replay.py``) proves history compatibility
 only; it is never deployed-drainage evidence.
 
 This module defines what counts as *drained* for that compatibility
-registration and gates its removal. It intentionally reuses the repository's
-existing drain rule instead of inventing another topology mode or service:
-the decision predicate mirrors
-``moonmind.workflows.executions.checkpoint_promotion.evaluate_worker_drain``
-(``outstanding == 0`` → safe to remove, otherwise retain). The deployment
+registration and gates its removal. It uses the repository's drain rule
+instead of inventing another topology mode or service: ``outstanding == 0``
+→ safe to remove, otherwise retain. The deployment
 collects the counts automatically through the existing Temporal service
 route, ``TemporalExecutionService.observe_checkpoint_compat_drain`` (backed
 by ``TemporalClientAdapter.observe_checkpoint_compat_drain``), which lists
@@ -45,8 +43,7 @@ COMPAT_DRAIN_CONTRACT = "checkpoint-branch-artifact-fleet-drain-v1"
 #: The patch whose pre-marker histories own the retained registration.
 COMPAT_PATCH_ID = "checkpoint-branch-artifact-fleet-v1"
 
-#: Removal requires every outstanding dimension to reach zero, mirroring
-#: ``evaluate_worker_drain`` (``mayRemoveWorkerRoutes == (outstanding == 0)``).
+#: Removal requires every outstanding dimension to reach zero.
 REQUIRED_ACTION_RETAIN = "retain_compat"
 REQUIRED_ACTION_REMOVE = "safe_to_remove"
 
@@ -105,9 +102,7 @@ def evaluate_checkpoint_compat_drain(
 ) -> CheckpointCompatDrainDecision:
     """Decide whether the compat registration may be removed.
 
-    The predicate is deliberately the same shape as
-    ``evaluate_worker_drain``: removal is allowed only when every
-    outstanding dimension is zero. Any nonzero — or unobservable —
+    Removal is allowed only when every outstanding dimension is zero. Any nonzero — or unobservable —
     dimension retains the registration.
     """
 
@@ -177,8 +172,7 @@ def evaluate_checkpoint_compat_drain_observations(
     """Evaluate the drain gate from possibly-unobservable probe results.
 
     Fully observable inputs delegate to :func:`evaluate_checkpoint_compat_drain`
-    so the removal predicate stays identical to the canonical
-    ``evaluate_worker_drain`` rule. Any ``None`` (unobservable/failed probe)
+    so there is one removal predicate. Any ``None`` (unobservable/failed probe)
     dimension retains compat and is named in ``blocking_dimensions``; each
     such dimension contributes one unit to ``outstanding`` so the verdict is
     never zero-outstanding while unobservable.

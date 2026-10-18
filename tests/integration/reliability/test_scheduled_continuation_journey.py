@@ -303,20 +303,6 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                     await session.get(TemporalExecutionCanonicalRecord, source_id)
                     is None
                 )
-                # Source-less scheduled recovery reaches the ordinary evidence
-                # gate; no source-row backfill or fabricated checkpoint grants
-                # eligibility to a run with no saved checkpoint.
-                with pytest.raises(HTTPException) as unavailable:
-                    await ex.recover_execution_from_failed_step(
-                        source_id,
-                        ex.RecoverFromFailedStepRequest(idempotencyKey="failed-step"),
-                        service,
-                        session,
-                        user,
-                        None,
-                    )
-                assert unavailable.value.status_code == 409
-                assert unavailable.value.detail["reason"] == "recovery_manifest_missing"
                 create = service.create_execution
                 creates = []
 
