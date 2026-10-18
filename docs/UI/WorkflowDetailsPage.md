@@ -429,7 +429,7 @@ It contains:
 - Created time
 - Started time, when available
 - Completed time, when available
-- Duration
+- Duration, ticking from the start time while the Workflow runs
 - Last updated time
 - Owner or creator
 - Trigger type

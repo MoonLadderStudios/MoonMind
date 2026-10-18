@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { screen, waitFor, act, fireEvent, within, cleanup } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
@@ -3327,6 +3327,11 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('MM-1034 shows step duration states and keeps the wall-clock timeline behind a secondary toggle', async () => {
+    // Active timing ticks from the server start time, so read it at the server's own clock.
+    vi.useFakeTimers({ now: new Date('2026-04-09T00:05:11Z'), toFake: ['Date', 'setInterval', 'clearInterval'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     window.history.pushState({}, 'Step Timing Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
