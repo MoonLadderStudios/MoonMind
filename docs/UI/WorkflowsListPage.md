@@ -88,7 +88,7 @@ Each row comes from the `/api/executions` list response: workflow identifier and
 
 ### 5.2 Row actions
 
-When workflow actions are enabled, each desktop Actions cell and mobile card exposes a single three-dot `More actions` menu. Cancel, Rerun, and Remediate live in that menu with the other workflow actions. Action capabilities load when the operator opens the menu rather than during list rendering, which keeps the list request cheap; loading and unavailable actions show their disabled reasons inside the menu while the trigger stays usable. Desktop and mobile share the same handlers and availability rules. On mobile the open menu stays in the card's flow; on desktop it can extend past the table edges and stays clickable above the results footer.
+When workflow actions are enabled, each desktop Actions cell and mobile card exposes a single three-dot `More actions` menu. Cancel, Rerun, and Remediate live in that menu with the other workflow actions. Action capabilities load when the operator opens the menu rather than during list rendering, which keeps the list request cheap; the menu shows a loading state until they arrive. Menu ordering, focus, and confirmations match the Workflow Details actions menu: safe actions first, destructive ones after a divider, Force cancel under Troubleshooting, and ineligible actions collapsed under `Unavailable (n)` with plain-language reasons. Desktop and mobile share the same handlers and availability rules. On mobile the open menu stays in the card's flow; on desktop it can extend past the table edges and stays clickable above the results footer.
 
 ### 5.3 Empty, loading, error, and pagination states
 
