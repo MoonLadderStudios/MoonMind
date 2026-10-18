@@ -18,3 +18,5 @@ export type {
 } from './DashboardToast';
 export { LogPanel } from './LogPanel';
 export type { LogPanelProps } from './LogPanel';
+export { PageHeader, documentTitleFor, useDocumentTitle } from './PageHeader';
+export type { PageHeaderProps } from './PageHeader';
