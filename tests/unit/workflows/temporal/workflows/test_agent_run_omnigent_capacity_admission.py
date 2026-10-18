@@ -30,7 +30,12 @@ from unittest.mock import patch
 
 import pytest
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError, ApplicationError, TimeoutType
+from temporalio.exceptions import (
+    ActivityError,
+    ApplicationError,
+    CancelledError,
+    TimeoutType,
+)
 from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -670,6 +675,137 @@ def test_profile_id_from_manager_lease_reads_the_held_profile() -> None:
         MoonMindAgentRun._profile_id_from_manager_lease({"requester_profile_id": " "})
         is None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observation", ["failed", "unknown", "malformed"])
+async def test_provider_queue_preserves_request_when_reconciliation_is_inconclusive(
+    monkeypatch: pytest.MonkeyPatch,
+    observation: str,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+    run.grant_on_signal = False
+    waits = []
+    inspections = []
+
+    async def wait_for_slot(predicate, timeout):
+        waits.append(timeout)
+        raise TimeoutError
+
+    async def inspect(**kwargs):
+        inspections.append(kwargs)
+        if len(inspections) == 1:
+            if observation == "failed":
+                raise RuntimeError("manager observation timed out")
+            if observation == "malformed":
+                return {"running": False, "error": "invalid_manager_state_payload"}
+            return {"running": True, "inspection_succeeded": False}
+        return {
+            "running": True,
+            "inspection_succeeded": True,
+            "requester_profile_id": "opencode-zen-free",
+            "requester_fencing_generation": 7,
+        }
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait_for_slot)
+    monkeypatch.setattr(run, "_manager_state_for_slot_wait", inspect)
+
+    await run._admit_omnigent_provider_capacity(
+        request=_omnigent_request(),
+        parent_info=None,
+        profile_id="opencode-zen-free",
+        runtime_id="opencode",
+    )
+
+    assert len(waits) == 2
+    assert len([name for name, _ in run.signals if name == "request_slot"]) == 1
+    assert run._assigned_profile_id == "opencode-zen-free"
+    assert run._assigned_slot_fencing_generation == 7
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_provider_queue_reconciliation_keeps_original_wait_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module, "_OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS", 240
+    )
+    run = _RecordingRun()
+    run.grant_on_signal = False
+    clock = {"now": datetime(2026, 10, 18, tzinfo=timezone.utc)}
+    waits = []
+    monkeypatch.setattr(agent_run_module.workflow, "now", lambda: clock["now"])
+
+    async def wait_for_slot(predicate, timeout):
+        waits.append(timeout.total_seconds())
+        clock["now"] += timeout
+        raise TimeoutError
+
+    async def inspect(**kwargs):
+        clock["now"] += timedelta(seconds=80)
+        raise RuntimeError("manager observation timed out")
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait_for_slot)
+    monkeypatch.setattr(run, "_manager_state_for_slot_wait", inspect)
+
+    with pytest.raises(ApplicationError) as failure:
+        await run._admit_omnigent_provider_capacity(
+            request=_omnigent_request(),
+            parent_info=None,
+            profile_id="opencode-zen-free",
+            runtime_id="opencode",
+        )
+
+    assert failure.value.type == "SlotAcquisitionTimeout"
+    assert "240s" in str(failure.value)
+    assert waits == [120, 40]
+    assert len([name for name, _ in run.signals if name == "request_slot"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_canceled_manager_observation_stops_capacity_wait_without_rerequest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+    run.grant_on_signal = False
+    clock = {"now": datetime(2026, 10, 18, tzinfo=timezone.utc)}
+    monkeypatch.setattr(agent_run_module.workflow, "now", lambda: clock["now"])
+    monkeypatch.setattr(
+        agent_run_module, "_OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS", 240
+    )
+    cancellation = ActivityError(
+        "manager observation canceled",
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="worker",
+        activity_type="provider_profile.manager_state",
+        activity_id="observation",
+        retry_state=None,
+    )
+    cancellation.__cause__ = CancelledError("workflow canceled")
+
+    async def wait_for_slot(predicate, timeout):
+        clock["now"] += timeout
+        raise TimeoutError
+
+    async def inspect(**kwargs):
+        raise cancellation
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait_for_slot)
+    monkeypatch.setattr(run, "_manager_state_for_slot_wait", inspect)
+    with pytest.raises(ActivityError) as failure:
+        await run._admit_omnigent_provider_capacity(
+            request=_omnigent_request(),
+            parent_info=None,
+            profile_id="opencode-zen-free",
+            runtime_id="opencode",
+        )
+
+    assert failure.value is cancellation
+    assert len([name for name, _ in run.signals if name == "request_slot"]) == 1
 
 
 @pytest.mark.asyncio

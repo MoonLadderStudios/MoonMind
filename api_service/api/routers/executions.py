@@ -11976,6 +11976,14 @@ def _normalize_submitted_repository(
             f"payload.repository is invalid: {exc}"
         ) from exc
 
+    branch = target.branch.name
+    # Git refs cannot contain colons; this also catches SCP-style clone URLs.
+    if target.provider == "git" and (":" in branch or branch.startswith("//")):
+        raise _invalid_workflow_request(
+            "payload.repository.branch must be a branch name, not a URL. "
+            "Clear it to use the remote default branch, or enter the intended branch."
+        )
+
     return (
         target.model_dump(by_alias=True, mode="json", exclude_none=True),
         target.repository.name,

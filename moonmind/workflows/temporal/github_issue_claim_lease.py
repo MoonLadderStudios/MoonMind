@@ -385,10 +385,9 @@ async def renew_owned_claim(*, store, service, owner):
             or handoff.operator_hold
         ):
             raise ValueError("claim_lease_lost")
-        # Execution renewal proves the run started work: a claim still in the
-        # short-lived announcement phase is promoted to the running lease so a
-        # multi-minute run is not canceled before its first renewal. This path
-        # only serves execution renewal (renew_execution_claim); selection-time
+        # Execution renewal covers dispatch, including durable capacity waits.
+        # Promote the announcement to the running lease so a multi-minute wait
+        # or execution is not canceled before its first renewal. Selection-time
         # announcements keep the five-minute deadline until dispatch.
         promoting = handoff.activity == "preparing"
         if promoting:

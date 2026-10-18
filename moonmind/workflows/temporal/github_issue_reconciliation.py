@@ -212,7 +212,6 @@ def classify_evidence_source(
     *,
     local_terminal_record: Mapping[str, Any] | None = None,
     remote_handoff: Mapping[str, Any] | None = None,
-    local_workflow_available: bool = False,
 ) -> dict[str, Any]:
     """Distinguish locally confirmed terminal evidence from remote status.
 
@@ -233,8 +232,6 @@ def classify_evidence_source(
     # An orphaned remote attempt is reported as unresponsive, never
     # misdescribed as a locally confirmed failure (design section 9).
     remote_unresponsive = bool(remote) and not remote_release_claimed
-    if not remote and not locally_confirmed and not local_workflow_available:
-        remote_unresponsive = True
     source_outcome = _string(local.get("primaryOutcome", local.get("primary_outcome")))
     return {
         "locallyConfirmed": locally_confirmed,
@@ -246,10 +243,13 @@ def classify_evidence_source(
             "Locally confirmed terminal evidence."
             if locally_confirmed
             else (
-                "Remote owner unresponsive or no trusted handoff readable; "
-                "ownership is uncertain."
+                "Remote owner unresponsive; ownership is uncertain."
                 if remote_unresponsive
-                else "Remote release claimed; verifying before repair."
+                else (
+                    "Remote release claimed; verifying before repair."
+                    if remote_release_claimed
+                    else "No managed attempt evidence or known interrupted transition."
+                )
             )
         ),
     }
@@ -322,14 +322,12 @@ def decide_issue_reconciliation(
     preservation_evidence: Mapping[str, Any] | None = None,
     proposed_disposition: str = "",
     trusted_handoff_present: bool = False,
-    manual_in_progress: bool = False,
     successor_observed_settled: str = "",
     operator_hold: bool = False,
     contradiction_observed: bool = False,
     pr_state: Mapping[str, Any] | None = None,
     local_terminal_record: Mapping[str, Any] | None = None,
     remote_handoff: Mapping[str, Any] | None = None,
-    local_workflow_available: bool = False,
 ) -> ReconciliationDecision:
     """Decide one issue's reconciliation from current GitHub evidence.
 
@@ -428,9 +426,7 @@ def decide_issue_reconciliation(
 
     # Manual/legacy in-progress labels: respected and surfaced, never
     # age-cleared (Req 3, design section 10).
-    if manual_in_progress or (
-        from_settled == lifecycle.SETTLED_IN_PROGRESS and not trusted_handoff_present
-    ):
+    if from_settled == lifecycle.SETTLED_IN_PROGRESS and not trusted_handoff_present:
         return ReconciliationDecision(
             action=ACTION_ATTENTION,
             reason_code="manual_in_progress_surfaced",
@@ -514,7 +510,6 @@ def decide_issue_reconciliation(
     source = classify_evidence_source(
         local_terminal_record=local_terminal_record,
         remote_handoff=remote_handoff,
-        local_workflow_available=local_workflow_available,
     )
     if source["remoteUnresponsive"] and not source["locallyConfirmed"]:
         writer = (writer_evidence or {})
