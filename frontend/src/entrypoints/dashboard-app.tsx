@@ -16,11 +16,13 @@ import {
   BrowserRouter,
   Link,
   Navigate,
+  NavigationType,
   NavLink,
   Route,
   Routes,
   useLocation,
   useNavigate,
+  useNavigationType,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PanelLeft, Plus, Rows3, ScrollText, Square } from 'lucide-react';
@@ -1557,13 +1559,17 @@ function RoutedDashboardPage({
   const layout = readSharedLayout(routedPayload);
   // Workflows and Skills keep a stable key so their workspaces stay mounted
   // across table/detail navigation (preserving sidebar filter state); other
-  // pages remount per path. Settings, Omnigent inventories and Artifacts read
-  // their query reactively, so typing a filter must not remount them.
+  // pages remount per path. Settings, Omnigent inventories, Artifacts and
+  // Recurring follow their query reactively, so a filter change or a hash
+  // section link must not remount them.
   const routeKey = route.page === 'workflows-workspace'
     ? 'workflows-workspace'
     : route.page === 'skills'
       ? 'skills'
-      : route.page.startsWith('settings-') || route.page === 'omnigent-inventory' || route.page === 'artifacts'
+      : route.page.startsWith('settings-')
+        || route.page === 'omnigent-inventory'
+        || route.page === 'artifacts'
+        || route.page === 'schedules'
         ? `${route.page}:${route.currentPath}`
         : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
 
@@ -1586,6 +1592,81 @@ function RoutedDashboardPage({
   );
 }
 
+// About one second of animation frames: long enough for a lazily loaded page
+// to render its sections, short enough not to scroll long after arrival.
+const HASH_TARGET_FRAME_ATTEMPTS = 60;
+
+function scrollToHashTarget(hash: string): () => void {
+  let id = hash.slice(1);
+  try {
+    id = decodeURIComponent(id);
+  } catch {
+    // Keep the raw fragment when it is not valid percent-encoding.
+  }
+  let frame = 0;
+  let attempts = 0;
+  const attempt = () => {
+    const target = id ? document.getElementById(id) : null;
+    if (target) {
+      if (typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView();
+      }
+      return;
+    }
+    attempts += 1;
+    if (attempts < HASH_TARGET_FRAME_ATTEMPTS) {
+      frame = window.requestAnimationFrame(attempt);
+    }
+  };
+  attempt();
+  return () => window.cancelAnimationFrame(frame);
+}
+
+/**
+ * BrowserRouter keeps the window scroll across route changes, so opening an
+ * item from a scrolled list would land mid-page. A navigation to another path
+ * starts at the top, and a hash target scrolls into view instead. Back/Forward
+ * is left to the browser's own restoration, and inner scroll containers (such
+ * as the collection sidebar) keep their position because only the window is
+ * reset.
+ */
+function useRouteScrollReset(): void {
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const previousRef = useRef({ pathname: location.pathname, hash: location.hash });
+  // navigateTo() announces programmatic pushes and replaces with a synthetic
+  // popstate, which the router also reports as POP; only a trusted popstate is
+  // a real Back/Forward.
+  const browserTraversalRef = useRef(false);
+
+  useEffect(() => {
+    const recordTraversal = (event: PopStateEvent) => {
+      browserTraversalRef.current = event.isTrusted;
+    };
+    window.addEventListener('popstate', recordTraversal);
+    return () => window.removeEventListener('popstate', recordTraversal);
+  }, []);
+
+  useLayoutEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = { pathname: location.pathname, hash: location.hash };
+    if (navigationType === NavigationType.Pop && browserTraversalRef.current) {
+      return undefined;
+    }
+    const pathnameChanged = location.pathname !== previous.pathname;
+    if (location.hash) {
+      const hashRequested = pathnameChanged
+        || location.hash !== previous.hash
+        || navigationType === NavigationType.Push;
+      return hashRequested ? scrollToHashTarget(location.hash) : undefined;
+    }
+    if (pathnameChanged && (window.scrollX !== 0 || window.scrollY !== 0)) {
+      window.scrollTo(0, 0);
+    }
+    return undefined;
+  }, [location.key, location.pathname, location.hash, navigationType]);
+}
+
 function DashboardRouter({ payload }: { payload: BootPayload }) {
   const uiInfoQuery = useDashboardUiInfo();
   const uiInfo = uiInfoQuery.data ?? null;
@@ -1593,6 +1674,7 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
     <RoutedDashboardPage payload={payload} uiInfo={uiInfo} isUiInfoPending={uiInfoQuery.isPending} />
   );
   const navigate = useNavigate();
+  useRouteScrollReset();
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {

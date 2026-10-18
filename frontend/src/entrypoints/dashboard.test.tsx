@@ -934,6 +934,126 @@ describe('Dashboard shared entry', () => {
     expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
   });
 
+  function recurringSchedule(id: string, name: string) {
+    return {
+      id,
+      version: 1,
+      name,
+      enabled: true,
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      nextRunAt: '2026-07-09T09:00:00Z',
+      lastDispatchStatus: 'enqueued',
+      target: {},
+      policy: {},
+    };
+  }
+
+  // `filteredLists` maps an exact list URL to the rows that query returns;
+  // every other list query returns `listItems`.
+  function mockRecurringFetch(
+    listItems: Array<ReturnType<typeof recurringSchedule>>,
+    filteredLists: Record<string, Array<ReturnType<typeof recurringSchedule>>> = {},
+  ) {
+    const known = [...listItems, ...Object.values(filteredLists).flat()];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      const filtered = filteredLists[url];
+      if (filtered) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: filtered }) } as Response);
+      }
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: listItems }) } as Response);
+      }
+      const detail = url.match(/^\/api\/recurring-workflows\/([^/?]+)$/);
+      const item = detail ? known.find((entry) => entry.id === decodeURIComponent(detail[1] || '')) : null;
+      if (item) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ...item, description: 'Runs every morning.' }),
+        } as Response);
+      }
+      if (/^\/api\/recurring-workflows\/[^/]+\/runs/.test(url)) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+  }
+
+  it('opens the first recurring schedule after the table has written its query to the URL', async () => {
+    mockRecurringFetch([recurringSchedule('schedule-one', 'Daily recurring scan')]);
+    window.history.replaceState({}, '', '/schedules');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    await waitFor(() => {
+      expect(window.location.search).toContain('limit=50');
+    });
+    const heading = screen.getByRole('heading', { name: 'Recurring Schedules' });
+    // The URL write is router-owned and must not remount the page.
+    expect(screen.getByRole('heading', { name: 'Recurring Schedules' })).toBe(heading);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/schedule-one');
+    });
+    expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
+    expect(screen.queryByText('Opening first recurring schedule...')).toBeNull();
+  });
+
+  it('clears Recurring table filters when the Recurring navigation link drops them from the URL', async () => {
+    mockRecurringFetch([recurringSchedule('schedule-one', 'Daily recurring scan')]);
+    window.history.replaceState({}, '', '/schedules?schedule=nightly');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Schedule filter: nightly' }).length).toBeGreaterThan(0);
+    const heading = screen.getByRole('heading', { name: 'Recurring Schedules' });
+
+    // On a System route the menu trigger is labelled with the active destination.
+    fireEvent.click(screen.getByRole('button', { name: 'Recurring' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Recurring' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Schedule filter: nightly' })).toBeNull();
+    });
+    expect(screen.getByRole('heading', { name: 'Recurring Schedules' })).toBe(heading);
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('schedule=nightly');
+    });
+    const listCalls = fetchSpy.mock.calls.map(([url]) => String(url)).filter((url) => url.startsWith('/api/recurring-workflows'));
+    expect(listCalls.at(-1)).not.toContain('schedule=nightly');
+  });
+
+  it('scrolls a recurring schedule section into view without remounting the detail page', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      mockRecurringFetch([recurringSchedule('schedule-one', 'Daily recurring scan')]);
+      window.history.replaceState({}, '', '/schedules/schedule-one');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+      const heading = await screen.findByRole('heading', { name: 'Daily recurring scan' });
+      fireEvent.click(screen.getByRole('link', { name: 'Runs' }));
+
+      await waitFor(() => {
+        expect(window.location.hash).toBe('#schedule-runs');
+      });
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalled();
+      });
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('schedule-runs'));
+      expect(screen.getByRole('heading', { name: 'Daily recurring scan' })).toBe(heading);
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
   it('MM-1149 renders mobile recurring schedule cards with standalone detail links and required facts', async () => {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -1773,6 +1893,67 @@ describe('Dashboard shared entry', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  describe('window scroll on navigation', () => {
+    let scrollToSpy: MockInstance;
+
+    function setWindowScrollY(value: number) {
+      Object.defineProperty(window, 'scrollY', { configurable: true, writable: true, value });
+    }
+
+    beforeEach(() => {
+      scrollToSpy = vi.spyOn(window, 'scrollTo').mockImplementation(() => {
+        setWindowScrollY(0);
+      });
+    });
+
+    afterEach(() => {
+      scrollToSpy.mockRestore();
+      setWindowScrollY(0);
+    });
+
+    it('starts a newly opened detail at the top of the page', async () => {
+      window.history.replaceState({}, '', '/workflows?source=temporal');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+      expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+
+      setWindowScrollY(900);
+      fireEvent.click(screen.getByRole('link', { name: 'Mock workflow title' }));
+
+      expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
+      expect(scrollToSpy).toHaveBeenCalledWith(0, 0);
+    });
+
+    it('leaves Back/Forward scroll to the browser', async () => {
+      window.history.replaceState({}, '', '/workflows?source=temporal');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+      expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+      fireEvent.click(screen.getByRole('link', { name: 'Mock workflow title' }));
+      expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
+
+      scrollToSpy.mockClear();
+      setWindowScrollY(700);
+      act(() => {
+        window.history.back();
+      });
+
+      expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+      expect(window.location.pathname).toBe('/workflows');
+      expect(scrollToSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not reset the window for a link to a hash target', async () => {
+      window.history.replaceState({}, '', '/workflows?source=temporal');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+      expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+
+      setWindowScrollY(900);
+      navigateTo('/workflows/hash-route#steps');
+
+      expect(await screen.findByText('Workflow detail route loaded: /workflows/hash-route')).toBeTruthy();
+      expect(scrollToSpy).not.toHaveBeenCalled();
+    });
   });
 
   it('MM-1029 intercepts dashboard links and changes routes without a document navigation', async () => {
