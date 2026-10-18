@@ -2399,6 +2399,54 @@ async def changed_repository_selection(
     ]
 
 
+#: Plan fields that follow the installed harness and runtime. The harness
+#: catalog ref is left out: it differs between compiles of the same runtime.
+_INSTALLED_RUNTIME_FIELDS = (
+    "harnessImplementationRef",
+    "hostClassRef",
+    "hostImageRef",
+    "omnigentHostBuildDigest",
+)
+
+
+async def changed_installed_runtime(
+    *,
+    artifact_service: Any,
+    principal: str,
+    recorded: OmnigentExecutionPlanPayload,
+    admitted: OmnigentExecutionPlanPayload,
+) -> dict[str, dict[str, Any]]:
+    """Name the harness and runtime identity a re-admission moved, with both values.
+
+    The Omnigent server image is recorded only in each plan's effective launch
+    snapshot; an unreadable snapshot leaves it out of this report.
+    """
+
+    changes = {
+        field: {"from": getattr(recorded, field), "to": getattr(admitted, field)}
+        for field in _INSTALLED_RUNTIME_FIELDS
+        if getattr(recorded, field) != getattr(admitted, field)
+    }
+
+    async def server_image(payload: OmnigentExecutionPlanPayload) -> Any:
+        ref = str(payload.effectiveLaunchSnapshotRef or "").removeprefix("artifact:")
+        if not ref:
+            return None
+        _artifact, body = await artifact_service.read(
+            artifact_id=ref, principal=principal, allow_restricted_raw=True
+        )
+        return json.loads(body).get("serverImageRef")
+
+    try:
+        before, after = await server_image(recorded), await server_image(admitted)
+    except Exception:  # The report must not decide admission.
+        logger.warning("Effective launch snapshots are unreadable", exc_info=True)
+    else:
+        if before != after:
+            changes["serverImageRef"] = {"from": before, "to": after}
+    return changes
+
+
 async def _retire_refused_plan_artifacts(
     *, artifact_service: Any, principal: str, artifact_refs: tuple[str, ...]
 ) -> None:
@@ -2443,9 +2491,10 @@ async def readmit_frozen_execution_plan(
     is refused when it would change the recorded request intent.
 
     Returns ``disposition`` ``admitted`` with the new plan binding and Skill
-    snapshot, or ``recorded`` with the reason when the frozen authority cannot
-    be admitted now; the recorded plan then launches under its own launch-time
-    checks.
+    snapshot (and ``runtimeChanges`` when the recorded plan ran another
+    harness or runtime), or ``recorded`` with the reason when the frozen
+    authority cannot be admitted now; the recorded plan then launches under
+    its own launch-time checks.
     """
 
     from api_service.db.models import ManagedAgentProviderProfile
@@ -2534,6 +2583,16 @@ async def readmit_frozen_execution_plan(
                 "re-admission would change the recorded request intent: "
                 + ", ".join(changed)
             )
+        runtime_changes = (
+            await changed_installed_runtime(
+                artifact_service=artifact_service,
+                principal=principal,
+                recorded=recorded_plan.payload,
+                admitted=persisted_plan.envelope.payload,
+            )
+            if recorded_plan is not None
+            else {}
+        )
     except (
         HarnessPlatformError,
         PolicyConflict,
@@ -2550,18 +2609,22 @@ async def readmit_frozen_execution_plan(
             )
         return recorded(f"{type(exc).__name__}: {exc}")
     await db_session.commit()
-    return {
+    admitted = {
         "disposition": "admitted",
         "omnigentExecutionPlan": persisted_plan.binding.model_dump(
             mode="json", by_alias=True, exclude_none=True
         ),
         "resolvedSkillsetRef": persisted_plan.resolved_skillset_ref,
     }
+    if runtime_changes:
+        admitted["runtimeChanges"] = runtime_changes
+    return admitted
 
 
 __all__ = [
     "PersistedOmnigentExecutionPlan",
     "changed_admitted_intent",
+    "changed_installed_runtime",
     "changed_repository_selection",
     "compile_and_persist_execution_plan",
     "compile_frozen_execution_plan",

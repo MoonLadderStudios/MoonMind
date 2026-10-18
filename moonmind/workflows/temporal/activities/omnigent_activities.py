@@ -309,11 +309,13 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
 async def omnigent_admit_step_successor_plan_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Bind an interrupted Step's successor attempt to the installed runtime.
+    """Bind a Step's next attempt to the installed runtime.
 
-    The successor is a fresh attempt, so it is admitted like a fresh start or
-    schedule occurrence. The new plan must keep the recorded request intent;
-    otherwise the recorded plan stays.
+    The attempt is an interrupted Step's successor, or (``trigger``
+    ``history_reset``) a Step that a reset of the run's history, such as retry
+    from a step, runs again. It is admitted like a fresh start or schedule
+    occurrence. The new plan must keep the recorded request intent; otherwise
+    the recorded plan stays.
     """
 
     from api_service.db.base import async_session_maker
@@ -333,7 +335,11 @@ async def omnigent_admit_step_successor_plan_activity(
             artifact_service=_OnDemandTemporalArtifactService(async_session_maker),
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
-            subject="Interrupted Step successor of",
+            subject=(
+                "Step retried after a history reset of"
+                if payload.get("trigger") == "history_reset"
+                else "Interrupted Step successor of"
+            ),
             preserve_recorded_intent=True,
         )
 
