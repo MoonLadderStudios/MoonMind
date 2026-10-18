@@ -1,94 +1,48 @@
 # Workflow Dependencies — Operator Guide
 
-This document describes operational behavior, limits, diagnostics, and remediation for the **Workflow Dependencies** feature in MoonMind.
+Use this guide to configure, diagnose, and recover dependency waits. [Workflow Dependencies](WorkflowDependencies.md) owns admission, signals, state, and code-handoff semantics.
 
----
+## 1. Configure prerequisites
 
-## 1. What Are Workflow Dependencies?
+At creation, put up to 10 existing, visible `MoonMind.UserWorkflow` IDs in `payload.workflow.dependsOn`, or select them in Create. Use `workflowId`, not `runId`. The API trims/deduplicates IDs; prerequisites must already exist. See the [request example](WorkflowDependencies.md#3-api-contract).
 
-A `MoonMind.UserWorkflow` execution can declare up to **10 prerequisite `workflowId` values** at create time via `payload.workflow.dependsOn`. The dependent run:
+Edges cannot be edited or retargeted. Each dependent is a top-level execution with its own cancel/rerun controls. C depending on B waits on B, without expanding B's dependencies. There is no dependency-based priority, automatic prerequisite cancellation/rerun, general template graph, or automatic remediation workflow.
 
-1. Initializes normally.
-2. Enters `waiting_on_dependencies` state.
-3. Performs an immediate durable status reconciliation for each prerequisite.
-4. Waits durably for explicit `DependencyResolved` signals from any unresolved prerequisites.
-5. Proceeds only when **every** prerequisite reaches terminal MoonMind state `completed` — possibly after one or more prerequisite reruns.
-6. **Never auto-fails on a prerequisite failure.** A prerequisite reaching `failed`, `canceled`, `terminated`, `timed_out`, or runtime-unresolvable keeps the dependent in `waiting_on_dependencies` and records a `waiting_for_successful_rerun` outcome for that prerequisite. The only ways to leave the gate without prerequisite success are operator cancel, operator bypass, or operator manual skip.
+A dependency orders work; it does not transfer code, grant publication authority, or prove all a coordinator's descendants finished. Before relying on predecessor code, establish the [declared handoff](WorkflowDependencies.md#72-code-availability-is-a-separate-handoff), especially for PR-only, fix-only, and None workflows.
 
-Each dependent run is a **top-level, independently visible, cancelable, and rerunnable** execution — not a child workflow.
+## 2. Read the waiting state
 
----
+The gate runs after initialization and before planning/execution. It performs an immediate status reconciliation, receives durable `DependencyResolved` signals, and reconciles uncertain delivery every 30 seconds. All prerequisites must reach MoonMind `completed`.
 
-## 2. Limits and Constraints (V1)
+| Observation | Operator interpretation |
+| --- | --- |
+| `completed` | This prerequisite is satisfied |
+| `failed`, `canceled`, `terminated`, or `timed_out` | `waiting_for_successful_rerun`; the dependent does not auto-fail |
+| Not found/runtime-unresolvable | Still waiting, with `failureCategory = dependency_unresolved`; not success |
+| Same declared ID completes after a failure | `satisfied_after_rerun` |
 
-| Constraint | Value |
-|---|---|
-| Maximum direct dependencies per run | **10** |
-| Cross-workflow-type dependencies | **Not supported** — prerequisites must also be `MoonMind.UserWorkflow` |
-| Editing dependencies after create | **Not supported** |
-| Transitive dependency expansion | **Not supported** — C depends on B depends on A means C waits on B only |
-| Auto-canceling prerequisite runs | **Not supported** |
-| Template-authored dependency graphs | **Not supported** |
-| Dependency-based priority/queue ordering | **Not supported** |
+Use Workflow Detail or `reports/run_summary.json` → `dependencies.outcomes`. Each outcome identifies the prerequisite, terminal/close state, failure category/message, distinct `failureCount`, and `lastFailedAt`. Repeated delivery is not a new failure. The top-level resolution is `satisfied_after_rerun` if any prerequisite recovered, otherwise `satisfied`.
 
----
+## 3. Recover a failed prerequisite
 
-## 3. Wait-Through-Rerun Behavior
+1. Open the failed prerequisite from the dependency panel; diagnose its original failure and retained work.
+2. Use its supported recovery/rerun operation and follow the returned destination identity.
+3. Check that identity before waiting again: terminal [RequestRerun](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics) creates a new linked `workflowId` and leaves the source closed. Its success cannot satisfy an edge targeting the old ID. Cancel and recreate the dependent with the returned ID if that destination is required. Existing edges never follow rerun lineage automatically.
+4. If the prerequisite is no longer needed, explicitly bypass/skip the dependent's wait; otherwise cancel the dependent. Do not wait for prerequisite failure to fail the dependent automatically. Normal workflow timeout still applies.
 
-A prerequisite satisfies the dependency gate **only** when it reaches MoonMind terminal state `completed`.
+Bypass changes ordering only. It does not grant missing code, repository permissions, or publication authority. Re-admit a changed source/objective where necessary.
 
-Under the unified wait-through-rerun model, no prerequisite terminal outcome auto-fails the dependent. The dependent stays in `waiting_on_dependencies` and records structured per-dependency diagnostics until either prerequisites complete, an operator cancels the dependent, or an operator bypasses the dependency wait.
+## 4. Pause and cancel behavior
 
-| Prerequisite Terminal State | Dependent Run Behavior |
-|---|---|
-| `completed` | Gate satisfied for that prerequisite |
-| `failed` | Dependent stays in `waiting_on_dependencies`; records `waiting_for_successful_rerun` |
-| `canceled` | Dependent stays in `waiting_on_dependencies`; records `waiting_for_successful_rerun` |
-| `terminated` | Dependent stays in `waiting_on_dependencies`; records `waiting_for_successful_rerun` |
-| `timed_out` | Dependent stays in `waiting_on_dependencies`; records `waiting_for_successful_rerun` |
-| Unresolvable (not found) | Dependent stays in `waiting_on_dependencies`; records `waiting_for_successful_rerun` with `failureCategory = "dependency_unresolved"` |
+| Action on dependent | Effect |
+| --- | --- |
+| Cancel | Cancels only this dependent; prerequisites remain untouched |
+| Bypass dependency wait | Clears the gate with `resolution = bypassed` |
+| `SkipDependencyWait` | Operator-only override with `resolution = manual_override` |
+| Pause | Records incoming outcomes but cannot advance to planning/execution |
+| Resume | Advances if all prerequisites resolved; otherwise resumes waiting with outcomes intact |
 
-When a prerequisite fails, the dependent records bounded per-dependency metadata:
-
-- prerequisite `workflowId`,
-- latest terminal MoonMind state,
-- latest close status,
-- `failureCategory`,
-- `failureCount` (number of distinct non-success terminal observations),
-- `lastFailedAt` (most recent non-success terminal timestamp),
-- human-readable message,
-- `resolution = "waiting_for_successful_rerun"`.
-
-If a supported lifecycle operation later produces `completed` under the declared prerequisite `workflowId`, the per-dependency entry transitions to `resolution = "satisfied_after_rerun"` and the prerequisite is removed from the unresolved set. Once every prerequisite is satisfied, the gate clears and the dependent proceeds.
-
-Terminal `RequestRerun` creates a new linked `workflowId`, as defined by the [rerun contract](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics). Its success does not satisfy an edge targeting the closed source. Follow the returned destination, then cancel and recreate the dependent with that destination as its prerequisite, or use an explicitly authorized bypass/skip. Existing edges cannot be retargeted.
-
-The top-level run summary `resolution` will be `satisfied_after_rerun` if any prerequisite required at least one rerun cycle, or `satisfied` if every prerequisite cleared on first observation.
-
----
-
-## 4. Pause and Cancel Behavior
-
-### While Blocked on Dependencies
-
-| Action | Effect |
-|---|---|
-| **Cancel** dependent run | Cancels only the dependent run. Prerequisites are untouched. The only routine way to release a dependent that is waiting on a prerequisite that will never complete. |
-| **Bypass dependency wait** | Manually clears the dependency gate and lets the dependent run continue even if one or more prerequisites are still unresolved. Prerequisites are untouched. |
-| **Manual skip** (`SkipDependencyWait`) | Operator-only update that clears unresolved prerequisites and lets the dependent advance with `resolution = manual_override`. |
-| **Pause** dependent run | Pauses progression through the dependency gate. Signals continue to be received and recorded; non-success terminal outcomes recorded while paused do **not** fail the run, they accumulate as `waiting_for_successful_rerun` entries. |
-| **Resume** dependent run | If all prerequisites resolved successfully while paused, proceeds normally. Otherwise the dependent re-enters its waiting loop with the recorded outcomes intact. |
-| Cancel/terminate prerequisite run | **Never** affects the dependent run's state automatically. The dependent will continue waiting for that prerequisite to be rerun to success, or for an operator to cancel/bypass on the dependent side. |
-
-### Key Guarantees
-
-- Pausing the dependent run does **not** suppress receipt of `DependencyResolved` signals.
-- While paused, dependency outcomes continue to be recorded in local state.
-- A prerequisite non-success terminal observation never fails the dependent under the wait-through-rerun contract — neither while running, nor while paused.
-- While paused, the workflow does **not** leave the dependency gate and enter planning or execution.
-- Bypassing the dependency wait is an explicit operator override for cases where the remaining prerequisites are no longer required for reasons MoonMind cannot infer automatically. The run summary records dependency resolution as `bypassed`.
-
----
+Canceling or terminating a prerequisite does not cancel its dependent. Signals continue while paused, and non-success observations remain waiting outcomes.
 
 ## 5. Diagnostic Event Log Reference
 
@@ -113,42 +67,20 @@ The following structured log events are emitted during dependency lifecycle:
 
 ## 6. Troubleshooting
 
-### A Dependent Run Is Stuck in `waiting_on_dependencies`
+### A dependent is stuck in `waiting_on_dependencies`
 
-1. **Check prerequisites**: Use the detail API or the dashboard to see which prerequisites are still running.
-2. **Check signal delivery**: If a prerequisite completed but the dependent is still waiting, check service logs for `dependency_signal_fan_out` events. If `signals_failed > 0`, the signal may not have reached the dependent.
-3. **Check reconciliation**: The workflow reconciles every 30 seconds via `execution.dependency_status_snapshot` activity. If the activity is failing, the workflow won't detect completed prerequisites via reconciliation.
-4. **Worker health**: If the Temporal worker is down, signals queue up and reconcile activities won't execute. Check worker logs and container health.
+- Check declared IDs and actual prerequisite state in detail. A completed rerun under a different ID is the most important identity trap.
+- If the correct prerequisite completed, inspect service `dependency_signal_fan_out`/`dependency_signal_delivery_failed` events and their failure counts. Fan-out is bounded, best-effort, and continues past closed/missing dependents.
+- Check `execution.dependency_status_snapshot` Activity failures and Temporal worker/container health. With workers down, signals queue and reconciliation cannot execute.
+- Inspect undeclared-signal and reconciliation-mismatch diagnostics rather than treating them as completion. The [workflow gate](../../moonmind/workflows/temporal/workflows/run.py) and [notification service](../../moonmind/workflows/temporal/service.py) own these paths.
 
-### A Dependent Run Is Waiting Because a Prerequisite Failed
+### A legacy dependent failed on prerequisite failure
 
-Under the wait-through-rerun contract, a failed prerequisite does **not** fail the dependent. Instead the dependent stays in `waiting_on_dependencies` with a per-dependency outcome marked `waiting_for_successful_rerun`.
+Inspect `DependencyFailureError` and `failedDependencyId` in the summary's `dependencies` block. Recover the prerequisite, then create a new dependent targeting the successful destination ID. Retained histories may keep fail-fast behavior; restarting the worker does not migrate them.
 
-1. Open the dependent's Workflow detail panel (or read `reports/run_summary.json` under `dependencies.outcomes`) and find any per-dependency outcome with `resolution = "waiting_for_successful_rerun"`.
-2. The `failureCount` and `lastFailedAt` fields tell you how many failure cycles have happened and when the most recent failure occurred.
-3. The `terminalState`, `closeStatus`, and `failureCategory` fields explain the nature of the most recent failure.
-4. **Remediation paths:**
-   - Rerun the failed prerequisite and follow the returned destination. A terminal rerun has a new `workflowId`; cancel and recreate the dependent against that destination if its success is required. Automatic `satisfied_after_rerun` applies only when the originally declared ID itself later completes.
-   - If the prerequisite cannot be recovered, **cancel the dependent run** or use **Bypass Dependency Wait** to advance the dependent without that prerequisite.
-   - Do **not** wait for the dependent to fail itself: under wait-through-rerun, it never will.
+### Reverse lookup shows no dependents
 
-### A Dependent Run Failed Due to a Legacy Prerequisite Failure
-
-Workflows that started **before** `dependency-wait-through-rerun-v1` was deployed may still fail-fast on a prerequisite failure. For those legacy runs:
-
-1. Check the `DependencyFailureError` detail in the run summary artifact (`reports/run_summary.json`) under the `dependencies` block.
-2. The `failedDependencyId` field identifies which prerequisite caused the failure.
-3. The `terminalState` and `failureCategory` fields explain the nature of the failure.
-4. **Remediation**: Fix or rerun the failed prerequisite, then create a new dependent Workflow Execution whose declared prerequisite is the successful destination ID. Newly created dependent runs use the wait-through-rerun behavior automatically.
-
-### Reverse Lookup Shows No Dependents
-
-Dependents are stored in the `execution_dependencies` durable edge table. If reverse lookup returns empty:
-
-1. Verify the prerequisite's `workflowId` matches the `prerequisite_workflow_id` column.
-2. Check that the dependency edges were persisted at create time (both `initialParameters.workflow.dependsOn` and the edge table must be written).
-
----
+Check the exact `workflowId` against `execution_dependencies.prerequisite_workflow_id`. Confirm both `initialParameters.workflow.dependsOn` and durable edges were persisted at creation. A missing edge is not repaired by sending an undeclared signal.
 
 ## 7. Deployment Integrity and Replay Compatibility
 
@@ -163,66 +95,3 @@ The dependency gate is deployed under cooperating Temporal patches:
 Future dependency-gate changes must keep replay behavior explicit through patch gates, replay tests, or a documented cutover.
 
 ---
-
-## 8. Signal Contract
-
-### `DependencyResolved` Signal
-
-Sent to dependent workflows when a prerequisite reaches terminal state.
-
-**Payload shape:**
-
-```json
-{
-  "prerequisiteWorkflowId": "mm:01ABC...",
-  "terminalState": "completed",
-  "closeStatus": "completed",
-  "resolvedAt": "2026-04-03T17:24:16Z",
-  "failureCategory": null,
-  "message": null
-}
-```
-
-**Non-success payload:**
-
-```json
-{
-  "prerequisiteWorkflowId": "mm:01ABC...",
-  "terminalState": "failed",
-  "closeStatus": "failed",
-  "resolvedAt": "2026-04-03T17:24:16Z",
-  "failureCategory": "dependency_failed",
-  "message": "Prerequisite run failed before dependent gate cleared"
-}
-```
-
-**Fan-out behavior:** Best-effort, bounded, idempotent. If a dependent workflow is already closed or missing, the failure is logged and fan-out continues.
-
----
-
-## 9. Known Non-Goals (V1)
-
-- Editing dependencies after create
-- Retargeting a dependency to a different `workflowId` after create
-- Cross-workflow-type dependencies
-- Template-authored dependency graphs
-- Automatic transitive dependency expansion
-- Auto-canceling prerequisite runs
-- Auto-rerunning failed prerequisites
-- Auto-creating remediation Workflow Executions for failed prerequisites
-- Dependency-based priority or queue-order guarantees
-- Replacing child workflows with Workflow dependencies
-- Storing large dependency history in Search Attributes
-
----
-
-## 10. Recommended Remediation When a Prerequisite Fails
-
-1. Identify the failed prerequisite from the dependent run's Workflow detail dependency panel or run summary artifact (look for an outcome with `resolution = "waiting_for_successful_rerun"`).
-2. Diagnose the prerequisite failure (its terminal state, close status, failure category, and message are surfaced on the prerequisite link, and `failureCount` / `lastFailedAt` on the dependent's outcome).
-3. **Rerun the prerequisite Workflow Execution** and follow the returned destination identity. Terminal rerun creates a new linked `workflowId` and leaves the failed source unchanged.
-4. To wait on that new destination, cancel and recreate the dependent with the returned `workflowId` as its prerequisite. The existing dependent does not automatically follow rerun lineage. Only completion under its originally declared ID can produce `satisfied_after_rerun` without operator intervention.
-5. If the prerequisite cannot be recovered:
-   - **Bypass the dependency wait** on the dependent if the remaining prerequisites are no longer required, or
-   - **Cancel the dependent run** if it should not proceed without the prerequisite, then create a new dependent run with corrected prerequisites.
-6. Dependencies are create-time only and cannot be edited or retargeted after create. To change which `workflowId` a dependent waits on, cancel and recreate.
