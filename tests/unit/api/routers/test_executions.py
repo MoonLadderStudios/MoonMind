@@ -11241,9 +11241,18 @@ def test_create_execution_accepts_matching_github_issue_repository(
     "connection_ref",
     ["repository-connection:git-default", "repository-connection:operator-choice"],
 )
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "release/operator-choice",
+        "refs/heads/release/operator-choice",
+        "refs/tags/release-v1",
+    ],
+)
 def test_create_execution_keeps_explicit_repository_branch_and_connection(
     client,
     connection_ref,
+    branch,
 ):
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
@@ -11251,7 +11260,7 @@ def test_create_execution_keeps_explicit_repository_branch_and_connection(
         "provider": "git",
         "connectionRef": connection_ref,
         "repository": {"name": "MoonLadderStudios/Tactics"},
-        "branch": {"name": "release/operator-choice"},
+        "branch": {"name": branch},
     }
     response = test_client.post(
         "/api/executions",
@@ -11288,6 +11297,11 @@ def test_create_execution_keeps_explicit_repository_branch_and_connection(
         ("https://github.com/MoonLadderStudios/Tactics/issues/2491", {}, 2490),
         ("https://github.com/other/repo/issues/2490", {}, 2490),
         ("https://example.com/unrelated", {}, 2490),
+        ("git@github.com:MoonLadderStudios/Tactics.git", {}, 2490),
+        ("operator@git.example.com:group/repository.git", {}, 2490),
+        ("git.example.com:group/repository.git", {}, 2490),
+        ("ssh://git@git.example.com/group/repository.git", {}, 2490),
+        ("//git.example.com/group/repository.git", {}, 2490),
         ("https://github.com/MoonLadderStudios/Tactics/issues/2490?x=1", {}, 2490),
         ("https://github.com/MoonLadderStudios/Tactics/issues/2490", {}, None),
         (
