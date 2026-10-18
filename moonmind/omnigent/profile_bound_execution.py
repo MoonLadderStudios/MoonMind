@@ -131,6 +131,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
 HeartbeatResult = TypeVar("HeartbeatResult")
+HostAdmissionResult = TypeVar("HostAdmissionResult")
 HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS = 30.0
 #: How long before an expiring gh issuance lapses its projection is re-issued.
 GITHUB_PROJECTION_REFRESH_LEAD_SECONDS = 600.0
@@ -640,19 +641,39 @@ class OmnigentProfileBoundExecutionCoordinator:
     ) -> OmnigentHostLease:
         """Wait for canceled-run host reconciliation before claiming the profile."""
 
+        return await self._wait_for_profile_idle(
+            operation=lambda: self._hosts.create_or_get_host_lease(
+                binding=binding,
+                provider_lease_id=provider_lease.lease_id,
+                holder_workflow_id=workflow_id,
+                agent_run_id=step_execution_id,
+                idempotency_key=idempotency_key,
+            ),
+            profile_id=binding.provider_profile_id,
+            stage="host_lease_created",
+            emit=emit,
+        )
+
+    async def _wait_for_profile_idle(
+        self,
+        *,
+        operation: Callable[[], Awaitable[HostAdmissionResult]],
+        profile_id: str,
+        stage: str,
+        emit: Callable[..., Awaitable[None]],
+    ) -> HostAdmissionResult:
+        """Bound binding repair and lease admission by the same cleanup wait."""
+
         deadline = asyncio.get_running_loop().time() + HOST_PROFILE_BUSY_WAIT_SECONDS
         wait_attempt = 0
         while True:
             try:
-                return await self._hosts.create_or_get_host_lease(
-                    binding=binding,
-                    provider_lease_id=provider_lease.lease_id,
-                    holder_workflow_id=workflow_id,
-                    agent_run_id=step_execution_id,
-                    idempotency_key=idempotency_key,
-                )
+                return await operation()
             except OmnigentOAuthHostError as exc:
-                if exc.code != HOST_PROFILE_BUSY_ERROR_CODE:
+                if exc.code not in {
+                    HOST_PROFILE_BUSY_ERROR_CODE,
+                    "OMNIGENT_HOST_BINDING_LEASED",
+                }:
                     raise
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
@@ -660,12 +681,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                 wait_attempt += 1
                 retry_after = min(HOST_PROFILE_BUSY_POLL_SECONDS, remaining)
                 await emit(
-                    "host_lease_created",
+                    stage,
                     "waiting",
-                    code=HOST_PROFILE_BUSY_ERROR_CODE,
+                    code=exc.code,
                     remediation_action="wait_for_host_cleanup",
                     metadata={
-                        "providerProfileId": binding.provider_profile_id,
+                        "providerProfileId": profile_id,
                         "retryAfterSeconds": retry_after,
                         "waitAttempt": wait_attempt,
                     },
@@ -1410,30 +1431,51 @@ class OmnigentProfileBoundExecutionCoordinator:
                 runtime_binding_ref = runtime_binding.runtimeBindingRef
             current_stage = "host_binding_resolution"
             selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
-            binding = await self._hosts.create_or_update_static_binding(
-                profile_id=profile_id,
-                endpoint_ref=str(effective_launch["endpointRef"]),
-                static_host_id=binding.static_host_id if binding is not None else None,
-                host_launch_profile_ref=(
-                    binding.host_launch_profile_ref
-                    if binding is not None
-                    else (
-                        (
-                            str(effective_launch["launchPolicyRef"])
-                            if requested_target
-                            else os.getenv(
-                                "OMNIGENT_CLAUDE_HOST_LAUNCH_PROFILE"
-                                if provider_runtime == "claude_code"
-                                else "OMNIGENT_CODEX_HOST_LAUNCH_PROFILE"
-                            )
-                        )
-                        if selected_on_demand
-                        else None
+            repair_missing_launch_ref = bool(
+                selected_on_demand
+                and binding is not None
+                and not binding.host_launch_profile_ref
+                and (
+                    not binding.static_host_id
+                    or (
+                        (binding.effective_launch_snapshot or {}).get("hostMode")
+                        == "on_demand_docker"
+                        and binding.launch_policy_ref
+                        == effective_launch["launchPolicyRef"]
                     )
+                )
+            )
+            binding = await self._wait_for_profile_idle(
+                operation=lambda: self._hosts.create_or_update_static_binding(
+                    profile_id=profile_id,
+                    endpoint_ref=str(effective_launch["endpointRef"]),
+                    static_host_id=(
+                        binding.static_host_id
+                        if binding is not None and not repair_missing_launch_ref
+                        else None
+                    ),
+                    host_launch_profile_ref=(
+                        binding.host_launch_profile_ref
+                        if binding is not None and not repair_missing_launch_ref
+                        else (
+                            str(effective_launch["launchPolicyRef"])
+                            if selected_on_demand
+                            else None
+                        )
+                    ),
+                    execution_profile_ref=str(effective_launch["executionProfileRef"]),
+                    launch_policy_ref=str(effective_launch["launchPolicyRef"]),
+                    effective_launch_snapshot=effective_launch,
+                    # Older omitted-target launches could persist an on-demand
+                    # snapshot without its mode marker, even after discovering a
+                    # static host. Repair only an idle binding whose stored launch
+                    # proves that mode, under the same lock as host lease admission.
+                    require_idle=repair_missing_launch_ref,
+                    expected_binding=binding if repair_missing_launch_ref else None,
                 ),
-                execution_profile_ref=str(effective_launch["executionProfileRef"]),
-                launch_policy_ref=str(effective_launch["launchPolicyRef"]),
-                effective_launch_snapshot=effective_launch,
+                profile_id=profile_id,
+                stage=current_stage,
+                emit=emit,
             )
             await emit(
                 current_stage,

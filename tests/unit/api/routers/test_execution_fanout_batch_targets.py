@@ -30,6 +30,7 @@ from moonmind.security.execution_fanout_capabilities import (
 )
 from tests.unit.api.routers.test_executions import (
     _build_execution_record,
+    _ExecuteResult,
     _override_user_dependencies,
 )
 
@@ -49,9 +50,11 @@ def batch_client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app.dependency_overrides[_get_service] = _override_batch_service
     app.dependency_overrides[get_temporal_client] = _override_batch_temporal_client
     # Each child is a fresh request: its idempotency key names no admitted
-    # execution yet.
+    # execution yet. The parent has no account pin, and no saved settings or
+    # deployment skill metadata override this fixture's inherited runtime.
     app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        get=AsyncMock(return_value=None)
+        get=AsyncMock(return_value=None),
+        execute=AsyncMock(return_value=_ExecuteResult([])),
     )
     user = _override_user_dependencies(app, is_superuser=False)
     # Fan-out tests authenticate via the execution-scoped bearer; the
@@ -156,6 +159,8 @@ def test_batch_child_with_explicit_authority_is_accepted(
     assert initial.get("batchDigest") == "sha256:approved"
     assert isinstance(initial.get("batchTarget"), dict)
     assert initial["batchTarget"]["repository"] == "acme/one"
+    assert initial.get("profileId") is None
+    assert "providerProfileRef" not in initial["workflow"]["runtime"]
 
 
 def test_batch_child_without_explicit_connection_is_rejected(

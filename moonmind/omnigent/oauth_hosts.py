@@ -244,13 +244,15 @@ class OmnigentOAuthHostRepository:
         launch_policy_ref: str | None = None,
         effective_launch_snapshot: dict[str, Any] | None = None,
         require_idle: bool = False,
+        expected_binding: OmnigentOAuthHostBinding | None = None,
     ) -> OmnigentOAuthHostBinding:
         """Create or update a profile's binding.
 
         ``require_idle`` refuses the update while the profile holds an active
         host lease. The check runs under the binding-row lock that lease
         creation also takes, so no lease can be acquired on the old launch
-        between the check and the update.
+        between the check and the update. An expected binding also prevents
+        repair from overwriting a concurrent selection after an idle wait.
         """
         if static_host_id and host_launch_profile_ref:
             raise ValueError(
@@ -268,6 +270,13 @@ class OmnigentOAuthHostRepository:
                 .with_for_update()
             )
             record = result.scalar_one_or_none()
+            if expected_binding is not None and (
+                record is None or self._binding_model(record, profile) != expected_binding
+            ):
+                raise OmnigentOAuthHostError(
+                    "host binding changed while waiting for cleanup",
+                    code="OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+                )
             if require_idle:
                 active = (
                     await session.execute(

@@ -7,17 +7,19 @@ Temporal artifact gateway. The resolved Skill snapshot is written the way
 ``agent_skill.resolve`` writes it, under another principal, so the run must
 dereference it from durable storage.
 
-Two boundaries are controlled substitutes, named here explicitly:
+External transports are controlled substitutes, named here explicitly:
 
-* Docker: ``docker compose up`` of the static Codex host is recorded instead of
-  run. Its fake renders the service's mounts from the Compose file it was
-  given and reads the Skill at its in-container path through them, so a
-  dropped or misconfigured Skills mount fails the journey.
+* Docker: static Compose and on-demand Docker commands are recorded instead
+  of run. Their fake reads the Skill through the emitted mounts, so a dropped
+  or misconfigured Skills mount fails the journey. On-demand cleanup removes
+  only its recorded container and run-owned volumes, preserving the OAuth home.
 * Provider: a fake Omnigent server (``FakeOmnigentServer``) plays the Codex
   turn. It returns a workspace file carrying the digest of the Skill the
   launched host received, so the retrieved result proves delivery.
 
-No provider credentials, login or paid model turn are involved.
+The Provider Profile manager transport grants one isolated test lease; the
+production lease client and release owner remain in the journey. No provider
+credentials, login or paid model turn are involved.
 """
 
 from __future__ import annotations
@@ -84,7 +86,6 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 PROFILE_ID = "codex"
 AUTH_VOLUME = "codex_auth_volume"
-LAUNCH_POLICY = "codex-static@1"
 SERVER_IMAGE = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "8" * 64
 HOST_IMAGE = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "9" * 64
 RESULT_PATH = "skill-delivery.txt"
@@ -113,6 +114,7 @@ class CodexTurnServer(FakeOmnigentServer):
     def __init__(self, *, host_id: str) -> None:
         super().__init__(supports_diff=False)
         self.host_id = host_id
+        self.host_name = "omnigent-host-codex"
         self.delivered_skill: bytes | None = None
 
     async def list_agents(self, request: web.Request) -> web.Response:
@@ -130,7 +132,7 @@ class CodexTurnServer(FakeOmnigentServer):
                 "hosts": [
                     {
                         "id": self.host_id,
-                        "name": "omnigent-host-codex",
+                        "name": self.host_name,
                         "status": "online",
                         "harnesses": ["codex-native"],
                     }
@@ -358,6 +360,122 @@ class StaticCodexDocker:
         raise AssertionError(f"unexpected Docker inspect: {format_value} {identity}")
 
 
+class OnDemandCodexDocker(StaticCodexDocker):
+    """Exercise the emitted on-demand commands and their owned resource state."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.container_name: str | None = None
+        self.container_present = False
+        self.host_labels: dict[str, str] = {}
+        self.mounts: dict[str, dict[str, str]] = {}
+        self.owned_volumes: set[str] = set()
+        self.launch_env: dict[str, str] = {}
+
+    async def __call__(self, *args: str, env=None, **kwargs):
+        if args[:2] == ("docker", "run"):
+            self.commands.append(tuple(args))
+            mounts = {
+                item["dst"]: item
+                for index, arg in enumerate(args[:-1])
+                if arg == "--mount"
+                for item in [
+                    dict(
+                        part.partition("=")[::2] for part in args[index + 1].split(",")
+                    )
+                ]
+            }
+            if set(mounts) == {"/home/app/.cache"}:
+                # Cleanup fences the lease-private gh cache before removal.
+                assert not kwargs.get("input_bytes")
+                assert mounts["/home/app/.cache"]["src"] in self.owned_volumes
+                assert json.loads(args[-1])["ownerRef"] == (
+                    "host-lease:" + self.host_labels["moonmind.host_lease_id"]
+                )
+                return (0, "", "")
+            assert mounts["/home/app/.codex"]["src"] == AUTH_VOLUME
+            if "--rm" in args:
+                assert args[-2:] == ("/opt/moonmind/init-oauth-host.sh", HOST_IMAGE)
+                return (0, "", "")
+            assert (
+                "-d" in args and args[-1] == "/opt/moonmind/start-codex-oauth-host.sh"
+            )
+            self.container_name = args[args.index("--name") + 1]
+            self.server.host_name = self.container_name
+            self.container_present = self.container_running = True
+            self.mounts = mounts
+            self.host_labels = dict(
+                args[index + 1].split("=", 1)
+                for index, arg in enumerate(args[:-1])
+                if arg == "--label"
+            )
+            self.launch_env = dict(
+                args[index + 1].split("=", 1)
+                for index, arg in enumerate(args[:-1])
+                if arg == "--env" and "=" in args[index + 1]
+            )
+            self.owned_volumes = {
+                mount["src"]
+                for mount in mounts.values()
+                if mount["type"] == "volume" and mount["src"] != AUTH_VOLUME
+            }
+            skills = mounts[OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR]
+            assert skills["type"] == "bind" and "readonly" in skills
+            self.server.delivered_skill = (
+                Path(skills["src"]) / _DURABLE_SKILL_NAME / "SKILL.md"
+            ).read_bytes()
+            return (0, self.host_container_id, "")
+        if args[:2] == ("docker", "ps"):
+            self.commands.append(tuple(args))
+            return (0, "", "")  # The synchronous --rm initializer exited.
+        if args[:2] == ("docker", "rm"):
+            self.commands.append(tuple(args))
+            assert args[-1] == self.container_name
+            self.container_present = self.container_running = False
+            return (0, "", "")
+        if args[:3] == ("docker", "volume", "rm"):
+            self.commands.append(tuple(args))
+            assert args[-1] != AUTH_VOLUME
+            self.owned_volumes.remove(args[-1])
+            return (0, "", "")
+        if args[:3] == ("docker", "volume", "inspect"):
+            self.commands.append(tuple(args))
+            return (
+                (0, args[-1], "")
+                if args[-1] in self.owned_volumes
+                else (1, "", "absent")
+            )
+        if args[:2] == ("docker", "stop") and args[-1] == self.container_name:
+            self.commands.append(tuple(args))
+            self._stop_host()
+            return (0, "", "")
+        if args[:2] == ("docker", "exec") and args[2] == self.container_name:
+            self.commands.append(tuple(args))
+            if args[3:6] == ("git", "-C", "/workspaces/run"):
+                return await self.run_command(
+                    "git", "-C", self.mounts["/workspaces/run"]["src"], *args[6:]
+                )
+            assert args[3:] == ("/opt/moonmind/check-runner-projections.sh",) or args[
+                3:5
+            ] == ("bash", "-lc")
+            return (0, "", "")
+        return await super().__call__(*args, env=env, **kwargs)
+
+    def _inspect(self, format_value: str, identity: str):
+        if identity not in (
+            self.server_container_id,
+            OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        ):
+            if identity != self.container_name or not self.container_present:
+                return (1, "", "absent")
+            if format_value == "{{.Id}}":
+                return (0, self.host_container_id, "")
+            if format_value == '{{index .Config.Labels "moonmind.host_lease_id"}}':
+                return (0, self.host_labels["moonmind.host_lease_id"], "")
+            identity = self.host_container_id
+        return super()._inspect(format_value, identity)
+
+
 class RecordingArtifactGateway(TemporalOmnigentArtifactGateway):
     """The durable gateway, recording each committed write in shared order."""
 
@@ -374,7 +492,8 @@ class RecordingArtifactGateway(TemporalOmnigentArtifactGateway):
 class HermeticProviderLeases:
     """Provider Profile manager transport: one lease, verified release."""
 
-    def __init__(self) -> None:
+    def __init__(self, events: list[tuple[str, str]]) -> None:
+        self.events = events
         self.acquired: list[str] = []
         self.signals: list[tuple[str, dict[str, Any]]] = []
 
@@ -421,6 +540,7 @@ class HermeticProviderLeases:
 
     async def signal_workflow(self, _workflow_id, name, payload):
         self.signals.append((name, dict(payload)))
+        self.events.append((name, payload["lease_id"]))
 
 
 async def _seed_codex_profile(session_factory) -> None:
@@ -455,7 +575,7 @@ async def _seed_codex_profile(session_factory) -> None:
         await seed_bootstrap_policies(session, image_resolver=resolve_image)
 
 
-async def _codex_plan(session_factory, skillset_ref: str):
+async def _codex_plan(session_factory, skillset_ref: str, launch_policy: str):
     """Compile the Codex plan from persisted launch authority, as the compiler does."""
 
     from api_service.services.omnigent_execution_plan_service import (
@@ -472,7 +592,7 @@ async def _codex_plan(session_factory, skillset_ref: str):
     )
 
     policy_snapshot = await _resolve_runtime_policy_snapshot(
-        policy_ref=LAUNCH_POLICY, session_factory=session_factory, db_session=None
+        policy_ref=launch_policy, session_factory=session_factory, db_session=None
     )
     effective_launch = _compile_persisted_effective_launch(
         policy_snapshot,
@@ -496,7 +616,7 @@ async def _codex_plan(session_factory, skillset_ref: str):
     architecture = str((effective_launch.get("architectures") or [""])[0])
     if "/" not in architecture:
         architecture = f"linux/{architecture}"
-    inputs = _codex_plan_inputs(LAUNCH_POLICY)
+    inputs = _codex_plan_inputs(launch_policy)
     # The plan admits the exact Skill set the request delivers.
     inputs["resolved_skills"] = inputs["resolved_skills"].model_copy(
         update={"resolvedSkillSetRef": f"artifact:{skillset_ref}"}
@@ -554,7 +674,12 @@ def _seeded_remote(tmp_path: Path) -> Path:
 
 
 def _request(
-    plan, *, workflow_id: str, skillset_ref: str, repository: Path
+    plan,
+    *,
+    workflow_id: str,
+    skillset_ref: str,
+    repository: Path,
+    explicit_target: bool = False,
 ) -> AgentExecutionRequest:
     step_execution_id = f"{workflow_id}:run:implement:execution:1"
     workspace_id = hashlib.sha256(
@@ -596,7 +721,12 @@ def _request(
             "publishMode": "none",
             "selectedSkill": _DURABLE_SKILL_NAME,
             "omnigent": {
-                "launchPolicyRef": LAUNCH_POLICY,
+                "launchPolicyRef": plan.payload.launchPolicyRef,
+                **(
+                    {"executionTargetRef": "omnigent-codex@1"}
+                    if explicit_target
+                    else {}
+                ),
                 "prompt": {"text": "Do the implement step."},
                 "session": {},
             },
@@ -604,6 +734,24 @@ def _request(
     )
 
 
+@pytest.mark.parametrize(
+    ("launch_policy", "explicit_target", "retained_binding"),
+    [
+        ("codex-static@1", False, None),
+        ("codex-static@1", True, None),
+        ("codex-on-demand@1", False, None),
+        ("codex-on-demand@1", True, None),
+        ("codex-on-demand@1", False, "idle"),
+        ("codex-on-demand@1", False, "busy"),
+        ("codex-on-demand@1", False, "idle_static"),
+        ("codex-on-demand@1", False, "busy_static"),
+        ("codex-on-demand@1", False, "busy_drained"),
+        ("codex-on-demand@1", False, "busy_static_drained"),
+        ("codex-on-demand@1", False, "busy_static_changed"),
+        ("codex-on-demand@1", False, "valid"),
+        ("codex-static@1", False, "valid"),
+    ],
+)
 @pytest.mark.parametrize("auth_mode", ["disabled", "oidc"])
 async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and_result(
     session_factory,
@@ -611,6 +759,9 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     auth_mode: str,
+    launch_policy: str,
+    explicit_target: bool,
+    retained_binding: str | None,
 ) -> None:
     from moonmind.config.settings import settings
     from moonmind.omnigent import production, profile_bound_execution
@@ -637,6 +788,7 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
         }.items():
             monkeypatch.setenv(key, value)
         monkeypatch.setattr(production, "generic_host_enabled", lambda: True)
+        monkeypatch.delenv("OMNIGENT_CODEX_HOST_LAUNCH_PROFILE", raising=False)
         monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
         monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
 
@@ -646,13 +798,16 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
         )
         events: list[tuple[str, str]] = []
         durable_gateway = RecordingArtifactGateway(session_factory, events=events)
-        leases = HermeticProviderLeases()
+        leases = HermeticProviderLeases(events)
         runtime = OmnigentOAuthHostRuntime(
             client=OmnigentHttpClient(base_url=running.base_url, api_token="journey"),
             workspace_root=tmp_path / "workspaces",
             repository_source_root=tmp_path,
         )
-        docker = StaticCodexDocker(
+        docker_class = (
+            OnDemandCodexDocker if "on-demand" in launch_policy else StaticCodexDocker
+        )
+        docker = docker_class(
             workflow_id=workflow_id,
             server=server,
             run_command=runtime._run,
@@ -695,16 +850,138 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             run_store=OmnigentBridgeSessionStore(session_factory),
         )
         realizer = services.realizer_registry.require("codex-profile-bound@1")
-        plan = await _codex_plan(session_factory, skillset_ref)
+        plan = await _codex_plan(session_factory, skillset_ref, launch_policy)
+        if retained_binding:
+            from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+            # Retained on-demand bindings can lack their mode marker, including
+            # older records that also persisted a discovered static host ID.
+            snapshot = json.loads(
+                await TemporalOmnigentArtifactGateway(
+                    session_factory, principal="system"
+                ).read_text(plan.payload.effectiveLaunchSnapshotRef)
+            )
+            hosts = OmnigentOAuthHostRepository(session_factory)
+            retained = await hosts.create_or_update_static_binding(
+                profile_id=PROFILE_ID,
+                endpoint_ref="default",
+                static_host_id=(
+                    host_id
+                    if (retained_binding == "valid" and "static" in launch_policy)
+                    or "static" in retained_binding
+                    else None
+                ),
+                host_launch_profile_ref=(
+                    "codex-oauth-v1"
+                    if retained_binding == "valid" and "on-demand" in launch_policy
+                    else None
+                ),
+                execution_profile_ref="omnigent-codex@1",
+                launch_policy_ref=launch_policy,
+                effective_launch_snapshot=snapshot,
+            )
+            if retained_binding.startswith("busy"):
+                from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+
+                prior_lease = await hosts.create_or_get_host_lease(
+                    binding=retained,
+                    provider_lease_id="prior-provider-lease",
+                    holder_workflow_id="mm:prior-workflow",
+                    agent_run_id="prior-agent",
+                    idempotency_key="prior-host-attempt",
+                )
+                monkeypatch.setattr(
+                    profile_bound_execution, "HOST_PROFILE_BUSY_POLL_SECONDS", 0.0
+                )
+                if retained_binding.endswith(("_drained", "_changed")):
+                    update_binding = OmnigentOAuthHostRepository.create_or_update_static_binding
+                    repair_conflicts = []
+
+                    async def observe_cleanup_after_conflict(repository, **kwargs):
+                        try:
+                            return await update_binding(repository, **kwargs)
+                        except OmnigentOAuthHostError as exc:
+                            if exc.code != "OMNIGENT_HOST_BINDING_LEASED":
+                                raise
+                            repair_conflicts.append(exc.code)
+                            # A concurrent cleanup owner finishes only after the
+                            # locked repair refused the still-active consumer.
+                            assert await hosts.get_binding_for_profile(PROFILE_ID) == retained
+                            assert not docker.commands and not server.create_payloads
+                            await hosts.mark_host_lease_stopped(prior_lease.lease_id)
+                            if retained_binding.endswith("_changed"):
+                                await update_binding(
+                                    hosts,
+                                    profile_id=PROFILE_ID,
+                                    endpoint_ref="default",
+                                    static_host_id="newly-enrolled-static-host",
+                                    execution_profile_ref="omnigent-codex@1",
+                                    launch_policy_ref="codex-static@1",
+                                    effective_launch_snapshot={},
+                                )
+                            raise
+
+                    monkeypatch.setattr(
+                        OmnigentOAuthHostRepository,
+                        "create_or_update_static_binding",
+                        observe_cleanup_after_conflict,
+                    )
+                else:
+                    monkeypatch.setattr(
+                        profile_bound_execution, "HOST_PROFILE_BUSY_WAIT_SECONDS", 0.0
+                    )
+                    with pytest.raises(OmnigentOAuthHostError) as blocked:
+                        await realizer.execute(
+                            _request(
+                                plan,
+                                workflow_id=workflow_id,
+                                skillset_ref=skillset_ref,
+                                repository=_seeded_remote(tmp_path),
+                            ),
+                            plan,
+                        )
+                    assert blocked.value.code == "OMNIGENT_HOST_BINDING_LEASED"
+                    assert await hosts.get_binding_for_profile(PROFILE_ID) == retained
+                    assert not docker.commands and not server.create_payloads
+                    return
+        if retained_binding and retained_binding.endswith("_changed"):
+            with pytest.raises(OmnigentOAuthHostError) as changed:
+                await realizer.execute(
+                    _request(
+                        plan,
+                        workflow_id=workflow_id,
+                        skillset_ref=skillset_ref,
+                        repository=_seeded_remote(tmp_path),
+                    ),
+                    plan,
+                )
+            assert changed.value.code == "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"
+            current = await hosts.get_binding_for_profile(PROFILE_ID)
+            assert current.launch_policy_ref == "codex-static@1"
+            assert current.static_host_id == "newly-enrolled-static-host"
+            assert current.host_launch_profile_ref is None
+            assert not docker.commands and not server.create_payloads
+            return
         result = await realizer.execute(
             _request(
                 plan,
                 workflow_id=workflow_id,
                 skillset_ref=skillset_ref,
                 repository=_seeded_remote(tmp_path),
+                explicit_target=explicit_target,
             ),
             plan,
         )
+        if retained_binding:
+            if retained_binding.endswith("_drained"):
+                assert repair_conflicts == ["OMNIGENT_HOST_BINDING_LEASED"]
+            current = await hosts.get_binding_for_profile(PROFILE_ID)
+            if retained_binding == "valid":
+                assert current.host_launch_profile_ref == retained.host_launch_profile_ref
+                assert current.static_host_id == retained.static_host_id
+            else:
+                assert current.host_launch_profile_ref == launch_policy
+                assert current.static_host_id is None
     finally:
         await running.runner.cleanup()
 
@@ -754,16 +1031,23 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
     assert checkpoint_write < host_stops[0]
     assert result.metadata["runtimeBindingState"] == "cleanup_complete"
     runtime_chain = result.metadata["authorityChain"]["runtime"]
-    assert runtime_chain["hostMode"] == "static_compose"
+    assert runtime_chain["hostMode"] == (
+        "on_demand_docker" if "on-demand" in launch_policy else "static_compose"
+    )
     assert "skills_tools" in runtime_chain["mountClasses"]
 
     # The selected profile's OAuth home is attached, never copied or logged in.
-    assert docker.compose_up_env is not None
-    assert docker.compose_up_env["CODEX_VOLUME_NAME"] == AUTH_VOLUME
-    assert docker.compose_up_env["CODEX_CREDENTIAL_GENERATION"] == "3"
+    if isinstance(docker, OnDemandCodexDocker):
+        assert docker.launch_env["CODEX_CREDENTIAL_GENERATION"] == "3"
+        assert not docker.container_present and not docker.owned_volumes
+    else:
+        assert docker.compose_up_env is not None
+        assert docker.compose_up_env["CODEX_VOLUME_NAME"] == AUTH_VOLUME
+        assert docker.compose_up_env["CODEX_CREDENTIAL_GENERATION"] == "3"
     flat_commands = [" ".join(command) for command in docker.commands]
     assert not any(" login" in command for command in flat_commands)
     assert not any(" cp " in f" {command} " for command in flat_commands)
     assert len(leases.acquired) == 1
     assert [name for name, _payload in leases.signals] == ["release_slot"]
     assert leases.signals[0][1]["lease_id"] == leases.acquired[0]
+    assert host_stops[-1] < events.index(("release_slot", leases.acquired[0]))

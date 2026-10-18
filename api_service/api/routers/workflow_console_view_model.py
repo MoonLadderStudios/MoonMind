@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any, Mapping
 from urllib.parse import quote, urlparse
-from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1695,21 +1694,6 @@ def build_runtime_config(
         },
     }
 
-_PROVIDER_PROFILE_INVALID_DIAGNOSTIC_CODES = frozenset(
-    {"provider_profile_not_found", "provider_profile_disabled"}
-)
-
-
-def _coerce_uuid(value: Any) -> UUID | None:
-    if isinstance(value, UUID):
-        return value
-    if value is None:
-        return None
-    try:
-        return UUID(str(value))
-    except (TypeError, ValueError):
-        return None
-
 
 async def resolve_dashboard_runtime_config(
     initial_path: str,
@@ -1737,10 +1721,13 @@ async def resolve_dashboard_runtime_config(
 
     # Local imports keep the view-model importable without DB models loaded
     # for tests that exercise build_runtime_config directly.
-    from api_service.services.settings_catalog import SettingsCatalogService
+    from api_service.services.settings_catalog import (
+        SettingsCatalogService,
+        coerce_settings_subject_id,
+    )
 
-    workspace_id = _coerce_uuid(getattr(user, "workspace_id", None))
-    user_id = _coerce_uuid(getattr(user, "id", None))
+    workspace_id = coerce_settings_subject_id(getattr(user, "workspace_id", None))
+    user_id = coerce_settings_subject_id(getattr(user, "id", None))
 
     runtime_override: str | None = None
     profile_ref: str | None = None
@@ -1761,12 +1748,14 @@ async def resolve_dashboard_runtime_config(
         profile_eff = await service.effective_value_async(
             "workflow.default_provider_profile_ref", scope=profile_scope
         )
+        # This is a form suggestion only. Submission preserves the configured
+        # account even when unavailable, so unattended callers cannot switch it.
         if isinstance(profile_eff.value, str) and profile_eff.value.strip():
-            invalid = any(
-                diag.code in _PROVIDER_PROFILE_INVALID_DIAGNOSTIC_CODES
-                for diag in profile_eff.diagnostics
-            )
-            if not invalid:
+            if not any(
+                diagnostic.code
+                in {"provider_profile_not_found", "provider_profile_disabled"}
+                for diagnostic in profile_eff.diagnostics
+            ):
                 profile_ref = profile_eff.value.strip()
     except Exception:
         # Settings overrides are best-effort. If the DB is unreachable or the

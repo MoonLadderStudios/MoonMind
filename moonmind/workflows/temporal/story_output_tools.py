@@ -35,6 +35,15 @@ from moonmind.workflows.skills.acceptance_contract import (
 )
 from moonmind.workflows.skills.plan_validation import validate_json_value
 from moonmind.workflows.skills.tool_definitions import (
+    DOCUMENT_UPDATE_TASKS_TOOL_NAME,
+    GITHUB_CREATE_ISSUES_TOOL_NAME,
+    GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME,
+    GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME,
+    GITHUB_STORY_TOOL_NAMES,
+    JIRA_CREATE_ISSUES_TOOL_NAME,
+    JIRA_IMPLEMENT_TASKS_TOOL_NAME,
+    JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
+    JIRA_STORY_TOOL_NAMES,
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
     JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
@@ -95,16 +104,6 @@ from moonmind.workflows.temporal.issue_claim_store import (
 )
 from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
 
-JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
-JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
-JIRA_IMPLEMENT_TASKS_TOOL_NAME = "story.create_jira_implement_tasks"
-GITHUB_CREATE_ISSUES_TOOL_NAME = "story.create_github_issues"
-GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME = (
-    "story.create_github_issue_orchestrate_workflows"
-)
-GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME = (
-    "story.create_github_issue_implement_workflows"
-)
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 ISSUE_BRIEF_LOADER_TOOL_NAMES = frozenset(
     {JIRA_LOAD_PRESET_BRIEF_TOOL_NAME, GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME}
@@ -122,20 +121,6 @@ GITHUB_MANUAL_ONLY_LABEL = "manual-only"
 # to classify results.
 _GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS = 10.0
 _GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS = 15.0
-JIRA_STORY_TOOL_NAMES = frozenset(
-    {
-        JIRA_CREATE_ISSUES_TOOL_NAME,
-        JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
-        JIRA_IMPLEMENT_TASKS_TOOL_NAME,
-    }
-)
-GITHUB_STORY_TOOL_NAMES = frozenset(
-    {
-        GITHUB_CREATE_ISSUES_TOOL_NAME,
-        GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME,
-        GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME,
-    }
-)
 _SOURCE_DOCUMENT_PATH_RE = re.compile(
     r"(?P<path>(?:docs/(?:[A-Za-z0-9_.@+=-]+/)*[A-Za-z0-9_.@+=-]+|"
     r"(?<![A-Za-z0-9_])AGENTS)\.md)"
@@ -227,7 +212,6 @@ _ACCEPTANCE_HEADING_RE = re.compile(
 )
 
 DOCUMENT_DISCOVER_TOOL_NAME = "document.discover"
-DOCUMENT_UPDATE_TASKS_TOOL_NAME = "story.create_document_update_tasks"
 _GITHUB_OWNER_REPO_PATTERN = re.compile(
     r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$"
 )
