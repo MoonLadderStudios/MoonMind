@@ -427,7 +427,7 @@ It contains:
 - Created time
 - Started time, when available
 - Completed time, when available
-- Duration
+- Duration, ticking from the start time while the Workflow runs
 - Last updated time
 - Owner or creator
 - Trigger type
@@ -843,21 +843,17 @@ While loading, the page displays a skeleton for:
 
 The page does not display incomplete action buttons before capabilities are loaded.
 
-### Not found state
+### Load failure states
 
-When the Workflow Execution does not exist or the user does not have access, the page displays:
+With no Workflow data to show, the page names the failure from the HTTP status and keeps the original error as detail:
 
-```text
-Workflow not found
+- **Workflow not found** (404/410) and **Access denied** (403) are final: the page neither retries nor polls them.
+- **Sign-in required** (401) offers **Retry** after signing in again.
+- **Workflow unavailable** (5xx or network failure) offers **Retry**; the shared query policy has already retried the transient failure.
 
-This workflow may have been deleted, moved, or you may not have permission to view it.
-```
+### Refresh failures
 
-Primary action:
-
-```text
-Back to workflows
-```
+A failed background refresh never replaces loaded data. The Workflow, steps, checkpoint branches, step execution history, session continuity, and artifacts keep their last data under a compact "Stale since <time>" notice with the error and **Retry**. Polling continues for transient failures, so the page recovers by itself after a brief outage such as a managed update.
 
 ### Data unavailable state
 
