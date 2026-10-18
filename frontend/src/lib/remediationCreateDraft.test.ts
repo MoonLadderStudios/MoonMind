@@ -72,18 +72,6 @@ describe('remediationCreateDraft', () => {
           workflowId: 'mm:target',
           runId: 'run-target',
         },
-        mode: 'snapshot_then_follow',
-        authorityMode: 'approval_gated',
-        actionPolicyRef: 'admin_healer_default',
-        approvalPolicy: {
-          requiredForHighRisk: true,
-        },
-        lockPolicy: {
-          targetMutationLock: true,
-        },
-        verificationPolicy: {
-          verifyAppliedActions: true,
-        },
         checkpointBranchPolicy: {
           actionKind: 'checkpoint_branch.create_from_remediation_context',
           runtimeContextPolicy: 'fresh_agent_run',
@@ -94,6 +82,18 @@ describe('remediationCreateDraft', () => {
     expect(draft.target.stepSelectors?.[0]).toMatchObject({
       checkpointRef: 'artifact://checkpoint/failed-step',
     });
+    // A remediation never acts on its target, so the draft carries no
+    // typed-action inputs and admission records observe_only/snapshot.
+    for (const retired of [
+      'mode',
+      'authorityMode',
+      'actionPolicyRef',
+      'approvalPolicy',
+      'lockPolicy',
+      'verificationPolicy',
+    ]) {
+      expect(draft.remediation).not.toHaveProperty(retired);
+    }
     expect(Date.parse(draft.createdAt)).not.toBeNaN();
   });
 
@@ -247,19 +247,25 @@ describe('remediationCreateDraft', () => {
     expect(
       inspectRemediationCreateDraft('malformed-selectors').status,
     ).toBe('malformed');
-    window.sessionStorage.setItem(
-      'moonmind.remediation-create-draft.unsupported-action-policy',
-      JSON.stringify({
-        ...draft,
-        remediation: {
-          ...draft.remediation,
-          actionPolicyRef: 'operator_review_only',
-        },
-      }),
-    );
-    expect(
-      inspectRemediationCreateDraft('unsupported-action-policy').status,
-    ).toBe('malformed');
+    // Drafts stored before typed remediation actions were retired carry
+    // inputs admission now rejects, so they are refused whole.
+    for (const [key, value] of [
+      ['mode', 'snapshot_then_follow'],
+      ['authorityMode', 'approval_gated'],
+      ['actionPolicyRef', 'admin_healer_default'],
+      ['approvalPolicy', { requiredForHighRisk: true }],
+      ['lockPolicy', { targetMutationLock: true }],
+      ['verificationPolicy', { verifyAppliedActions: true }],
+    ] as const) {
+      window.sessionStorage.setItem(
+        `moonmind.remediation-create-draft.retired-${key}`,
+        JSON.stringify({
+          ...draft,
+          remediation: { ...draft.remediation, [key]: value },
+        }),
+      );
+      expect(inspectRemediationCreateDraft(`retired-${key}`).status).toBe('malformed');
+    }
     window.sessionStorage.setItem(
       'moonmind.remediation-create-draft.expired',
       JSON.stringify({
