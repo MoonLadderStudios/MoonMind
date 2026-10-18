@@ -7,9 +7,9 @@ authority snapshot, upstream evidence, current state, and caller authority.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from hashlib import sha256
-import json
 from typing import Any, Mapping
 
 CAPABILITY_SCHEMA_VERSION = "moonmind.omnigent.effective-capabilities.v1"
@@ -64,7 +64,9 @@ _OWNER_CAPABILITIES = frozenset(CAPABILITY_NAMES) - frozenset(
 )
 
 
-def adapt_provider_capabilities(capabilities: Mapping[str, Any]) -> dict[str, bool]:
+def adapt_provider_capabilities(
+    capabilities: Mapping[str, Any] | None, *, native_session_protocol: bool = False
+) -> dict[str, bool]:
     """Adapt bounded provider evidence to the complete canonical namespace."""
 
     # Intervention capability maps describe provider controls, not the complete
@@ -73,6 +75,13 @@ def adapt_provider_capabilities(capabilities: Mapping[str, Any]) -> dict[str, bo
     adapted = {
         name: name in _PROVIDER_PRESENTATION_CAPABILITIES for name in CAPABILITY_NAMES
     }
+    # Stock Omnigent SessionResponse has no capability map. The reviewed native
+    # session-event protocol supplies message support only after the store has
+    # verified its observed harness/host/session against immutable runtime authority.
+    # An explicit provider map (including an empty one) never uses this fallback.
+    if capabilities is None:
+        adapted["sendMessage"] = native_session_protocol
+        return adapted
     for name in CAPABILITY_NAMES:
         if capabilities.get(name) is True:
             adapted[name] = True
@@ -80,6 +89,14 @@ def adapt_provider_capabilities(capabilities: Mapping[str, Any]) -> dict[str, bo
         if capabilities.get(provider_name) is True:
             for canonical_name in canonical_names:
                 adapted[canonical_name] = True
+    # Explicit denial wins over presentation support and any affirmative alias.
+    for name in CAPABILITY_NAMES:
+        if name in capabilities and capabilities[name] is not True:
+            adapted[name] = False
+    for provider_name, canonical_names in PROVIDER_CAPABILITY_ALIASES.items():
+        if provider_name in capabilities and capabilities[provider_name] is not True:
+            for canonical_name in canonical_names:
+                adapted[canonical_name] = False
     return adapted
 
 
@@ -266,9 +283,14 @@ def resolve_bridge_row_capabilities(
         "policyDigest": policy.get("policyDigest"),
         "effectiveLaunchSnapshotRef": launch.get("snapshotRef"),
         "sessionEpoch": state.get("sessionEpoch"),
-        "authorityFresh": evidence.get("fresh") is True,
+        "authorityFresh": evidence.get("fresh") is True
+        and (
+            (not metadata.get("executionPlanRef") and metadata.get("runtimeAuthority") is None)
+            or getattr(row, "_chat_runtime_authority_fresh", False) is True
+        ),
         "expectedProviderProfileGeneration": evidence.get("providerProfileGeneration"),
         "expectedSessionEpoch": expected_session_epoch,
+        "runtimeBindingAuthority": metadata.get("runtimeAuthority"),
     }
     stale_reason = None
     immutable_preconditions = (

@@ -153,6 +153,7 @@ async def project_remediation_action_inputs(link: Any, *, session: AsyncSession)
 
     from api_service.services.remediation_session_controls import (
         SESSION_CONTROLS,
+        refresh_session_control_authority,
         session_control_capabilities,
     )
     from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
@@ -174,6 +175,8 @@ async def project_remediation_action_inputs(link: Any, *, session: AsyncSession)
         .all()
     )
     bridge = bindings[0] if bindings else None
+    for row in bindings:
+        await refresh_session_control_authority(session, row)
     candidates = [
         (row, session_control_capabilities(row))
         for row in bindings

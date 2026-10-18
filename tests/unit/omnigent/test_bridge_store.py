@@ -40,7 +40,6 @@ from moonmind.omnigent.bridge_store import (
     bridge_failure_class,
     coalesce_bridge_status,
 )
-from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRuntimeStepExecutionLaunch,
@@ -159,7 +158,7 @@ def _effective_launch() -> dict:
 
 
 @pytest.mark.asyncio
-async def test_generic_profile_authorization_persists_plan_and_binding(store) -> None:
+async def test_generic_profile_authorization_rejects_unadmitted_plan(store) -> None:
     request = _request("generic-authority", with_step=True)
     launch = {
         "executionPlanRef": "omnigent-execution-plan:sha256:" + "4" * 64,
@@ -169,27 +168,57 @@ async def test_generic_profile_authorization_persists_plan_and_binding(store) ->
         "executionRealizerRef": "generic-omnigent-host@1",
     }
 
-    row = await store.bind_profile_authorization(
+    with pytest.raises(OmnigentIdempotencyError, match="plan authority conflicts"):
+        await store.bind_profile_authorization(
+            request=request,
+            endpoint_ref="default",
+            provider_profile_id="opencode-profile",
+            provider_lease_id="provider-lease-generic",
+            credential_generation=3,
+            host_binding_ref="host-binding-generic",
+            host_lease_ref="host-lease-generic",
+            omnigent_host_id="host-generic",
+            effective_launch_snapshot=launch,
+        )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_complete", [True, False])
+async def test_unposted_retry_retires_runtime_authority_only_after_cleanup(
+    store, cleanup_complete
+) -> None:
+    request = _request("runtime-authority-retry")
+    await store.get_or_create(
         request=request,
         endpoint_ref="default",
-        provider_profile_id="opencode-profile",
-        provider_lease_id="provider-lease-generic",
-        credential_generation=3,
-        host_binding_ref="host-binding-generic",
-        host_lease_ref="host-lease-generic",
-        omnigent_host_id="host-generic",
-        effective_launch_snapshot=launch,
+        agent_id=None,
+        agent_name=None,
+        target_metadata={
+            "runtimeAuthority": {"bindingId": "old-binding"},
+            "capabilityAuthority": {"fresh": True},
+        },
     )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="terminal",
+        status="failed",
+        metadata={"cleanupCompleted": cleanup_complete},
+    )
+    reopened = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    if cleanup_complete:
+        assert "runtimeAuthority" not in reopened.metadata_
+        assert "capabilityAuthority" not in reopened.metadata_
+        assert reopened.metadata_["unpostedAttemptHistory"][-1]["runtimeAuthority"] == {
+            "bindingId": "old-binding"
+        }
+    else:
+        assert reopened.metadata_["runtimeAuthority"] == {"bindingId": "old-binding"}
 
-    assert row.effective_launch_snapshot_json == launch
-    claim = await store.claim_canonical_turn_command(
-        row=row,
-        command_type="message",
-        turn_source=TurnSource.WORKFLOW_CHAT,
-        idempotency_key="generic-follow-up",
-        payload_digest="sha256:" + "6" * 64,
-    )
-    assert claim.owns_delivery is True
 
 
 @pytest.mark.asyncio
