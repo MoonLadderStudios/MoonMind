@@ -361,9 +361,7 @@ The **Cancel** button is present when:
 capabilities.canCancel === true
 ```
 
-The button cancels a pending, scheduled, or running Workflow according to Workflow Execution rules.
-
-The original Workflow page remains available after cancellation.
+The button cancels a pending, scheduled, or running Workflow after a one-line confirmation, as do **Reject** and **Force cancel**; reversible **Pause** and **Resume** do not ask. The original Workflow page remains available after cancellation.
 
 ### Pause and lifecycle Resume buttons
 
@@ -398,7 +396,7 @@ Possible menu items:
 - Archive workflow, if supported
 - Delete workflow, if supported
 
-Destructive Workflow lifecycle actions are visually separated, clearly labeled, and capability-gated by the backend.
+Safe actions come first and take initial focus; destructive ones follow a divider. **Force cancel** stays under Troubleshooting even on terminal Workflows, whose projected state may be stale, and ineligible actions collapse under **Unavailable (n)** with plain-language reasons.
 
 ## Action visibility by status
 
@@ -660,9 +658,9 @@ blast radius, and artifact evidence. Authorized operators can approve or deny
 with a rationale, which is sent as the durable decision `comment`. Expired or
 stale decisions explain why a new request is required. Operator **Take over and
 pause**, **Resume remediation**, and **Cancel remediation** use ordinary durable
-Workflow signal/cancel endpoints; takeover never exposes credentials or raw
-runtime/session authority. All controls retain labels, keyboard access,
-loading/error states, and responsive layout.
+Workflow signal/cancel endpoints, and only cancel asks first; takeover never
+exposes credentials or raw runtime/session authority. All controls retain labels,
+keyboard access, loading/error states, and responsive layout.
 
 ## Outputs section
 
