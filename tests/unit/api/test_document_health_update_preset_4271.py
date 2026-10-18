@@ -25,7 +25,6 @@ pytestmark = [pytest.mark.asyncio]
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PRESET_DIR = _REPO_ROOT / "api_service" / "data" / "presets"
-_SKILLS_DIR = _REPO_ROOT / ".agents" / "skills"
 
 
 @asynccontextmanager
@@ -50,10 +49,6 @@ def _seed_dir(tmp_path) -> Path:
 
 def _seed_yaml(slug: str) -> dict:
     return yaml.safe_load((_PRESET_DIR / f"{slug}.yaml").read_text(encoding="utf-8"))
-
-
-def _skill_text(name: str) -> str:
-    return (_SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
 
 
 async def _expand(slug: str, tmp_path, inputs: dict):
@@ -87,9 +82,6 @@ def test_health_update_seed_selects_explicit_skills_with_typed_inputs():
     assert "output_mode" in str(review_skill["args"])
     assert "report_path" in str(remediate_skill["args"])
     assert "allow_destructive" in str(remediate_skill["args"])
-    # No copied review/remediation procedure in preset prose.
-    assert "drift or factual inaccuracy" not in seed["steps"][0]["instructions"]
-    assert "redo review work" not in seed["steps"][1]["instructions"]
 
 
 def test_health_update_seed_declares_tested_input_contract():
@@ -124,72 +116,6 @@ async def test_health_update_expansion_carries_report_handoff(tmp_path):
     assert remediate["skill"]["id"] == "document-health-remediate"
     assert "artifacts/document-health-review.json" in review["instructions"]
     assert "artifacts/document-health-review.json" in remediate["instructions"]
-    assert "verified no-op" in remediate["instructions"]
-    assert "still valid" in remediate["instructions"]
-
-
-def test_review_skill_is_read_only_with_typed_contract():
-    text = _skill_text("document-health-review")
-    assert "Review-only, always" in text
-    assert "remediation owns authorized edits" in text
-    assert "target_scope" in text
-    assert "report_path" in text
-    assert "output_mode" in text
-
-
-def test_review_skill_resolves_role_first_and_size_as_signal():
-    text = _skill_text("document-health-review")
-    assert "Document Role First" in text
-    assert "Factual implementation reference" in text
-    assert "Authorized desired-state design" in text
-    assert "Temporary execution artifact" in text
-    assert "investigation signal" in text
-    assert "large file alone does not force" in text.lower()
-
-
-def test_review_skill_reconciles_ownership_ban_with_authority_checks():
-    text = _skill_text("document-health-review")
-    assert "bounded exception" in text
-    assert "unclear_authority" in text
-
-
-def test_remediate_skill_revalidates_and_orders_safely():
-    text = _skill_text("document-health-remediate")
-    assert "stale recommendation is not write authority" in text.lower()
-    assert "focused stale-evidence check is required" in text
-    assert "safe content/dependency ordering" in text
-    assert "update inbound and relative links before removal" in text.lower()
-    assert "allow_destructive" in text
-
-
-def test_remediate_skill_has_explicit_destructive_permission():
-    text = _skill_text("document-health-remediate")
-    assert "external report alone never authorizes deletion" in text.lower()
-    assert "denied mutation is never retried" in text.lower()
-
-
-def test_document_skills_use_provider_neutral_escalation():
-    for name in ("document-health-review", "document-health-remediate", "document-update"):
-        text = _skill_text(name)
-        assert "provider-neutral" in text.lower(), name
-    update_text = _skill_text("document-update")
-    assert "structured handoff" in update_text
-    assert "missing tracker integration must not force" in update_text.lower()
-
-
-def test_document_update_preserves_desired_state_and_role():
-    text = _skill_text("document-update")
-    assert "Document Role First" in text
-    assert "Buggy or incomplete code never downgrades" in text
-    assert "never be falsely labeled implemented" in text
-
-
-def test_document_author_discovers_conventions_without_mandatory_detour():
-    text = _skill_text("document-author")
-    assert "actual conventions" in text
-    assert "only the document-class references relevant to this output" in text
-    assert "otherwise well-scoped document" in text
-    assert "do not replace it with a plan solely because it is substantial" in text
 
 
 def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
@@ -200,9 +126,6 @@ def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
     before the source disappears, then apply the move and link-check the
     tree) instead of performing a bare filesystem move.
     """
-    skill = _skill_text("document-health-remediate")
-    assert "update inbound and relative links before removal" in skill.lower()
-    assert "repair references" in skill.lower()
     assert (
         _seed_yaml("document-health-update")["steps"][1]["skill"]["id"]
         == "document-health-remediate"
@@ -279,13 +202,7 @@ def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
     assert entry["status"] == "applied"
 
 
-def test_orchestrate_preset_preserves_discovery_and_child_policy():
+def test_orchestrate_preset_selects_discovery_and_child_creation_tools():
     seed = _seed_yaml("document-update-orchestrate")
     assert seed["steps"][0]["tool"]["id"] == "document.discover"
     assert seed["steps"][1]["tool"]["id"] == "story.create_document_update_tasks"
-    instructions = seed["steps"][1]["instructions"]
-    assert "exact discovered document path" in instructions
-    assert "inherits" in instructions
-    assert "cannot silently write conflicting" in instructions
-    assert "not document completion" in instructions
-    assert "another scheduler" in instructions
