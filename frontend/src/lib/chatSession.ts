@@ -483,9 +483,14 @@ function updateBlock(
   blockId: string,
   update: (block: ChatBlock) => ChatBlock,
 ): void {
-  state.blocks.forEach((block, index) => {
-    if (block.id === blockId) state.blocks[index] = stripUndefined(update(block));
-  });
+  // Blocks without turn or response ids share an id across turns; only the
+  // newest is open. Searching from the end also keeps streaming linear.
+  for (let index = state.blocks.length - 1; index >= 0; index -= 1) {
+    if (state.blocks[index]!.id === blockId) {
+      state.blocks[index] = stripUndefined(update(state.blocks[index]!));
+      return;
+    }
+  }
 }
 
 function blockFromEvent(event: ChatSessionEvent, kind: ChatBlockKind, text: string): ChatBlock {

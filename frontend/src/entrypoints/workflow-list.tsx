@@ -1738,11 +1738,16 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   // Track the desktop breakpoint so the toolbar layout (Filters trigger vs.
   // per-column filters, results header vs. Actions-header "View options") stays
-  // in sync with the active responsive surface.
+  // in sync with the active responsive surface. Leaving desktop unmounts the
+  // table, so an open column filter closes too rather than pausing polling
+  // behind a popover nobody can see or dismiss.
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const query = window.matchMedia(DESKTOP_MEDIA_QUERY);
-    const onChange = (event: MediaQueryListEvent) => setIsDesktop(event.matches);
+    const onChange = (event: MediaQueryListEvent) => {
+      setIsDesktop(event.matches);
+      if (!event.matches) setDesktopFilterField(null);
+    };
     setIsDesktop(query.matches);
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);

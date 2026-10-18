@@ -4085,6 +4085,78 @@ describe('Workflow Detail Entrypoint', () => {
     }
   });
 
+  it('opens a new run artifact collection on its first page with deleted rows hidden', async () => {
+    window.history.pushState({}, 'Evidence Test', '/workflows/test-123/artifacts?source=temporal');
+    let currentRunId = '02-run';
+    const files = (prefix: string, status = 'complete') =>
+      Array.from({ length: 120 }, (_, index) => ({
+        artifactId: `art-${prefix}-${status}-${index}`,
+        contentType: 'text/plain',
+        sizeBytes: 1536,
+        status,
+        metadata: { filename: `${prefix}-${status}-${index}.txt` },
+      }));
+    const artifactsByRun: Record<string, unknown[]> = {
+      '02-run': [...files('first', 'deleted'), ...files('first')],
+      '03-run': [...files('next', 'deleted'), ...files('next')],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        const runId = url.includes('/03-run/') ? '03-run' : '02-run';
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: artifactsByRun[runId] }),
+        } as Response);
+      }
+      if (url.includes('/steps')) {
+        return Promise.resolve({ ok: true, json: async () => ({ steps: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          temporalRunId: currentRunId,
+          runId: currentRunId,
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'Rerun workflow',
+          summary: 'Execution summary',
+          status: 'completed',
+          state: 'succeeded',
+          rawState: 'succeeded',
+          temporalStatus: 'completed',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          actions: {},
+        }),
+      } as Response);
+    });
+
+    const { queryClient } = renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+    const region = () => document.querySelector('.td-artifacts-region') as HTMLElement;
+    await waitFor(() => expect(within(region()).getByText('first-complete-0.txt')).toBeTruthy());
+    fireEvent.click(within(region()).getByRole('button', { name: 'Show deleted (120)' }));
+    fireEvent.click(within(region()).getByRole('button', { name: 'Next' }));
+    fireEvent.click(within(region()).getByRole('button', { name: 'Next' }));
+    expect(region().querySelector('[data-artifact-deleted]')).toBeTruthy();
+
+    // The same workflow moves to a new run while the detail stays mounted.
+    currentRunId = '03-run';
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    await waitFor(() => expect(within(region()).getByText('next-complete-0.txt')).toBeTruthy());
+    expect(region().querySelector('[data-artifact-deleted]')).toBeNull();
+    expect(within(region()).getByRole('button', { name: 'Show deleted (120)' })).toBeTruthy();
+  });
+
   it('does not poll terminal workflow detail surfaces after the initial load', async () => {
     const terminalExecution = {
       taskId: 'test-123',

@@ -76,4 +76,16 @@ describe('bridge resource evidence polling', () => {
     expect(poller(settled(3, 'partial'), false)).toBe(5_000);
     expect(poller(settled(4, 'complete'), true)).toBe(false);
   });
+
+  it('starts a new bridge session at the base rate after an earlier session backed off', () => {
+    const poller = createResourceEvidencePoller();
+    const failed = (queryHash: string, at: number) => ({
+      queryHash,
+      state: { data: undefined, status: 'error', dataUpdatedAt: 0, errorUpdatedAt: at },
+    });
+
+    expect([1, 2, 3, 4, 5].map((at) => poller(failed('["resources","bridge-1"]', at), false)))
+      .toEqual([5_000, 10_000, 20_000, 40_000, 60_000]);
+    expect(poller(failed('["resources","bridge-2"]', 6), false)).toBe(5_000);
+  });
 });
