@@ -30,8 +30,10 @@ import {
   PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY,
   suggestProfileId,
 } from './ProviderProfilesManager';
+import { MemoryRouter } from 'react-router-dom';
 import { DashboardToastProvider } from '../dashboard/DashboardToast';
 import { runtimeDefaultTierDraft } from '../../utils/providerProfileTiers';
+import { SettingsDraftGuardProvider } from './SettingsDraftGuard';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -3135,6 +3137,80 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect((screen.getByLabelText('Tier 1 label') as HTMLInputElement).value).toBe('Plan');
     expect((screen.getByLabelText(/Max parallel runs/) as HTMLInputElement).value).toBe('1');
+  });
+
+  it('blocks Save on invalid tier JSON and keeps the raw text in the draft', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => tierProfile } as Response);
+    const { onNotice } = renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Plan updated' } });
+    const parameters = screen.getByLabelText('Tier 1 parameters') as HTMLTextAreaElement;
+    fireEvent.change(parameters, { target: { value: '{"temperature": ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+
+    await waitFor(() => expect(onNotice).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' })));
+    expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
+    expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(false);
+    const invalid = screen.getByLabelText('Tier 1 parameters') as HTMLTextAreaElement;
+    expect(invalid.value).toBe('{"temperature": ');
+    expect(invalid.getAttribute('aria-invalid')).toBe('true');
+    expect(document.activeElement).toBe(invalid);
+
+    fireEvent.change(invalid, { target: { value: '{"temperature": 0.4}' } });
+    expect(invalid.getAttribute('aria-invalid')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    expect(patchPayload(fetchSpy).model_tiers[0]).toMatchObject({ label: 'Plan updated', parameters: { temperature: 0.4 } });
+  });
+
+  it('counts invalid tier JSON as an unsaved draft', () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => tierProfile } as Response);
+    const queryClient = choicesQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SettingsDraftGuardProvider>
+            <ProviderProfilesManager
+              profiles={[tierProfile]}
+              secretSlugs={[]}
+              onNotice={vi.fn()}
+              queryClient={queryClient}
+              defaultTaskModelByRuntime={{}}
+            />
+          </SettingsDraftGuardProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Tier 2 annotations'), { target: { value: '{"note": "unfinished' } });
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+  });
+
+  it('waits for a Harness before offering model choices', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue({ ok: false, status: 404, json: async () => ({}) } as Response);
+    renderProviderProfilesManager([]);
+    const model = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
+    expect(Array.from(model.options).map((option) => option.value)).toEqual(['__runtime_default__']);
+    expect(screen.getByText('Choose a Harness and Provider to see model choices.')).toBeTruthy();
+  });
+
+  it('offers no guessed models when profile capabilities fail to load', async () => {
+    const claudeProfile: ProviderProfile = {
+      ...tierProfile,
+      runtime_id: 'claude_code',
+      provider_id: 'anthropic',
+      model_tiers: [{ label: 'Plan', model: 'claude-opus-5-5', effort: null, parameters: {}, annotations: {} }],
+      default_model_tier: 1,
+    };
+    vi.spyOn(window, 'fetch').mockResolvedValue({ ok: false, status: 503, json: async () => ({ detail: 'Model discovery unavailable.' }) } as Response);
+    renderProviderProfilesManager([claudeProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await screen.findByText('Model discovery unavailable.');
+    const model = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
+    expect(model.value).toBe('claude-opus-5-5');
+    expect(Array.from(model.options).map((option) => option.value)).toEqual(['__runtime_default__', 'claude-opus-5-5']);
   });
 
   it('repairs a profile with no saved tiers through Edit', async () => {

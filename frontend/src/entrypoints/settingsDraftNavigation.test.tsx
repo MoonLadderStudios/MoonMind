@@ -2,7 +2,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import type { BootPayload } from '../boot/parseBootPayload';
-import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import { ProvidersSecretsSettingsPage, InstanceSettingsPage } from './settings';
 
 const generatedDescriptor = {
@@ -41,6 +41,49 @@ const generatedDescriptor = {
 function ok(body: unknown): Response {
   return { ok: true, status: 200, statusText: 'OK', json: async () => body } as Response;
 }
+
+function savedProfile(profileId: string) {
+  return {
+    profile_id: profileId,
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'secret_ref',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: {},
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: true,
+    model_tiers: [{ label: 'Default', model: null, effort: null, parameters: {}, annotations: {} }],
+    default_model_tier: 1,
+  };
+}
+
+const savedSecrets = ['alpha', 'beta'].map((slug) => ({
+  slug,
+  status: 'active',
+  details: {},
+  createdAt: '2026-10-01T00:00:00Z',
+}));
+
+function rowAction(text: string, action: string): HTMLElement {
+  const row = screen.getByText(text, { selector: 'td, td *' }).closest('tr');
+  if (!row) throw new Error(`no row for ${text}`);
+  return within(row).getByRole('button', { name: action });
+}
+
+const providersSecretsPayload = {
+  page: 'settings-providers-secrets',
+  apiBase: '/api',
+  initialData: {
+    settingsPermissions: [
+      'provider_profiles.read',
+      'provider_profiles.write',
+      'secrets.metadata.read',
+    ],
+    runtimeConfig: { system: { supportedRuntimes: ['codex_cli', 'claude_code'] } },
+  },
+} as BootPayload;
 
 function destinationLink(path: string): HTMLAnchorElement {
   const link = document.createElement('a');
@@ -329,5 +372,101 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     await waitFor(() => expect(filter.value).toBe('codex_cli'));
     act(() => window.history.forward());
     await waitFor(() => expect(filter.value).toBe('claude_code'));
+  });
+
+  describe('in-page editor switches', () => {
+    beforeEach(() => {
+      fetchSpy.mockImplementation((input) => {
+        const url = String(input);
+        if (url === '/api/v1/provider-profiles') {
+          return Promise.resolve(ok([savedProfile('profile-a'), savedProfile('profile-b')]));
+        }
+        if (url === '/api/v1/secrets') return Promise.resolve(ok({ items: savedSecrets }));
+        if (url === '/api/v1/repository-connections') return Promise.resolve(ok({ items: [] }));
+        return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found', json: async () => ({}) } as Response);
+      });
+    });
+
+    function renderProvidersSecrets() {
+      window.history.replaceState({}, '', '/settings/providers-secrets');
+      renderWithClient(
+        <BrowserRouter>
+          <ProvidersSecretsSettingsPage payload={providersSecretsPayload} />
+        </BrowserRouter>,
+      );
+    }
+
+    it('asks only about the Provider Profile draft when editing another profile, and discards only it', async () => {
+      renderProvidersSecrets();
+      await screen.findByText('profile-b', { selector: 'td, td *' });
+      const slug = screen.getByLabelText('Secret slug') as HTMLInputElement;
+      fireEvent.change(slug, { target: { value: 'draft-secret' } });
+
+      // A clean profile editor switches without asking about the secret draft.
+      fireEvent.click(rowAction('profile-a', 'Edit'));
+      expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).toBeNull();
+      expect(screen.getByRole('heading', { name: 'Edit Profile: profile-a' })).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText(/Max parallel runs/), { target: { value: '4' } });
+      fireEvent.click(rowAction('profile-b', 'Edit'));
+      expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+      expect(screen.getByRole('heading', { name: 'Edit Profile: profile-a' })).toBeTruthy();
+      expect((screen.getByLabelText(/Max parallel runs/) as HTMLInputElement).value).toBe('4');
+
+      fireEvent.click(rowAction('profile-b', 'Edit'));
+      fireEvent.click(screen.getByRole('button', { name: 'Discard and continue' }));
+      expect(await screen.findByRole('heading', { name: 'Edit Profile: profile-b' })).toBeTruthy();
+      expect((screen.getByLabelText(/Max parallel runs/) as HTMLInputElement).value).toBe('1');
+      expect(slug.value).toBe('draft-secret');
+    });
+
+    it('asks only about the secret draft when editing another secret, and discards only it', async () => {
+      renderProvidersSecrets();
+      const profileId = await screen.findByLabelText(/Profile ID/) as HTMLInputElement;
+      fireEvent.change(profileId, { target: { value: 'draft-profile' } });
+
+      fireEvent.click(rowAction('alpha', 'Edit'));
+      expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).toBeNull();
+      const value = screen.getByLabelText('Secure value') as HTMLInputElement;
+      fireEvent.change(value, { target: { value: 'new-alpha-value' } });
+
+      fireEvent.click(rowAction('beta', 'Edit'));
+      expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+      expect((screen.getByLabelText('Secret slug') as HTMLInputElement).value).toBe('alpha');
+      expect(value.value).toBe('new-alpha-value');
+
+      fireEvent.click(rowAction('beta', 'Edit'));
+      fireEvent.click(screen.getByRole('button', { name: 'Discard and continue' }));
+      await waitFor(() => expect((screen.getByLabelText('Secret slug') as HTMLInputElement).value).toBe('beta'));
+      expect((screen.getByLabelText('Secure value') as HTMLInputElement).value).toBe('');
+      expect(profileId.value).toBe('draft-profile');
+    });
+
+    it('changes the Harness filter without asking about unrelated drafts', async () => {
+      renderProvidersSecrets();
+      await screen.findByText('profile-b', { selector: 'td, td *' });
+      fireEvent.change(screen.getByLabelText('Secret slug'), { target: { value: 'draft-secret' } });
+
+      fireEvent.change(screen.getByLabelText('Harness filter'), { target: { value: 'codex_cli' } });
+      expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).toBeNull();
+      await waitFor(() => expect(window.location.search).toBe('?runtime=codex_cli'));
+      expect((screen.getByLabelText('Secret slug') as HTMLInputElement).value).toBe('draft-secret');
+    });
+
+    it('still discards every draft when leaving the Settings page', async () => {
+      renderProvidersSecrets();
+      const profileId = await screen.findByLabelText(/Profile ID/) as HTMLInputElement;
+      fireEvent.change(profileId, { target: { value: 'draft-profile' } });
+      const slug = screen.getByLabelText('Secret slug') as HTMLInputElement;
+      fireEvent.change(slug, { target: { value: 'draft-secret' } });
+
+      fireEvent.click(destinationLink('/settings/operations'));
+      fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
+      await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
+      expect(slug.value).toBe('');
+      expect(profileId.value).toBe('');
+    });
   });
 });

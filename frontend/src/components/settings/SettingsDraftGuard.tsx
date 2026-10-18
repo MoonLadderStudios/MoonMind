@@ -19,6 +19,8 @@ interface DraftRegistration {
 interface PendingDeparture {
   action: () => void;
   description: string;
+  /** The drafts this departure replaces; null means every draft on the page. */
+  draftIds: readonly string[] | null;
 }
 
 interface PendingHistoryDeparture {
@@ -28,12 +30,21 @@ interface PendingHistoryDeparture {
 
 interface SettingsDraftGuardValue {
   registerDraft: (draftId: string, registration: DraftRegistration | null) => void;
-  requestDeparture: (action: () => void, description?: string) => boolean;
+  /**
+   * Run `action` once the affected drafts are clean or discarded. Leaving the
+   * page affects every draft; an in-page switch passes the ids of the drafts it
+   * replaces, so other editors on the page keep their drafts.
+   */
+  requestDeparture: (
+    action: () => void,
+    description?: string,
+    draftIds?: readonly string[],
+  ) => boolean;
 }
 
 const immediateGuard: SettingsDraftGuardValue = {
   registerDraft: () => undefined,
-  requestDeparture: (action) => {
+  requestDeparture: (action: () => void) => {
     action();
     return true;
   },
@@ -83,10 +94,15 @@ export function SettingsDraftGuardProvider({ children }: { children: ReactNode }
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const [pendingDeparture, setPendingDeparture] = useState<PendingDeparture | null>(null);
 
-  const hasDirtyDraft = useCallback(
-    () => Array.from(registrationsRef.current.values()).some((draft) => draft.dirty),
+  const affectedDrafts = useCallback(
+    (draftIds: readonly string[] | null) =>
+      Array.from(registrationsRef.current.entries()).filter(
+        ([draftId, draft]) => draft.dirty && (draftIds === null || draftIds.includes(draftId)),
+      ),
     [],
   );
+
+  const hasDirtyDraft = useCallback(() => affectedDrafts(null).length > 0, [affectedDrafts]);
 
   const registerDraft = useCallback(
     (draftId: string, registration: DraftRegistration | null) => {
@@ -100,15 +116,16 @@ export function SettingsDraftGuardProvider({ children }: { children: ReactNode }
   );
 
   const requestDeparture = useCallback(
-    (action: () => void, description = 'Leave this page?') => {
-      if (!hasDirtyDraft()) {
+    (action: () => void, description = 'Leave this page?', draftIds?: readonly string[]) => {
+      const scope = draftIds ?? null;
+      if (affectedDrafts(scope).length === 0) {
         action();
         return true;
       }
-      setPendingDeparture({ action, description });
+      setPendingDeparture({ action, description, draftIds: scope });
       return false;
     },
-    [hasDirtyDraft],
+    [affectedDrafts],
   );
 
   useEffect(() => {
@@ -202,17 +219,17 @@ export function SettingsDraftGuardProvider({ children }: { children: ReactNode }
   );
 
   const stay = () => setPendingDeparture(null);
-  const discardAndLeave = () => {
+  const discardAndContinue = () => {
     const departure = pendingDeparture;
     if (!departure) {
       return;
     }
-    for (const registration of registrationsRef.current.values()) {
-      if (registration.dirty) {
-        registration.discard();
-      }
+    for (const [draftId, registration] of affectedDrafts(departure.draftIds)) {
+      registration.discard();
+      // Treat the draft as clean until its editor re-registers, so the action
+      // below (or a navigation it starts) is not stopped by the stale flag.
+      registrationsRef.current.set(draftId, { ...registration, dirty: false });
     }
-    registrationsRef.current.clear();
     setPendingDeparture(null);
     departure.action();
   };
@@ -286,10 +303,10 @@ export function SettingsDraftGuardProvider({ children }: { children: ReactNode }
               <button
                 type="button"
                 className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500"
-                onClick={discardAndLeave}
+                onClick={discardAndContinue}
                 ref={discardButtonRef}
               >
-                Discard and leave
+                {pendingDeparture.draftIds === null ? 'Discard and leave' : 'Discard and continue'}
               </button>
             </div>
           </section>
