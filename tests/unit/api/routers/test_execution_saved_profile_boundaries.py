@@ -236,7 +236,7 @@ async def test_raw_create_preserves_explicit_account_intent(
     response = await context.client.post("/api/executions", json=body)
     stored = await stored_parameters(context, response)
     assert "saved-codex_cli" not in str(stored)
-    assert not context.settings_reads
+    assert len(context.settings_reads) == 1
     if intent != "agentProfile":
         request = next(iter(agent_requests(stored).values()))
         if intent == "profileSelector":
