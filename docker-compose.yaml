@@ -1399,10 +1399,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
-    entrypoint: ["/opt/moonmind/init-codex-oauth-host.sh"]
+    entrypoint: ["/opt/moonmind/init-oauth-host.sh"]
     environment:
       OMNIGENT_STATE_PATH: /home/app/.omnigent
-      CODEX_HOME: /home/app/.codex
+      OAUTH_HOME: /home/app/.codex
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
       - omnigent-host-artifacts:/artifacts
