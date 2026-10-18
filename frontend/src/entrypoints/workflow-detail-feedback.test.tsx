@@ -474,3 +474,93 @@ describe('workflow detail status vocabularies', () => {
     expect(unknownStatusWarnings(warn)).toEqual([]);
   });
 });
+
+describe('workflow detail turn interrupt', () => {
+  const sessionUrl = '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli';
+
+  function mockManagedSession(activeTurnId: string | null) {
+    const execution = {
+      ...baseExecution,
+      title: 'Codex session task',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'wf-task-1',
+      actions: { canCancel: true },
+    };
+    const projection = {
+      agent_run_id: 'wf-task-1',
+      session_id: 'sess:wf-task-1:codex_cli',
+      session_epoch: 1,
+      grouped_artifacts: [],
+      latest_summary_ref: null,
+      latest_checkpoint_ref: null,
+      latest_control_event_ref: null,
+      latest_reset_boundary_ref: null,
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve(jsonResponse({
+          summary: {
+            status: 'running',
+            supportsLiveStreaming: false,
+            liveStreamStatus: 'unavailable',
+            sessionSnapshot: {
+              sessionId: 'sess:wf-task-1:codex_cli',
+              sessionEpoch: 1,
+              containerId: 'ctr-1',
+              threadId: 'thread-1',
+              activeTurnId,
+            },
+            interventionCapabilities: {
+              sendFollowUp: true,
+              clearSession: true,
+              interruptTurn: true,
+              cancelSession: true,
+            },
+          },
+        }));
+      }
+      if (url === `${sessionUrl}/control`) {
+        return Promise.resolve(jsonResponse({
+          action: JSON.parse(String(init?.body || '{}')).action,
+          projection,
+        }));
+      }
+      if (url === sessionUrl) return Promise.resolve(jsonResponse(projection));
+      if (url === DETAIL_URL) return Promise.resolve(jsonResponse(execution));
+      return Promise.resolve(jsonResponse({ artifacts: [], items: [] }));
+    });
+  }
+
+  function controlRequests() {
+    return fetchSpy.mock.calls.filter(([url]) => String(url) === `${sessionUrl}/control`);
+  }
+
+  it('does not interrupt the agent on Escape and interrupts through the visible control', async () => {
+    window.history.pushState({}, '', '/workflows/test-123/steps?source=temporal');
+    mockManagedSession('turn-1');
+
+    renderWithClient(<WorkflowDetailPage payload={detailPayload(60_000, { actionsEnabled: true })} />);
+
+    const followUp = await screen.findByLabelText('Follow-up message');
+    fireEvent.change(followUp, { target: { value: 'Draft message' } });
+    fireEvent.keyDown(followUp, { key: 'Escape' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(controlRequests()).toHaveLength(0);
+    expect((followUp as HTMLTextAreaElement).value).toBe('Draft message');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Interrupt turn' }));
+    await waitFor(() => expect(controlRequests()).toHaveLength(1));
+    expect(String(controlRequests()[0]?.[1]?.body)).toContain('"action":"interrupt_turn"');
+  });
+
+  it('offers no interrupt control when no turn is running', async () => {
+    window.history.pushState({}, '', '/workflows/test-123/steps?source=temporal');
+    mockManagedSession(null);
+
+    renderWithClient(<WorkflowDetailPage payload={detailPayload(60_000, { actionsEnabled: true })} />);
+
+    expect(await screen.findByLabelText('Follow-up message')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Interrupt turn' })).toBeNull();
+  });
+});
