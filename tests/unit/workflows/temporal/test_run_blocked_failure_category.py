@@ -123,3 +123,44 @@ async def test_gate_stop_without_step_failure_stays_user_error(
     await _run("test-blocked-category-gate-stop")
 
     assert recorded_categories == ["user_error"]
+
+
+def _blocked_workflow(*, capacity_exhausted: bool = False) -> MoonMindUserWorkflow:
+    wf = MoonMindUserWorkflow()
+    wf._state = "executing"
+    wf._record_result_failure_diagnostic(
+        stage="executing",
+        category="integration_error",
+        source="child_workflow",
+        step_id="node-1",
+        step_title="omnigent",
+        message="sandbox workspace clone failed: fatal: early EOF",
+    )
+    wf._plan_blocked_message = "blocked"
+    if capacity_exhausted:
+        wf._issue_search_capacity_retry_enabled = True
+        wf._publish_context["capacityWait"] = {"exhausted": True}
+    return wf
+
+
+def test_exhausted_capacity_wait_outranks_an_earlier_step_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _p: True)
+
+    wf = _blocked_workflow(capacity_exhausted=True)
+
+    assert wf._blocked_publish_failure_category() == "execution_error"
+
+
+def test_history_without_the_patch_keeps_the_legacy_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        != run_workflow_module.RUN_BLOCKED_STEP_FAILURE_CATEGORY_PATCH,
+    )
+
+    assert _blocked_workflow()._blocked_publish_failure_category() == "user_error"

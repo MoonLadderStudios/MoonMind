@@ -551,6 +551,7 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termina
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
 RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
+RUN_BLOCKED_STEP_FAILURE_CATEGORY_PATCH = "run-blocked-step-failure-category-v1"
 RUN_WORKSPACE_BLOCK_FAILURE_POLICY_PATCH = "run-workspace-block-failure-policy-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = "run-jira-blocker-recheck-retry-floor-v1"
@@ -25921,21 +25922,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _blocked_publish_failure_category(self) -> str:
         """Classify a run that stopped before publication.
 
-        A failed step already recorded its own category (a transport failure
-        is ``integration_error``), so a step-failure stop keeps it. Only a
-        block with no recorded step failure, such as a gate or policy stop,
-        is the operator's to resolve.
+        An exhausted capacity wait is an execution failure even when an
+        earlier node already failed. Otherwise a failed step keeps the
+        category it recorded (a transport failure is ``integration_error``);
+        only a block with no recorded step failure, such as a gate or policy
+        stop, is the operator's to resolve.
         """
 
-        recorded = (self._failure_diagnostic or {}).get("category")
-        if self._plan_blocked_message and recorded:
-            return str(recorded)
-        if self._plan_blocked_message and not (
+        if not self._plan_blocked_message or (
             self._issue_search_capacity_retry_enabled
             and self._publish_context.get("capacityWait", {}).get("exhausted")
         ):
-            return "user_error"
-        return "execution_error"
+            return "execution_error"
+        recorded = (self._failure_diagnostic or {}).get("category")
+        if recorded and workflow.patched(RUN_BLOCKED_STEP_FAILURE_CATEGORY_PATCH):
+            return str(recorded)
+        return "user_error"
 
     async def _record_terminal_state(
         self,
