@@ -12030,15 +12030,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 state=STATE_FAILED,
                 close_status=CLOSE_STATUS_FAILED,
                 summary=output_message,
-                error_category=(
-                    "user_error"
-                    if self._plan_blocked_message
-                    and not (
-                        self._issue_search_capacity_retry_enabled
-                        and self._publish_context.get("capacityWait", {}).get("exhausted")
-                    )
-                    else "execution_error"
-                ),
+                error_category=self._blocked_publish_failure_category(),
             )
             raise exceptions.ApplicationError(
                 output_message,
@@ -25925,6 +25917,25 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._summary_ref = resolved_artifact_id
         except Exception as exc:
             self._get_logger().warning(f"Failed to generate finish summary: {exc}")
+
+    def _blocked_publish_failure_category(self) -> str:
+        """Classify a run that stopped before publication.
+
+        A failed step already recorded its own category (a transport failure
+        is ``integration_error``), so a step-failure stop keeps it. Only a
+        block with no recorded step failure, such as a gate or policy stop,
+        is the operator's to resolve.
+        """
+
+        recorded = (self._failure_diagnostic or {}).get("category")
+        if self._plan_blocked_message and recorded:
+            return str(recorded)
+        if self._plan_blocked_message and not (
+            self._issue_search_capacity_retry_enabled
+            and self._publish_context.get("capacityWait", {}).get("exhausted")
+        ):
+            return "user_error"
+        return "execution_error"
 
     async def _record_terminal_state(
         self,
