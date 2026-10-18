@@ -34,10 +34,10 @@ interchangeable responsibilities.
 
 - A shared image never authorizes every installed runtime. Each Host Class
   declares only its own harness, runtime pack, and materializers.
-- Codex runs on the retained profile-bound realizer by default. The generic
-  Codex row stays `disabled` while `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false`
-  (the shipped value); its promotion rules are owned by
-  `RuntimeProviderRollout.md` and `codex_cutover_drain.py`.
+- Codex uses the generic realizer by default. Explicit
+  `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` preserves the profile-bound
+  compatibility choice. Rollout stops, custom policy and recorded plans retain
+  their meaning; see [Runtime Provider Rollout](RuntimeProviderRollout.md).
 - Generic Claude Code has no profile-bound realizer, so it is admitted as an
   explicit choice by default: a connected Anthropic OAuth Provider Profile
   needs no manual toggle. Image, policy, inventory, credential readiness, and

@@ -890,3 +890,52 @@ def test_codex_direct_drain_report_registered_as_temporal_activity():
     )
 
     assert callable(getattr(TemporalIntegrationActivities, "codex_direct_drain_report"))
+
+
+@pytest.mark.parametrize(
+    "value,enabled",
+    [
+        (None, True),
+        ("", True),
+        ("  ", True),
+        ("true", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_generic_codex_default_and_promotion_share_admission_setting(value, enabled):
+    from moonmind.omnigent.runtime_provider_rollout import (
+        default_runtime_provider_rollout_policy,
+    )
+    from moonmind.omnigent.settings import generic_codex_qualified
+
+    env = {} if value is None else {"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": value}
+    assert generic_codex_qualified(env=env) is enabled
+    assert generic_codex_promotion_permitted(None, env) is enabled
+    policy = default_runtime_provider_rollout_policy(env=env)
+    rows = {row.target_id: row for row in policy.rules}
+    assert rows["codex.generic-omnigent"].state == (
+        "new_work_default" if enabled else "disabled"
+    )
+    assert rows["codex.legacy-profile-bound-omnigent"].state == (
+        "retired_for_new_work" if enabled else "new_work_default"
+    )
+
+
+def test_generic_codex_invalid_setting_keeps_boundary_error_and_promotion_denial():
+    from moonmind.omnigent.runtime_provider_rollout import (
+        default_runtime_provider_rollout_policy,
+    )
+    from moonmind.omnigent.settings import generic_codex_qualified
+
+    env = {"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "invalid"}
+    with pytest.raises(ValueError, match="invalid boolean"):
+        generic_codex_qualified(env=env)
+    with pytest.raises(ValueError, match="invalid boolean"):
+        default_runtime_provider_rollout_policy(env=env)
+    assert generic_codex_promotion_permitted(None, env) is False

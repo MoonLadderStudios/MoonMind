@@ -111,7 +111,9 @@ def _host_class(implementation_ref: str) -> HostClass:
 
 
 @pytest.fixture()
-def codex_plan_inputs() -> dict[str, object]:
+def codex_plan_inputs(monkeypatch) -> dict[str, object]:
+    # Exercise the explicitly retained compatibility lane, not the shared default.
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
     catalog = _catalog()
     impl = HarnessImplementationIdentity.model_validate(
         {
@@ -212,8 +214,8 @@ def _reclassify(monkeypatch: pytest.MonkeyPatch, **updates: object) -> None:
 
 
 def test_active_product_path_still_compiles_codex_plans(codex_plan_inputs) -> None:
-    # #3833 has not promoted the qualified generic rows, so the legacy realizer
-    # is still the trusted Codex selection and new admission must not stop.
+    # Explicit false/restore policy still supports this compatibility choice;
+    # the code-owned guard must not disable it globally.
     assert (
         get_retirement_record(PROFILE_BOUND_PATH_ID).retirement_class
         is RetirementClass.ACTIVE_PRODUCT_PATH
