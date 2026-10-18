@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import os
 import time
@@ -835,20 +837,63 @@ class OmnigentHttpClient:
         )
 
     async def get_workspace_file(self, session_id: str, path: str) -> bytes:
-        return await self._request_bytes(
+        response = await self._request_resource(
             "GET",
             f"/v1/sessions/{quote(session_id, safe='')}"
             "/resources/environments/default/filesystem/"
-            f"{quote(path, safe='')}",
+            f"{quote(path, safe='')}?download=true",
         )
 
+        # Attachments (including JSON files) and legacy byte resources are
+        # opaque. Older stock servers ignore download and return a JSON preview.
+        if not _is_json_resource_response(response):
+            return response.content
+        try:
+            # Do not use _request(): diagnostic redaction would mutate data.
+            envelope = response.json()
+            if not isinstance(envelope, dict):
+                raise TypeError("unexpected resource shape")
+            if envelope.get("object") != "session.environment.filesystem.file_content":
+                raise ValueError("unexpected resource type")
+            if envelope.get("path") != path:
+                raise ValueError("mismatched resource path")
+            if envelope.get("truncated") is not False:
+                raise ValueError("incomplete content")
+            encoded = envelope["content"]
+            if not isinstance(encoded, str):
+                raise TypeError("invalid content")
+            if envelope.get("encoding") == "utf-8":
+                decoded = encoded.encode("utf-8")
+            elif envelope.get("encoding") == "base64":
+                decoded = base64.b64decode(encoded, validate=True)
+            else:
+                raise ValueError("unknown encoding")
+            expected_bytes = envelope["bytes"]
+            if type(expected_bytes) is not int or expected_bytes != len(decoded):
+                raise ValueError("invalid byte length")
+        except (KeyError, TypeError, ValueError, UnicodeError, binascii.Error) as exc:
+            raise OmnigentClientError(
+                "Omnigent workspace file envelope is malformed or truncated",
+                failure_class="integration_error",
+            ) from exc
+        return decoded
+
     async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
-        return await self._request_bytes(
+        response = await self._request_resource(
             "GET",
             f"/v1/sessions/{quote(session_id, safe='')}"
             "/resources/environments/default/diff/"
             f"{quote(path, safe='')}",
         )
+
+        if _is_json_resource_response(response):
+            # Stock before/after is a bounded, lossy comparison with no complete
+            # patch guarantee. Existing capture records this as unavailable.
+            raise OmnigentClientError(
+                "Omnigent workspace comparison is not a complete patch",
+                failure_class="integration_error",
+            )
+        return response.content
 
     async def list_session_files(self, session_id: str) -> dict[str, Any]:
         return await self._request(
@@ -1008,10 +1053,13 @@ class OmnigentHttpClient:
         return {"body": redact_sensitive_payload(parsed)}
 
     async def _request_bytes(self, method: str, path: str) -> bytes:
+        return (await self._request_resource(method, path)).content
+
+    async def _request_resource(self, method: str, path: str) -> httpx.Response:
         window_started_at = time.monotonic()
         while True:
             try:
-                content = await self._request_bytes_once(method, path)
+                response = await self._request_resource_once(method, path)
             except OmnigentClientError as exc:
                 if await self._await_connect_outage_retry(
                     exc, window_started_at=window_started_at
@@ -1019,9 +1067,9 @@ class OmnigentHttpClient:
                     continue
                 raise
             self._connect_outage_deadline = None
-            return content
+            return response
 
-    async def _request_bytes_once(self, method: str, path: str) -> bytes:
+    async def _request_resource_once(self, method: str, path: str) -> httpx.Response:
         if self._client is not None:
             try:
                 response = await self._client.request(
@@ -1045,7 +1093,7 @@ class OmnigentHttpClient:
                 ) from exc
             if response.status_code < 200 or response.status_code >= 300:
                 raise self._error_from_response(response.status_code, response.text)
-            return response.content
+            return response
 
         shared = shared_pool_client() if self._transport is None else None
         if shared is not None:
@@ -1071,7 +1119,7 @@ class OmnigentHttpClient:
                 ) from exc
             if response.status_code < 200 or response.status_code >= 300:
                 raise self._error_from_response(response.status_code, response.text)
-            return response.content
+            return response
 
         async with httpx.AsyncClient(
             timeout=self._timeout,
@@ -1099,7 +1147,7 @@ class OmnigentHttpClient:
                 ) from exc
         if response.status_code < 200 or response.status_code >= 300:
             raise self._error_from_response(response.status_code, response.text)
-        return response.content
+        return response
 
     def _error_from_response(self, status_code: int, body: str) -> OmnigentClientError:
         response_body: Any
@@ -1160,6 +1208,17 @@ class OmnigentHttpClient:
 
         detail = str(exc).strip() or type(exc).__name__
         return self._redact(f"Omnigent transport error: {detail}")
+
+
+def _is_json_resource_response(response: httpx.Response) -> bool:
+    """Distinguish protocol JSON from raw downloads using HTTP metadata."""
+
+    disposition = response.headers.get("content-disposition", "").partition(";")[0]
+    media_type = response.headers.get("content-type", "").partition(";")[0]
+    return (
+        disposition.strip().lower() != "attachment"
+        and media_type.strip().lower() == "application/json"
+    )
 
 
 def _iter_validated_sse_frame(frame: bytes | bytearray) -> Iterable[dict[str, Any]]:
