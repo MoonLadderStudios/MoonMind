@@ -4087,6 +4087,54 @@ def test_execution_status_facet_counts_static_status_values_with_workflow_scope(
     assert "mm_owner_id" not in first_count_query
     assert body["truncated"] is True
 
+
+@pytest.mark.parametrize("state", ["canceled", "failed", "executing"])
+def test_execution_status_facet_count_agrees_with_list_state_filter(state: str) -> None:
+    """A canceled or terminated workflow keeps the non-terminal ``mm_state``
+    it last published, so counting raw ``mm_state`` reported "Canceled: 0"
+    while ``state=canceled`` listed every canceled workflow. Each status count
+    must use the same effective-state clause the list filter sends."""
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_get_service] = lambda: AsyncMock()
+    app.dependency_overrides[get_async_session] = _empty_session_override
+    _override_user_dependencies(app, is_superuser=False)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=1)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        facet_response = test_client.get(
+            "/api/executions/facets",
+            params={"source": "temporal", "facet": "status", "pageSize": 50},
+        )
+        list_response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "state": state},
+        )
+
+    assert facet_response.status_code == 200
+    assert list_response.status_code == 200
+    facet_values = [item["value"] for item in facet_response.json()["items"]]
+    count_queries = [
+        call.kwargs["query"] for call in temporal_client.count_workflows.await_args_list
+    ]
+    facet_query = dict(zip(facet_values, count_queries, strict=True))[state]
+    list_query = temporal_client.list_workflows.call_args.kwargs["query"]
+    assert facet_query == list_query
+
+
 def test_execution_status_facet_supports_real_pagination() -> None:
     app = FastAPI()
     app.include_router(router)
