@@ -2307,6 +2307,56 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions'))).toBe(false);
   });
 
+  it('returns to the full table when the visible workflow list has nothing to open', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'missing-workflow' });
+    visibleItemsMock.workflows = [];
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    expect(await screen.findByText('No workflow to open.')).toBeTruthy();
+    expect(window.location.pathname).toBe('/workflows');
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+    // The explicit choice is still saved for the next time there is a workflow to open.
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
+  });
+
+  it('ignores a pending first-workflow lookup after the Workflows nav link clears the query', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    let releaseLookup: (() => void) | null = null;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=failed') {
+        return new Promise<Response>((resolve) => {
+          releaseLookup = () => resolve({
+            ok: true,
+            json: async () => ({ items: [{ workflowId: 'failed-1' }] }),
+          } as Response);
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+    await waitFor(() => expect(releaseLookup).not.toBeNull());
+    fireEvent.click(screen.getByRole('link', { name: 'MoonMind workflows' }));
+    await waitFor(() => expect(window.location.search).toBe(''));
+    await act(async () => {
+      releaseLookup!();
+    });
+
+    await waitFor(() => expect(screen.queryByText('Opening first workflow...')).toBeNull());
+    expect(window.location.pathname).toBe('/workflows');
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+  });
+
   it('MM-1113 keeps a route-selected workflow when switching detail-compatible modes', async () => {
     window.history.replaceState({}, '', '/workflows/route-123?stateIn=failed&limit=10');
     updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });

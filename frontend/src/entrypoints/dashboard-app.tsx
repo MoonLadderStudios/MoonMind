@@ -223,6 +223,14 @@ function iconForWorkflowListMode(icon: string) {
  * route-owned table; Create and detail routes cannot show the table, so a saved
  * `table` maps to their documented defaults without being rewritten.
  */
+/** A first-item lookup started from a collection table, and the list it was made on. */
+type PendingFirstItemRequest = {
+  id: symbol;
+  pathname: string;
+  search: string;
+  survivesQueryChange: boolean;
+};
+
 function workflowModeForPath(
   normalizedPath: string,
   savedMode: CollectionListDisplayMode,
@@ -1032,7 +1040,7 @@ function RoutedDashboardPage({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const pendingRequestRef = useRef<symbol | null>(null);
+  const pendingRequestRef = useRef<PendingFirstItemRequest | null>(null);
   const [requestedMode, setRequestedMode] = useState<CollectionListDisplayMode>(() => (
     readDashboardPreferences().workflowListDisplayMode
   ));
@@ -1235,13 +1243,19 @@ function RoutedDashboardPage({
     }
   }, [location.pathname, location.search]);
 
-  // A pending first-item request belongs to the path it was made on. A table
-  // rewriting its own query (Recurring canonicalizes it after mount) must not
-  // cancel it, but leaving the path does.
+  // A pending first-item request belongs to the list it was made on: leaving
+  // the path or changing the list query (the Workflows nav link clears the
+  // filters) cancels it. Recurring canonicalizes its own query after mount, so
+  // only leaving the path cancels a Recurring request.
   useEffect(() => {
-    pendingRequestRef.current = null;
-  }, [location.pathname]);
-  useEffect(() => {
+    const pending = pendingRequestRef.current;
+    if (
+      pending
+      && (pending.pathname !== location.pathname
+        || (!pending.survivesQueryChange && pending.search !== location.search))
+    ) {
+      pendingRequestRef.current = null;
+    }
     if (!pendingRequestRef.current) {
       setResolutionStatus(null);
     }
@@ -1252,15 +1266,24 @@ function RoutedDashboardPage({
     const search = new URLSearchParams(location.search);
     const requestPathname = location.pathname;
     const requestIsCurrent = (requestId: symbol) => (
-      pendingRequestRef.current === requestId && window.location.pathname === requestPathname
+      pendingRequestRef.current?.id === requestId && window.location.pathname === requestPathname
     );
+    const startRequest = (survivesQueryChange: boolean): symbol => {
+      const id = Symbol();
+      pendingRequestRef.current = {
+        id,
+        pathname: location.pathname,
+        search: location.search,
+        survivesQueryChange,
+      };
+      return id;
+    };
     pendingRequestRef.current = null;
     setResolutionStatus(null);
 
     if (resolvedRecurringDisplay) {
       if (location.pathname.replace(/\/$/, '') === '/schedules' && selectedMode !== 'table') {
-        const requestId = Symbol();
-        pendingRequestRef.current = requestId;
+        const requestId = startRequest(true);
         setRequestedRecurringMode(selectedMode);
         updateDashboardPreferences({ recurringListDisplayMode: selectedMode });
         setResolutionStatus('Opening first recurring schedule...');
@@ -1272,6 +1295,7 @@ function RoutedDashboardPage({
           }
           const targetDefinitionId = chooseVisibleItem(visibleIds, lastSelectedDefinitionId);
           if (!targetDefinitionId) {
+            setRequestedRecurringMode('table');
             setResolutionStatus('No recurring schedule to open.');
             return;
           }
@@ -1282,6 +1306,7 @@ function RoutedDashboardPage({
           navigate(`/schedules/${encodeURIComponent(targetDefinitionId)}`);
         } catch {
           if (requestIsCurrent(requestId)) {
+            setRequestedRecurringMode('table');
             setResolutionStatus('Recurring schedule list is unavailable.');
           }
         }
@@ -1319,8 +1344,7 @@ function RoutedDashboardPage({
 
     if (resolvedSkillsDisplay) {
       if (location.pathname.replace(/\/$/, '') === '/skills' && selectedMode !== 'table') {
-        const requestId = Symbol();
-        pendingRequestRef.current = requestId;
+        const requestId = startRequest(false);
         setRequestedSkillsMode(selectedMode);
         updateDashboardPreferences({ skillsListDisplayMode: selectedMode });
         setResolutionStatus('Opening first skill...');
@@ -1331,6 +1355,7 @@ function RoutedDashboardPage({
           }
           const targetSkillId = chooseVisibleItem(visibleIds, lastSelectedSkillId);
           if (!targetSkillId) {
+            setRequestedSkillsMode('table');
             setResolutionStatus('No skill to open.');
             return;
           }
@@ -1340,6 +1365,7 @@ function RoutedDashboardPage({
           navigate(encodeSkillDetailPath(targetSkillId, location.search));
         } catch {
           if (requestIsCurrent(requestId)) {
+            setRequestedSkillsMode('table');
             setResolutionStatus('Skill list is unavailable.');
           }
         }
@@ -1373,8 +1399,7 @@ function RoutedDashboardPage({
     }
 
     if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
-      const requestId = Symbol();
-      pendingRequestRef.current = requestId;
+      const requestId = startRequest(false);
       updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
@@ -1385,6 +1410,7 @@ function RoutedDashboardPage({
         }
         const targetWorkflowId = chooseVisibleItem(visibleIds, lastSelectedWorkflowId);
         if (!targetWorkflowId) {
+          setRequestedMode('table');
           setResolutionStatus('No workflow to open.');
           return;
         }
@@ -1394,6 +1420,7 @@ function RoutedDashboardPage({
         navigate(workflowDetailHref(targetWorkflowId, search));
       } catch {
         if (requestIsCurrent(requestId)) {
+          setRequestedMode('table');
           setResolutionStatus('Workflow list is unavailable.');
         }
       }
