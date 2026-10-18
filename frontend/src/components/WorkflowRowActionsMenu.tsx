@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { DashboardActionDialog } from './DashboardActionDialog';
 import { useDashboardToast } from './dashboard/DashboardToast';
-import { formatStatusLabel } from '../utils/formatters';
+import { responseError } from '../lib/api/client';
 import { navigateTo } from '../lib/navigation';
 import { workflowDetailHref } from '../lib/workflowListContext';
 import {
@@ -14,6 +14,7 @@ import {
 } from '../lib/temporalTaskEditing';
 import {
   buildWorkflowActionMenuItems,
+  describeWorkflowActionDisabledReason,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
@@ -78,29 +79,14 @@ const KEBAB_ICON = (
   </svg>
 );
 
-const ACTION_AVAILABILITY_PENDING_REASON = 'Checking availability…';
 const DEFAULT_WORKFLOW_ACTION_ERROR = 'The workflow action could not be completed.';
-
-const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
-  canSetTitle: true,
-  canUpdateInputs: true,
-  canEditForRerun: true,
-  canRerun: true,
-  canApprove: true,
-  canPause: true,
-  canResume: true,
-  canResumeFromFailedStep: true,
-  canCancel: true,
-  canForceCancel: true,
-  canReject: true,
-  canSendMessage: true,
-  canBypassDependencies: true,
-} satisfies RowActionsExecution['actions'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+// Request failures arrive as ApiError, whose message already carries the
+// API's `detail` reason; anything else is shown as plain text.
 function readableWorkflowActionError(error: unknown): string {
   const rawMessage =
     error instanceof Error
@@ -112,23 +98,6 @@ function readableWorkflowActionError(error: unknown): string {
           : '';
   const message = rawMessage.trim();
   if (!message) return DEFAULT_WORKFLOW_ACTION_ERROR;
-  try {
-    const parsed = JSON.parse(message) as { detail?: unknown; message?: unknown };
-    // Rejected workflow actions answer with a structured `detail` object
-    // ({code, message}); without unwrapping it the operator gets the raw JSON
-    // envelope instead of the reason the action was refused.
-    const parsedMessage =
-      typeof parsed.detail === 'string'
-        ? parsed.detail
-        : isRecord(parsed.detail) && typeof parsed.detail.message === 'string'
-          ? parsed.detail.message
-          : typeof parsed.message === 'string'
-            ? parsed.message
-            : null;
-    if (parsedMessage?.trim()) return parsedMessage.trim();
-  } catch {
-    // Plain text API errors are already user-readable enough for this surface.
-  }
   return message.replace(/\s+/g, ' ').slice(0, 240);
 }
 
@@ -181,7 +150,7 @@ export function WorkflowRowActionsMenu({
         `${apiBase}/executions/${encodeURIComponent(workflowId)}?source=temporal`,
       );
       if (!response.ok) {
-        throw new Error(`Workflow actions: ${response.statusText}`);
+        throw await responseError(response, 'Workflow actions');
       }
       return RowActionsExecutionSchema.parse(await response.json());
     },
@@ -232,8 +201,7 @@ export function WorkflowRowActionsMenu({
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -255,8 +223,7 @@ export function WorkflowRowActionsMenu({
         body: JSON.stringify({ signalName, payload: signalPayload ?? {} }),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -278,8 +245,7 @@ export function WorkflowRowActionsMenu({
         body: JSON.stringify({ action, graceful }),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -304,8 +270,7 @@ export function WorkflowRowActionsMenu({
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -324,8 +289,7 @@ export function WorkflowRowActionsMenu({
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -369,44 +333,31 @@ export function WorkflowRowActionsMenu({
       null;
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
-  const actionAvailabilityPending = actionsEnabled && !actions && !detailQuery.isError;
   const workflowSubject = execution?.title?.trim() || workflowId;
   const detailHref = workflowDetailHref(workflowId, new URLSearchParams(window.location.search));
   const disabledReason = useCallback(
-    (key: string): string | null => {
-      if (actionAvailabilityPending) return ACTION_AVAILABILITY_PENDING_REASON;
-      const reason = actions?.disabledReasons?.[key];
-      return reason ? formatStatusLabel(reason) : null;
-    },
-    [actionAvailabilityPending, actions],
+    (key: string): string | null =>
+      describeWorkflowActionDisabledReason(actions?.disabledReasons?.[key]),
+    [actions],
   );
 
   const items: WorkflowActionMenuItem[] = useMemo(() => {
-    const menuActions = actionAvailabilityPending
-      ? PENDING_WORKFLOW_ACTION_CAPABILITIES
-      : actions;
-    if (!actionsEnabled || !menuActions) return [];
-    const pendingReason = actionAvailabilityPending ? ACTION_AVAILABILITY_PENDING_REASON : null;
+    if (!actionsEnabled || !actions) return [];
     return buildWorkflowActionMenuItems({
       actionsOn: actionsEnabled,
-      actions: menuActions,
-      busy: busy || actionAvailabilityPending,
-      ...(pendingReason ? { busyDisabledReason: pendingReason } : {}),
+      actions,
+      busy,
       taskEditingOn: taskEditingEnabled,
       disabledReason,
-      editHref: actionAvailabilityPending ? taskEditHref(workflowId) : editHref,
-      compareHref: actionAvailabilityPending ? taskCompareHref(workflowId) : compareHref,
-      canShowEditWorkflow: actionAvailabilityPending ? true : canShowEditWorkflow,
-      editTaskDisabledReason: editTaskUnavailableReason
-        ? formatStatusLabel(editTaskUnavailableReason)
-        : pendingReason,
-      rerunDisabledReason: rerunUnavailableReason
-        ? formatStatusLabel(rerunUnavailableReason)
-        : pendingReason,
+      editHref,
+      compareHref,
+      canShowEditWorkflow,
+      editTaskDisabledReason: describeWorkflowActionDisabledReason(editTaskUnavailableReason),
+      rerunDisabledReason: describeWorkflowActionDisabledReason(rerunUnavailableReason),
       selectedRecoveryOptionCount: 0,
       selectedRecoveryStepEligible: false,
       selectedRecoveryStepDisabledReason: null,
-      canCreateRemediation: actionAvailabilityPending ? true : canCreateRemediation,
+      canCreateRemediation,
       keepRemediationVisible: true,
       handlers: {
         onRename: () => {
@@ -500,7 +451,6 @@ export function WorkflowRowActionsMenu({
       },
     });
   }, [
-    actionAvailabilityPending,
     actions,
     actionsEnabled,
     busy,
@@ -525,10 +475,12 @@ export function WorkflowRowActionsMenu({
     workflowSubject,
   ]);
 
-  const emptyMessage = detailQuery.isLoading
-    ? 'Loading actions…'
-    : detailQuery.isError
-      ? 'Unable to load workflow actions.'
+  // Until capabilities arrive the menu shows a loading state, not a list of
+  // actions that only look unavailable.
+  const emptyMessage = detailQuery.isError
+    ? 'Unable to load workflow actions.'
+    : !detailQuery.data
+      ? 'Loading actions…'
       : 'No workflow actions are currently available.';
   const subject = workflowSubject;
   const closeDialog = () => {
@@ -565,6 +517,8 @@ export function WorkflowRowActionsMenu({
         triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
         menuAriaLabel="More actions"
         emptyMessage={emptyMessage}
+        subject={workflowSubject}
+        subjectId={workflowId}
         onOpenChange={(open) => {
           if (open) armActions();
         }}

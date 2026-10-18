@@ -1424,6 +1424,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repository-connections/{connection_id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Allow new use of a disabled connection again */
+        post: operations["enable_repository_connection_api_v1_repository_connections__connection_id__enable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repository-connections/{connection_id}/assignments": {
         parameters: {
             query?: never;
@@ -12357,6 +12374,18 @@ export interface components {
             updatedAt: string;
         };
         /**
+         * RecurringWorkflowRunExecutionModel
+         * @description Recorded lifecycle of the execution a run dispatched.
+         */
+        RecurringWorkflowRunExecutionModel: {
+            /** State */
+            state: string;
+            /** Objectiveoutcome */
+            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked") | null;
+            /** Completiondisposition */
+            completionDisposition?: "gated_continuation" | null;
+        };
+        /**
          * RecurringWorkflowRunListResponse
          * @description List response for recurring run history.
          */
@@ -12410,6 +12439,7 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+            execution?: components["schemas"]["RecurringWorkflowRunExecutionModel"] | null;
         };
         /**
          * RegistryAuthorization
@@ -17448,6 +17478,41 @@ export interface operations {
         };
     };
     disable_repository_connection_api_v1_repository_connections__connection_id__disable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryConnectionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enable_repository_connection_api_v1_repository_connections__connection_id__enable_post: {
         parameters: {
             query?: never;
             header?: never;

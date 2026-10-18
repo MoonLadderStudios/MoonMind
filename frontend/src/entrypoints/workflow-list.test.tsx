@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { BrowserRouter, Link } from 'react-router-dom';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
@@ -10,6 +11,7 @@ import {
   DASHBOARD_PREFERENCES_VERSION,
 } from '../utils/dashboardPreferences';
 import { WorkflowListPage } from './workflow-list';
+import { VisibleCollectionItemsContext } from '../lib/visibleCollectionItems';
 
 describe('Workflows Entrypoint', () => {
   const mockPayload: BootPayload = {
@@ -114,20 +116,22 @@ describe('Workflows Entrypoint', () => {
   });
 
   it('shows structured API validation detail when the workflow list request fails', async () => {
+    const body = JSON.stringify({
+      detail: {
+        code: 'execution_filter_validation_failed',
+        message: 'Cannot combine stateIn and stateNotIn.',
+      },
+    });
     fetchSpy.mockResolvedValue({
       ok: false,
+      status: 400,
       statusText: 'Bad Request',
-      json: async () => ({
-        detail: {
-          code: 'execution_filter_validation_failed',
-          message: 'Cannot combine stateIn and stateNotIn.',
-        },
-      }),
+      text: async () => body,
     } as Response);
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(await screen.findByText(/Cannot combine stateIn and stateNotIn\./)).toBeTruthy();
     expect(screen.queryByLabelText('Live updates')).toBeNull();
   });
 
@@ -1577,6 +1581,98 @@ describe('Workflows Entrypoint', () => {
     expect(
       updatedLaterLink.compareDocumentPosition(createdLateLink) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it('publishes the rows it shows, in display order, for the shell first-item choice', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'older-row',
+            source: 'temporal',
+            title: 'Older row',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T19:00:00Z',
+            updatedAt: '2026-04-15T19:05:00Z',
+          },
+          {
+            taskId: 'newer-row',
+            source: 'temporal',
+            title: 'Newer row',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T00:00:00Z',
+            updatedAt: '2026-04-15T20:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+    const publish = vi.fn();
+
+    renderWithClient(
+      <VisibleCollectionItemsContext.Provider value={{ publish }}>
+        <WorkflowListPage payload={mockPayload} />
+      </VisibleCollectionItemsContext.Provider>,
+    );
+
+    await screen.findAllByText('Newer row');
+    await waitFor(() => {
+      expect(publish).toHaveBeenLastCalledWith('workflow', ['newer-row', 'older-row']);
+    });
+  });
+
+  it('follows the URL when navigation drops its filters', async () => {
+    window.history.pushState({}, 'Test', '/workflows?stateIn=failed');
+
+    renderWithClient(
+      <BrowserRouter>
+        <Link to="/workflows">Workflows nav</Link>
+        <WorkflowListPage payload={mockPayload} />
+      </BrowserRouter>,
+    );
+
+    await screen.findAllByText('Example task');
+    expect(String(lastExecutionListUrl())).toContain('stateIn=failed');
+    expect(screen.getByLabelText('Active filters').textContent).toContain('failed');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Workflows nav' }));
+
+    await waitFor(() => {
+      expect(String(lastExecutionListUrl())).not.toContain('stateIn');
+    });
+    expect(screen.queryByLabelText('Active filters')).toBeNull();
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows');
+      expect(window.location.search).not.toContain('stateIn');
+    });
+  });
+
+  it('clears a URL validation error when navigation keeps the same filters but drops the conflict', async () => {
+    window.history.pushState({}, 'Test', '/workflows?stateIn=running&stateNotIn=failed');
+
+    renderWithClient(
+      <BrowserRouter>
+        <Link to="/workflows?stateNotIn=failed">Valid filters</Link>
+        <WorkflowListPage payload={mockPayload} />
+      </BrowserRouter>,
+    );
+
+    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    const baselineCalls = executionListCalls().length;
+
+    fireEvent.click(screen.getByRole('link', { name: 'Valid filters' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Cannot combine stateIn and stateNotIn.')).toBeNull();
+    });
+    await waitFor(() => {
+      expect(executionListCalls().length).toBeGreaterThan(baselineCalls);
+    });
+    expect(String(lastExecutionListUrl())).toContain('stateNotIn=failed');
   });
 
   it('reuses the trimmed repository filter for both the request and the query key', async () => {

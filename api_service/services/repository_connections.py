@@ -825,9 +825,56 @@ class RepositoryConnectionService:
     ) -> RepositoryConnection:
         """Disable without breaking active cleanup (bindings stay, use denied)."""
 
+        return await self._set_lifecycle(
+            connection_id,
+            lifecycle="disabled",
+            verb="disable",
+            actor_ref=actor_ref,
+            request_id=request_id,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+        )
+
+    async def enable_connection(
+        self,
+        connection_id: str,
+        *,
+        actor_ref: str,
+        request_id: str,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> RepositoryConnection:
+        """Reactivate a disabled connection with its kept records unchanged.
+
+        Disabling only stops new use, so the credential, assignments, and
+        defaults are still the ones the operator configured; enabling admits
+        them again. Deleted (tombstoned) connections stay unrecoverable.
+        """
+
+        return await self._set_lifecycle(
+            connection_id,
+            lifecycle="active",
+            verb="enable",
+            actor_ref=actor_ref,
+            request_id=request_id,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+        )
+
+    async def _set_lifecycle(
+        self,
+        connection_id: str,
+        *,
+        lifecycle: str,
+        verb: str,
+        actor_ref: str,
+        request_id: str,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> RepositoryConnection:
+        action = f"connection.{verb}"
         if await self._replayed_action(
-            request_id=request_id, action="connection.disable",
-            connection_id=connection_id,
+            request_id=request_id, action=action, connection_id=connection_id
         ):
             record = await self._get_record(connection_id)
             if record is None:
@@ -838,24 +885,33 @@ class RepositoryConnectionService:
                 record=record,
                 principal_ref=principal_ref,
                 principal_scope=principal_scope,
-                action="disable",
+                action=verb,
             )
+            if record.lifecycle != lifecycle:
+                # A later change replaced this request's outcome; answering
+                # with the current record would report a different result.
+                raise RepositoryRouteError(
+                    REPOSITORY_ROUTE_CONFLICT,
+                    f"connection {verb} was superseded by a later change",
+                )
             return _record_to_connection(record)
         record = await self._get_record(connection_id)
         if record is None or record.tombstone:
-            raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "connection not found"
+            )
         self._check_use(
             record=record,
             principal_ref=principal_ref,
             principal_scope=principal_scope,
-            action="disable",
+            action=verb,
         )
-        record.lifecycle = "disabled"
+        record.lifecycle = lifecycle
         record.policy_revision = record.policy_revision + 1
         await self._audit(
             request_id=request_id,
             actor_ref=actor_ref,
-            action="connection.disable",
+            action=action,
             connection_id=connection_id,
             scope_type=record.scope_type,
             scope_ref=record.scope_ref,

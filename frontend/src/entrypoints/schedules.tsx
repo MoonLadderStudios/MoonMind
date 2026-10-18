@@ -1,17 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
-import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
+import { PageSizeSelector } from '../components/PageSizeSelector';
+import {
+  activeRecurringFilterEntries,
+  cleanCursor,
+  recurringListUrlQuery,
+  recurringListUrlStateFromSearch,
+  type RecurringFilterKey,
+  type RecurringFilters,
+  type RecurringSortDirection,
+  type RecurringSortKey,
+} from '../lib/recurringListQuery';
 import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionSidebar, type CollectionSidebarRow } from '../components/CollectionSidebar';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
+import { RouterSearchListener } from '../components/RouterSearchListener';
 import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/WorkflowColumnHeader';
+import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
+import { responseError } from '../lib/api/client';
 
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 import { newRequestId } from '../lib/requestId';
 import {
   clearRecurringScheduleFocusRequest,
@@ -65,6 +79,13 @@ const ScheduleRunSchema = z.object({
   message: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // `outcome` is the dispatch result; `execution` is the recorded lifecycle of
+  // the workflow that dispatch started, when one is known.
+  execution: z.object({
+    state: z.string(),
+    objectiveOutcome: z.string().nullable().optional(),
+    completionDisposition: z.string().nullable().optional(),
+  }).nullable().optional(),
 }).passthrough();
 
 const ScheduleRunsResponseSchema = z.object({
@@ -73,22 +94,6 @@ const ScheduleRunsResponseSchema = z.object({
 
 type Schedule = z.infer<typeof ScheduleSchema>;
 type ScheduleRun = z.infer<typeof ScheduleRunSchema>;
-type RecurringSortKey = 'updatedAt' | 'name' | 'state' | 'target' | 'repository' | 'cron' | 'timezone' | 'nextRunAt' | 'lastScheduledFor' | 'dispatch';
-type RecurringSortDirection = 'asc' | 'desc';
-type RecurringFilterKey = 'schedule' | 'state' | 'target' | 'repository' | 'cadence' | 'nextRun' | 'lastScheduled' | 'dispatch' | 'updated';
-
-type RecurringFilters = {
-  schedule: string;
-  state: string;
-  target: string;
-  repository: string;
-  cadence: string;
-  nextRun: string;
-  lastScheduled: string;
-  dispatch: string;
-  updated: string;
-};
-
 const EMPTY_RECURRING_FILTERS: RecurringFilters = {
   schedule: '',
   state: '',
@@ -221,54 +226,6 @@ function safeRecurringSearchParams(): URLSearchParams {
     return new URLSearchParams();
   }
   return new URLSearchParams(window.location.search);
-}
-
-function cleanQueryText(value: string | null): string {
-  return String(value || '').trim().slice(0, 160);
-}
-
-function cleanCursor(value: string | null): string {
-  return String(value || '').trim().slice(0, 512);
-}
-
-function parseRecurringFilters(params: URLSearchParams): RecurringFilters {
-  return {
-    schedule: cleanQueryText(params.get('schedule')),
-    state: cleanQueryText(params.get('state')),
-    target: cleanQueryText(params.get('target')),
-    repository: cleanQueryText(params.get('repository')),
-    cadence: cleanQueryText(params.get('cadence')),
-    nextRun: cleanQueryText(params.get('nextRun')),
-    lastScheduled: cleanQueryText(params.get('lastScheduled')),
-    dispatch: cleanQueryText(params.get('dispatch')),
-    updated: cleanQueryText(params.get('updated')),
-  };
-}
-
-function parseRecurringSortKey(raw: string | null): RecurringSortKey {
-  const value = String(raw || '').trim();
-  return (
-    value === 'name'
-    || value === 'state'
-    || value === 'target'
-    || value === 'repository'
-    || value === 'cron'
-    || value === 'timezone'
-    || value === 'nextRunAt'
-    || value === 'lastScheduledFor'
-    || value === 'dispatch'
-    || value === 'updatedAt'
-  ) ? value : 'updatedAt';
-}
-
-function parseRecurringSortDirection(raw: string | null): RecurringSortDirection {
-  return String(raw || '').trim() === 'asc' ? 'asc' : 'desc';
-}
-
-function activeRecurringFilterEntries(filters: RecurringFilters): Array<[RecurringFilterKey, string]> {
-  return (Object.keys(RECURRING_FILTER_LABELS) as RecurringFilterKey[])
-    .map((key) => [key, filters[key].trim()] as [RecurringFilterKey, string])
-    .filter(([, value]) => Boolean(value));
 }
 
 function appendScheduleListParams(
@@ -1032,7 +989,7 @@ function ScheduleDetailPage({
     queryFn: async () => {
       const response = await fetch(runsEndpoint, { credentials: 'include' });
       if (!response.ok) {
-        throw new Error(`Failed to fetch schedule runs: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch schedule runs');
       }
       return ScheduleRunsResponseSchema.parse(await response.json());
     },
@@ -1123,7 +1080,7 @@ function ScheduleDetailPage({
         body: JSON.stringify({ enabled, version }),
       });
       if (!response.ok) {
-        throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
+        throw await responseError(response, `Failed to ${enabled ? 'resume' : 'pause'} schedule`);
       }
       return ScheduleSchema.parse(await response.json());
     },
@@ -1614,8 +1571,20 @@ function ScheduleDetailPage({
               },
               {
                 key: 'outcome',
-                header: 'Status',
+                header: 'Dispatch',
                 render: (item) => titleCaseLabel(formatStatusLabel(item.outcome)),
+              },
+              {
+                key: 'execution',
+                header: 'Execution',
+                render: (item) => (item.execution ? (
+                  <WorkflowLifecycleStatusPill
+                    status={item.execution.state}
+                    enableMotion={false}
+                    completionDisposition={item.execution.completionDisposition}
+                    objectiveOutcome={item.execution.objectiveOutcome}
+                  />
+                ) : '-'),
               },
               {
                 key: 'trigger',
@@ -1801,7 +1770,7 @@ function ScheduleRowActions({
     },
     queryFn: async () => {
       const response = await fetch(runsEndpoint, { credentials: 'include' });
-      if (!response.ok) throw new Error('Failed to fetch schedule runs');
+      if (!response.ok) throw await responseError(response, 'Failed to fetch schedule runs');
       return ScheduleRunsResponseSchema.parse(await response.json());
     },
   });
@@ -1944,13 +1913,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const routeDefinitionId = useMemo(() => scheduleRouteDefinitionId(payload), [payload]);
   const listDisplayMode = recurringListDisplayMode(payload, Boolean(routeDefinitionId));
 
-  const initialParams = useMemo(() => safeRecurringSearchParams(), []);
-  const [filters, setFilters] = useState<RecurringFilters>(() => parseRecurringFilters(initialParams));
-  const [pageSize, setPageSize] = useState(() => parsePageSize(initialParams.get('limit')));
-  const [cursor, setCursor] = useState(() => cleanCursor(initialParams.get('cursor')));
+  const initialUrlState = useMemo(() => recurringListUrlStateFromSearch(safeRecurringSearchParams()), []);
+  const [filters, setFilters] = useState<RecurringFilters>(initialUrlState.filters);
+  const [pageSize, setPageSize] = useState(initialUrlState.pageSize);
+  const [cursor, setCursor] = useState(initialUrlState.cursor);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const [sort, setSort] = useState<RecurringSortKey>(() => parseRecurringSortKey(initialParams.get('sort')));
-  const [sortDir, setSortDir] = useState<RecurringSortDirection>(() => parseRecurringSortDirection(initialParams.get('sortDir')));
+  const [sort, setSort] = useState<RecurringSortKey>(initialUrlState.sort);
+  const [sortDir, setSortDir] = useState<RecurringSortDirection>(initialUrlState.sortDir);
   const [openFilter, setOpenFilter] = useState<RecurringFilterKey | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const baseListEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
@@ -1979,6 +1948,11 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   });
 
   const schedules = data?.items || [];
+  const visibleScheduleIds = useMemo(
+    () => (!routeDefinitionId && data ? data.items.map((schedule) => schedule.id) : null),
+    [data, routeDefinitionId],
+  );
+  usePublishVisibleCollectionItems('recurring', visibleScheduleIds);
   const activeFilters = activeRecurringFilterEntries(filters);
   const nextCursor = cleanCursor(data?.nextPageToken || null);
   const pageIndex = cursorStack.length;
@@ -1997,29 +1971,35 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   }, [data?.activeCount, data?.attentionCount, data?.next24hCount, schedules, totalCount]);
   const isMobileLayout = useSchedulesMobileLayout();
 
+  const listUrlQuery = recurringListUrlQuery({ filters, pageSize, cursor, sort, sortDir });
   useEffect(() => {
     if (typeof window === 'undefined' || routeDefinitionId) {
       return;
     }
     const timer = window.setTimeout(() => {
-    const params = new URLSearchParams();
-    params.set('limit', String(pageSize));
-    params.set('sort', sort);
-    params.set('sortDir', sortDir);
-    if (cursor) {
-      params.set('cursor', cursor);
-    }
-    for (const [key, value] of activeRecurringFilterEntries(filters)) {
-      params.set(key, value);
-    }
-    const query = params.toString();
-    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}`;
-    if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
-      window.history.replaceState(window.history.state, '', nextUrl);
-    }
+      const nextUrl = `${window.location.pathname}${listUrlQuery ? `?${listUrlQuery}` : ''}`;
+      if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+        // Through the router, so the shell's location matches the address bar.
+        navigateTo(nextUrl, { replace: true });
+      }
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [cursor, filters, pageSize, routeDefinitionId, sort, sortDir]);
+  }, [listUrlQuery, routeDefinitionId]);
+
+  // Follow URL changes this table did not write (the Recurring nav link,
+  // Back/Forward): the page stays mounted across query changes.
+  const adoptUrlSearch = (search: string) => {
+    const next = recurringListUrlStateFromSearch(new URLSearchParams(search));
+    if (recurringListUrlQuery(next) === listUrlQuery) {
+      return;
+    }
+    setFilters(next.filters);
+    setPageSize(next.pageSize);
+    setCursor(next.cursor);
+    setCursorStack([]);
+    setSort(next.sort);
+    setSortDir(next.sortDir);
+  };
 
   const setFilter = (key: RecurringFilterKey, value: string) => {
     setFilters((current) => ({ ...current, [key]: value.slice(0, 160) }));
@@ -2104,6 +2084,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="schedules-page stack">
+      <RouterSearchListener onSearchChange={adoptUrlSearch} />
       <header className="toolbar schedules-toolbar">
         <div>
           <h2 className="page-title" tabIndex={-1} data-recurring-table-title>Recurring Schedules</h2>

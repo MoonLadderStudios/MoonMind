@@ -5,7 +5,6 @@ import {
   useState,
   type CSSProperties,
   type Dispatch,
-  type KeyboardEvent,
   type ReactNode,
   type SetStateAction,
 } from 'react';
@@ -15,14 +14,17 @@ import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import {
-  ExecutionStatusPill,
+  CheckpointBranchStatusPill,
+  CheckpointBranchTurnStatusPill,
+  DependencyStatusPill,
   StepExecutionStatusPill,
   StepLedgerStatusPill,
   WorkflowLifecycleStatusPill,
 } from '../components/ExecutionStatusPill';
+import { STEP_CHECK_STATUS } from '../status/statusVocabulary';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, formatWorkflowSummary, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { AttachmentImagePreview } from '../components/AttachmentImagePreview';
-import { DashboardActionDialog } from '../components/DashboardActionDialog';
+import { DashboardActionDialog, useActionConfirmation } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
 import {
@@ -34,6 +36,11 @@ import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { QueryStaleNotice } from '../components/dashboard/StaleDataNotice';
+import { ApiErrorState } from '../components/DashboardErrorState';
+import { responseError } from '../lib/api/client';
+import { isTransientError } from '../boot/queryClient';
+import { useLiveClock } from '../lib/liveClock';
 import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   readDashboardPreferences,
@@ -64,6 +71,7 @@ import {
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
+  describeWorkflowActionDisabledReason,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
   type WorkflowActionMenuItem,
@@ -2205,9 +2213,13 @@ const KEBAB_ICON = (
 function IconMenuButton({
   items,
   ariaLabel,
+  subject,
+  subjectId,
 }: {
   items: WorkflowActionMenuItem[];
   ariaLabel: string;
+  subject: string;
+  subjectId: string;
 }) {
   return (
     <WorkflowActionsMenu
@@ -2215,6 +2227,8 @@ function IconMenuButton({
       triggerContent={KEBAB_ICON}
       triggerAriaLabel={ariaLabel}
       triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+      subject={subject}
+      subjectId={subjectId}
     />
   );
 }
@@ -2225,6 +2239,23 @@ function workflowDuration(startedAt: string | null | undefined, closedAt: string
   const closed = new Date(closedAt).getTime();
   if (Number.isNaN(started) || Number.isNaN(closed) || closed < started) return '—';
   return formatDurationMs(closed - started);
+}
+
+/** Workflow duration; a running workflow ticks from its server start time. */
+function WorkflowDurationValue({
+  startedAt,
+  closedAt,
+  running,
+}: {
+  startedAt: string | null | undefined;
+  closedAt: string | null | undefined;
+  running: boolean;
+}) {
+  const started = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const live = running && !closedAt && Number.isFinite(started);
+  const nowMs = useLiveClock(live);
+  if (!live) return <>{workflowDuration(startedAt, closedAt)}</>;
+  return <>{`${formatDurationMs(Math.max(0, nowMs - started))} so far`}</>;
 }
 
 function githubRepositoryHref(repository: string | null | undefined): string | null {
@@ -2655,7 +2686,7 @@ async function fetchRunSummaryArtifact(
   );
   if (!resp.ok) {
     if (resp.status === 404) return null;
-    throw new Error(`Run summary: ${resp.statusText}`);
+    throw await responseError(resp, 'Run summary');
   }
   const text = await resp.text();
   if (!text.trim()) return null;
@@ -2679,7 +2710,7 @@ async function fetchArtifactSessionProjection(
   );
   if (!resp.ok) {
     if (resp.status === 404) return null;
-    throw new Error(`Session continuity: ${resp.status}`);
+    throw await responseError(resp, 'Session continuity');
   }
   return ArtifactSessionProjectionSchema.parse(await resp.json());
 }
@@ -2701,7 +2732,7 @@ async function fetchSessionResources(
   );
   if (!resp.ok) {
     if (resp.status === 404) return null;
-    throw new Error(`Session resources: ${resp.status}`);
+    throw await responseError(resp, 'Session resources');
   }
   return SessionResourceListSchema.parse(await resp.json());
 }
@@ -2728,16 +2759,7 @@ async function controlArtifactSession(
     },
   );
   if (!resp.ok) {
-    let detail = `Session control: ${resp.status}`;
-    try {
-      const payload = await resp.json();
-      if (typeof payload?.detail === 'string' && payload.detail.trim()) {
-        detail = payload.detail;
-      }
-    } catch {
-      // Keep the status fallback when the response is not JSON.
-    }
-    throw new Error(detail);
+    throw await responseError(resp);
   }
   return ArtifactSessionControlResponseSchema.parse(await resp.json());
 }
@@ -3089,9 +3111,7 @@ async function fetchBridgeSessionEvents(
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
   const resp = await fetch(stepsHref, { credentials: 'include' });
   if (!resp.ok) {
-    const statusText = resp.statusText.trim();
-    const detail = statusText ? ` ${statusText}` : '';
-    throw new Error(`Steps: ${resp.status}${detail} (${stepsHref})`);
+    throw await responseError(resp, `Steps (${stepsHref})`);
   }
   return StepLedgerSnapshotSchema.parse(await resp.json());
 }
@@ -3105,9 +3125,7 @@ async function fetchCheckpointBranches(
     { credentials: 'include' },
   );
   if (!resp.ok) {
-    const statusText = resp.statusText.trim();
-    const detail = statusText ? ` ${statusText}` : '';
-    throw new Error(`Checkpoint branches: ${resp.status}${detail}`);
+    throw await responseError(resp, 'Checkpoint branches');
   }
   return CheckpointBranchListSchema.parse(await resp.json());
 }
@@ -3122,9 +3140,7 @@ async function fetchCheckpointBranchTurns(
     { credentials: 'include' },
   );
   if (!resp.ok) {
-    const statusText = resp.statusText.trim();
-    const detail = statusText ? ` ${statusText}` : '';
-    throw new Error(`Branch turns: ${resp.status}${detail}`);
+    throw await responseError(resp, 'Branch turns');
   }
   return CheckpointBranchTurnListSchema.parse(await resp.json());
 }
@@ -3185,13 +3201,18 @@ export function workflowDetailQueryOptions({
       const suffix = sourceTemporal ? '?source=temporal' : '';
       const response = await fetch(`${apiBase}/executions/${encodedWorkflowId}${suffix}`);
       if (!response.ok) {
-        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch workflow');
       }
       return ExecutionDetailSchema.parse(await response.json());
     },
-    refetchInterval: (query: { state: { data: z.infer<typeof ExecutionDetailSchema> | undefined } }) => (
-      !isExecutionTerminal(query.state.data) ? detailPoll : false
-    ),
+    refetchInterval: (query: {
+      state: { data: z.infer<typeof ExecutionDetailSchema> | undefined; error: unknown };
+    }) => {
+      // A missing or forbidden workflow stays that way, so polling would only
+      // repeat the 4xx. Transient failures keep polling and the page recovers.
+      if (query.state.error && !isTransientError(query.state.error)) return false;
+      return !isExecutionTerminal(query.state.data) ? detailPoll : false;
+    },
     staleTime: detailPoll,
   };
 }
@@ -4482,21 +4503,26 @@ function stepCheckStatusClass(status: string | null | undefined): string {
   return `check-${normalized || 'unknown'}`;
 }
 
-function stepCheckStatusPillProps(status: string | null | undefined) {
+function stepCheckStatusPillProps(status: string | null | undefined): Readonly<{
+  className: string;
+  'data-state'?: string;
+  'data-effect'?: 'shimmer-sweep';
+  'data-shimmer-label'?: string;
+}> {
   const normalized = String(status || '').trim().toLowerCase();
   if (normalized === 'pending') {
     return {
       ...executionStatusPillProps('executing'),
-      'data-shimmer-label': formatStatusLabel(status),
+      'data-shimmer-label': STEP_CHECK_STATUS.label(status),
     };
   }
-  return executionStatusPillProps(status);
+  return STEP_CHECK_STATUS.pillProps(status);
 }
 
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
   const checkStatusClass = stepCheckStatusClass(check.status);
   const statusPillProps = stepCheckStatusPillProps(check.status);
-  const label = `${check.kind.replaceAll('_', ' ')}: ${formatStatusLabel(check.status)}`;
+  const label = `${check.kind.replaceAll('_', ' ')}: ${STEP_CHECK_STATUS.label(check.status)}`;
   const hasShimmerSweep = statusPillProps['data-effect'] === 'shimmer-sweep';
   return (
     <span
@@ -5155,6 +5181,7 @@ function BranchExplorerPanel({
   isLoading,
   error,
   turnsError,
+  staleNotice,
   actionsEnabled,
   busy,
   latestCompare,
@@ -5171,6 +5198,8 @@ function BranchExplorerPanel({
   isLoading: boolean;
   error: Error | null;
   turnsError: Error | null;
+  /** Shown above known branches when a refresh failed. */
+  staleNotice?: ReactNode;
   actionsEnabled: boolean;
   busy: boolean;
   latestCompare: z.infer<typeof CheckpointBranchCompareSchema> | null;
@@ -5182,7 +5211,7 @@ function BranchExplorerPanel({
     enabled: actionsEnabled,
     queryFn: async (): Promise<Array<{ profile_id: string; account_label?: string; enabled?: boolean; launch_ready?: boolean }>> => {
       const response = await fetch(`${apiBase}/v1/provider-profiles?include_execution=true`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error('Profiles could not be loaded.');
+      if (!response.ok) throw await responseError(response, 'Provider Profiles');
       const value: unknown = await response.json();
       return Array.isArray(value) ? value : [];
     },
@@ -5293,6 +5322,7 @@ function BranchExplorerPanel({
           <span className="step-tl-count">{branches.length} branch{branches.length === 1 ? '' : 'es'}</span>
         </span>
       </div>
+      {staleNotice}
       {isLoading ? (
         <LoadingPlaceholder surface="workflow-detail" region="checkpoint-branches" variant="list" density="compact" preserveContext />
       ) : error ? (
@@ -5325,7 +5355,7 @@ function BranchExplorerPanel({
                             {branch.label}
                           </button>
                           <div className="td-facts-grid">
-                            <Fact label="State"><ExecutionStatusPill status={branch.state || 'unknown'} /></Fact>
+                            <Fact label="State"><CheckpointBranchStatusPill status={branch.state} /></Fact>
                             <Fact label="Branch ID"><code className="text-xs break-all">{branch.branchId}</code></Fact>
                             <Fact label="Kind">{formatStatusLabel(branch.branchKind || 'root')}</Fact>
                             <Fact label="Children">{childCount}</Fact>
@@ -5473,7 +5503,7 @@ function BranchExplorerPanel({
             <ol className="step-execution-history" aria-label="Branch turns">
               {turns.map((turn, index) => (
                 <li key={turn.branchTurnId}>
-                  <strong>Turn {index + 1}</strong> <ExecutionStatusPill status={turn.status || 'unknown'} />
+                  <strong>Turn {index + 1}</strong> <CheckpointBranchTurnStatusPill status={turn.status} />
                   <div className="td-facts-grid">
                     <Fact label="Turn ID"><code className="text-xs break-all">{turn.branchTurnId}</code></Fact>
                     <Fact label="Instructions"><code className="text-xs break-all">{turn.instructionRef}</code></Fact>
@@ -5532,14 +5562,34 @@ function fallbackTimingMs(startedAt: string | null | undefined, endedAt: string 
   return Math.max(0, ended - started);
 }
 
-function rowTimingValueMs(row: StepLedgerRow): number | null {
-  return stepTimingMs(row.timing) ?? fallbackTimingMs(row.startedAt, row.updatedAt);
+/**
+ * Elapsed time of an active attempt: the server's start time to `nowMs`. The
+ * server's own elapsed figure is as of its last write to the row, so it only
+ * sets a floor (covering a client clock that runs behind the server's).
+ */
+function liveElapsedMs(
+  timing: StepTiming,
+  startedAt: string | null | undefined,
+  nowMs: number,
+): number | null {
+  const started = Date.parse(timing?.startedAt ?? startedAt ?? '');
+  if (!Number.isFinite(started)) return null;
+  return Math.max(stepTimingMs(timing) ?? 0, nowMs - started);
 }
 
-function stepTimingLabel(row: StepLedgerRow): string {
+function isLiveStepRow(row: StepLedgerRow): boolean {
+  return ACTIVE_STEP_TIMING_STATUSES.has(row.status) && !(row.preservedFrom || row.timing?.preserved);
+}
+
+function rowTimingValueMs(row: StepLedgerRow, nowMs: number): number | null {
+  const live = isLiveStepRow(row) ? liveElapsedMs(row.timing, row.startedAt, nowMs) : null;
+  return live ?? stepTimingMs(row.timing) ?? fallbackTimingMs(row.startedAt, row.updatedAt);
+}
+
+function stepTimingLabel(row: StepLedgerRow, nowMs: number): string {
   const status = row.status;
   const timing = row.timing;
-  const valueMs = rowTimingValueMs(row);
+  const valueMs = rowTimingValueMs(row, nowMs);
   if (row.preservedFrom || timing?.preserved) {
     return valueMs === null ? 'Original timing unavailable' : `Original duration: ${formatDurationMs(valueMs)}`;
   }
@@ -5550,18 +5600,31 @@ function stepTimingLabel(row: StepLedgerRow): string {
   return formatDurationMs(valueMs);
 }
 
-function executionTimingLabel(execution: StepExecutionProjection): string {
-  const valueMs = stepTimingMs(execution.timing) ?? fallbackTimingMs(execution.startedAt, execution.updatedAt);
+const ACTIVE_STEP_EXECUTION_TIMING_STATUSES = new Set(['preparing', 'executing', 'running', 'checking']);
+
+function isLiveStepExecution(execution: StepExecutionProjection): boolean {
+  return ACTIVE_STEP_EXECUTION_TIMING_STATUSES.has(execution.status);
+}
+
+function executionTimingValueMs(execution: StepExecutionProjection, nowMs: number): number | null {
+  const live = isLiveStepExecution(execution)
+    ? liveElapsedMs(execution.timing, execution.startedAt, nowMs)
+    : null;
+  return live ?? stepTimingMs(execution.timing) ?? fallbackTimingMs(execution.startedAt, execution.updatedAt);
+}
+
+function executionTimingLabel(execution: StepExecutionProjection, nowMs: number): string {
+  const valueMs = executionTimingValueMs(execution, nowMs);
   if (valueMs === null || execution.timing?.precision === 'unavailable') return 'Timing unavailable';
-  const suffix = ACTIVE_STEP_TIMING_STATUSES.has(execution.status) ? ' so far' : '';
+  const suffix = isLiveStepExecution(execution) ? ' so far' : '';
   return `${formatDurationMs(valueMs)}${suffix}`;
 }
 
-function visibleStepTimingOverview(rows: StepLedgerRow[]) {
+function visibleStepTimingOverview(rows: StepLedgerRow[], nowMs: number) {
   const completed = rows.filter((row) => row.status === 'completed').length;
   const active = rows.find((row) => ACTIVE_STEP_TIMING_STATUSES.has(row.status));
   const timedRows = rows
-    .map((row) => ({ row, valueMs: rowTimingValueMs(row) }))
+    .map((row) => ({ row, valueMs: rowTimingValueMs(row, nowMs) }))
     .filter((item): item is { row: StepLedgerRow; valueMs: number } => item.valueMs !== null);
   const longest = timedRows.reduce<{ row: StepLedgerRow; valueMs: number } | null>(
     (current, item) => (!current || item.valueMs > current.valueMs ? item : current),
@@ -5576,14 +5639,16 @@ function visibleStepTimingOverview(rows: StepLedgerRow[]) {
 }
 
 function StepTimingChip({ row }: { row: StepLedgerRow }) {
-  return <span className="step-timing-chip">{stepTimingLabel(row)}</span>;
+  const nowMs = useLiveClock(isLiveStepRow(row));
+  return <span className="step-timing-chip">{stepTimingLabel(row, nowMs)}</span>;
 }
 
 function StepTimingDetails({ row }: { row: StepLedgerRow }) {
   const timing = row.timing;
-  const valueMs = rowTimingValueMs(row);
+  const nowMs = useLiveClock(isLiveStepRow(row));
+  const valueMs = rowTimingValueMs(row, nowMs);
   const elapsed = row.preservedFrom || timing?.preserved
-    ? stepTimingLabel(row)
+    ? stepTimingLabel(row, nowMs)
     : valueMs === null
       ? 'Timing unavailable'
       : ACTIVE_STEP_TIMING_STATUSES.has(row.status)
@@ -5603,13 +5668,14 @@ function StepTimingDetails({ row }: { row: StepLedgerRow }) {
 }
 
 function StepTimingOverview({ rows }: { rows: StepLedgerRow[] }) {
-  const overview = visibleStepTimingOverview(rows);
+  const nowMs = useLiveClock(rows.some(isLiveStepRow));
+  const overview = visibleStepTimingOverview(rows, nowMs);
   return (
     <div className="step-timing-overview" aria-label="Step timing overview">
       <span>
         Current step{' '}
         <strong>
-          {overview.active ? `${overview.active.title} · ${stepTimingLabel(overview.active)}` : 'None'}
+          {overview.active ? `${overview.active.title} · ${stepTimingLabel(overview.active, nowMs)}` : 'None'}
         </strong>
       </span>
       <span>
@@ -5663,8 +5729,10 @@ function StepExecutionRefList({ entries }: { entries: Array<[string, string]> })
 // disposition, downstream invalidation) as refs and typed diagnostics only.
 function StepExecutionHistoryRow({
   execution,
+  nowMs,
 }: {
   execution: StepExecutionProjection;
+  nowMs: number;
 }) {
   const contextBundleRef = execution.stepEvidence?.contextBundleRef?.artifactRef ?? null;
   const gateVerdict =
@@ -5684,7 +5752,7 @@ function StepExecutionHistoryRow({
       <div className="step-execution-history-head">
         <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
         <StepExecutionStatusPill status={execution.status} />
-        <span className="step-timing-chip">{executionTimingLabel(execution)}</span>
+        <span className="step-timing-chip">{executionTimingLabel(execution, nowMs)}</span>
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (
           <span
@@ -5821,9 +5889,7 @@ function StepExecutionHistory({
         { credentials: 'include' },
       );
       if (!response.ok) {
-        const statusText = response.statusText.trim();
-        const detail = statusText ? ` ${statusText}` : '';
-        throw new Error(`Step executions: ${response.status}${detail}`);
+        throw await responseError(response, 'Step executions');
       }
       return StepExecutionListSchema.parse(await response.json());
     },
@@ -5832,21 +5898,24 @@ function StepExecutionHistory({
     staleTime,
   });
 
+  const executions = historyQuery.data?.stepExecutions ?? [];
+  const nowMs = useLiveClock(enabled && executions.some(isLiveStepExecution));
+
   if (!enabled) return null;
 
-  const executions = historyQuery.data?.stepExecutions ?? [];
   const ordered = [...executions].sort((a, b) => b.executionOrdinal - a.executionOrdinal);
   const totalMs = executions
-    .map((execution) => stepTimingMs(execution.timing) ?? fallbackTimingMs(execution.startedAt, execution.updatedAt))
+    .map((execution) => executionTimingValueMs(execution, nowMs))
     .filter((value): value is number => value !== null)
     .reduce((sum, value) => sum + value, 0);
 
   return (
     <section className="step-tl-detail-section">
       <h4>Step Execution history</h4>
+      <QueryStaleNotice query={historyQuery} />
       {historyQuery.isLoading ? (
         <p className="small">Loading step executions…</p>
-      ) : historyQuery.isError ? (
+      ) : historyQuery.isLoadingError ? (
         <p className="small step-tl-error">{(historyQuery.error as Error).message}</p>
       ) : ordered.length > 0 ? (
         <>
@@ -5856,7 +5925,7 @@ function StepExecutionHistory({
           </p>
           <ol className="step-execution-history" aria-label="Step Execution history">
             {ordered.map((execution) => (
-              <StepExecutionHistoryRow key={execution.stepExecutionId} execution={execution} />
+              <StepExecutionHistoryRow key={execution.stepExecutionId} execution={execution} nowMs={nowMs} />
             ))}
           </ol>
         </>
@@ -7223,6 +7292,7 @@ function SessionContinuityPanel({
   const sessionId = sessionSnapshot?.sessionId ?? null;
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
+  const { requestConfirmation, confirmationDialog } = useActionConfirmation();
   const optimisticMessageSequenceRef = useRef(0);
 
   const projectionQuery = useQuery({
@@ -7323,7 +7393,7 @@ function SessionContinuityPanel({
       </section>
     );
   }
-  if (summaryQuery.isError) {
+  if (summaryQuery.isLoadingError) {
     return null;
   }
   if (!sessionId) {
@@ -7337,7 +7407,7 @@ function SessionContinuityPanel({
       </section>
     );
   }
-  if (projectionQuery.isError) {
+  if (projectionQuery.isLoadingError) {
     return (
       <section className="stack">
         <h3>Session Continuity</h3>
@@ -7390,7 +7460,9 @@ function SessionContinuityPanel({
     ? unavailableReason(canSendFollowUp, 'Follow-up')
     : (canSendFollowUp ? 'Enter a message to send a follow-up.' : unavailableReason(canSendFollowUp, 'Follow-up'));
   const clearDisabledReason = unavailableReason(canClearSession, 'Clear / Reset');
-  const interruptDisabledReason = unavailableReason(canInterruptTurn, 'Interrupt turn');
+  const interruptDisabledReason =
+    unavailableReason(canInterruptTurn, 'Interrupt turn')
+    ?? (sessionSnapshot?.activeTurnId ? null : 'No turn is running.');
   const cancelDisabledReason = unavailableReason(canCancelSession, 'Cancel session');
 
   const submitFollowUp = () => {
@@ -7412,16 +7484,26 @@ function SessionContinuityPanel({
   };
 
   const clearSession = () => {
-    if (!window.confirm('Clear this managed session and start a new context boundary?')) return;
-    const requestId = crypto.randomUUID();
-    setPanelError(null);
-    controlMutation.mutate({
-      schemaVersion: 1,
-      controlRequestId: requestId,
-      idempotencyKey: requestId,
-      action: 'clear_session',
-      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
-      reason: 'Operator confirmed clear session',
+    requestConfirmation({
+      title: 'Clear session?',
+      subject: 'Managed session',
+      compactId: projection.session_id,
+      consequence:
+        'Starts a new context boundary: the agent continues without the earlier conversation. This cannot be undone.',
+      confirmLabel: 'Clear session',
+      danger: true,
+      onConfirm: () => {
+        const requestId = crypto.randomUUID();
+        setPanelError(null);
+        controlMutation.mutate({
+          schemaVersion: 1,
+          controlRequestId: requestId,
+          idempotencyKey: requestId,
+          action: 'clear_session',
+          expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+          reason: 'Operator confirmed clear session',
+        });
+      },
     });
   };
 
@@ -7441,35 +7523,26 @@ function SessionContinuityPanel({
   };
 
   const cancelSession = () => {
-    if (!window.confirm('Stop this managed session?')) return;
-    const requestId = crypto.randomUUID();
-    setPanelError(null);
-    controlMutation.mutate({
-      schemaVersion: 1,
-      controlRequestId: requestId,
-      idempotencyKey: requestId,
-      action: 'cancel_session',
-      expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
-      reason: 'Operator confirmed stop session',
+    requestConfirmation({
+      title: 'Cancel session?',
+      subject: 'Managed session',
+      compactId: projection.session_id,
+      consequence: 'Stops the managed session; it takes no further turns. This cannot be undone.',
+      confirmLabel: 'Cancel session',
+      danger: true,
+      onConfirm: () => {
+        const requestId = crypto.randomUUID();
+        setPanelError(null);
+        controlMutation.mutate({
+          schemaVersion: 1,
+          controlRequestId: requestId,
+          idempotencyKey: requestId,
+          action: 'cancel_session',
+          expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
+          reason: 'Operator confirmed stop session',
+        });
+      },
     });
-  };
-
-  const stopActiveTurn = () => {
-    if (busy || isTerminal) return;
-    if (canInterruptTurn) {
-      interruptTurn();
-      return;
-    }
-    if (canCancelSession) {
-      cancelSession();
-    }
-  };
-
-  const handleFollowUpKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Escape') return;
-    if (!canInterruptTurn && !canCancelSession) return;
-    event.preventDefault();
-    stopActiveTurn();
   };
 
   const renderControlButton = ({
@@ -7525,6 +7598,8 @@ function SessionContinuityPanel({
       </div>
 
       {panelError ? <div className="notice error">{panelError}</div> : null}
+      <QueryStaleNotice query={summaryQuery} />
+      <QueryStaleNotice query={projectionQuery} />
 
       {!compact ? <div className="grid-2">
         <Card label="Session ID">
@@ -7625,7 +7700,6 @@ function SessionContinuityPanel({
           id="session-follow-up"
           value={followUpMessage}
           onChange={(event) => setFollowUpMessage(event.target.value)}
-          onKeyDown={handleFollowUpKeyDown}
           rows={3}
           placeholder="Send a follow-up turn to the managed Codex session."
           disabled={busy || !canSendFollowUp}
@@ -7667,6 +7741,7 @@ function SessionContinuityPanel({
           })}
         </div>
       </div>
+      {confirmationDialog}
     </section>
   );
 }
@@ -9288,9 +9363,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         { credentials: 'include' },
       );
       if (!response.ok) {
-        const statusText = response.statusText.trim();
-        const detail = statusText ? ` ${statusText}` : '';
-        throw new Error(`Step execution: ${response.status}${detail}`);
+        throw await responseError(response, 'Step execution');
       }
       return StepExecutionDetailSchema.parse(await response.json());
     },
@@ -9312,7 +9385,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(artifactRunId || '')}/artifacts`;
       const response = await fetch(path);
       if (!response.ok) {
-        throw new Error(`Artifacts: ${response.statusText}`);
+        throw await responseError(response, 'Artifacts');
       }
       return ArtifactListSchema.parse(await response.json());
     },
@@ -9331,7 +9404,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(artifactRunId || '')}/artifacts?link_type=report.primary&latest_only=true`;
       const response = await fetch(path);
       if (!response.ok) {
-        throw new Error(`Report: ${response.statusText}`);
+        throw await responseError(response, 'Report');
       }
       return ArtifactListSchema.parse(await response.json());
     },
@@ -9357,7 +9430,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=inbound`,
       );
-      if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
+      if (!response.ok) throw await responseError(response, 'Remediations');
       return RemediationLinksSchema.parse(await response.json());
     },
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
@@ -9369,7 +9442,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=outbound`,
       );
-      if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
+      if (!response.ok) throw await responseError(response, 'Remediations');
       return RemediationLinksSchema.parse(await response.json());
     },
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
@@ -9450,7 +9523,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   );
   const hasStepsEndpoint = Boolean(execution?.stepsHref);
   const showExecutionObservationFallback =
-    !hasStepsEndpoint || (!stepsQuery.isLoading && (stepsQuery.isError || !stepsQuery.data));
+    !hasStepsEndpoint || (!stepsQuery.isLoading && !stepsQuery.data);
   const branchesByStep = useMemo(() => buildBranchGroups(branches), [branches]);
 
   const invalidate = () => {
@@ -9472,8 +9545,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9498,8 +9570,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         }),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9524,8 +9595,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         }),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9559,8 +9629,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9582,8 +9651,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9617,8 +9685,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9658,8 +9725,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9713,8 +9779,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9755,8 +9820,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return { action, body: await response.json() };
     },
@@ -9782,8 +9846,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           { credentials: 'include' },
         );
         if (!response.ok) {
-          const text = await response.text();
-          throw new Error(text || response.statusText);
+          throw await responseError(response);
         }
         return { kind: request.kind, body: CheckpointBranchCompareSchema.parse(await response.json()) };
       }
@@ -9890,8 +9953,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return { kind: request.kind, body: await response.json() };
     },
@@ -9967,6 +10029,73 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const onReject = () => {
     setActionError(null);
     cancelMutation.mutate({ action: 'reject', graceful: true });
+  };
+
+  const { requestConfirmation, confirmationDialog } = useActionConfirmation();
+  // Promoting, publishing and archiving a branch change shared or outside
+  // state the dashboard cannot undo, so they are confirmed first. The other
+  // branch actions start new work or only read.
+  const onBranchAction = (request: BranchMutationRequest) => {
+    const submit = () => {
+      setActionError(null);
+      checkpointBranchMutation.mutate(request);
+    };
+    if (request.kind !== 'promote' && request.kind !== 'publish' && request.kind !== 'archive') {
+      submit();
+      return;
+    }
+    const { branch } = request;
+    const confirmation = {
+      promote: {
+        title: 'Promote branch?',
+        consequence:
+          'Accepts this branch as the result for its step. Only one branch per step can be promoted, and the dashboard cannot undo it.',
+        confirmLabel: 'Promote branch',
+      },
+      publish: {
+        title: 'Publish branch?',
+        consequence: `Publishes this branch for review as a GitHub pull request from ${branch.gitWorkBranch} into ${branch.gitBaseBranch} in ${branch.gitRepository}.`,
+        confirmLabel: 'Publish branch',
+      },
+      archive: {
+        title: 'Archive branch?',
+        consequence:
+          'Archived branches cannot be continued, promoted, or published, and the dashboard cannot restore them.',
+        confirmLabel: 'Archive branch',
+        danger: true,
+      },
+    }[request.kind];
+    requestConfirmation({
+      ...confirmation,
+      subject: branch.label || branch.branchId,
+      compactId: branch.branchId,
+      onConfirm: submit,
+    });
+  };
+  // Takeover and resume pause or resume the remediation and stay reversible;
+  // only cancel ends it, so only cancel asks first.
+  const onRemediationOperatorControl = (
+    remediationWorkflowId: string,
+    action: 'cancel' | 'takeover' | 'resume',
+  ) => {
+    const submit = () => {
+      setActionError(null);
+      remediationOperatorMutation.mutate({ remediationWorkflowId, action });
+    };
+    if (action !== 'cancel') {
+      submit();
+      return;
+    }
+    requestConfirmation({
+      title: 'Cancel remediation?',
+      subject: 'Remediation workflow',
+      compactId: remediationWorkflowId,
+      consequence:
+        'The remediation workflow stops gracefully and ends as canceled. This cannot be undone.',
+      confirmLabel: 'Cancel remediation',
+      danger: true,
+      onConfirm: submit,
+    });
   };
 
   const actions = execution?.actions;
@@ -10050,10 +10179,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
-  const actionDisabledReason = (key: string): string | null => {
-    const reason = actions?.disabledReasons?.[key];
-    return reason ? formatStatusLabel(reason) : null;
-  };
+  const actionDisabledReason = (key: string): string | null =>
+    describeWorkflowActionDisabledReason(actions?.disabledReasons?.[key]);
   const workflowActionMenuItems: WorkflowActionMenuItem[] = buildWorkflowActionMenuItems({
     actionsOn,
     actions,
@@ -10063,15 +10190,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     editHref,
     compareHref,
     canShowEditWorkflow,
-    editTaskDisabledReason: editTaskUnavailableReason
-      ? formatStatusLabel(editTaskUnavailableReason)
-      : null,
-    rerunDisabledReason: rerunUnavailableReason ? formatStatusLabel(rerunUnavailableReason) : null,
+    editTaskDisabledReason: describeWorkflowActionDisabledReason(editTaskUnavailableReason),
+    rerunDisabledReason: describeWorkflowActionDisabledReason(rerunUnavailableReason),
     selectedRecoveryOptionCount: selectedRecoveryOptions.length,
     selectedRecoveryStepEligible: Boolean(selectedRecoveryStep?.eligible),
-    selectedRecoveryStepDisabledReason: selectedRecoveryStep?.reason
-      ? formatStatusLabel(selectedRecoveryStep.reason)
-      : 'selected step is not eligible',
+    selectedRecoveryStepDisabledReason:
+      describeWorkflowActionDisabledReason(selectedRecoveryStep?.reason) ??
+      'The selected step is not eligible.',
     canCreateRemediation: remediationActionAvailable,
     handlers: {
       onRename,
@@ -10198,6 +10323,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             <IconMenuButton
               items={toolbarMenuItems}
               ariaLabel="Workflow actions"
+              subject={workflowDialogSubject}
+              subjectId={workflowDialogId}
             />
           ) : null}
         </div>
@@ -10263,6 +10390,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         onCancel={closeWorkflowDialog}
         onConfirm={confirmWorkflowDialog}
       />
+      {confirmationDialog}
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
       {actionNotice ? (
@@ -10286,10 +10414,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           density="detail-heavy"
           preserveContext
         />
-      ) : detailQuery.isError ? (
-        <div className="notice error">{(detailQuery.error as Error).message}</div>
+      ) : !execution && detailQuery.isError ? (
+        <ApiErrorState error={detailQuery.error} subject="workflow" onRetry={() => void detailQuery.refetch()} />
       ) : execution ? (
         <>
+          <QueryStaleNotice query={detailQuery} />
           <div className="td-hero">
             <div className="td-hero-body">
               <div className="td-hero-headline">
@@ -10609,7 +10738,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               <FactGroup title="Lifecycle">
                 <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
                 <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
-                <Fact label="Duration">{workflowDuration(execution.startedAt, execution.closedAt)}</Fact>
+                <Fact label="Duration">
+                  <WorkflowDurationValue
+                    startedAt={execution.startedAt}
+                    closedAt={execution.closedAt}
+                    running={!isTerminalExecution}
+                  />
+                </Fact>
                 <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
                 <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
                 {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
@@ -10951,6 +11086,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   ) : null}
                 </span>
               </div>
+              <QueryStaleNotice query={stepsQuery} />
               {stepsQuery.isLoading ? (
                 <LoadingPlaceholder
                   surface="workflow-detail"
@@ -10959,7 +11095,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   density="compact"
                   preserveContext
                 />
-              ) : stepsQuery.isError ? (
+              ) : stepsQuery.isLoadingError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
                 <>
@@ -10995,16 +11131,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     selectedBranch={selectedBranch}
                     turns={selectedBranchTurnsQuery.data?.items ?? []}
                     isLoading={branchesQuery.isLoading}
-                    error={branchesQuery.isError ? (branchesQuery.error as Error) : null}
-                    turnsError={selectedBranchTurnsQuery.isError ? (selectedBranchTurnsQuery.error as Error) : null}
+                    error={branchesQuery.isLoadingError ? (branchesQuery.error as Error) : null}
+                    turnsError={selectedBranchTurnsQuery.isLoadingError ? (selectedBranchTurnsQuery.error as Error) : null}
+                    staleNotice={
+                      <>
+                        <QueryStaleNotice query={branchesQuery} />
+                        <QueryStaleNotice query={selectedBranchTurnsQuery} />
+                      </>
+                    }
                     actionsEnabled={actionsOn}
                     busy={busy}
                     latestCompare={latestBranchCompare}
                     onSelectBranch={setSelectedBranchId}
-                    onBranchAction={(request) => {
-                      setActionError(null);
-                      checkpointBranchMutation.mutate(request);
-                    }}
+                    onBranchAction={onBranchAction}
                   />
                 </>
               ) : (
@@ -11085,7 +11224,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                               <strong>{item.title || item.workflowId}</strong>
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
-                            <ExecutionStatusPill status={stateLabel} />
+                            <DependencyStatusPill status={stateLabel} />
                             {isWaitingForRerun ? (
                               <p className="small">
                                 <strong>Prerequisite failed; waiting for successful rerun.</strong>{' '}
@@ -11123,7 +11262,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                             <strong>{item.title || item.workflowId}</strong>
                           </a>
                           <code className="text-xs break-all">{item.workflowId}</code>
-                          <ExecutionStatusPill status={item.state || 'unknown'} />
+                          <DependencyStatusPill status={item.state} />
                           {item.summary ? <p className="small">{item.summary}</p> : null}
                           {item.closeStatus ? <p className="small">Close status: {formatStatusLabel(item.closeStatus)}</p> : null}
                         </div>
@@ -11137,6 +11276,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
           {artifactsTabActive ? (
             <>
+              <QueryStaleNotice query={artifactsQuery} />
               <ReportPresentationSection
                 primaryReport={primaryReport}
                 relatedArtifacts={relatedReports}
@@ -11171,7 +11311,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 artifacts={artifactsQuery.data?.artifacts || []}
                 apiBase={payload.apiBase}
                 isLoading={artifactsQuery.isLoading}
-                error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
+                error={artifactsQuery.isLoadingError ? (artifactsQuery.error as Error) : null}
               />
             </>
           ) : null}
@@ -11195,10 +11335,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   ...(comment ? { comment } : {}),
                 });
               }}
-              onOperatorControl={(remediationWorkflowId, action) => {
-                setActionError(null);
-                remediationOperatorMutation.mutate({ remediationWorkflowId, action });
-              }}
+              onOperatorControl={onRemediationOperatorControl}
             />
           ) : null}
 

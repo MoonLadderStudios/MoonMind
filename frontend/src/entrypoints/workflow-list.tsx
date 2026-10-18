@@ -4,6 +4,9 @@ import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { responseError } from '../lib/api/client';
+import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
+import { RouterSearchListener } from '../components/RouterSearchListener';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
@@ -791,53 +794,19 @@ function sortRows(
   return copy;
 }
 
+/** The list's shareable URL query; sort stays out of it (it is current-page-only). */
+function workflowListUrlQuery(filters: ColumnFilters, pageSize: number, cursor: string | null): string {
+  const params = new URLSearchParams();
+  appendFilterParams(params, filters);
+  params.set('limit', String(pageSize));
+  if (cursor) params.set('nextPageToken', cursor);
+  return params.toString();
+}
+
 function replaceUrlQuery(params: URLSearchParams) {
   const queryText = params.toString();
   const path = window.location.pathname;
   navigateTo(queryText ? `${path}?${queryText}` : path, { replace: true });
-}
-
-function sanitizeApiErrorMessage(message: string): string {
-  return message.replace(/\s+/g, ' ').trim().slice(0, 500);
-}
-
-function apiErrorMessageFromPayload(payload: unknown): string | null {
-  if (typeof payload === 'string') {
-    return sanitizeApiErrorMessage(payload) || null;
-  }
-  if (!payload || typeof payload !== 'object') return null;
-  const record = payload as Record<string, unknown>;
-  if (typeof record.detail === 'string') {
-    return sanitizeApiErrorMessage(record.detail) || null;
-  }
-  if (record.detail && typeof record.detail === 'object' && !Array.isArray(record.detail)) {
-    const detail = record.detail as Record<string, unknown>;
-    if (typeof detail.message === 'string') {
-      return sanitizeApiErrorMessage(detail.message) || null;
-    }
-  }
-  if (Array.isArray(record.detail)) {
-    const firstMessage = record.detail
-      .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>).msg : null))
-      .find((message): message is string => typeof message === 'string');
-    if (firstMessage) return sanitizeApiErrorMessage(firstMessage) || null;
-  }
-  if (typeof record.message === 'string') {
-    return sanitizeApiErrorMessage(record.message) || null;
-  }
-  return null;
-}
-
-async function taskListErrorMessage(response: Response): Promise<string> {
-  try {
-    const payload = await response.json();
-    const message = apiErrorMessageFromPayload(payload);
-    if (message) return message;
-  } catch {
-    // Fall back to status text below when the body is empty or not JSON.
-  }
-  const statusText = sanitizeApiErrorMessage(response.statusText || '');
-  return statusText ? `Failed to fetch: ${statusText}` : 'Failed to fetch workflows.';
 }
 
 function emptyValueFilter(): ValueFilter {
@@ -1346,8 +1315,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   );
 
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
+  // The URL the applied filters came from: the mount URL, or a later URL this
+  // page did not write (the Workflows nav link, Back/Forward).
+  const [filterUrlParams, setFilterUrlParams] = useState(initial);
 
-  const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
+  const initialFilterValidationErrors = useMemo(
+    () => validateInitialFilterParams(filterUrlParams),
+    [filterUrlParams],
+  );
   const focusListOnWorkspaceReturn = useMemo(
     () => consumeWorkflowListReturnFocusIntent(initial),
     [initial],
@@ -1425,15 +1400,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const syncUrl = useCallback(() => {
     if (filterValidationErrors.length > 0) return;
-    const params = new URLSearchParams();
-    appendFilterParams(params, filters);
-    params.set('limit', String(pageSize));
-    if (listCursor) params.set('nextPageToken', listCursor);
-    params.delete(WORKFLOW_LIST_CONTEXT_RETURN_PARAM);
     // MM-954: do not persist sort/sortDir to the URL. Sorting only reorders the
     // currently loaded page, so writing it to the URL would falsely imply a
     // global server-side sort across the full filtered result set.
-    replaceUrlQuery(params);
+    replaceUrlQuery(new URLSearchParams(workflowListUrlQuery(filters, pageSize, listCursor)));
   }, [
     filters,
     filterValidationErrors.length,
@@ -1444,6 +1414,39 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     syncUrl();
   }, [syncUrl]);
+
+  // URL -> filters: adopt a query this page did not write. Its own writes
+  // round-trip to the same canonical query and are ignored.
+  const adoptUrlSearch = (search: string) => {
+    const params = new URLSearchParams(search);
+    const nextFilters = parseInitialFilters(params);
+    const limitParam = params.get('limit') ?? params.get('pageSize');
+    const nextPageSize = limitParam !== null
+      ? parsePageSize(limitParam)
+      : readDashboardPreferences().workflowListPageSize;
+    const nextCursor = hasUnsupportedWorkflowScopeState(params)
+      ? null
+      : params.get('nextPageToken')?.trim() || null;
+    if (
+      workflowListUrlQuery(nextFilters, nextPageSize, nextCursor)
+      === workflowListUrlQuery(filters, pageSize, listCursor)
+    ) {
+      // The same filters can arrive with a different validity (a conflicting
+      // include dropped), so adopt the URL as the validation source anyway.
+      if (filterValidationErrors.length > 0 || validateInitialFilterParams(params).length > 0) {
+        setFilterUrlParams(params);
+        setHasEditedFilters(false);
+      }
+      return;
+    }
+    setFilterUrlParams(params);
+    setHasEditedFilters(false);
+    setFilters(nextFilters);
+    setDraftFilters(nextFilters);
+    setPageSize(nextPageSize);
+    setListCursor(nextCursor);
+    setCursorStack([]);
+  };
 
   const listQueryParams = useMemo(() => {
     const params = new URLSearchParams();
@@ -1462,7 +1465,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     queryFn: async () => {
       const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
       if (!response.ok) {
-        throw new Error(await taskListErrorMessage(response));
+        throw await responseError(response, 'Failed to fetch workflows');
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
@@ -1506,7 +1509,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         appendFilterParams(params, facetFilters);
         const response = await fetch(`${payload.apiBase}/executions/facets?${params}`, { signal });
         if (!response.ok) {
-          throw new Error(`Failed to fetch facets: ${response.statusText}`);
+          throw await responseError(response, 'Failed to fetch facets');
         }
         return ExecutionFacetResponseSchema.parse(await response.json());
       },
@@ -1840,6 +1843,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const sortedItems = useMemo(() => {
     return sortRows(pageItems, sortField, sortDir, knownProviderProfiles.ambiguous);
   }, [pageItems, sortField, sortDir, knownProviderProfiles.ambiguous]);
+  const visibleWorkflowIds = useMemo(
+    () => (data ? sortedItems.map(rowWorkflowId).filter(Boolean) : null),
+    [data, sortedItems],
+  );
+  usePublishVisibleCollectionItems('workflow', visibleWorkflowIds);
   const detailListContext = useMemo(() => {
     const params = new URLSearchParams();
     appendFilterParams(params, filters);
@@ -2681,6 +2689,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
+      <RouterSearchListener onSearchChange={adoptUrlSearch} />
       {hasWorkflowListNotices ? (
         <section className="workflow-list-notices-deck" aria-label="Workflow list notices">
           {!listEnabled ? (

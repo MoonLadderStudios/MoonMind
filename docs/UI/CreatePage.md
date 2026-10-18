@@ -275,11 +275,13 @@ Errors identify the editable source and consuming step. For example:
 
 A binding error identifies the workflow repository/branch or selected PR control, not a hidden Skill field the user cannot edit. A publication conflict identifies the single publishing selection and the incompatible objective. Values survive failures; a summary supplements rather than replaces inline errors.
 
+A failed check before submission shows its reason in the fixed submit bar beside Start, so it is visible wherever the form is scrolled. Focus moves to the control to correct, opening Advanced mode or a collapsed section when that control is inside one, and the control is marked invalid until it is edited. A failure without a single control, such as a server rejection, focuses the reason itself. An accepted Create, Edit, or rerun opens its result and leaves the submitted form locked, so the same request cannot be sent twice. Browser Back/Forward that would change the mode or execution, or leave Create, asks before discarding an edited draft; declining keeps the draft and its URL.
+
 Static conflicts are rejected before parent launch, issue creation, or child enqueue. Dynamic discovery failures are reported as blocked/partial outcomes with exact accepted child links, not disguised as full batch success.
 
 ## Advanced Controls
 
-Advanced mode shows meaningful optional Skill inputs, required capabilities, worker routing, Priority, Max Attempts, and a Backend alternative only where supported. Opening or closing disclosure never changes supported authored values. An exceptional Backend remains visible in the collapsed summary. Controls that are genuinely retired or inapplicable follow their owning intent-preserving normalization, not a blanket reset merely because they are hidden.
+Advanced mode shows meaningful optional Skill inputs, required capabilities, worker routing, Priority, Max Attempts, host policy, and a Backend alternative only where supported. Opening or closing disclosure never changes supported authored values: hidden values are still validated and submitted, and the collapsed toggle shows how many non-default values it holds (for example "2 overrides"). An exceptional Backend remains visible in the collapsed summary. Controls that are genuinely retired or inapplicable follow their owning intent-preserving normalization, not a blanket reset merely because they are hidden.
 
 MoonMind does not provide native retrieval, so Create has no context-retrieval/RAG controls in either mode. Edit and rerun never resubmit an inherited `rag` or `followUpRetrieval` value; the server rejects an explicit retired value with an actionable error. Supply context through explicit attachments, artifact refs, or scoped workspace access.
 

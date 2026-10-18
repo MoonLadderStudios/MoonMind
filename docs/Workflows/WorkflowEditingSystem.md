@@ -95,7 +95,7 @@ New authoring never uses `/tasks/queue/new`, editJobId, queue-job updates, or qu
 
 ### 5.3 Mode resolution order
 
-Resolve rerunExecutionId, then editExecutionId, then Create. A malformed or unauthorized requested mode is reported, not silently downgraded to unrelated new work.
+Resolve rerunExecutionId, then editExecutionId, then Create. A malformed or unauthorized requested mode is reported, not silently downgraded to unrelated new work. The modes share one route, so the page re-resolves its mode whenever the URL changes without remounting the editor; switching between modes of the same execution keeps the current draft instead of reloading it.
 
 ## 6. Entry points
 

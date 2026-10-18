@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation, useQuery } from '@tanstack/react-query';
 
 import type { components } from '../../generated/openapi';
+import { responseError } from '../../lib/api/client';
 import { formatHarnessLabel } from '../../runtime/runtimeTargets';
 import { trapTabWithin } from '../../lib/focusTrap';
 import { formatStatusLabel } from '../../utils/formatters';
@@ -18,7 +19,7 @@ import {
   tierDisplayModel,
   type ProviderProfileTierDraft,
 } from '../../utils/providerProfileTiers';
-import { useSettingsDraftRegistration } from './SettingsDraftGuard';
+import { useSettingsDraftGuard, useSettingsDraftRegistration } from './SettingsDraftGuard';
 
 type ProviderProfileCreationPreset =
   components['schemas']['ProviderProfileCreationPresetResponse'];
@@ -280,6 +281,18 @@ interface OAuthSessionState {
 }
 
 export const PROVIDER_PROFILE_QUERY_KEY = ['provider-profiles'] as const;
+
+/** The saved Provider Profiles, cached under {@link PROVIDER_PROFILE_QUERY_KEY}. */
+export async function fetchProviderProfiles(): Promise<ProviderProfile[]> {
+  const response = await fetch('/api/v1/provider-profiles', {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw await responseError(response, 'Failed to fetch provider profiles');
+  return response.json();
+}
+
+/** The profile editor's Settings draft, which in-page switches replace. */
+export const PROVIDER_PROFILE_DRAFT_ID = 'provider-profile';
 /** Sentinel value for the All-runtimes administrative view in Settings. */
 export const ALL_RUNTIMES_FILTER_VALUE = 'all';
 const RUNTIME_FILTER_CONTROL_ID = 'provider-profile-runtime-filter';
@@ -297,6 +310,26 @@ function providerProfileTierCount(profile: ProviderProfile): number | null {
     return profile.model_tiers.length;
   }
   return null;
+}
+
+const TIER_JSON_FIELDS = ['parameters', 'annotations'] as const;
+type TierJsonField = (typeof TIER_JSON_FIELDS)[number];
+
+/** Parse a tier JSON field; empty text is an empty object. */
+function parseTierJsonObject(
+  text: string,
+): { value: Record<string, unknown> } | { error: string } {
+  if (text.trim() === '') return { value: {} };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    return { error: `Invalid JSON: ${error instanceof Error ? error.message : 'could not parse'}` };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { error: 'Enter a JSON object, such as {"key": "value"}.' };
+  }
+  return { value: parsed as Record<string, unknown> };
 }
 
 function cloneTierDrafts(
@@ -1904,6 +1937,7 @@ export function ProviderProfilesManager({
   runtimeFilterOptions = [],
   onSelectRuntimeId,
 }: ProviderProfilesManagerProps) {
+  const { requestDeparture } = useSettingsDraftGuard();
   // MoonLadderStudios/MoonMind#4001: Harness/Provider choices come from the
   // backend's creation declarations, never from saved profiles or launch-ready
   // hosts, so the first profile can be created on an empty deployment.
@@ -2123,6 +2157,10 @@ export function ProviderProfilesManager({
   const [invalidSavedDefaultIndex, setInvalidSavedDefaultIndex] = useState<number | null>(null);
   const [isTierRepair, setIsTierRepair] = useState(false);
   const [tierFieldErrors, setTierFieldErrors] = useState<Record<string, string>>({});
+  // Edited tier JSON text, keyed `${clientId}.${field}`. It is part of the
+  // draft, so text that does not parse is kept (and blocks Save) instead of
+  // being replaced by the last valid value.
+  const [tierJsonText, setTierJsonText] = useState<Record<string, string>>({});
   const [tierLiveMessage, setTierLiveMessage] = useState<string>('');
   const [tierUndo, setTierUndo] = useState<{ tier: ProviderProfileTierDraft; index: number; wasDefault: boolean } | null>(null);
   const [tierRemoveDialog, setTierRemoveDialog] = useState<{ index: number; tier: ProviderProfileTierDraft; isDefault: boolean; isMiddle: boolean } | null>(null);
@@ -2594,6 +2632,7 @@ export function ProviderProfilesManager({
     setDefaultTierClientId(initialTier.clientId);
     setTierBaseline(cloneTierDrafts([initialTier]));
     setTierBaselineDefaultId(initialTier.clientId);
+    setTierJsonText({});
   }, [createFormRuntimeSeed, editingProfileId, form.runtimeId, selectedRuntimeId]);
 
   useEffect(() => {
@@ -2638,6 +2677,7 @@ export function ProviderProfilesManager({
     setInvalidSavedDefaultIndex(null);
     setIsTierRepair(false);
     setTierFieldErrors({});
+    setTierJsonText({});
     setTierUndo(null);
     setTierRemoveDialog(null);
     setCreationPreset(null);
@@ -2686,6 +2726,7 @@ export function ProviderProfilesManager({
       setTierBaselineDefaultId(normalized.defaultTierClientId);
     }
     setTierFieldErrors({});
+    setTierJsonText({});
     setTierUndo(null);
     setTierRemoveDialog(null);
     setCreationCapabilities(capabilities);
@@ -2697,10 +2738,17 @@ export function ProviderProfilesManager({
   };
 
   // The editor sits below the collection, so Edit moves keyboard focus (and the
-  // viewport) to the editor heading once it names the selected profile.
+  // viewport) to the editor heading once it names the selected profile. Edit
+  // replaces only the profile draft, so only that draft is guarded.
   const handleEditProfile = (profile: ProviderProfile) => {
-    beginEditingProfile(profile);
-    setEditorFocusRequest((current) => current + 1);
+    requestDeparture(
+      () => {
+        beginEditingProfile(profile);
+        setEditorFocusRequest((current) => current + 1);
+      },
+      `Edit ${profile.profile_id}? Your unsaved Provider Profile draft will be discarded.`,
+      [PROVIDER_PROFILE_DRAFT_ID],
+    );
   };
 
   useEffect(() => {
@@ -2797,9 +2845,28 @@ export function ProviderProfilesManager({
     setAdvancedFocusRequest(null);
   }, [advancedFocusRequest, showAdvanced]);
 
+  const tierJsonErrors = useMemo(() => {
+    const errors: Record<string, string> = {};
+    for (const tier of tierDrafts) {
+      for (const field of TIER_JSON_FIELDS) {
+        const key = `${tier.clientId}.${field}`;
+        const text = tierJsonText[key];
+        if (text === undefined) continue;
+        const parsed = parseTierJsonObject(text);
+        if ('error' in parsed) errors[key] = parsed.error;
+      }
+    }
+    return errors;
+  }, [tierDrafts, tierJsonText]);
+
   useSettingsDraftRegistration(
-    'provider-profile',
-    canWriteProviderProfiles && (JSON.stringify(form) !== JSON.stringify(formBaseline) || tierDraftsChanged || hasTierDraft && !tierBaseline),
+    PROVIDER_PROFILE_DRAFT_ID,
+    canWriteProviderProfiles && (
+      JSON.stringify(form) !== JSON.stringify(formBaseline) ||
+      tierDraftsChanged ||
+      (hasTierDraft && !tierBaseline) ||
+      Object.keys(tierJsonErrors).length > 0
+    ),
     resetForm,
   );
 
@@ -2848,34 +2915,26 @@ export function ProviderProfilesManager({
     setTierDrafts((current) => current.map((t) => (t.clientId === clientId ? { ...t, effort } : t)));
   };
 
-  const handleTierParametersChange = (clientId: string, text: string) => {
-    try {
-      const parsed = text.trim() === '' ? {} : JSON.parse(text);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('Must be object');
-      setTierDrafts((current) => current.map((t) => (t.clientId === clientId ? { ...t, parameters: parsed as Record<string, unknown> } : t)));
-      setTierFieldErrors((prev) => {
-        const next = { ...prev };
-        delete next[`${clientId}.parameters`];
-        return next;
-      });
-    } catch (e) {
-      setTierFieldErrors((prev) => ({ ...prev, [`${clientId}.parameters`]: e instanceof Error ? e.message : 'Invalid JSON' }));
-    }
+  // Valid text updates the tier as it is typed; invalid text stays in the draft
+  // and is reported on blur and on Save.
+  const handleTierJsonChange = (clientId: string, field: TierJsonField, text: string) => {
+    const key = `${clientId}.${field}`;
+    setTierJsonText((current) => ({ ...current, [key]: text }));
+    const parsed = parseTierJsonObject(text);
+    if ('error' in parsed) return;
+    setTierDrafts((current) => current.map((t) => (t.clientId === clientId ? { ...t, [field]: parsed.value } : t)));
+    setTierFieldErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
-  const handleTierAnnotationsChange = (clientId: string, text: string) => {
-    try {
-      const parsed = text.trim() === '' ? {} : JSON.parse(text);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('Must be object');
-      setTierDrafts((current) => current.map((t) => (t.clientId === clientId ? { ...t, annotations: parsed as Record<string, unknown> } : t)));
-      setTierFieldErrors((prev) => {
-        const next = { ...prev };
-        delete next[`${clientId}.annotations`];
-        return next;
-      });
-    } catch (e) {
-      setTierFieldErrors((prev) => ({ ...prev, [`${clientId}.annotations`]: e instanceof Error ? e.message : 'Invalid JSON' }));
-    }
+  const handleTierJsonBlur = (clientId: string, field: TierJsonField) => {
+    const key = `${clientId}.${field}`;
+    const error = tierJsonErrors[key];
+    if (error) setTierFieldErrors((prev) => ({ ...prev, [key]: error }));
   };
 
   const requestRemoveTier = (index: number) => {
@@ -3500,21 +3559,33 @@ export function ProviderProfilesManager({
   const submittedOperationRef = useRef<SubmittedProfileOperation | null>(null);
   const handleSaveSubmit = () => {
     if (saveMutation.isPending) return;
-    const effortErrors: Record<string, string> = {};
+    // Every client-checked tier field blocks Save, so an error is never saved
+    // as the previous value and reported as an update.
+    const tierErrors: Record<string, string> = { ...tierJsonErrors };
     for (const tier of tierDrafts) {
       const baseline = tierBaseline?.find((saved) => saved.clientId === tier.clientId);
       if (baseline && baseline.model === tier.model && baseline.effort === tier.effort) continue;
       const option = tierEffortOptions.find((candidate) => candidate.value === tier.effort);
       if (option && !isTierEffortOptionAvailable(option, tier.model ?? tierCapabilities?.model?.runtime_default ?? null)) {
-        effortErrors[`${tier.clientId}.effort`] = `Effort "${tier.effort}" is unavailable for this model. Choose a supported effort.`;
+        tierErrors[`${tier.clientId}.effort`] = `Effort "${tier.effort}" is unavailable for this model. Choose a supported effort.`;
       }
     }
+    const clientCheckedFields = ['effort', ...TIER_JSON_FIELDS];
     setTierFieldErrors((current) => ({
-      ...Object.fromEntries(Object.entries(current).filter(([key]) => !key.endsWith('.effort'))),
-      ...effortErrors,
+      ...Object.fromEntries(
+        Object.entries(current).filter(
+          ([key]) => !clientCheckedFields.some((field) => key.endsWith(`.${field}`)),
+        ),
+      ),
+      ...tierErrors,
     }));
-    if (Object.keys(effortErrors).length > 0) {
-      onNotice({ level: 'error', text: Object.values(effortErrors)[0]! });
+    const firstErrorKey = Object.keys(tierErrors)[0];
+    if (firstErrorKey) {
+      onNotice({ level: 'error', text: tierErrors[firstErrorKey]! });
+      const control = document.querySelector<HTMLElement>(`[data-tier-field="${firstErrorKey}"]`);
+      const disclosure = control?.closest('details');
+      if (disclosure) disclosure.open = true;
+      control?.focus();
       return;
     }
     const selectedMethod =
@@ -3693,6 +3764,7 @@ export function ProviderProfilesManager({
           setTierBaseline(cloneTierDrafts([initialTier]));
           setTierBaselineDefaultId(initialTier.clientId);
           setTierFieldErrors({});
+          setTierJsonText({});
           setTierUndo(null);
           setTierRemoveDialog(null);
         }
@@ -5444,6 +5516,8 @@ export function ProviderProfilesManager({
             ) : null}
             {tierCapabilitiesLoading ? (
               <p className="text-xs text-slate-500 dark:text-slate-400">Loading model choices from backend capabilities…</p>
+            ) : !isEditing && (!form.runtimeId.trim() || !form.providerId.trim()) ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">Choose a Harness and Provider to see model choices.</p>
             ) : null}
             {tierCapabilitiesError ? (
               <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
@@ -5494,12 +5568,14 @@ export function ProviderProfilesManager({
                             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                               <span>Model</span>
                               {(() => {
+                                // Model choices come only from the backend capabilities for
+                                // this Harness and Provider; without them, only the runtime
+                                // default and the saved value are offered.
                                 const catalogOptions = tierCapabilities?.model?.options ?? [];
                                 const allowCustomModel = tierCapabilities?.model?.allow_custom === true;
                                 const knownValues = new Set([
                                   '__runtime_default__',
                                   ...catalogOptions.map((o) => o.value),
-                                  ...(tierCapabilities === null ? ['gpt-5.5', 'gpt-4o'] : []),
                                 ]);
                                 const currentValue = tier.model ?? '__runtime_default__';
                                 const isCustomValue = tier.model != null && tier.model !== '' && !knownValues.has(tier.model);
@@ -5507,7 +5583,7 @@ export function ProviderProfilesManager({
                                 // Catalog freshness controls observed options. The backend's
                                 // explicit allow_custom policy independently authorizes manual
                                 // entry, which the write/launch boundaries still validate.
-                                const selectValue = isCustomValue || isCustomDraft ? '__custom__' : currentValue;
+                                const selectValue = allowCustomModel && (isCustomValue || isCustomDraft) ? '__custom__' : currentValue;
                                 const showCustomInput = allowCustomModel && (isCustomValue || isCustomDraft);
                                 return (
                                   <>
@@ -5533,12 +5609,6 @@ export function ProviderProfilesManager({
                                           {opt.recommended ? ' · Recommended' : ''}
                                         </option>
                                       ))}
-                                      {tierCapabilities === null ? (
-                                        <>
-                                          <option value="gpt-5.5">GPT-5.5</option>
-                                          <option value="gpt-4o">GPT-4o</option>
-                                        </>
-                                      ) : null}
                                       {tier.model && !knownValues.has(tier.model) && tier.model !== '' ? (
                                         <option value={tier.model}>{tier.model} (existing — custom or unavailable)</option>
                                       ) : null}
@@ -5565,7 +5635,7 @@ export function ProviderProfilesManager({
                             </label>
                             <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                               <span>Effort level</span>
-                              <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.effort ?? '__runtime_default__'} onChange={(e) => handleTierEffortChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} effort`}>
+                              <select className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm" value={tier.effort ?? '__runtime_default__'} onChange={(e) => handleTierEffortChange(tier.clientId, e.target.value === '__runtime_default__' ? null : e.target.value)} aria-label={`Tier ${tierNumber} effort`} data-tier-field={`${tier.clientId}.effort`}>
                                 <option value="__runtime_default__">Runtime default{tierCapabilities?.effort?.runtime_default ? ` — ${tierCapabilities.effort.runtime_default}` : ''}</option>
                                 {tierEffortOptions.map((opt) => (
                                   <option key={opt.value} value={opt.value} disabled={!isTierEffortOptionAvailable(opt, tier.model ?? tierCapabilities?.model?.runtime_default ?? null)}>
@@ -5584,16 +5654,28 @@ export function ProviderProfilesManager({
                           <details className="rounded-xl border border-slate-200 dark:border-slate-800 p-3">
                             <summary className="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">Advanced tier options</summary>
                             <div className="mt-3 space-y-3">
-                              <label className="flex flex-col gap-1.5 text-sm">
-                                <span>Parameters (JSON)</span>
-                                <textarea rows={3} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-xs" defaultValue={JSON.stringify(tier.parameters, null, 2)} onBlur={(e) => handleTierParametersChange(tier.clientId, e.target.value)} aria-label={`Tier ${tierNumber} parameters`} />
-                                {tierFieldErrors[`${tier.clientId}.parameters`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.parameters`]}</span> : null}
-                              </label>
-                              <label className="flex flex-col gap-1.5 text-sm">
-                                <span>Annotations (JSON)</span>
-                                <textarea rows={3} className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-xs" defaultValue={JSON.stringify(tier.annotations, null, 2)} onBlur={(e) => handleTierAnnotationsChange(tier.clientId, e.target.value)} aria-label={`Tier ${tierNumber} annotations`} />
-                                {tierFieldErrors[`${tier.clientId}.annotations`] ? <span className="text-xs text-rose-600">{tierFieldErrors[`${tier.clientId}.annotations`]}</span> : null}
-                              </label>
+                              {TIER_JSON_FIELDS.map((field) => {
+                                const key = `${tier.clientId}.${field}`;
+                                const error = tierFieldErrors[key];
+                                const errorId = `tier-field-error-${tier.clientId}-${field}`;
+                                return (
+                                  <label key={field} className="flex flex-col gap-1.5 text-sm">
+                                    <span>{field === 'parameters' ? 'Parameters' : 'Annotations'} (JSON)</span>
+                                    <textarea
+                                      rows={3}
+                                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 font-mono text-xs"
+                                      value={tierJsonText[key] ?? JSON.stringify(tier[field], null, 2)}
+                                      onChange={(e) => handleTierJsonChange(tier.clientId, field, e.target.value)}
+                                      onBlur={() => handleTierJsonBlur(tier.clientId, field)}
+                                      aria-label={`Tier ${tierNumber} ${field}`}
+                                      aria-invalid={error ? true : undefined}
+                                      aria-describedby={error ? errorId : undefined}
+                                      data-tier-field={key}
+                                    />
+                                    {error ? <span id={errorId} className="text-xs text-rose-600">{error}</span> : null}
+                                  </label>
+                                );
+                              })}
                             </div>
                           </details>
                         </>

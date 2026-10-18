@@ -1,7 +1,14 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ExecutionStatusPill, StepExecutionStatusPill, WorkflowLifecycleStatusPill } from './ExecutionStatusPill';
+import {
+  CheckpointBranchStatusPill,
+  CheckpointBranchTurnStatusPill,
+  DependencyStatusPill,
+  ExecutionStatusPill,
+  StepExecutionStatusPill,
+  WorkflowLifecycleStatusPill,
+} from './ExecutionStatusPill';
 
 describe('ExecutionStatusPill', () => {
   afterEach(() => {
@@ -108,4 +115,26 @@ it.each(([
   render(<WorkflowLifecycleStatusPill status={status} objectiveOutcome={objectiveOutcome} enableMotion={false} />);
   expect(screen.getByText(label)).toBeTruthy();
   expect(screen.queryByText('Idle')).toBeNull();
+});
+
+it('labels checkpoint branch, branch turn and dependency statuses without warnings', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  render(
+    <>
+      <CheckpointBranchStatusPill status="promotable" />
+      <CheckpointBranchTurnStatusPill status="succeeded" />
+      <DependencyStatusPill status="waiting_on_dependencies" />
+      <DependencyStatusPill status="timed_out" />
+      <DependencyStatusPill status={null} />
+    </>,
+  );
+
+  expect(screen.getByText('Promotable').className).toContain('status-awaiting-action');
+  expect(screen.getByText('Succeeded').className).toContain('status-completed');
+  expect(screen.getByText('Awaiting dependencies').className).toContain('status-awaiting-dependencies');
+  expect(screen.getByText('Timed out').className).toContain('status-failed');
+  expect(screen.getByText('Unknown').className).toContain('status-neutral');
+  expect(warn).not.toHaveBeenCalled();
+  warn.mockRestore();
 });
