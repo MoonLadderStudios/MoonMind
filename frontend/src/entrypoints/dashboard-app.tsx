@@ -305,9 +305,9 @@ function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
 function LoadingPage() {
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 shadow-sm dark:text-slate-400">
+      <h1 className="m-0 rounded-3xl border border-mm-border/80 bg-transparent p-6 font-sans text-sm font-normal leading-normal text-slate-500 shadow-sm dark:text-slate-400">
         Loading MoonMind...
-      </div>
+      </h1>
     </div>
   );
 }

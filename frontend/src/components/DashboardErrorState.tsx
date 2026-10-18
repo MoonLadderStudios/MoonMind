@@ -7,7 +7,8 @@ import { apiErrorKind, type ApiErrorKind } from '../lib/api/client';
  *
  * Shared presentation for route errors, configuration errors, and boot
  * failures so dashboard load failures are recoverable, styled, and
- * diagnosable rather than raw unstyled HTML.
+ * diagnosable rather than raw unstyled HTML. The title is the page's `h1`
+ * unless the state renders under a page that already owns one.
  */
 export function DashboardErrorState({
   title,
@@ -15,20 +16,23 @@ export function DashboardErrorState({
   detail,
   onRetry,
   retryLabel = 'Try again',
+  headingLevel = 1,
 }: {
   title: string;
   description: ReactNode;
   detail?: string | null;
   onRetry?: (() => void) | undefined;
   retryLabel?: string;
+  headingLevel?: 1 | 2 | undefined;
 }) {
+  const Heading = headingLevel === 1 ? 'h1' : 'h2';
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
       <div
         role="alert"
         className="rounded-3xl border border-rose-200 bg-rose-50 p-6 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20"
       >
-        <h2 className="text-base font-semibold text-rose-800 dark:text-rose-300">{title}</h2>
+        <Heading className="text-base font-semibold text-rose-800 dark:text-rose-300">{title}</Heading>
         <div className="mt-2 text-sm text-rose-700 dark:text-rose-400">{description}</div>
         {detail ? (
           <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-rose-100/70 p-3 text-xs text-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
@@ -97,11 +101,13 @@ export function ApiErrorState({
   error,
   subject,
   onRetry,
+  headingLevel,
 }: {
   error: unknown;
   /** Lower-case noun for the entity, e.g. "workflow". */
   subject: string;
   onRetry?: () => void;
+  headingLevel?: 1 | 2 | undefined;
 }) {
   const copy = API_ERROR_COPY[apiErrorKind(error)](subject);
   return (
@@ -111,6 +117,7 @@ export function ApiErrorState({
       detail={error instanceof Error ? error.message : null}
       onRetry={copy.retryable ? onRetry : undefined}
       retryLabel="Retry"
+      headingLevel={headingLevel}
     />
   );
 }

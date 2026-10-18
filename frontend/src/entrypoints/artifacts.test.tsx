@@ -110,6 +110,7 @@ describe('ArtifactsPage', () => {
         <ArtifactsPage payload={{ page: 'artifacts', apiBase: '/api', features: { artifacts: false } }} />
       </MemoryRouter>,
     );
+    expect(screen.getByRole('heading', { level: 1, name: 'Artifacts & Observability' })).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('not enabled');
     expect(fetchSpy).not.toHaveBeenCalled();
   });

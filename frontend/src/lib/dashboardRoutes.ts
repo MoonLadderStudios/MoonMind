@@ -157,8 +157,9 @@ export const DASHBOARD_REACT_ROUTE_PATHS = Array.from(
 
 /**
  * Detects version skew between this bundle and the server. Only the contract
- * the two sides share is compared — destination keys, paths and capability
- * keys — so a wording or icon change on either side is not reported as skew.
+ * the two sides share is compared — destination keys, paths, capability keys
+ * and endpoint keys — so a wording or icon change on either side is not
+ * reported as skew.
  */
 export function matchesDashboardDestinationRegistry(
   destinations: DashboardDestinationInfo[] | undefined,
@@ -170,6 +171,7 @@ export function matchesDashboardDestinationRegistry(
     return Boolean(remote) && (
       local.canonicalPath === remote?.canonicalPath &&
       local.capabilityKey === remote.capabilityKey &&
+      local.endpointKey === remote.endpointKey &&
       JSON.stringify(local.pathPatterns) === JSON.stringify(remote.pathPatterns)
     );
   });

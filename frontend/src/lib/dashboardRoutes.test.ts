@@ -104,6 +104,9 @@ describe('dashboard route resolution', () => {
       index === 0 ? { ...item, canonicalPath: '/drifted' } : item
     )))).toBe(false);
     expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
+      index === 0 ? { ...item, endpointKey: 'drifted' } : item
+    )))).toBe(false);
+    expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
       index === 0 ? { ...item, pathPatterns: ['/drifted'] } : item
     )))).toBe(false);
   });

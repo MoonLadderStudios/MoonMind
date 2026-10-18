@@ -106,6 +106,6 @@ export default function ArtifactsPage({ payload }: { payload: BootPayload }) {
     : 'artifacts';
   useDocumentTitle('Artifacts & Observability');
   const enabled = payload.features?.artifacts !== false;
-  if (!enabled) return <div role="alert">Artifacts and observability are not enabled for this deployment.</div>;
+  if (!enabled) return <div className="evidence-workspace"><header><p className="eyebrow">Evidence</p><h1>Artifacts &amp; Observability</h1></header><div role="alert">Artifacts and observability are not enabled for this deployment.</div></div>;
   return <div className="evidence-workspace"><header><p className="eyebrow">Evidence</p><h1>Artifacts &amp; Observability</h1><p>Authorized evidence from MoonMind-owned, same-origin services.</p><nav aria-label="Evidence collections">{CATEGORIES.map((item) => <Link key={item.value} to={item.value === 'observability' ? '/observability' : `/artifacts#${item.value}-heading`}>{item.label}</Link>)}</nav></header><EvidenceSection category={selected} apiBase={payload.apiBase || '/api'} />{selected === 'artifacts' ? <><EvidenceSection category="reports" apiBase={payload.apiBase || '/api'} /><EvidenceSection category="observability" apiBase={payload.apiBase || '/api'} /></> : null}</div>;
 }
