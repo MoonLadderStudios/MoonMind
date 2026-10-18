@@ -41,7 +41,7 @@ describe('remediationCreateDraft', () => {
       model: 'gpt-5',
       effort: 'high',
       profileId: 'profile:codex',
-      resume: { checkpointRef: 'artifact://checkpoint/failed-step' },
+      latestCheckpointRef: 'artifact://checkpoint/failed-step',
     });
 
     expect(draft).toMatchObject({

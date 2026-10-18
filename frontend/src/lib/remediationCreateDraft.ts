@@ -82,10 +82,6 @@ type RemediationDraftExecution = {
   state?: string | null | undefined;
   rawState?: string | null | undefined;
   status?: string | null | undefined;
-  resume?: {
-    checkpointRef?: string | null | undefined;
-    sourceRunId?: string | null | undefined;
-  } | null | undefined;
   inputParameters?: Record<string, unknown> | null | undefined;
   steps?: Array<Record<string, unknown>> | null | undefined;
   stepLedger?: Array<Record<string, unknown>> | null | undefined;
@@ -178,12 +174,6 @@ function checkpointSelectors(execution: RemediationDraftExecution): Array<Record
     });
   };
 
-  if (execution.resume?.checkpointRef) {
-    selectors.push({
-      source: 'resume',
-      checkpointRef: execution.resume.checkpointRef,
-    });
-  }
   for (const item of execution.checkpoints || []) add(item, 'checkpoint');
   for (const item of execution.stepLedger || []) add(item, 'step_ledger');
   for (const item of execution.steps || []) add(item, 'step');

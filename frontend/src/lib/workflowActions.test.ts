@@ -14,8 +14,7 @@ function noopHandlers(): WorkflowActionHandlers {
     onEditTask: vi.fn(),
     onCompareRun: vi.fn(),
     onRerun: vi.fn(),
-    onResumeFromFailedStep: vi.fn(),
-    onRecoverFromSelectedStep: vi.fn(),
+    onRetryFromStep: vi.fn(),
     onContinueRemediation: vi.fn(),
     onRetryPublication: vi.fn(),
     onPause: vi.fn(),
@@ -44,9 +43,6 @@ function buildParams(
     canShowEditWorkflow: false,
     editTaskDisabledReason: null,
     rerunDisabledReason: null,
-    selectedRecoveryOptionCount: 0,
-    selectedRecoveryStepEligible: false,
-    selectedRecoveryStepDisabledReason: null,
     canCreateRemediation: false,
     handlers: noopHandlers(),
     ...overrides,
@@ -119,13 +115,12 @@ describe('buildWorkflowActionMenuItems', () => {
         canShowEditWorkflow: true,
         editHref: '/tasks/abc/edit',
         compareHref: '/tasks/abc/compare',
-        actions: { canRerun: true, canResumeFromFailedStep: true },
+        actions: { canRerun: true },
       }),
     );
     expect(withEditing.map((item) => item.id)).toEqual([
       'edit-task',
       'rerun',
-      'resume-from-failed-step',
       'compare-run',
     ]);
     expect(withEditing.find((item) => item.id === 'edit-task')?.href).toBe('/tasks/abc/edit');
@@ -188,22 +183,26 @@ describe('buildWorkflowActionMenuItems', () => {
     });
   });
 
-  it('omits recover-from-selected-step unless a recovery option is selected', () => {
-    const base = {
-      taskEditingOn: true,
-      actions: { canResumeFromFailedStep: true } as ExecutionActionCapabilities,
-    };
-    const withoutSelection = buildWorkflowActionMenuItems(buildParams(base));
-    expect(withoutSelection.some((item) => item.id === 'recover-from-selected-step')).toBe(false);
+  it('offers retry from the failed step without requiring task editing', () => {
+    const handlers = noopHandlers();
+    const items = buildWorkflowActionMenuItems(
+      buildParams({ actions: { canRetryFromStep: true }, handlers }),
+    );
+    expect(items.map((item) => item.id)).toEqual(['retry-from-failed-step']);
+    expect(items[0]?.label).toBe('Retry from failed step');
+    items[0]?.onSelect?.();
+    expect(handlers.onRetryFromStep).toHaveBeenCalledOnce();
 
-    const withSelection = buildWorkflowActionMenuItems(
+    const unavailable = buildWorkflowActionMenuItems(
       buildParams({
-        ...base,
-        selectedRecoveryOptionCount: 1,
-        selectedRecoveryStepEligible: true,
+        actions: { canRetryFromStep: false },
+        disabledReason: (key) => (key === 'canRetryFromStep' ? 'child workflow' : null),
       }),
     );
-    expect(withSelection.some((item) => item.id === 'recover-from-selected-step')).toBe(true);
+    expect(unavailable[0]).toMatchObject({
+      id: 'retry-from-failed-step',
+      disabledReason: 'child workflow',
+    });
   });
 
   it('surfaces a disabled reason for unavailable actions that report one', () => {

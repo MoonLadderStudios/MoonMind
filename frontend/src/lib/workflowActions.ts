@@ -17,7 +17,7 @@ export const ExecutionActionsSchema = z
     canApprove: z.boolean().optional(),
     canPause: z.boolean().optional(),
     canResume: z.boolean().optional(),
-    canResumeFromFailedStep: z.boolean().optional(),
+    canRetryFromStep: z.boolean().optional(),
     canContinueRemediation: z.boolean().optional(),
     canRetryPublication: z.boolean().optional(),
     canPublishSavedWork: z.boolean().optional(),
@@ -75,8 +75,7 @@ export type WorkflowActionHandlers = {
   onEditTask: () => void;
   onCompareRun: () => void;
   onRerun: () => void;
-  onResumeFromFailedStep: () => void;
-  onRecoverFromSelectedStep: () => void;
+  onRetryFromStep: () => void;
   onContinueRemediation: () => void;
   onRetryPublication: () => void;
   onPause: () => void;
@@ -106,15 +105,6 @@ export type WorkflowActionMenuBuilderParams = {
   editTaskDisabledReason: string | null;
   /** Display-ready reason for an unavailable Rerun action, or null. */
   rerunDisabledReason: string | null;
-  /**
-   * Number of operator-selected recovery steps. The "Recover from selected step"
-   * action only applies when a step is selected on the detail page, so the list
-   * row passes 0 and that option is omitted.
-   */
-  selectedRecoveryOptionCount: number;
-  selectedRecoveryStepEligible: boolean;
-  /** Display-ready reason for an ineligible selected recovery step. */
-  selectedRecoveryStepDisabledReason: string | null;
   canCreateRemediation: boolean;
   /**
    * Keep Remediate rendered (disabled, with a reason) even when the target
@@ -147,9 +137,6 @@ export function buildWorkflowActionMenuItems(
     canShowEditWorkflow,
     editTaskDisabledReason,
     rerunDisabledReason,
-    selectedRecoveryOptionCount,
-    selectedRecoveryStepEligible,
-    selectedRecoveryStepDisabledReason,
     canCreateRemediation,
     keepRemediationVisible = false,
     handlers,
@@ -283,6 +270,14 @@ export function buildWorkflowActionMenuItems(
     disabledReason: disabledReason('canRetryPublication'),
     onSelect: handlers.onRetryPublication,
   });
+  // Retry keeps the workflow's recorded inputs, so it does not need editing.
+  addButton({
+    id: 'retry-from-failed-step',
+    label: 'Retry from failed step',
+    available: Boolean(actions.canRetryFromStep),
+    disabledReason: disabledReason('canRetryFromStep'),
+    onSelect: handlers.onRetryFromStep,
+  });
   if (taskEditingOn) {
     addButton({
       id: 'rerun',
@@ -291,22 +286,6 @@ export function buildWorkflowActionMenuItems(
       disabledReason: rerunDisabledReason,
       onSelect: handlers.onRerun,
     });
-    addButton({
-      id: 'resume-from-failed-step',
-      label: 'Resume from failed step',
-      available: Boolean(actions.canResumeFromFailedStep),
-      disabledReason: disabledReason('canResumeFromFailedStep'),
-      onSelect: handlers.onResumeFromFailedStep,
-    });
-    if (actions.canResumeFromFailedStep && selectedRecoveryOptionCount > 0) {
-      addButton({
-        id: 'recover-from-selected-step',
-        label: 'Recover from selected step',
-        available: selectedRecoveryStepEligible,
-        disabledReason: selectedRecoveryStepDisabledReason ?? 'selected step is not eligible',
-        onSelect: handlers.onRecoverFromSelectedStep,
-      });
-    }
   }
   // Remaining, less commonly used actions follow.
   addButton({
@@ -363,6 +342,63 @@ export function buildWorkflowActionMenuItems(
     onSelect: handlers.onSendMessage,
   });
   return items;
+}
+
+export type RetryFromStepRequest = {
+  apiBase: string;
+  workflowId: string;
+  /** The failed run being retried; a newer run makes the request conflict. */
+  sourceRunId?: string | null;
+  /** Omit to restart from the failed step the server records. */
+  stepId?: string | null;
+};
+
+export type RetryFromStepResult = {
+  workflowId: string;
+  runId: string;
+  sourceRunId: string;
+  stepId: string;
+  stepTitle?: string | null;
+  message: string;
+};
+
+/**
+ * Restart a closed run from one of its steps. Earlier steps are kept and the
+ * workflow keeps its id; refusals carry a readable `detail.message`.
+ */
+export async function requestRetryFromStep({
+  apiBase,
+  workflowId,
+  sourceRunId,
+  stepId,
+}: RetryFromStepRequest): Promise<RetryFromStepResult> {
+  const response = await fetch(
+    `${apiBase}/executions/${encodeURIComponent(workflowId)}/retry-from-step`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: `retry-${workflowId}-${sourceRunId || 'latest'}-${stepId || 'failed'}`,
+        ...(sourceRunId ? { sourceRunId } : {}),
+        ...(stepId ? { stepId } : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || response.statusText;
+    try {
+      const detail = JSON.parse(text)?.detail;
+      if (typeof detail?.message === 'string' && detail.message) {
+        message = detail.message;
+      }
+    } catch {
+      // Keep the raw response text when it is not JSON.
+    }
+    throw new Error(message);
+  }
+  return response.json();
 }
 
 function coalesceString(...values: unknown[]): string {
