@@ -86,37 +86,12 @@ from moonmind.omnigent.runtime_provider_rollout import (
     freeze_rollout_record,
     load_runtime_provider_rollout_policy,
     resolve_rollout_decision,
-    state_admits_execution,
     state_admits_new_authoring,
 )
 
 
 GENERIC_REALIZER_REF = "generic-omnigent-host@1"
 LEGACY_CODEX_REALIZER_REF = "codex-profile-bound@1"
-
-
-def _rollout_admits_execution(
-    *,
-    policy: RuntimeProviderRolloutPolicy,
-    harness_id: str,
-    path_class: RuntimeProviderPathClass,
-) -> bool:
-    """Return whether the rollout policy admits execution on this exact row.
-
-    ``retired_for_new_work`` still admits execution so recorded authority stays
-    replayable and rerunnable; only ``disabled`` blocks compilation. An
-    *unregistered* harness row resolves to ``explicit_only`` (a missing support
-    row leaves the path explicit, never promoted), so a newly registered harness
-    stays launchable without a rollout edit while promotion remains policy-owned.
-    """
-
-    rules = policy.rules_for(harness_id=harness_id, path_class=path_class)
-    if not rules:
-        return True
-    return any(
-        state_admits_execution(effective_rule_state(rule, policy)[0])
-        for rule in rules
-    )
 
 
 def _rollout_admits_new_authoring(
@@ -134,21 +109,6 @@ def _rollout_admits_new_authoring(
         state_admits_new_authoring(effective_rule_state(rule, policy)[0])
         for rule in rules
     )
-
-
-def _realizer_path_class(
-    *, harness_id: str, execution_realizer_ref: str
-) -> RuntimeProviderPathClass | None:
-    """Return the path class an explicit realizer belongs to for a harness."""
-
-    if execution_realizer_ref == GENERIC_REALIZER_REF:
-        return RuntimeProviderPathClass.generic_omnigent
-    if (
-        execution_realizer_ref == LEGACY_CODEX_REALIZER_REF
-        and harness_id == "codex-native"
-    ):
-        return RuntimeProviderPathClass.legacy_profile_bound_omnigent
-    return None
 
 
 def _primary_materializer_ref(
@@ -561,7 +521,6 @@ def compile_execution_plan(
     omnigent_host_build_digest: str | None = None,
     host_architecture: str | None = None,
     capture_policy_ref: str | None = None,
-    execution_realizer_ref: str | None = None,
     execution_authority: dict[str, Any] | None = None,
     agent_profile_snapshot_ref: str | None = None,
     rollout_policy: RuntimeProviderRolloutPolicy | None = None,
@@ -836,52 +795,18 @@ def compile_execution_plan(
     )
 
     # 12. Select execution realizer + compute support combination key
-    # Realizer is trusted planner selection, never workflow-authored; ignore caller override
-    # For tests that explicitly request a realizer for codex preservation, allow only if compatible
-    # Otherwise select via trusted policy
+    # Deployment policy selects the realizer for the admitted binding authority.
     active_rollout_policy = (
         rollout_policy or load_runtime_provider_rollout_policy()
     )
-    trusted_realizer = select_execution_realizer(
+    realizer = select_execution_realizer(
         harness_id=profile.harness.id,
         is_codex=(profile.harness.id == "codex-native"),
         rollout_policy=active_rollout_policy,
-        required_authority_kinds=(
-            required_worker_authority_kinds(credential_binding_set)
-            if execution_realizer_ref is None
-            else ("model",)
+        required_authority_kinds=required_worker_authority_kinds(
+            credential_binding_set
         ),
     )
-    if (
-        execution_realizer_ref is not None
-        and execution_realizer_ref != trusted_realizer
-    ):
-        # An explicit realizer is admissible only when the rollout policy admits
-        # that exact harness x path-class row. Denial fails closed; it never
-        # substitutes the trusted selection for the requested one.
-        requested_path_class = _realizer_path_class(
-            harness_id=profile.harness.id,
-            execution_realizer_ref=execution_realizer_ref,
-        )
-        if requested_path_class is None:
-            raise HarnessPlatformError(
-                f"execution realizer {execution_realizer_ref} not selectable for harness {profile.harness.id}",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
-            )
-        if not _rollout_admits_execution(
-            policy=active_rollout_policy,
-            harness_id=profile.harness.id,
-            path_class=requested_path_class,
-        ):
-            raise HarnessPlatformError(
-                f"execution realizer {execution_realizer_ref} is not qualified "
-                f"for {profile.harness.id} in this deployment; explicit generic "
-                "selection is fail-closed",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
-            )
-        realizer = execution_realizer_ref
-    else:
-        realizer = trusted_realizer
     # Validate realizer exists
     try:
         from moonmind.omnigent.harness_platform.support import (
@@ -897,20 +822,14 @@ def compile_execution_plan(
 
     from moonmind.omnigent.realizers.registry import realizer_authority_kinds
 
-    # Explicit owners retain their selection. Agent-consumed bindings require
-    # the selected realizer's support; native grants belong to Activities and
-    # are independently barred from agent execution.
+    # Agent-consumed bindings require the selected realizer's support; native
+    # grants belong to Activities and are independently barred from agent execution.
     assert_worker_supports_binding_set(
         realizer_authority_kinds(realizer), credential_binding_set
     )
 
-    # Retirement admission (#3835 required work 2). Plan compilation is the one
-    # new-admission boundary for every client: a trusted planner default, an
-    # explicit ``execution_realizer_ref`` from an alternate API client, a
-    # schedule, and a preset all resolve here. Once the code-owned retirement
-    # class for a realizer stops admitting new work, no new plan may select it,
-    # while already-recorded plans keep executing, cancelling, cleaning up, and
-    # reading normally.
+    # Retirement gates new plans, including schedules and presets. Recorded
+    # plans keep their realizer for execution, cancellation, cleanup, and reads.
     from moonmind.omnigent.legacy_retirement import (
         LegacyAdmissionRejected,
         assert_surface_admits_new_work,
