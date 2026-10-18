@@ -7800,12 +7800,14 @@ def _build_action_capabilities(
     ):
         enabled = enabled - {"can_update_inputs", "can_edit_for_rerun", "can_rerun"}
     # Retry from a step resets the closed run's own history, so it needs no
-    # input snapshot. A parent workflow owns its children's retries.
+    # input snapshot. A parent workflow owns its children's retries, and the
+    # route applies the same submission gate as other new work.
     retry_owned_by_parent = bool(memo.get("objectiveParentId"))
     if (
         workflow_type_value == "MoonMind.UserWorkflow"
         and raw_state in _RETRYABLE_CLOSED_STATES
         and not retry_owned_by_parent
+        and settings.temporal_dashboard.submit_enabled
     ):
         enabled = enabled | {"can_retry_from_step"}
     git_publication = auxiliary_outcomes.get("gitPublication")
@@ -7880,6 +7882,8 @@ def _build_action_capabilities(
                 disabled_reasons[alias] = "unsupported_workflow_type"
             elif raw_state in _RETRYABLE_CLOSED_STATES and retry_owned_by_parent:
                 disabled_reasons[alias] = "child_workflow"
+            elif raw_state in _RETRYABLE_CLOSED_STATES:
+                disabled_reasons[alias] = "temporal_submit_disabled"
             else:
                 disabled_reasons[alias] = "state_not_eligible"
             continue

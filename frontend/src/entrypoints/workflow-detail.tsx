@@ -6972,17 +6972,18 @@ type RetryStepOption = {
 
 /**
  * Steps a failed run can restart from: every step it started, up to the
- * failed step. The server makes the final decision from Temporal history.
+ * earliest failed step, matching the server's default. The server makes the
+ * final decision from Temporal history, which records a step's start before
+ * the ledger sets startedAt, so a failed step counts as started without it.
  */
 function retryStepOptions(
   rows: z.infer<typeof StepLedgerRowSchema>[],
   failedStepId: string | null | undefined,
 ): RetryStepOption[] {
-  const started = rows.filter((row) => Boolean(row.startedAt));
-  const defaultRow =
-    started.find((row) => row.logicalStepId === failedStepId) ||
-    [...started].reverse().find((row) => row.status === 'failed') ||
-    started[started.length - 1];
+  const isFailed = (row: z.infer<typeof StepLedgerRowSchema>) =>
+    row.status === 'failed' || row.logicalStepId === failedStepId;
+  const started = rows.filter((row) => Boolean(row.startedAt) || isFailed(row));
+  const defaultRow = started.find(isFailed) || started[started.length - 1];
   if (!defaultRow) return [];
   return started
     .filter((row) => row.order <= defaultRow.order)
