@@ -1817,81 +1817,22 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
         db_base.async_session_maker = original_session_maker
 
 
-def test_typed_recover_route_contract_is_registered() -> None:
+def test_retry_from_step_route_contract_is_registered() -> None:
     schema = app.openapi()
-    route = schema["paths"]["/api/executions/{workflow_id}/recover"]["post"]
-    assert route["responses"]["201"]["description"]
+    route = schema["paths"]["/api/executions/{workflow_id}/retry-from-step"]["post"]
+    assert route["responses"]["202"]["description"]
     request_schema = route["requestBody"]["content"]["application/json"]["schema"]
     ref = request_schema["$ref"].removeprefix("#/components/schemas/")
     request_contract = schema["components"]["schemas"][ref]
-    properties = request_contract["properties"]
     assert request_contract["additionalProperties"] is False
-    assert {
-        "schemaVersion",
-        "recoveryAction",
-        "target",
-        "source",
-        "checkpoint",
-        "continuation",
-        "capabilitySnapshot",
-        "preservedStepRefs",
-        "sideEffectDispositionRef",
-        "destination",
-    }.issubset(properties)
-
-
-def test_recover_from_failed_step_route_contract_is_registered() -> None:
-    schema = app.openapi()
-    route = schema["paths"]["/api/executions/{workflow_id}/recover-from-failed-step"]["post"]
-    assert route["responses"]["201"]["description"]
-    request_schema = route["requestBody"]["content"]["application/json"]["schema"]
-    ref = request_schema["$ref"].removeprefix("#/components/schemas/")
-    request_contract = schema["components"]["schemas"][ref]
-    properties = request_contract["properties"]
-    assert request_contract["additionalProperties"] is False
-    assert {
-        "sourceWorkflowId",
+    assert set(request_contract["properties"]) == {
+        "idempotencyKey",
+        "stepId",
         "sourceRunId",
-        "logicalStepId",
-        "sourceExecutionOrdinal",
-        "recoveryCheckpointRef",
-        "checkpointBoundary",
-        "taskInputSnapshotRef",
-        "planRef",
-        "planDigest",
-        "preservedStepRefs",
-        "dependencySignatures",
-        "workspacePolicy",
-    }.issubset(properties)
-
-
-def test_recover_from_selected_step_route_contract_is_registered() -> None:
-    schema = app.openapi()
-    route = schema["paths"]["/api/executions/{workflow_id}/recover-from-selected-step"]["post"]
-    assert route["responses"]["201"]["description"]
-    request_schema = route["requestBody"]["content"]["application/json"]["schema"]
-    ref = request_schema["$ref"].removeprefix("#/components/schemas/")
-    request_contract = schema["components"]["schemas"][ref]
-    properties = request_contract["properties"]
-    assert request_contract["additionalProperties"] is False
-    assert {
-        "sourceWorkflowId",
-        "sourceRunId",
-        "selectedStartStepId",
-        "logicalStepId",
-        "sourceExecutionOrdinal",
-        "recoveryCheckpointRef",
-        "checkpointBoundary",
-        "taskInputSnapshotRef",
-        "planRef",
-        "planDigest",
-        "preservedStepRefs",
-        "dependencySignatures",
-        "workspacePolicy",
-    }.issubset(properties)
-    assert {"sourceWorkflowId", "sourceRunId", "selectedStartStepId"}.issubset(
-        set(request_contract["required"])
-    )
+    }
+    assert request_contract["required"] == ["idempotencyKey"]
+    for retired in ("recover", "recover-from-failed-step", "recover-from-selected-step"):
+        assert f"/api/executions/{{workflow_id}}/{retired}" not in schema["paths"]
 
 
 def _request_component_for(path: str) -> dict[str, object]:

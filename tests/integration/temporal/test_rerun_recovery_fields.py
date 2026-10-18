@@ -1,9 +1,8 @@
-"""Hermetic integration coverage for MM-643 backend-computed Resume eligibility."""
+"""Fresh reruns and edited retries never carry recovery reference fields."""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -17,7 +16,6 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
 )
-from moonmind.schemas.temporal_models import FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -25,7 +23,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 @asynccontextmanager
 async def _db(tmp_path: Path):
-    url = f"sqlite+aiosqlite:///{tmp_path}/backend_recovery_eligibility.db"
+    url = f"sqlite+aiosqlite:///{tmp_path}/rerun_recovery_fields.db"
     engine = create_async_engine(url, future=True)
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:
@@ -34,140 +32,6 @@ async def _db(tmp_path: Path):
         yield maker
     finally:
         await engine.dispose()
-
-
-def _checkpoint_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
-    return {
-        "schemaVersion": "v1",
-        "source": {"workflowId": workflow_id, "runId": run_id},
-        "taskInputSnapshotRef": "artifact://snapshot/source",
-        "planDigest": "sha256:plan",
-        "failedStep": {
-            "logicalStepId": "implement",
-            "order": 2,
-            "attempt": 1,
-            "title": "Implement",
-        },
-        "preservedSteps": [
-            {
-                "logicalStepId": "plan",
-                "order": 1,
-                "status": "succeeded",
-                "sourceExecutionOrdinal": 1,
-                "artifacts": {"outputSummary": "artifact://summary"},
-                "stateCheckpointRef": "artifact://workspace/before-plan",
-            }
-        ],
-        "preparedArtifactRefs": ["artifact://prepared"],
-        "recoveryWorkspace": {"branch": "feature", "commit": "abc123"},
-    }
-
-
-def _recovery_manifest_payload(*, workflow_id: str, run_id: str) -> dict[str, object]:
-    return {
-        "schemaVersion": "v1",
-        "contentType": FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
-        "workflowId": workflow_id,
-        "runId": run_id,
-        "failedLogicalStepId": "implement",
-        "failedExecutionOrdinal": 1,
-        "validation": {
-            "result": "valid",
-            "checkpointRef": "artifact://checkpoint/source",
-            "boundary": "before_recovery_restoration",
-        },
-        "resumeAllowed": True,
-        "recoveryEligibility": {
-            "eligible": True,
-            "defaultAction": "resume_from_checkpoint",
-            "checkpointRef": "artifact://checkpoint/source",
-            "operatorGuidance": "resume",
-        },
-        "createdAt": datetime.now(UTC),
-    }
-
-
-async def test_checkpoint_payload_stays_ref_only_and_contains_prepared_refs() -> None:
-    payload = _checkpoint_payload(workflow_id="wf-source", run_id="run-source")
-
-    assert payload["preparedArtifactRefs"] == ["artifact://prepared"]
-    assert payload["preservedSteps"][0]["stateCheckpointRef"] == (
-        "artifact://workspace/before-plan"
-    )
-    assert "inlineCheckpointPayload" not in str(payload)
-
-
-async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
-    tmp_path: Path,
-) -> None:
-    async with _db(tmp_path) as maker:
-        async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
-            created = await service.create_execution(
-                workflow_type="MoonMind.UserWorkflow",
-                owner_id=uuid4(),
-                title="Recovery source",
-                input_artifact_ref="artifact://input/source",
-                plan_artifact_ref="artifact://plan/source",
-                manifest_artifact_ref=None,
-                failure_policy=None,
-                initial_parameters={
-                    "agentRunId": "old-agent-run",
-                    "workflow": {"title": "Recovery source", "instructions": "Original"},
-                },
-                idempotency_key=None,
-            )
-            created.state = MoonMindWorkflowState.FAILED
-            created.close_status = TemporalExecutionCloseStatus.FAILED
-            created.memo = {
-                **created.memo,
-                "task_input_snapshot_ref": "artifact://snapshot/source",
-                "recovery_checkpoint_ref": "artifact://checkpoint/source",
-            }
-            await session.commit()
-
-            result = await service.create_failed_step_recovery_execution(
-                created,
-                recovery_checkpoint_ref=None,
-                idempotency_key="resume-mm-643",
-                checkpoint_payload=_checkpoint_payload(
-                    workflow_id=created.workflow_id,
-                    run_id=created.run_id,
-                ),
-                failed_run_recovery_manifest_ref="artifact://manifest/source",
-                failed_run_recovery_manifest=_recovery_manifest_payload(
-                    workflow_id=created.workflow_id,
-                    run_id=created.run_id,
-                ),
-            )
-            resumed = await service.describe_execution(result["execution"]["workflowId"])
-
-    workflow_payload = resumed.parameters["workflow"]
-    assert workflow_payload["recovery"] == {
-        "kind": "recover_from_failed_step",
-        "sourceWorkflowId": created.workflow_id,
-        "sourceRunId": created.run_id,
-    }
-    assert workflow_payload["resume"] == {
-        "kind": "recover_from_failed_step",
-        "sourceWorkflowId": created.workflow_id,
-        "sourceRunId": created.run_id,
-        "failedStepId": "implement",
-        "failedStepExecution": 1,
-        "recoveryCheckpointRef": "artifact://checkpoint/source",
-        "failedRunRecoveryManifestRef": "artifact://manifest/source",
-        "checkpointBoundary": "before_recovery_restoration",
-        "taskInputSnapshotRef": "artifact://snapshot/source",
-        "planRef": "artifact://plan/source",
-        "planDigest": "sha256:plan",
-        "preservedStepRefs": [
-            "artifact://workspace/before-plan",
-            "artifact://summary",
-        ],
-        "dependencySignatures": {},
-        "workspacePolicy": "restore_pre_execution",
-    }
-    assert "agentRunId" not in resumed.parameters
 
 
 async def test_generic_rerun_does_not_carry_recovery_reference_fields(

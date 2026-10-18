@@ -185,42 +185,26 @@ async def test_update_request_rerun_from_manifest_source_rejected(
 
 
 @pytest.mark.asyncio
-async def test_typed_and_failed_step_recovery_reject_manifest_source(
+async def test_retry_from_step_rejects_manifest_source(
     tmp_path: Path,
 ) -> None:
-    """Typed/failed-step recovery never launches from a ManifestIngest source."""
-    from moonmind.workflows.temporal.service import TemporalExecutionService
-    from moonmind.workflows.temporal.service import TemporalExecutionValidationError
+    """Retry from a step never resets a retired ManifestIngest run."""
     from moonmind.workflows.temporal.service import (
-        TemporalExecutionRecoveryCheckpointError,
+        TemporalExecutionHistoricalTypeError,
+        TemporalExecutionService,
     )
 
     async with _temporal_db(tmp_path) as session:
         record = await _insert_historical_manifest_record(session)
         service = TemporalExecutionService(session)
-        service._client_adapter.start_workflow = AsyncMock()  # type: ignore[attr-defined]
-        # Typed recovery validates its admitted target first; either way the
-        # retired source is rejected before any launch side effect.
-        with pytest.raises(
-            (TemporalExecutionValidationError, TemporalExecutionRecoveryCheckpointError)
-        ):
-            await service.create_typed_recovery_execution(
+        service._client_adapter.reset_workflow_execution = AsyncMock()  # type: ignore[attr-defined]
+        with pytest.raises(TemporalExecutionHistoricalTypeError):
+            await service.retry_execution_from_step(
                 record,  # type: ignore[arg-type]
-                recovery_target={
-                    "source": {
-                        "workflowId": record.workflow_id,
-                        "runId": record.run_id,
-                    }
-                },
+                ledger_rows=[],
+                idempotency_key=f"retry:{uuid4()}",
             )
-        # Failed-step recovery gates on UserWorkflow sources before state.
-        with pytest.raises(TemporalExecutionValidationError, match="only available for"):
-            await service.create_failed_step_recovery_execution(
-                record,  # type: ignore[arg-type]
-                recovery_checkpoint_ref=None,
-                idempotency_key=f"recovery:{uuid4()}",
-            )
-        service._client_adapter.start_workflow.assert_not_awaited()  # type: ignore[attr-defined]
+        service._client_adapter.reset_workflow_execution.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 def test_draft_and_preset_shapes_with_retired_intent_reject_at_schema() -> None:

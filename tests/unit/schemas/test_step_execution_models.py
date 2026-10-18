@@ -19,7 +19,6 @@ from moonmind.schemas.temporal_models import (
     EnvironmentDiagnosticReferenceModel,
     EvidenceRefStatusModel,
     ExecutionProgressModel,
-    RecoveryCheckpointPreservedStepModel,
     RecoveryEligibilityDiagnosticModel,
     StepExecutionProjectionModel,
     StepEvidenceSummaryModel,
@@ -165,21 +164,6 @@ def test_execution_progress_model_normalizes_legacy_progress_fields() -> None:
 
     assert progress.executing == 1
     assert progress.completed == 1
-
-
-def test_recovery_checkpoint_preserved_step_normalizes_legacy_success_status() -> None:
-    preserved = RecoveryCheckpointPreservedStepModel.model_validate(
-        {
-            "logicalStepId": "prepare",
-            "order": 1,
-            "status": "succeeded",
-            "sourceExecutionOrdinal": 1,
-            "artifacts": {"outputSummary": "artifact://summary"},
-            "stateCheckpointRef": "artifact://state",
-        }
-    )
-
-    assert preserved.status == "completed"
 
 
 def test_execution_contract_keeps_retry_reexecution_and_recovery_terms_distinct() -> None:
