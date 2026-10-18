@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 
+import { apiErrorKind, type ApiErrorKind } from '../lib/api/client';
+
 /**
  * Styled dashboard error card (MM-960).
  *
@@ -17,7 +19,7 @@ export function DashboardErrorState({
   title: string;
   description: ReactNode;
   detail?: string | null;
-  onRetry?: () => void;
+  onRetry?: (() => void) | undefined;
   retryLabel?: string;
 }) {
   return (
@@ -42,6 +44,74 @@ export function DashboardErrorState({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+const API_ERROR_COPY: Record<
+  ApiErrorKind,
+  (subject: string) => { title: string; description: string; retryable: boolean }
+> = {
+  not_found: (subject) => ({
+    title: `${capitalize(subject)} not found`,
+    description: `No ${subject} exists at this address. It may have been removed, or the link is wrong.`,
+    retryable: false,
+  }),
+  unauthorized: (subject) => ({
+    title: 'Sign-in required',
+    description: `The API did not accept this session for the ${subject}. Sign in again, then retry.`,
+    retryable: true,
+  }),
+  forbidden: (subject) => ({
+    title: 'Access denied',
+    description: `This deployment does not allow viewing this ${subject}.`,
+    retryable: false,
+  }),
+  client: (subject) => ({
+    title: `${capitalize(subject)} could not be loaded`,
+    description: `The API rejected the request for this ${subject}.`,
+    retryable: false,
+  }),
+  unavailable: (subject) => ({
+    title: `${capitalize(subject)} unavailable`,
+    description: `MoonMind could not load this ${subject} right now. The service may be restarting; retry in a moment.`,
+    retryable: true,
+  }),
+  network: (subject) => ({
+    title: `${capitalize(subject)} unavailable`,
+    description: `MoonMind could not be reached to load this ${subject}. Check the connection, then retry.`,
+    retryable: true,
+  }),
+};
+
+/**
+ * Load-failure state for an entity with no data to show: not found (404/410),
+ * sign-in required (401), access denied (403), rejected (other 4xx) or
+ * unavailable (5xx and network failures, with a retry). Permanent failures
+ * offer no retry because repeating the request cannot change the answer.
+ */
+export function ApiErrorState({
+  error,
+  subject,
+  onRetry,
+}: {
+  error: unknown;
+  /** Lower-case noun for the entity, e.g. "workflow". */
+  subject: string;
+  onRetry?: () => void;
+}) {
+  const copy = API_ERROR_COPY[apiErrorKind(error)](subject);
+  return (
+    <DashboardErrorState
+      title={copy.title}
+      description={copy.description}
+      detail={error instanceof Error ? error.message : null}
+      onRetry={copy.retryable ? onRetry : undefined}
+      retryLabel="Retry"
+    />
   );
 }
 

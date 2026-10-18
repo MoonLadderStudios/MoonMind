@@ -220,7 +220,7 @@ Rules:
 
 - `logicalStepId` comes from the plan node and must remain stable within that plan
 - `timing` carries `startedAt`, `endedAt`, `durationMs`, `elapsedMs`, `serverNow`, `precision`, and `preserved`
-- `precision: "exact"` means the terminal end and duration come from known step-end timing; `precision: "live"` means active elapsed time as of `serverNow`; `precision: "fallback"` means lifecycle timestamps were used because exact end timing was unavailable; `precision: "unavailable"` means the dashboard must show unavailable, ready, or not-started copy instead of inventing a duration
+- `precision: "exact"` means the terminal end and duration come from known step-end timing; `precision: "live"` means active elapsed time as of `serverNow`, which can be the last row write rather than the read, so the dashboard keeps an active row ticking from `startedAt` to the current time and never shows less than `elapsedMs`; `precision: "fallback"` means lifecycle timestamps were used because exact end timing was unavailable; `precision: "unavailable"` means the dashboard must show unavailable, ready, or not-started copy instead of inventing a duration
 - `updatedAt` remains the last user-visible mutation timestamp and must not be treated as the primary terminal end when explicit timing is available
 - `workload.durationSeconds` is runner/workload metadata and is not the logical step duration source for the row timing chip
 - preserved rows keep source-run timing with `timing.preserved: true`; operators see original timing or original timing unavailable, not newly executed work

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { screen, waitFor, act, fireEvent, within, cleanup } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
@@ -3332,6 +3332,11 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('MM-1034 shows step duration states and keeps the wall-clock timeline behind a secondary toggle', async () => {
+    // Active timing ticks from the server start time, so read it at the server's own clock.
+    vi.useFakeTimers({ now: new Date('2026-04-09T00:05:11Z'), toFake: ['Date', 'setInterval', 'clearInterval'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     window.history.pushState({}, 'Step Timing Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
@@ -4556,7 +4561,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('step scoped log line')).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Hide details for Apply patch' })).toBeTruthy();
     });
-    expect(screen.getAllByText('approval policy: passed')[0]?.className).toContain('check-passed');
+    expect(screen.getAllByText('approval policy: Passed')[0]?.className).toContain('check-passed');
 
     // MM-920: the embedded step logs drop the redundant left rail and the second
     // "Live Logs" disclosure, so the log content sits directly under the
@@ -4733,14 +4738,14 @@ describe('Workflow Detail Entrypoint', () => {
         '.step-check-badge[data-effect="shimmer-sweep"]',
       );
       expect(activeCheckBadge).toBeTruthy();
-      expect(activeCheckBadge?.textContent).toBe('approval policy: pending');
+      expect(activeCheckBadge?.textContent).toBe('approval policy: Pending');
       expect(activeCheckBadge?.dataset.effect).toBe('shimmer-sweep');
       expect(activeCheckBadge?.dataset.state).toBe('executing');
       expect(activeCheckBadge?.className).toContain('is-executing');
       expect(activeCheckBadge?.className).toContain('check-pending');
-      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: pending');
+      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: Pending');
       expect(activeCheckBadge?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe(
-        'approval policy: pending',
+        'approval policy: Pending',
       );
     });
   });
@@ -4890,7 +4895,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Steps: 403 (/api/executions/test-123/steps)')).toBeTruthy();
+      expect(screen.getByText('Steps (/api/executions/test-123/steps): Request failed with HTTP 403')).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
     });
 
@@ -11057,7 +11062,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: false,
           status: 409,
-          json: async () => ({ detail: 'Follow-up is not supported for this session.' }),
+          text: async () => JSON.stringify({ detail: 'Follow-up is not supported for this session.' }),
         } as Response);
       }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
