@@ -831,3 +831,24 @@ async def test_stream_rejects_truncated_or_split_json_frames(body: bytes) -> Non
     )
     with pytest.raises(OmnigentClientError, match="Malformed Omnigent SSE frame"):
         _ = [item async for item in client.stream_events("sess-malformed")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope", ["data", "harnesses"])
+@pytest.mark.parametrize(
+    "auth", ["omnigent-credential", "own-auth", "session-scoped-config"]
+)
+async def test_harness_catalog_preserves_only_public_auth_enum(envelope, auth):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={envelope: [{"id": "example", "capabilities": {"auth": auth}}]},
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+    )
+    assert await client.list_harnesses() == [
+        {"id": "example", "capabilities": {"auth": auth}}
+    ]
