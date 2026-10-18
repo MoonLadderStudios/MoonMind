@@ -17522,6 +17522,7 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
         "recoverySource": {
             "sourceWorkflowId": "mm:source",
             "sourceRunId": "run-source",
+            "recoveryCheckpointRef": "artifact://resume/checkpoint",
             "preservedSteps": [
                 {
                     "logicalStepId": "prepare",
@@ -17532,14 +17533,6 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
                 }
             ],
         },
-    }
-    record.memo = {
-        **record.memo,
-        "recovery_checkpoint_ref": "artifact://resume/checkpoint",
-        "resume_failed_step_id": "inspect",
-        "recovery_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
-        "resume_plan_digest": "sha256:plan",
-        "resume_completed_step_refs": ["artifact://completed/prepare"],
     }
     mock_service.describe_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
