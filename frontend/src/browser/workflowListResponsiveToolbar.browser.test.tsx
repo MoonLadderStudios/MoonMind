@@ -39,7 +39,15 @@ beforeEach(() => {
           workflowId: 'task-123',
           runId: 'run-1',
           state: 'executing',
-          actions: { canCancel: true, canRerun: true },
+          actions: {
+            canCancel: true,
+            canRerun: true,
+            canPause: false,
+            disabledReasons: {
+              canPause:
+                'Pausing is unavailable while the workflow finalizes its published results and cannot accept operator signals.',
+            },
+          },
         }),
       } as Response);
     }
@@ -123,7 +131,15 @@ describe('workflow list row actions', () => {
       expect(within(menu).getByRole('menuitem', { name: 'Cancel' }).getAttribute('aria-disabled')).toBeNull();
       expect(within(menu).getByRole('menuitem', { name: 'Rerun' }).getAttribute('aria-disabled')).toBeNull();
     });
-    expect(within(menu).getByRole('menuitem', { name: 'Remediate' }).getAttribute('aria-disabled')).toBe('true');
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Unavailable (2)' }));
+    expect((await within(menu).findByRole('menuitem', { name: 'Remediate' })).getAttribute('aria-disabled')).toBe('true');
+    expect(within(menu).getByRole('menuitem', { name: 'Pause' }).getAttribute('aria-disabled')).toBe('true');
+
+    // Long reasons wrap inside the menu; it never scrolls sideways.
+    expect(menu.scrollWidth).toBeLessThanOrEqual(menu.clientWidth);
+    for (const item of within(menu).getAllByRole('menuitem')) {
+      expect(item.scrollWidth).toBeLessThanOrEqual(item.clientWidth + 1);
+    }
 
     const bounds = menu.getBoundingClientRect();
     expect(bounds.width).toBeGreaterThan(0);
@@ -146,6 +162,11 @@ describe('workflow list row actions', () => {
     expect(cancelItem.contains(hitTarget)).toBe(true);
 
     await page.getByRole('menuitem', { name: 'Cancel', exact: true }).click();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/cancel'))).toBe(false);
+    const dialog = await screen.findByRole('dialog', { name: 'Cancel workflow?' });
+    expect(getComputedStyle(dialog).whiteSpace).toBe('normal');
+    expect(dialog.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);
+    await page.getByRole('button', { name: 'Cancel workflow', exact: true }).click();
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(([url]) => String(url) === '/api/executions/task-123/cancel');
       expect(cancelCall).toBeTruthy();

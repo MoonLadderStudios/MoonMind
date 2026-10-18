@@ -2224,6 +2224,11 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Promote branch' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Promote branch?' })).getByRole('button', {
+        name: 'Promote branch',
+      }),
+    );
 
     await waitFor(() => {
       const postCall = fetchSpy.mock.calls.find(([url, init]) => (
@@ -5323,6 +5328,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Cancel');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Cancel' }));
+    confirmWorkflowDialog('Cancel workflow');
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/executions/test-123/cancel',
@@ -5336,6 +5342,11 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Force cancel');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Force cancel' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Force cancel workflow?' })).getByRole('button', {
+        name: 'Force cancel',
+      }),
+    );
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/executions/test-123/cancel',
@@ -5490,10 +5501,9 @@ describe('Workflow Detail Entrypoint', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     });
-    await waitFor(() => {
-      const pauseItem = screen.getByRole('menuitem', { name: /Pause/ });
-      expect(within(pauseItem).getByText('state not eligible')).toBeTruthy();
-    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Unavailable (1)' }));
+    const pauseItem = screen.getByRole('menuitem', { name: /Pause/ });
+    expect(within(pauseItem).getByText("Not available in the workflow's current state.")).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: /Pause/ }));
     expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/signal') && init?.method === 'POST')).toBe(false);
   });
@@ -5805,16 +5815,17 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    const menu = await openWorkflowActionsMenu('Edit');
+    const menu = await openWorkflowActionsMenu();
+    fireEvent.click(await within(menu).findByRole('menuitem', { name: /^Unavailable/ }));
     expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
     const disabledEditItem = within(menu).getByRole('menuitem', { name: 'Edit' });
     expect(
-      within(disabledEditItem).getByText('original task input snapshot missing'),
+      within(disabledEditItem).getByText("The workflow's original inputs were not saved."),
     ).toBeTruthy();
     const disabledRerunItem = within(menu).getByRole('menuitem', { name: 'Rerun' });
     expect(
-      within(disabledRerunItem).getByText('original task input snapshot missing'),
+      within(disabledRerunItem).getByText("The workflow's original inputs were not saved."),
     ).toBeTruthy();
   });
 
@@ -10370,7 +10381,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Reject');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Reject' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
+    confirmWorkflowDialog('Reject workflow');
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -10971,6 +10982,11 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Clear session?' })).getByRole('button', {
+        name: 'Clear session',
+      }),
+    );
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -11200,6 +11216,11 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel session' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Cancel session?' })).getByRole('button', {
+        name: 'Cancel session',
+      }),
+    );
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -12715,6 +12736,11 @@ describe('LiveLogsPanel', () => {
     });
     await waitFor(() => expect(screen.queryByText('Operator message · Sending')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Clear session?' })).getByRole('button', {
+        name: 'Clear session',
+      }),
+    );
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',
