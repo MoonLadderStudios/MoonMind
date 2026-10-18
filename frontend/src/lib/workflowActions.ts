@@ -1,3 +1,4 @@
+import { responseError } from './api/client';
 import { readModelSelection } from "./modelSelection";
 import { z } from 'zod';
 
@@ -452,8 +453,32 @@ export type RetryFromStepResult = {
 };
 
 /**
+ * A fixed-length key for one retry intent, so repeated clicks deduplicate and
+ * long workflow or step ids stay within the API's 128-character limit. The
+ * server compares keys per workflow, so a 64-bit hash is ample.
+ */
+export function retryFromStepIdempotencyKey(
+  workflowId: string,
+  sourceRunId?: string | null,
+  stepId?: string | null,
+): string {
+  const identity = [workflowId, sourceRunId || 'latest', stepId || 'failed'].join('\n');
+  // Two FNV-1a passes with different offsets; crypto.subtle needs a secure
+  // context, which a LAN deployment over plain HTTP does not have.
+  const fnv1a = (offset: number) => {
+    let hash = offset;
+    for (let index = 0; index < identity.length; index += 1) {
+      hash ^= identity.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  };
+  return `retry-${fnv1a(0x811c9dc5)}${fnv1a(0x050c5d1f)}`;
+}
+
+/**
  * Restart a closed run from one of its steps. Earlier steps are kept and the
- * workflow keeps its id; refusals carry a readable `detail.message`.
+ * workflow keeps its id; a refusal throws an ApiError with its reason code.
  */
 export async function requestRetryFromStep({
   apiBase,
@@ -468,24 +493,14 @@ export async function requestRetryFromStep({
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
-        idempotencyKey: `retry-${workflowId}-${sourceRunId || 'latest'}-${stepId || 'failed'}`,
+        idempotencyKey: retryFromStepIdempotencyKey(workflowId, sourceRunId, stepId),
         ...(sourceRunId ? { sourceRunId } : {}),
         ...(stepId ? { stepId } : {}),
       }),
     },
   );
   if (!response.ok) {
-    const text = await response.text();
-    let message = text || response.statusText;
-    try {
-      const detail = JSON.parse(text)?.detail;
-      if (typeof detail?.message === 'string' && detail.message) {
-        message = detail.message;
-      }
-    } catch {
-      // Keep the raw response text when it is not JSON.
-    }
-    throw new Error(message);
+    throw await responseError(response);
   }
   return response.json();
 }

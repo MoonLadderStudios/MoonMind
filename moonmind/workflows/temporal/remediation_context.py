@@ -88,7 +88,8 @@ class RemediationContextBuildResult:
     payload: dict[str, Any]
 
 
-StepLedgerLoader = Callable[[str], Awaitable[Sequence[Mapping[str, Any]]]]
+# (workflow_id, run_id): the ledger of that exact run.
+StepLedgerLoader = Callable[[str, str | None], Awaitable[Sequence[Mapping[str, Any]]]]
 
 
 async def load_remediation_target(
@@ -160,7 +161,7 @@ class RemediationContextBuilder:
             target_record=target_record,
         )
         failure_evidence = await self._failure_evidence(
-            target_record, principal=principal
+            target_record, run_id=link.target_run_id, principal=principal
         )
         payload["failureEvidence"] = failure_evidence
         payload["boundedness"]["artifactContentsIncluded"] = bool(
@@ -219,6 +220,7 @@ class RemediationContextBuilder:
         self,
         record: Any,
         *,
+        run_id: str | None,
         principal: str,
     ) -> dict[str, Any]:
         """Embed what the failed run recorded about its failure, bounded."""
@@ -236,7 +238,16 @@ class RemediationContextBuilder:
         }
         evidence["authoredWork"] = _authored_work(record)
         unavailable: list[dict[str, Any]] = []
-        steps, steps_reason = await self._failure_steps(record.workflow_id)
+        failure = finish.get("failure")
+        steps, steps_reason = await self._failure_steps(
+            record.workflow_id,
+            run_id=run_id,
+            failed_step_id=(
+                _string_or_none(failure.get("stepId"))
+                if isinstance(failure, Mapping)
+                else None
+            ),
+        )
         evidence["steps"] = steps
         if steps_reason:
             unavailable.append({"kind": "step_ledger", "reason": steps_reason})
@@ -255,18 +266,20 @@ class RemediationContextBuilder:
         return evidence
 
     async def _failure_steps(
-        self, workflow_id: str
+        self,
+        workflow_id: str,
+        *,
+        run_id: str | None,
+        failed_step_id: str | None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         if self._step_ledger_loader is None:
             return [], "step ledger is not readable here"
         try:
-            rows = await self._step_ledger_loader(workflow_id)
+            rows = await self._step_ledger_loader(workflow_id, run_id)
         except Exception as exc:  # degraded evidence, not a failed remediation
             return [], f"step ledger query failed: {type(exc).__name__}"
         steps: list[dict[str, Any]] = []
-        for row in list(rows)[:MAX_FAILURE_EVIDENCE_STEPS]:
-            if not isinstance(row, Mapping):
-                continue
+        for row in _bounded_failure_ledger_rows(rows, failed_step_id):
             artifacts = row.get("artifacts")
             artifacts = artifacts if isinstance(artifacts, Mapping) else {}
             step = {
@@ -689,6 +702,39 @@ def _bounded_evidence_value(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, list | tuple):
         return [_bounded_evidence_value(item, depth=depth + 1) for item in value[:50]]
     return _bounded_evidence_value(str(value), depth=depth)
+
+
+def _bounded_failure_ledger_rows(
+    rows: Sequence[Any], failed_step_id: str | None
+) -> list[Mapping[str, Any]]:
+    """Bound the ledger while keeping the failed steps and their neighbors.
+
+    Remediation needs the failed row's status, error and artifact refs most,
+    and a long plan can fail far past any head slice. Remaining room goes to
+    the earliest rows; ledger order is kept.
+    """
+
+    mapped = [row for row in rows if isinstance(row, Mapping)]
+    if len(mapped) <= MAX_FAILURE_EVIDENCE_STEPS:
+        return mapped
+    failed = [
+        index
+        for index, row in enumerate(mapped)
+        if str(row.get("status") or "").strip().lower() == "failed"
+        or (failed_step_id and row.get("logicalStepId") == failed_step_id)
+    ]
+    neighbors = [
+        index
+        for center in failed
+        for index in range(center - 2, center + 3)
+        if 0 <= index < len(mapped)
+    ]
+    kept: dict[int, None] = {}
+    for index in [*failed, *neighbors, *range(len(mapped))]:
+        if len(kept) >= MAX_FAILURE_EVIDENCE_STEPS:
+            break
+        kept.setdefault(index, None)
+    return [mapped[index] for index in sorted(kept)]
 
 
 def _authored_work(record: Any) -> dict[str, Any]:
