@@ -204,7 +204,7 @@ A value-list popover contains the column title, current filter summary, sort com
 
 ### 9.2 Status
 
-A checklist of canonical lifecycle states in this order: `scheduled`, `initializing`, `waiting_on_dependencies`, `planning`, `awaiting_slot`, `executing`, `awaiting_external`, `intervention_requested`, `finalizing`, `completed`, `failed`, `canceled`. It filters by MoonMind lifecycle state, not the coarse dashboard status, using the same `rawState || state || status` precedence as the table so historical rows behave consistently. The API validates unsupported values and reports them clearly.
+A checklist of canonical lifecycle states in this order: `scheduled`, `initializing`, `waiting_on_dependencies`, `planning`, `awaiting_slot`, `executing`, `awaiting_external`, `intervention_requested`, `finalizing`, `completed`, `failed`, `canceled`. It filters by MoonMind lifecycle state, not the coarse dashboard status, using the same `rawState || state || status` precedence as the table so historical rows behave consistently. Because a canceled, terminated, or timed-out workflow keeps the non-terminal `mm_state` it last published, the server matches terminal values on Temporal's execution status and non-terminal values on `mm_state` only while the execution runs; status facet counts use the same clause, so a count always matches what selecting that value lists. The API validates unsupported values and reports them clearly.
 
 ### 9.3 Provider Profile
 
