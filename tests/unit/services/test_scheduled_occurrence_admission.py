@@ -315,7 +315,7 @@ async def test_step_successor_binds_the_installed_runtime_with_the_same_intent(
     monkeypatch, compiler
 ) -> None:
     _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
-    artifacts = _ArtifactService()
+    artifacts = _RetiringArtifacts()
     parameters, recorded_plan = await _schedule_parameters(artifacts)
 
     # An update replaced the host and server while the Step was running.
@@ -340,6 +340,11 @@ async def test_step_successor_binds_the_installed_runtime_with_the_same_intent(
     assert plan.modelConfig == recorded_plan.modelConfig
     # The interrupted attempt's plan keeps the images it actually used.
     assert recorded_plan.hostImageRef == _REPO + "7" * 64
+    # The admission names the runtime it moved the Step to.
+    assert admitted["runtimeChanges"] == {
+        "hostImageRef": {"from": _REPO + "7" * 64, "to": _REPO + "8" * 64},
+        "serverImageRef": {"from": _SERVER + "6" * 64, "to": _SERVER + "9" * 64},
+    }
     assert session.commits == 1
 
 
@@ -727,6 +732,8 @@ async def test_step_successor_keeps_the_recorded_plan_when_its_repository_route_
         # The same route admits a successor that refreshes its snapshots.
         unchanged = await admit(parameters)
         assert unchanged["disposition"] == "admitted", unchanged
+        # The installed runtime is the recorded one, so nothing moved.
+        assert "runtimeChanges" not in unchanged
 
         # The interrupted attempt selected another route than the one its
         # connection now resolves to.

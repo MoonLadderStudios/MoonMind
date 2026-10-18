@@ -4423,6 +4423,9 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
+        run_workflow_module.workflow, "register_random_seed_callback", lambda _cb: None
+    )
+    monkeypatch.setattr(
         run_workflow_module.workflow,
         "now",
         lambda: datetime.now(timezone.utc),
@@ -4576,6 +4579,9 @@ async def test_run_observes_cancel_after_late_stages_before_completion(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
+        run_workflow_module.workflow, "register_random_seed_callback", lambda _cb: None
+    )
+    monkeypatch.setattr(
         run_workflow_module.workflow,
         "now",
         lambda: datetime.now(timezone.utc),
@@ -4703,6 +4709,9 @@ async def test_run_records_no_commit_terminal_state_for_skipped_publish(
         },
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "register_random_seed_callback", lambda _cb: None
+    )
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "now",
