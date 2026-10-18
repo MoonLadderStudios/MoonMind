@@ -36,14 +36,18 @@ def _settings(default_runtime: str = "omnigent") -> SimpleNamespace:
     return SimpleNamespace(default_runtime=default_runtime)
 
 
-def test_unauthored_new_work_uses_shared_rollout_default():
-    policy = _policy({"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true"})
-    runtime_id = resolve_new_work_runtime(
+@pytest.mark.parametrize("requested_target_id", [None, "codex.generic-omnigent"])
+def test_unauthored_new_work_uses_shared_rollout_default(requested_target_id):
+    policy = _policy()
+    selection = resolve_new_work_selection(
+        requested_target_id=requested_target_id,
         surface=AuthoringSurface.workflow_create,
         workflow_settings=_settings(),
         policy=policy,
     )
-    assert runtime_id == "omnigent"
+    assert selection.available is True
+    assert selection.runtime_id == "omnigent"
+    assert selection.target_id == "codex.generic-omnigent"
 
 
 def test_authored_runtime_is_preserved_without_fallback():
@@ -80,10 +84,9 @@ def test_retired_phase_inputs_never_change_new_work_selection(monkeypatch):
 
 
 def test_unavailable_target_fails_closed_without_substitution():
-    policy = _policy({})
-    # With no qualification the generic Codex row is disabled; the legacy
-    # profile-bound row remains the default, so an explicit disabled target
-    # must raise rather than silently substitute.
+    policy = _policy({"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "false"})
+    # Explicit opt-out disables generic admission; selecting that target must
+    # fail instead of substituting the retained profile-bound default.
     with pytest.raises(NewWorkAdmissionRejected) as excinfo:
         resolve_new_work_runtime(
             requested_target_id="codex.generic-omnigent",

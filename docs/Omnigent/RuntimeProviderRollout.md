@@ -39,7 +39,7 @@ Rules match exact declared dimensions, use `*` as the selector wildcard, and app
 
 | Target | Built-in state |
 | --- | --- |
-| `codex.generic-omnigent` | `disabled` unless `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=true`; then `new_work_default` when promotion is permitted, otherwise `explicit_only` |
+| `codex.generic-omnigent` | `new_work_default` by default; explicit `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` disables it; explicitly configured linked-evidence constraints may keep it `explicit_only` |
 | `codex.legacy-profile-bound-omnigent` | `new_work_default` until generic Codex is promoted, then `retired_for_new_work` |
 | `claude.generic-omnigent` | `explicit_only` (reached by choosing an Anthropic Profile); `disabled` when `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` |
 | `opencode.generic-omnigent` | `new_work_default`; `disabled` when `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false` |
@@ -102,6 +102,8 @@ New occurrences follow installed runtime selection with their authored harness/P
 Telemetry is observational: its failure must not change selection, execution, save outcome, or cleanup. Basic diagnosis uses logs and operation records and needs no LLM or metrics exporter.
 
 ## 9. Configuration
+
+Codex uses the shared realizer when its admission setting is omitted, blank or true. Explicit false retains profile-bound new admission; it is a compatibility choice, unlike `stop_new_generic_codex_admission`, which does not restore a legacy default. A configured custom policy or explicit runtime choice remains authoritative. Recorded profile-bound plans, planless/reference-only histories, and their cancellation, saving and cleanup keep their existing owners. The profile-bound realizer cannot be removed while those supported histories or explicit compatibility controls can invoke it; historical readers remain until retention or lossless migration permits removal. OAuth maintenance, reconnect and janitor callers also retain their runtime dependency until equivalent credential/resource ownership replaces it.
 
 The rollout, rollback, cohort, and qualified/enabled inputs are read by `runtime_provider_rollout.py` and shipped in `.env-template`. `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLOUT` is normally empty, selecting the built-in policy; a complete JSON policy document overrides it, and invalid configuration fails fast. Clear a stale upgraded value to follow the installed default. Ordinary versus strict certification is selected by `MOONMIND_OMNIGENT_EVIDENCE_POLICY`: omitted, blank, or `either` is certificate independent; explicit `protected` or `deployment` keeps strict validation ([Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence)).
 

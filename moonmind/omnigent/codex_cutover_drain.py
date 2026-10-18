@@ -40,6 +40,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 
+from moonmind.omnigent.settings import (
+    OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV as GENERIC_CODEX_QUALIFIED_ENV,
+    generic_codex_qualified,
+)
+
 #: The single deployment-owned cutoff. ISO-8601 instant after which no new
 #: work may enter the retired direct-Codex lane. Unset means the lane is not
 #: retired and the usable path is preserved.
@@ -63,12 +68,6 @@ LINKED_QUALIFICATION_DIMENSIONS_ENV = (
 #: :func:`resolve_generic_codex_selection` so the rollout policy can bind the
 #: declared selection to its linked qualification evidence.
 GENERIC_SELECTION_ENV = "MOONMIND_CODEX_GENERIC_SELECTION"
-
-#: Boolean qualification switch owned by #3832. Read here with the same
-#: fail-closed default (false) as ``settings.generic_codex_qualified`` so this
-#: module never loosens the existing gate; it only adds exactness once linked
-#: evidence is declared.
-GENERIC_CODEX_QUALIFIED_ENV = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
 
 #: Runtime ids that count as the retired direct lane.
 RETIRED_DIRECT_RUNTIME_IDS = frozenset({"codex_cli", "codex-direct", "direct"})
@@ -321,15 +320,6 @@ def retained_disposition(branch: str) -> dict[str, str]:
     return dict(record)
 
 
-def _boolean_qualified(values: Mapping[str, Any]) -> bool:
-    return str(values.get(GENERIC_CODEX_QUALIFIED_ENV) or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def resolve_generic_codex_selection(
     env: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -487,10 +477,9 @@ def generic_codex_promotion_permitted(
 ) -> bool:
     """Return whether the generic Codex row may promote for new defaults.
 
-    The boolean qualification switch stays fail-closed: false never promotes.
-    While no linked evidence is declared, a true boolean preserves the existing
-    promotion so the usable path survives until its qualified replacement is
-    declared. Once linked evidence is declared, the declared selection must
+    The shared admission setting supplies the default; explicit false never
+    promotes. Without linked evidence, ordinary admission needs no certificate.
+    Once linked evidence is declared, the declared selection must
     match it exactly via :func:`require_exact_generic_support`; mismatches,
     missing selections, and invalid declarations fail closed to ``False``
     (explicit-only, never a fallback to different credentials, a different
@@ -498,7 +487,12 @@ def generic_codex_promotion_permitted(
     """
 
     values = os.environ if env is None else env
-    if not _boolean_qualified(values):
+    try:
+        if not generic_codex_qualified(env=values):
+            return False
+    except ValueError:
+        # This evidence predicate historically denies malformed input. The
+        # settings/policy boundary still reports the configuration error.
         return False
     try:
         qualification = resolve_linked_generic_qualification(values)

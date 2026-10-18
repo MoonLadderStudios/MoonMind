@@ -8,8 +8,8 @@ The fake provider reads the exact durable Skill through the emitted read-only
 mount and writes its digest through the workspace mount during the native turn.
 This exercises orchestration and wire contracts, not a live stock server,
 installed images or paid provider turns. SQLite's single-process lock substitute
-does not prove PostgreSQL concurrency. Generic Codex is opted in only for this
-test, not qualified here.
+does not prove PostgreSQL concurrency. Generic Codex uses its omitted-setting
+default; fixture metadata is not qualification evidence.
 """
 
 from __future__ import annotations
@@ -970,6 +970,19 @@ async def native_journey(
         "moonmind.omnigent.execute._await_marked_turn_terminal", short_quiescence
     )
     harness = request.param
+    # These are default-path journeys, independent of the test runner's rollout
+    # configuration. Credential readiness and real plan authority stay intact.
+    for key in (
+        "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED",
+        "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLOUT",
+        "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK",
+        "MOONMIND_CODEX_GENERIC_SELECTION",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS",
+    ):
+        monkeypatch.delenv(key, raising=False)
     await _serialize_finalization_on_sqlite(session_factory)
     workflow_id = "mm:generic-native-durable-journey"
     worker_root = tmp_path / "worker"
@@ -990,7 +1003,6 @@ async def native_journey(
             "WORKFLOW_WORKSPACE_ROOT": str(worker_root),
             "WORKFLOW_DOCKER_DAEMON_MODE": "local",
             "NATIVE_JOURNEY_KEY": SECRET,
-            "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true",
         }.items():
             monkeypatch.setenv(key, value)
         _configure_ready_host_image_pair(monkeypatch)
@@ -1146,7 +1158,9 @@ async def test_registered_generic_native_turn_saves_result_and_cleans_owned_reso
     await assert_native_turn_saved_and_cleaned(native_journey, terminal_status)
 
 
-async def assert_native_turn_saved_and_cleaned(journey, terminal_status="idle"):
+async def assert_native_turn_saved_and_cleaned(
+    journey, terminal_status="idle", *, expected_messages=1
+):
     """Reuse the full durable lifecycle proof for separately admitted plans."""
     request, plan, services = journey.request, journey.plan, journey.services
     realizer, server, docker = journey.realizer, journey.server, journey.docker
@@ -1193,7 +1207,7 @@ async def assert_native_turn_saved_and_cleaned(journey, terminal_status="idle"):
         else []
     )
     messages = [event for event in server.events if event.get("type") == "message"]
-    assert len(messages) == 1
+    assert len(messages) == expected_messages
     assert "Generate a report." in messages[0]["data"]["content"][0]["text"]
     assert "sessions.stream" in server.route_calls
     assert not server.host_alive
@@ -1303,3 +1317,4 @@ async def assert_native_turn_saved_and_cleaned(journey, terminal_status="idle"):
         and len(server.session_ids) == 1
         and len(manager.inspections) == 1
     )
+    return result
