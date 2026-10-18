@@ -99,15 +99,30 @@ def _message(text="Bound follow-up"):
     }
 
 
+def _select_request_plan_shape(journey, explicit_binding):
+    if not explicit_binding:
+        journey.request = journey.request.model_copy(
+            update={
+                "omnigent_execution_plan": None,
+                "parameters": {
+                    **journey.request.parameters,
+                    "executionPlanRef": journey.plan.planRef,
+                },
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "native_journey",
     ["codex-native", "claude-native", "opencode-native"],
     indirect=True,
 )
+@pytest.mark.parametrize("explicit_binding", [True, False])
 async def test_attested_generic_native_binding_reads_and_sends(
-    native_journey, session_factory
+    native_journey, session_factory, explicit_binding
 ):
     journey = native_journey
+    _select_request_plan_shape(journey, explicit_binding)
     store = OmnigentBridgeSessionStore(session_factory)
     follow_up = _message("Return only the heading of the generated report.")
 
@@ -438,10 +453,12 @@ async def test_generic_native_chat_denies_changed_authority(
 
 
 @pytest.mark.parametrize("native_journey", ["opencode-native"], indirect=True)
+@pytest.mark.parametrize("explicit_binding", [True, False])
 async def test_generic_native_mutation_rechecks_runtime_fence(
-    native_journey, session_factory, monkeypatch
+    native_journey, session_factory, monkeypatch, explicit_binding
 ):
     journey = native_journey
+    _select_request_plan_shape(journey, explicit_binding)
     store = OmnigentBridgeSessionStore(session_factory)
 
     async def active():
