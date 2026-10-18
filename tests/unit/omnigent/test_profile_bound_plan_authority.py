@@ -12,6 +12,7 @@ from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
 )
+from moonmind.omnigent.settings import generic_codex_qualified
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
@@ -30,6 +31,8 @@ async def _admit_codex_plan(
     shared_host="ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
     server=None,
 ):
+    qualification_env = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
+    monkeypatch.delenv(qualification_env, raising=False)
     _configure_ready_host_image_pair(monkeypatch)
     monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", shared_host)
     if server is not None:
@@ -53,23 +56,29 @@ async def _admit_codex_plan(
             "launchPolicyRef": policy,
         },
     }
-    admitted = await service.compile_and_persist_execution_plan(
-        session_factory=object(),
-        artifact_service=artifacts,
-        principal="user-1",
-        workflow_id="mm:pr-resolver-policy-regression",
-        agent_profile_snapshot=_snapshot(
-            harness="codex-native", policy=policy, provider_id="codex"
-        ),
-        provider_profile=SimpleNamespace(
-            profile_id="codex", runtime_id="codex_cli", provider_id="openai"
-        ),
-        initial_parameters=parameters,
-        authored_request_ref="art_request_1",
-        authored_request_digest="sha256:" + "1" * 64,
-        task_input_snapshot_ref="art_request_1",
-        task_input_snapshot_digest="sha256:" + "1" * 64,
-    )
+    # Admit the retained coordinator explicitly, then restore ordinary defaults
+    # before dispatch so the frozen plan remains authoritative across promotion.
+    with monkeypatch.context() as admission:
+        admission.setenv(qualification_env, "false")
+        admitted = await service.compile_and_persist_execution_plan(
+            session_factory=object(),
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id="mm:pr-resolver-policy-regression",
+            agent_profile_snapshot=_snapshot(
+                harness="codex-native", policy=policy, provider_id="codex"
+            ),
+            provider_profile=SimpleNamespace(
+                profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+            ),
+            initial_parameters=parameters,
+            authored_request_ref="art_request_1",
+            authored_request_digest="sha256:" + "1" * 64,
+            task_input_snapshot_ref="art_request_1",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+        )
+    assert generic_codex_qualified() is True
+    assert admitted.envelope.payload.executionRealizerRef == "codex-profile-bound@1"
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
         lease_client=object(),
