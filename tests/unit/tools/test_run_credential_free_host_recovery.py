@@ -1114,10 +1114,21 @@ async def test_stock_catalog_admission_uses_distinct_server_and_host_identity(
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     from api_service.db.models import Base
+    from moonmind.omnigent.harness_platform import planner
     from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
         _admit_stock_native_catalog,
         _host_class,
     )
+
+    admitted_harnesses = []
+    compile_plan = planner.compile_execution_plan
+
+    def record_admission(**kwargs):
+        plan = compile_plan(**kwargs)
+        admitted_harnesses.append(plan.payload.harnessId)
+        return plan
+
+    monkeypatch.setattr(planner, "compile_execution_plan", record_admission)
 
     class Inventory:
         async def get_version(self):
@@ -1164,5 +1175,44 @@ async def test_stock_catalog_admission_uses_distinct_server_and_host_identity(
             "claude-native-ui",
             "opencode-native-ui",
         }
+        # Discovery may list other agents; this inspected image is OpenCode-only.
+        assert admitted_harnesses == ["opencode-native"]
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "status,last_task_error",
+    [
+        ("failed", None),
+        ("failed", {"code": "runner_failed_to_start", "message": "runner failed"}),
+        ("running", None),
+        ("waiting", None),
+        ("idle", {"code": "executor_error", "message": "task failed"}),
+    ],
+)
+def test_credential_free_session_rejects_unhealthy_snapshot_before_receipt(
+    status, last_task_error
+):
+    from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
+        _assert_credential_free_session_healthy,
+    )
+
+    snapshot = {
+        "status": status,
+        "last_task_error": last_task_error,
+        "pending_inputs": [],
+        "items": [],
+    }
+    with pytest.raises(AssertionError):
+        _assert_credential_free_session_healthy(snapshot)
+
+
+def test_credential_free_session_accepts_idle_snapshot_without_task_error():
+    from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
+        _assert_credential_free_session_healthy,
+    )
+
+    _assert_credential_free_session_healthy(
+        {"status": "idle", "last_task_error": None, "pending_inputs": [], "items": []}
+    )
