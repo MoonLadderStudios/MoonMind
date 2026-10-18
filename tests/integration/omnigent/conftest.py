@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
+    Base,
     ManagedAgentProviderProfile,
     OmnigentChatBindingAlias,
     OmnigentCleanupAuthority,
@@ -33,6 +34,7 @@ from api_service.db.models import (
     OmnigentTurnAttempt,
     TemporalArtifact,
     TemporalExecutionCanonicalRecord,
+    TemporalExecutionRecord,
     TemporalExecutionRemediationLink,
 )
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
@@ -57,19 +59,20 @@ _CONTROL_PLANE_TABLES = [
     # Terminal commits continue pending remediation verification through its
     # durable link ledger. Include the real foreign-key owners for that lookup.
     TemporalExecutionCanonicalRecord.__table__,
+    TemporalExecutionRecord.__table__,
     TemporalArtifact.__table__,
     TemporalExecutionRemediationLink.__table__,
 ]
 
 
 def _create_tables(sync_conn) -> None:
-    for table in _CONTROL_PLANE_TABLES:
-        table.create(sync_conn, checkfirst=True)
+    Base.metadata.create_all(sync_conn, tables=_CONTROL_PLANE_TABLES, checkfirst=True)
 
 
 def _drop_tables(sync_conn) -> None:
-    for table in reversed(_CONTROL_PLANE_TABLES):
-        table.drop(sync_conn, checkfirst=True)
+    # A metadata-level drop removes enum types shared by the execution source
+    # and projection tables only after both tables are gone.
+    Base.metadata.drop_all(sync_conn, tables=_CONTROL_PLANE_TABLES, checkfirst=True)
 
 
 @pytest_asyncio.fixture()
