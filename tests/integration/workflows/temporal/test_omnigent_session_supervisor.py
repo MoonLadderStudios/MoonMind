@@ -100,6 +100,7 @@ from tests.unit.omnigent.test_adapter_contracts import _plan as _agent_plan_enve
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,
+    pytest.mark.integration_ci,
     pytest.mark.temporal_boundary,
 ]
 
@@ -1329,7 +1330,6 @@ class _CodexCapacityActivities:
         return result
 
 
-@pytest.mark.integration_ci
 async def test_plan_bound_codex_keeps_recorded_realizer_and_replays(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
