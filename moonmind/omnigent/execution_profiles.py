@@ -463,6 +463,40 @@ def validate_effective_launch_snapshot(snapshot: Mapping[str, Any]) -> None:
         )
 
 
+def validate_planned_effective_launch(plan: Any, raw: bytes) -> dict[str, Any]:
+    """Verify the immutable launch bytes named by an execution plan."""
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+
+    try:
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != (
+            plan.payload.effectiveLaunchSnapshotDigest
+        ):
+            raise ValueError("effective launch artifact digest conflicts with the plan")
+        launch = json.loads(raw)
+        if not isinstance(launch, dict):
+            raise TypeError("effective launch artifact is not an object")
+        validate_effective_launch_snapshot(launch)
+        expected = {
+            "launchPolicyRef": plan.payload.launchPolicyRef,
+            "hostImageRef": plan.payload.hostImageRef,
+            "harness": plan.payload.harnessId,
+        }
+        if any(
+            str(launch.get(key) or "") != str(value) for key, value in expected.items()
+        ):
+            raise ValueError(
+                "effective launch artifact conflicts with the execution plan"
+            )
+    except (TypeError, ValueError, OmnigentOAuthHostError) as exc:
+        raise HarnessPlatformError(
+            str(exc), code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
+        ) from exc
+    return launch
+
+
 def selection_from_request(
     parameters: Mapping[str, Any] | None,
 ) -> tuple[str | None, str | None]:
