@@ -165,13 +165,13 @@ Resolution order:
 1. Use the workflow ID in the current route when the route already identifies a workflow.
 2. Otherwise use the last explicitly selected workflow when the visible list contains it.
 3. Otherwise choose the first visible row, after the table's filters, sort, source, page size, and cursor.
-4. If no row exists, show the Workflows empty state and keep the table available.
+4. If no row exists, show the Workflows empty state and return the control to the table.
 
 Rules:
 
 1. "First item" means the first visible workflow row in the same list the user was looking at, not an arbitrary newest workflow from a different query.
 2. The table publishes the row IDs it shows, in display order, and the shell uses them directly. Only while the table has no settled rows does the shell fetch the same list query from the URL (without the current-page sort).
-3. If the list query is loading, the control may enter a resolving state with accessible text such as `Opening first workflow...`.
+3. If the list query is loading, the control may enter a resolving state with accessible text such as `Opening first workflow...`. Changing the list query (the Workflows nav link clears the filters) or leaving `/workflows` cancels it, so a late answer for the old list never navigates.
 4. If the list query fails, show a recoverable list error and do not navigate to a guessed workflow.
 5. The fallback must never expose workflows outside the current user's authorization scope; list membership is that check.
 6. A remembered workflow that the visible list does not contain is dropped rather than opened, so a filtered table never opens a workflow outside its filters.
