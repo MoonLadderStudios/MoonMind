@@ -185,4 +185,3 @@ def decide_checkpoint_recovery(
         ),
         evidence=list(evidence),
     )
-
