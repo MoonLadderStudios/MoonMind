@@ -1960,10 +1960,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
       fireEvent.click(advancedToggle);
     }
-    // Closing Advanced hides the control but keeps (and counts) the override.
+    // Closing Advanced hides the control but keeps (and names) the override.
     expect(screen.queryByLabelText("Host policy")).toBeNull();
     expect(screen.queryByLabelText("Execution target")).toBeNull();
-    expect(screen.getByText("1 override")).toBeTruthy();
+    expect(screen.getByText("Overrides: host policy Pinned v1")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Submit with the hidden host override." },
@@ -13313,33 +13313,26 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(within(controls).queryByLabelText("Priority")).toBeNull();
     expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
 
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     expect(within(controls).getByLabelText("Priority")).toBeTruthy();
     expect(within(controls).getByLabelText("Max Attempts")).toBeTruthy();
 
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     expect(within(controls).queryByLabelText("Priority")).toBeNull();
     expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
   });
 
   it("remembers the guided vs expert (Advanced mode) default across reload (MM-964)", async () => {
-    const findExecutionControls = () =>
-      document.querySelector<HTMLElement>(
-        '[data-canonical-create-section="Execution controls"]',
-      ) as HTMLElement;
-
     const view = renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
     await screen.findByLabelText("Instructions");
 
-    const advancedToggle = within(findExecutionControls()).getByLabelText(
-      "Advanced mode",
-    ) as HTMLInputElement;
+    const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
     // Default is guided mode (Advanced off) with no stored preference.
     expect(advancedToggle.checked).toBe(false);
 
     fireEvent.click(advancedToggle);
     expect(
-      (within(findExecutionControls()).getByLabelText("Advanced mode") as HTMLInputElement)
+      (screen.getByLabelText("Advanced mode") as HTMLInputElement)
         .checked,
     ).toBe(true);
     expect(window.localStorage.getItem("moonmind.dashboard.preferences")).toContain(
@@ -13351,7 +13344,7 @@ describe("Task Create MM-641 authoring validation", () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
     await screen.findByLabelText("Instructions");
     expect(
-      (within(findExecutionControls()).getByLabelText("Advanced mode") as HTMLInputElement)
+      (screen.getByLabelText("Advanced mode") as HTMLInputElement)
         .checked,
     ).toBe(true);
   });
@@ -13380,17 +13373,17 @@ describe("Task Create MM-641 authoring validation", () => {
 
     // Reveal the advanced controls, set non-default values, then hide the
     // controls again before submitting.
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(within(controls).getByLabelText("Priority"), {
       target: { value: "7" },
     });
     fireEvent.change(within(controls).getByLabelText("Max Attempts"), {
       target: { value: "5" },
     });
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     expect(within(controls).queryByLabelText("Priority")).toBeNull();
     expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
-    expect(within(controls).getByText("2 overrides")).toBeTruthy();
+    expect(screen.getByText("Overrides: priority 7, max attempts 5")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -13405,6 +13398,189 @@ describe("Task Create MM-641 authoring validation", () => {
     const request = latestCreateRequest();
     expect(request.priority).toBe(7);
     expect(request.maxAttempts).toBe(5);
+  });
+
+  describe("option disclosures (#4872)", () => {
+    function disclosure(id: string): HTMLDetailsElement {
+      const element = document.querySelector<HTMLDetailsElement>(
+        `details[data-create-disclosure="${id}"]`,
+      );
+      expect(element).not.toBeNull();
+      return element as HTMLDetailsElement;
+    }
+
+    function disclosureSummary(id: string): string {
+      return (
+        disclosure(id).querySelector("[data-create-disclosure-summary]")?.textContent || ""
+      );
+    }
+
+    function setDisclosure(id: string, open: boolean) {
+      const element = disclosure(id);
+      if (element.open !== open) {
+        fireEvent.click(element.querySelector("summary") as HTMLElement);
+        element.open = open;
+      }
+    }
+
+    async function fillOptionValues() {
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Run the dependent stage." },
+      });
+      fireEvent.change(screen.getByLabelText("Schedule Mode"), {
+        target: { value: "recurring" },
+      });
+      fireEvent.change(screen.getByLabelText("Cron Expression"), {
+        target: { value: "0 9 * * 1" },
+      });
+      fireEvent.change(screen.getByLabelText("Timezone"), {
+        target: { value: "Europe/Paris" },
+      });
+      fireEvent.change(screen.getByLabelText("Schedule Name"), {
+        target: { value: "Weekly brief" },
+      });
+      await waitFor(() => {
+        const select = screen.getByRole("combobox", { name: "Prerequisite" }) as HTMLSelectElement;
+        expect(Array.from(select.options).map((option) => option.value)).toContain("mm:dep-641");
+      });
+      fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
+        target: { value: "mm:dep-641" },
+      });
+      fireEvent.click(screen.getByLabelText("Produce report artifact"));
+      fireEvent.click(screen.getByLabelText("Advanced mode"));
+      fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "7" } });
+      fireEvent.change(screen.getByLabelText("Max Attempts"), { target: { value: "5" } });
+    }
+
+    async function submitAndCapture(): Promise<Record<string, unknown>> {
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          "/api/executions",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+      return latestCreateRequest();
+    }
+
+    it("collapses Schedule, Dependencies and Report behind one-line summaries", async () => {
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await screen.findByLabelText("Instructions");
+
+      expect(disclosure("schedule").open).toBe(false);
+      expect(disclosureSummary("schedule")).toBe("Runs now");
+      expect(disclosure("dependencies").open).toBe(false);
+      expect(disclosureSummary("dependencies")).toBe("No prerequisites");
+      expect(disclosure("report").open).toBe(false);
+      expect(disclosureSummary("report")).toBe("Report: off");
+    });
+
+    it("summarizes the values a collapsed disclosure holds", async () => {
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await fillOptionValues();
+
+      expect(disclosureSummary("schedule")).toBe("Recurring: 0 9 * * 1 (Europe/Paris)");
+      expect(disclosureSummary("dependencies")).toBe("Waits for Prepare MM-641 source brief");
+      expect(disclosureSummary("report")).toBe("Report: on");
+    });
+
+    it("lists prerequisites by title with the workflow ID kept secondary", async () => {
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await screen.findByLabelText("Instructions");
+
+      const select = screen.getByRole("combobox", { name: "Prerequisite" }) as HTMLSelectElement;
+      await waitFor(() => {
+        expect(Array.from(select.options).map((option) => option.value)).toContain("mm:dep-641");
+      });
+      const option = Array.from(select.options).find((item) => item.value === "mm:dep-641");
+      expect(option?.textContent).toBe("Prepare MM-641 source brief");
+      expect(option?.title).toBe("mm:dep-641");
+    });
+
+    it("places the Advanced mode toggle before the controls it reveals", async () => {
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await screen.findByLabelText("Instructions");
+
+      const toggle = screen.getByLabelText("Advanced mode");
+      const steps = document.querySelector('[data-canonical-create-section="Steps"]');
+      const controls = document.querySelector(
+        '[data-canonical-create-section="Execution controls"]',
+      );
+      expect(
+        toggle.compareDocumentPosition(steps as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        toggle.compareDocumentPosition(controls as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("names each override a closed Advanced mode keeps", async () => {
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await screen.findByLabelText("Instructions");
+
+      fireEvent.click(screen.getByLabelText("Advanced mode"));
+      fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "-2" } });
+      fireEvent.change(screen.getByLabelText("Max Attempts"), { target: { value: "5" } });
+      expect(screen.queryByText(/^Overrides:/)).toBeNull();
+      fireEvent.click(screen.getByLabelText("Advanced mode"));
+
+      expect(screen.getByText("Overrides: priority -2, max attempts 5")).toBeTruthy();
+    });
+
+    it("submits the same values whether the disclosures are open or closed", async () => {
+      const openView = renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await fillOptionValues();
+      for (const id of ["schedule", "dependencies", "report"]) {
+        setDisclosure(id, true);
+      }
+      const openRequest = await submitAndCapture();
+      openView.unmount();
+      fetchSpy.mockClear();
+      window.localStorage.clear();
+
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await fillOptionValues();
+      for (const id of ["schedule", "dependencies", "report"]) {
+        setDisclosure(id, false);
+      }
+      fireEvent.click(screen.getByLabelText("Advanced mode"));
+      expect(screen.queryByLabelText("Priority")).toBeNull();
+      const closedRequest = await submitAndCapture();
+
+      expect(closedRequest).toEqual(openRequest);
+      expect(closedRequest.priority).toBe(7);
+      expect(closedRequest.maxAttempts).toBe(5);
+      expect(JSON.stringify(closedRequest)).toContain("0 9 * * 1");
+      expect(JSON.stringify(closedRequest)).toContain("mm:dep-641");
+    }, 20000);
+
+    it("opens a collapsed Schedule disclosure to show its validation error", async () => {
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      fireEvent.change(await screen.findByLabelText("Instructions"), {
+        target: { value: "Schedule without cron." },
+      });
+      fireEvent.change(screen.getByLabelText("Schedule Mode"), {
+        target: { value: "recurring" },
+      });
+      setDisclosure("schedule", false);
+
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+      expect(
+        await screen.findByText("Cron expression is required for recurring scheduling."),
+      ).toBeTruthy();
+      await waitFor(() => expect(disclosure("schedule").open).toBe(true));
+      expect(document.activeElement).toBe(screen.getByLabelText("Cron Expression"));
+    });
+
+    it("renders the page title as the single h1 and sets the tab title", async () => {
+      document.title = "";
+      renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      await screen.findByLabelText("Instructions");
+
+      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+      expect(document.title).toBe("Start Workflow | MoonMind");
+    });
   });
 
   it("offers no retired retrieval authoring in Advanced mode and submits no vector fields", async () => {
@@ -13424,7 +13600,7 @@ describe("Task Create MM-641 authoring validation", () => {
 
     // Native retrieval is retired (#4103): Advanced mode no longer presents a
     // retrieval disclosure or advertises it as an advanced capability.
-    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     expect(within(controls).queryByText(/context retrieval/i)).toBeNull();
     expect(within(controls).queryByText(/\bRAG\b/)).toBeNull();
 
@@ -14620,7 +14796,11 @@ describe("Task Create MM-641 authoring validation", () => {
       target: { value: "mm:dep-641" },
     });
     await waitFor(() => {
-      expect(screen.getByText(/Prepare MM-641 source brief/)).toBeTruthy();
+      expect(
+        within(document.getElementById("queue-dependency-list") as HTMLElement).getByText(
+          "Prepare MM-641 source brief",
+        ),
+      ).toBeTruthy();
     });
     const step = (await screen.findByText("Step 1")).closest("section");
     expect(step).not.toBeNull();

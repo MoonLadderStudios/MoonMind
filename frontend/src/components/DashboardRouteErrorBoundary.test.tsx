@@ -38,7 +38,7 @@ describe('DashboardRouteErrorBoundary', () => {
     );
 
     expect(screen.getByRole('alert')).toBeTruthy();
-    expect(screen.getByText('This page failed to load')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'This page failed to load' })).toBeTruthy();
     expect(screen.getByText('render blew up')).toBeTruthy();
   });
 

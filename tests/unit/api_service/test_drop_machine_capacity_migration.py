@@ -52,9 +52,10 @@ def test_migration_graph_keeps_single_head_at_new_revision() -> None:
     # single-user conversion ledger) into 387_merge_386_heads_4461; the GitHub
     # event delivery receipts migration (#3967) extended that chain, and the
     # OpenCode validation repair (#4526), the account-free preset catalog
-    # (#4350), the legacy GitHub credential mapping (#4023), and the runtime
-    # evidence retention backfill now extend it further as the single head.
-    assert tuple(script.get_heads()) == ("394_default_conn_issues_grant",)
+    # (#4350), the legacy GitHub credential mapping (#4023), the runtime
+    # evidence retention backfill, the default-connection grants, and the
+    # remediation link target now extend it further as the single head.
+    assert tuple(script.get_heads()) == ("395_remediation_link_target",)
 
 
 def test_upgrade_drops_only_retired_table_and_keeps_unrelated_rows(

@@ -229,7 +229,7 @@ describe('skills table visual parity (MoonMind#3346)', () => {
     const descriptionCell = container.querySelector<HTMLElement>(
       'td[data-column-key="description"]',
     )!;
-    expect(getComputedStyle(descriptionCell).overflowWrap).toBe('anywhere');
+    expect(getComputedStyle(descriptionCell).overflowWrap).toBe('break-word');
     expect(getComputedStyle(table).whiteSpace).toBe('normal');
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
       document.documentElement.clientWidth + 1,
@@ -245,7 +245,7 @@ describe('skills table visual parity (MoonMind#3346)', () => {
     const descriptionCell = container.querySelector<HTMLElement>(
       'td[data-column-key="description"]',
     )!;
-    expect(getComputedStyle(descriptionCell).overflowWrap).toBe('anywhere');
+    expect(getComputedStyle(descriptionCell).overflowWrap).toBe('break-word');
     expect(slab.scrollWidth).toBeGreaterThan(slab.clientWidth);
     expect(getComputedStyle(slab).overflowX).toBe('auto');
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
