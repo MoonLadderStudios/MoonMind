@@ -111,8 +111,14 @@ try {
           .getByRole("menu", { name: "Workflow actions" })
           .getByRole("menuitem", { name: "Cancel", exact: true });
         await cancel.waitFor({ state: "visible" });
-        execution.cancelRequestedAt = new Date().toISOString();
         await cancel.click();
+        // Cancel asks for a one-line confirmation before it sends anything.
+        const confirm = page
+          .getByRole("dialog", { name: "Cancel workflow?" })
+          .getByRole("button", { name: "Cancel workflow", exact: true });
+        await confirm.waitFor({ state: "visible" });
+        execution.cancelRequestedAt = new Date().toISOString();
+        await confirm.click();
         await page.getByText("Cancellation requested.").first().waitFor({ state: "visible" });
         // The detail page polls until the workflow is terminal.
         await page
