@@ -1172,6 +1172,14 @@ RUN_INTERRUPTED_STEP_DEADLINE_PATCH = "run-interrupted-step-deadline-v1"
 RUN_INTERRUPTED_STEP_INSTALLED_ADMISSION_PATCH = (
     "run-interrupted-step-installed-admission-v1"
 )
+# The first Omnigent Step to start after a reset of the run's history (retry
+# from a step) is admitted again on the installed runtime, as an interrupted
+# Step's successor is. The patch is first consulted after the reset, so a
+# history recorded before it still re-admits the retried Step; histories without
+# a reset never consult it.
+RUN_RETRIED_STEP_INSTALLED_ADMISSION_PATCH = (
+    "run-retried-step-installed-admission-v1"
+)
 # GitHub and Jira Orchestrate run the same remediation loop, then hand off the
 # PR in a further fresh Omnigent sandbox that restores the verified candidate.
 # A history that launched a doc-reconciliation Step before MoonMind#4808
@@ -1851,6 +1859,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # admitted inputs when no verified save exists.
         self._interrupted_step_restore_refs: dict[str, str] = {}
         self._interrupted_step_restart_limitations: set[str] = set()
+        # Set where a reset of this run's history restarts it; the next
+        # Omnigent Step to start is admitted on the installed runtime.
+        self._retried_step_admission_pending = False
+        # Plan admissions for an attempt, keyed by ``(step, execution ordinal)``.
+        self._step_runtime_admissions: dict[tuple[str, int], dict[str, Any]] = {}
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
         self._step_execution_context_projections: dict[
@@ -3243,6 +3256,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 else "external_provider_continuation"
             )
             execution_ordinal = self._step_execution_for(logical_step_id) or 1
+            admission = self._step_runtime_admissions.get(
+                (logical_step_id, execution_ordinal)
+            )
+            if admission:
+                execution["runtimeAdmission"] = dict(admission)
             if agent_kind == "managed":
                 reset = self._managed_reattempt_session_reset_evidence(
                     logical_step_id,
@@ -11709,6 +11727,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
+        self._watch_for_history_reset()
         self._canonical_git_repository_projection_enabled = workflow.patched(
             RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH
         )
@@ -12371,21 +12390,45 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             parameters, admitted, subject="Scheduled occurrence"
         )
 
-    async def _admit_step_successor_plan(
-        self, parameters: dict[str, Any], *, logical_step_id: str
-    ) -> None:
-        """Bind an interrupted Step's successor to the installed Omnigent runtime.
+    def _watch_for_history_reset(self) -> None:
+        """Note each reset of this run's history, such as retry from a step.
 
-        The successor is a fresh attempt, so the plan owner admits the
-        workflow's frozen inputs again, as for a fresh start or a schedule
-        occurrence, and refuses a plan that would change the recorded request
-        intent. The interrupted attempt keeps the plan it used. A refused or
-        failed admission keeps the recorded plan, which then launches under its
-        own launch-time checks.
+        Temporal reseeds workflow randomness only where a reset's failed
+        workflow task sits in history, so the callback fires at the same point
+        on every replay. It is registered before any reset point a retry can
+        choose, since a retry restarts a Step.
+        """
+
+        workflow.register_random_seed_callback(self._note_history_reset)
+
+    def _note_history_reset(self, _seed: int) -> None:
+        self._retried_step_admission_pending = True
+
+    async def _admit_step_successor_plan(
+        self,
+        parameters: dict[str, Any],
+        *,
+        logical_step_id: str,
+        trigger: str = "interrupted_step",
+    ) -> None:
+        """Bind a Step's next attempt to the installed Omnigent runtime.
+
+        The attempt is an interrupted Step's successor, or a Step that a reset
+        of the run's history runs again (``trigger`` ``history_reset``). It is
+        a fresh attempt, so the plan owner admits the workflow's frozen inputs
+        again, as for a fresh start or a schedule occurrence, and refuses a
+        plan that would change the recorded request intent. Earlier attempts
+        keep the plan they used. A refused or failed admission keeps the
+        recorded plan, which then launches under its own launch-time checks.
+        The attempt's Step Execution manifest records the outcome and any
+        harness or runtime the new plan moved to.
         """
 
         if not isinstance(parameters.get("omnigentExecutionPlan"), Mapping):
             return
+        recorded_plan_ref = str(
+            parameters["omnigentExecutionPlan"].get("planRef") or ""
+        )
         original = self._original_input_payload.get(
             "initialParameters"
         ) or self._original_input_payload.get("initial_parameters")
@@ -12396,13 +12439,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "omnigent.admit_step_successor_plan"
         )
-        subject = f"Step {logical_step_id} successor"
+        subject = (
+            f"Step {logical_step_id} retried after a history reset"
+            if trigger == "history_reset"
+            else f"Step {logical_step_id} successor"
+        )
+        record: dict[str, Any] = {"trigger": trigger}
+        self._step_runtime_admissions[
+            (logical_step_id, (self._step_execution_for(logical_step_id) or 0) + 1)
+        ] = record
         try:
             admitted = await workflow.execute_activity(
                 "omnigent.admit_step_successor_plan",
                 {
                     "workflowId": workflow.info().workflow_id,
                     "initialParameters": frozen_parameters,
+                    "trigger": trigger,
                 },
                 **self._execute_kwargs_for_route(route),
             )
@@ -12412,8 +12464,34 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 subject,
                 exc.cause or exc,
             )
+            record.update(
+                disposition="failed",
+                planRef=recorded_plan_ref,
+                reason=str(exc.cause or exc)[:500],
+            )
             return
-        self._adopt_admitted_execution_plan(parameters, admitted, subject=subject)
+        if not self._adopt_admitted_execution_plan(
+            parameters, admitted, subject=subject
+        ):
+            record.update(
+                disposition="recorded",
+                planRef=recorded_plan_ref,
+                reason=str(admitted.get("reason") or "")[:500],
+            )
+            return
+        record.update(
+            disposition="admitted",
+            planRef=parameters["omnigentExecutionPlan"].get("planRef"),
+            previousPlanRef=recorded_plan_ref,
+        )
+        changes = admitted.get("runtimeChanges")
+        if isinstance(changes, Mapping) and changes:
+            record["runtimeChanges"] = dict(changes)
+            self._get_logger().info(
+                "%s moved to the installed harness or runtime: %s",
+                subject,
+                ", ".join(sorted(changes)),
+            )
 
     def _adopt_admitted_execution_plan(
         self,
@@ -12421,8 +12499,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         admitted: Any,
         *,
         subject: str,
-    ) -> None:
-        """Carry an admission's plan into later launches and Continue-As-New."""
+    ) -> bool:
+        """Carry an admission's plan into later launches and Continue-As-New.
+
+        Returns whether the admitted plan replaced the recorded one.
+        """
 
         if not isinstance(admitted, Mapping):
             raise ValueError(f"{subject} admission returned no decision")
@@ -12432,7 +12513,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 subject,
                 admitted.get("reason"),
             )
-            return
+            return False
         binding = admitted.get("omnigentExecutionPlan")
         skillset_ref = str(admitted.get("resolvedSkillsetRef") or "").strip()
         if not isinstance(binding, Mapping) or not skillset_ref:
@@ -12449,6 +12530,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     **original,
                     **admitted_fields,
                 }
+        return True
 
     def _record_integration_from_parameters(
         self,
@@ -13482,6 +13564,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 self._update_memo()
                 self._refresh_step_readiness(updated_at=workflow.now())
+                if self._retried_step_admission_pending and (
+                    tool_type == "agent_runtime"
+                    and _normalize_agent_runtime_id(
+                        self._agent_id_from_runtime_inputs(
+                            node_inputs=node_inputs,
+                            fallback_name=tool_name,
+                        )
+                    )
+                    == "omnigent"
+                ):
+                    # A reset restarted the run at or before this Step on the
+                    # installed code. After the step-start memo, so retrying
+                    # this Step again repeats its admission.
+                    self._retried_step_admission_pending = False
+                    if workflow.patched(RUN_RETRIED_STEP_INSTALLED_ADMISSION_PATCH):
+                        await self._admit_step_successor_plan(
+                            parameters,
+                            logical_step_id=node_id,
+                            trigger="history_reset",
+                        )
                 if node_id == self._recovery_failed_step_id:
                     await self._record_canonical_step_checkpoint(
                         node_id,

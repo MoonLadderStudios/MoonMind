@@ -1,6 +1,6 @@
 # MoonMind Workflow Run History and New Run Semantics
 
-Last updated: 2026-10-17
+Last updated: 2026-10-18
 
 **Document class:** Canonical declarative lifecycle contract.
 **Status:** Normative
@@ -121,7 +121,9 @@ Closed Temporal executions do not process ordinary updates. Terminal rerun is th
 
 ### 7A.1 Meaning
 
-Retry from a step re-executes a failed, canceled, terminated, or timed-out `MoonMind.UserWorkflow` run from the start of a chosen step. MoonMind resets the run's Temporal history to the workflow task that started that step. Temporal replays the earlier history on the installed workflow code, so completed steps, their recorded results, and their confirmed effects are kept rather than repeated. The chosen step and every step after it run again, with the run's original task-input snapshot and admitted Omnigent execution plan. The failed run stays in Temporal history and the reset run becomes the workflow's current run.
+Retry from a step re-executes a failed, canceled, terminated, or timed-out `MoonMind.UserWorkflow` run from the start of a chosen step. MoonMind resets the run's Temporal history to the workflow task that started that step. Temporal replays the earlier history on the installed workflow code, so completed steps, their recorded results, and their confirmed effects are kept rather than repeated. The chosen step and every step after it run again with the run's original task-input snapshot. The failed run stays in Temporal history and the reset run becomes the workflow's current run.
+
+The first Omnigent step to start after the reset is admitted again on the installed runtime, as an interrupted step's successor is ([Docker Compose Update System](../Steps/DockerComposeUpdateSystem.md)). The plan owner recompiles the run's frozen inputs against the installed harness, host, and server, and refuses a plan that would change the Harness, Provider Profile account, model and effort, launch or capture policy, source, repository route, or publication intent. Later launches and Continue-As-New use the admitted plan; a refused or failed admission keeps the recorded plan under its launch-time checks. The step's Step Execution manifest records the outcome under `execution.runtimeAdmission`, with any harness implementation, Host Class, host image, or server build and image the step moved to. The workflow recognizes the reset from the restart Temporal records in its history, so runs recorded by earlier code and manual Temporal resets are admitted the same way.
 
 Retry is distinct from rerun (a fresh execution of the authored input), Continue-As-New (history rollover), Pause/Resume, and same-session continuation. It never changes instructions, inputs, or execution choices; those need an edited rerun or a Checkpoint Branch.
 
@@ -191,7 +193,7 @@ Durable operation identity and independently readable artifacts reconcile ambigu
 
 ## 12. Acceptance criteria
 
-Retry from a step is exercised against a real Temporal server through the public route: the chosen step and its successors run again, earlier steps do not, a repeated request returns the same run, the reset history replays on installed code, and a history that diverges from installed code is refused without touching the failed run. Rerun and Continue-As-New keep their own lifecycle tests. Hermetic tests, live provider evidence, and promotion are reported separately; a passing helper does not satisfy an end-to-end claim.
+Retry from a step is exercised against a real Temporal server through the public route: the chosen step and its successors run again, earlier steps do not, a repeated request returns the same run, the reset history replays on installed code, and a history that diverges from installed code is refused without touching the failed run. A run recorded before an update and retried after it launches the retried Omnigent step on the plan admitted for the installed runtime, and both histories replay. Rerun and Continue-As-New keep their own lifecycle tests. Hermetic tests, live provider evidence, and promotion are reported separately; a passing helper does not satisfy an end-to-end claim.
 
 ## 13. Summary
 
