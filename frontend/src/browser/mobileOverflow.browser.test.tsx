@@ -942,7 +942,7 @@ describe('Artifacts & Observability in the dashboard shell (MoonMind#4559)', () 
     expect(screen.getByLabelText('Filter artifacts')).toBe(filter);
     expect(filter.value).toBe('final');
     await waitFor(() => expect(window.location.search).toContain('artifacts_q=final'));
-    expect(visible(screen.getAllByRole('link', { name: 'Download' }))).toHaveLength(1);
+    await waitFor(() => expect(visible(screen.getAllByRole('link', { name: 'Download' }))).toHaveLength(1));
   });
 });
 
