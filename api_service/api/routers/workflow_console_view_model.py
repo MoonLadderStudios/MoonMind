@@ -1695,10 +1695,6 @@ def build_runtime_config(
         },
     }
 
-_PROVIDER_PROFILE_INVALID_DIAGNOSTIC_CODES = frozenset(
-    {"provider_profile_not_found", "provider_profile_disabled"}
-)
-
 
 def _coerce_uuid(value: Any) -> UUID | None:
     if isinstance(value, UUID):
@@ -1758,16 +1754,7 @@ async def resolve_dashboard_runtime_config(
             runtime_override = runtime_eff.value.strip()
 
         profile_scope = "user" if user_id is not None else "workspace"
-        profile_eff = await service.effective_value_async(
-            "workflow.default_provider_profile_ref", scope=profile_scope
-        )
-        if isinstance(profile_eff.value, str) and profile_eff.value.strip():
-            invalid = any(
-                diag.code in _PROVIDER_PROFILE_INVALID_DIAGNOSTIC_CODES
-                for diag in profile_eff.diagnostics
-            )
-            if not invalid:
-                profile_ref = profile_eff.value.strip()
+        profile_ref = await service.default_provider_profile_ref(scope=profile_scope)
     except Exception:
         # Settings overrides are best-effort. If the DB is unreachable or the
         # catalog service raises, fall back to the env/settings-only defaults
