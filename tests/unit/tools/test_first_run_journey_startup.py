@@ -64,6 +64,8 @@ entry = {
     "attempt": attempt, "status": status,
     "env_exists": (Path(os.environ["STARTUP_TEST_REPO"]) / ".env").exists(),
     "credentials": [key for key in config["credential_keys"] if key in os.environ],
+    "workspace_volume": os.environ.get("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"),
+    "control_network": os.environ.get("MOONMIND_CONTROL_PLANE_NETWORK"),
 }
 with calls.open("a") as output:
     output.write(json.dumps(entry) + "\n")
@@ -398,6 +400,8 @@ def test_successful_startup_preserves_complete_fresh_journey_and_cleanup(
         "credential",
         "verify",
         "release",
+        "generate",
+        "generated_verify",
     ]
     assert any(call["command"][:1] == ["restart"] for call in journey.calls())
     output = _startup_log(journey, "fresh", "candidate", 1)
@@ -542,3 +546,29 @@ def test_unobserved_worker_processes_are_unavailable_not_zero(
     assert f"compose top exit_status={status}" in text
     if stderr:
         assert stderr in text
+
+
+def test_generated_execution_uses_only_project_owned_storage_and_cleans_before_download(
+    journey,
+):
+    journey.env["MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"] = "caller-workspaces"
+    journey.env["MOONMIND_CONTROL_PLANE_NETWORK"] = "caller-control"
+    result = journey.run(candidate_statuses=[0], lines=1)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = journey.calls()
+    assert all(
+        call["workspace_volume"] == "moonmind-test-startup-unit-agent-workspaces"
+        for call in calls
+    )
+    assert all(
+        call["control_network"] == "moonmind-test-startup-unit_control-plane-network"
+        for call in calls
+    )
+    assert any(
+        "cleanup" in call["command"] and "exec" in call["command"] for call in calls
+    )
+    phases = [json.loads(line) for line in journey.api_calls.read_text().splitlines()]
+    assert phases[-2][0] == "generate"
+    assert phases[-1][0] == "generated_verify" and "--cleanup-receipt" in phases[-1]
+    assert calls[0]["directory"] != str(journey.repo)
+    journey.assert_cleaned()
