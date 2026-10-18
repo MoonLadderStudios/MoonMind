@@ -285,7 +285,7 @@ async def test_dedicated_explicit_runtime_alias_beats_saved_default(
         "target": target,
         "parameter_runtime": params.setdefault("runtime", {}),
     }[layer]
-    # An explicit empty task runtime still owns the field; only parameter-runtime
+    # An empty workflow runtime still owns the field; only parameter-runtime
     # fallback intentionally omits that task-level mapping.
     if layer == "parameter_runtime":
         task.pop("runtime")

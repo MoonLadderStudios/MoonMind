@@ -457,6 +457,12 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
                 )
             )
             canonical.integration_state = dict(snapshot)
+            # Model a binding-only record predating creation-default stamping.
+            for historical_record in (row, canonical):
+                parameters = dict(historical_record.parameters or {})
+                parameters.pop("targetRuntime", None)
+                parameters.pop("runtimeCutover", None)
+                historical_record.parameters = parameters
             if terminal:
                 canonical.state = MoonMindWorkflowState.COMPLETED
             if terminal:
