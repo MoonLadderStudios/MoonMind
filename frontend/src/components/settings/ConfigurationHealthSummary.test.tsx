@@ -201,6 +201,18 @@ describe('ConfigurationHealthSummary', () => {
     expect(screen.getByText(/settings\.effective\.read/i)).toBeTruthy();
   });
 
+  it('omits the permissions footer when every action is allowed', () => {
+    renderSummary({
+      providerProfiles: [makeProfile({ is_default: true })],
+      canWriteProviderProfiles: true,
+      canRunGithubTokenProbe: true,
+    });
+
+    expect(screen.queryByText(/^Permissions$/i)).toBeNull();
+    expect(screen.queryByText(/writes enabled/i)).toBeNull();
+    expect(screen.queryByText(/probe available/i)).toBeNull();
+  });
+
   it('renders a loading state without querying', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

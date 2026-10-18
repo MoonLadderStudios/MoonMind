@@ -163,9 +163,9 @@ describe('workflow detail source context presentation (MM-4228)', () => {
     });
     renderWithClient(<WorkflowDetailPage payload={payload} />);
     await screen.findByLabelText('Workflow source context');
-    const matches = await screen.findAllByText(longBranch);
-    // Shared strip + Overview Git & Publish render the same normalized value.
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+    await screen.findByText('Git & Publish');
+    // The shared strip is the single place the starting branch is shown.
+    expect(screen.getAllByText(longBranch)).toHaveLength(1);
   });
 
   it('never substitutes target or published branches for the source branch', async () => {

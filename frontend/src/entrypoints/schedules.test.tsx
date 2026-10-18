@@ -255,10 +255,28 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("Paused")).not.toBeNull();
     expect(screen.getByText("Needs attention")).not.toBeNull();
     expect(screen.getByText("MoonLadderStudios/MoonMind")).not.toBeNull();
-    expect(screen.getByText("0 9 * * *")).not.toBeNull();
+    expect(screen.getByText("Daily at 09:00").getAttribute("title")).toBe("0 9 * * *");
+    expect(screen.getByText("Every Monday at 04:30")).not.toBeNull();
+    expect(screen.getByText("America/New_York")).not.toBeNull();
     expect(screen.getByText("Skip / Latest")).not.toBeNull();
     expect(screen.getByText("Adapter rejected schedule")).not.toBeNull();
-    expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("3");
+    const summary = screen.getByRole("region", { name: "Schedule summary" });
+    expect(summary.textContent).toContain("3 schedules · 2 active");
+    expect(within(summary).getByText("1 needs attention")).not.toBeNull();
+    expect(screen.queryByText("Total")).toBeNull();
+    // Raw definition IDs stay off the list rows.
+    expect(screen.queryByText("schedule-1")).toBeNull();
+  });
+
+  it("makes the list title the page's only h1 and names the browser tab", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    const headings = screen.getAllByRole("heading", { level: 1 });
+    expect(headings).toHaveLength(1);
+    expect(headings[0]?.textContent).toBe("Recurring Schedules");
+    expect(headings[0]?.hasAttribute("data-recurring-table-title")).toBe(true);
+    expect(document.title).toBe("Recurring Schedules | MoonMind");
   });
 
   it("renders mobile schedule cards only at the mobile breakpoint and preserves dispatch errors", async () => {
@@ -603,7 +621,7 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(screen.getByText("Total").nextElementSibling?.textContent).toBe("0");
+    expect(screen.getByRole("region", { name: "Schedule summary" }).textContent).toContain("0 schedules");
     expect(screen.queryByRole("button", { name: "Create Schedule" })).toBeNull();
   });
 
@@ -854,7 +872,8 @@ describe("SchedulesPage", () => {
       expect(latest).toContain("sort=nextRunAt");
       expect(latest).toContain("sortDir=asc");
     });
-    expect(screen.getByText("Sorting is server-authoritative.")).not.toBeNull();
+    expect(screen.queryByText(/server-authoritative/)).toBeNull();
+    expect(document.querySelector('[title*="server-authoritative"]')).toBeNull();
   });
 
   it("loads the recurring schedule detail route by the routed definition id", async () => {
@@ -880,8 +899,27 @@ describe("SchedulesPage", () => {
     expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Temporal Schedule ID")).not.toBeNull();
+    expect(screen.getAllByText("Daily at 02:00 (UTC)").length).toBeGreaterThanOrEqual(1);
+    // Identifiers and the raw target payload sit behind closed disclosures.
+    const details = screen.getByText("Temporal Schedule ID").closest("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(within(details).getByText("schedule-alpha")).not.toBeNull();
+    expect(within(details).getByText("0 2 * * *")).not.toBeNull();
+    expect(screen.queryByText("Definition ID: schedule-alpha")).toBeNull();
+    fireEvent.click(within(details).getByText("Details"));
+    expect(details.open).toBe(true);
     expect(screen.getByText("temporal-schedule-alpha")).not.toBeNull();
+    const payload = screen.getByText(/"kind": "queue_task"/).closest("details") as HTMLDetailsElement;
+    expect(payload.open).toBe(false);
+    expect(within(payload).getByText("Target payload")).not.toBeNull();
+    // Policy, last outcome and next run stay visible by default.
+    expect(screen.getByText("Policy").closest("details")).toBeNull();
+    expect(screen.getByText("Next Run").closest("details")).toBeNull();
+    expect(screen.getByText("Last Dispatch Error").closest("details")).toBeNull();
+    const h1s = screen.getAllByRole("heading", { level: 1 });
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0]?.textContent).toBe("Nightly detail sweep");
+    expect(document.title).toBe("Nightly detail sweep | MoonMind");
     expect(screen.getByText("MoonLadderStudios/MoonMind")).not.toBeNull();
     expect(screen.getByRole("columnheader", { name: "Actual Start" })).not.toBeNull();
     expect(screen.getByRole("columnheader", { name: "Dispatch" })).not.toBeNull();
@@ -1245,6 +1283,35 @@ describe("SchedulesPage", () => {
         version: 1,
       });
     });
+  });
+
+  it("previews the edited cron as a readable cadence while keeping the raw expression editable", async () => {
+    mockScheduleDetailFetch(fetchSpy, { permissions: { canEdit: true, canRunNow: true } });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    const cron = screen.getByLabelText("Cron") as HTMLInputElement;
+    expect(cron.value).toBe("0 2 * * *");
+    const preview = document.getElementById(cron.getAttribute("aria-describedby") || "");
+    expect(preview?.textContent).toBe("Runs daily at 02:00 (UTC)");
+    fireEvent.change(cron, { target: { value: "0 9 * * 1-5" } });
+    expect(preview?.textContent).toBe("Runs weekdays at 09:00 (UTC)");
+    fireEvent.change(cron, { target: { value: "0 9 1 6 *" } });
+    expect(preview?.textContent).toBe("Custom cron expression (UTC)");
+  });
+
+  it("keeps a non-default overlap and catch-up policy visible on the detail page", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      policy: { overlap: { mode: "allow" }, catchup: { mode: "all" } },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    const policy = screen.getByText("Allow / All");
+    expect(policy.closest("details")).toBeNull();
   });
 
   it("shows submitted cron and timezone feedback and blocks invalid saves", async () => {

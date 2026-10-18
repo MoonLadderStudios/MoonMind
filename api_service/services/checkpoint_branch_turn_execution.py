@@ -85,12 +85,19 @@ def get_checkpoint_branch_artifact_service(
 
 
 class CheckpointBranchTurnLaunchError(ValueError):
-    """Bounded rejection raised before any runtime mutation."""
+    """Launch failure, including an uncertain start after a durable claim."""
 
-    def __init__(self, code: str, reason: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        reason: str,
+        *,
+        claimed_execution: Mapping[str, str | None] | None = None,
+    ) -> None:
         super().__init__(reason)
         self.code = code
         self.reason = reason
+        self.claimed_execution = dict(claimed_execution or {})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1585,6 +1592,20 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "launch_claim_incomplete", "claimed turn has no owner workflow identity"
             )
+        # Capture the durable claim before crossing the dispatch boundary. A
+        # lost acknowledgment must not need another database read to retain it.
+        claimed_execution = {
+            "workflowId": branch.workflow_id,
+            "runId": branch.source_run_id,
+            "branchId": branch.branch_id,
+            "branchTurnId": turn.branch_turn_id,
+            "actionId": turn.idempotency_key,
+            "checkpointRef": branch.source_checkpoint_ref,
+            "instructionRef": turn.instruction_ref,
+            "instructionDigest": turn.instruction_digest,
+            "stepExecutionId": turn.created_step_execution_id,
+            "agentRunId": turn.runtime_agent_run_id,
+        }
         try:
             source = await self._session.get(
                 TemporalExecutionCanonicalRecord, branch.workflow_id
@@ -1621,6 +1642,7 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "execution_owner_start_failed",
                 "branch turn execution owner could not be started",
+                claimed_execution=claimed_execution,
             ) from exc
 
 
