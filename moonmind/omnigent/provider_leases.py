@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Mapping, NoReturn, Protocol
 
@@ -245,6 +245,14 @@ class OmnigentProviderLeaseCoordinator:
                     credential_generation=admitted_generation,
                 ),
             )
+            observed_fence = inspection.get("fencingGeneration")
+            if observed_fence is not None:
+                if type(observed_fence) is not int or observed_fence < 1:
+                    raise HarnessPlatformError(
+                        "workflow-admitted provider grant fence is invalid",
+                        code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+                    )
+                lease = replace(lease, fencing_generation=observed_fence)
             admitted_scope_ref = getattr(
                 admitted_profile, "capacity_scope_ref", None
             )
