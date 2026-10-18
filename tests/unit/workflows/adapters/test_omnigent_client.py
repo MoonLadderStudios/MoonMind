@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -125,6 +126,92 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
     assert await client.interrupt("sess_1") == {"ok": True}
     assert await client.stop_session("sess_1") == {"ok": True}
     assert await client.delete_session("sess_1") == {"ok": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "encoding,body",
+    [
+        ("utf-8", "Native report: café ☾\n".encode()),
+        ("utf-8", b'{"api_key":"synthetic-file-content"}\n'),
+        ("base64", b"\x00\xff\x80native\n"),
+        ("base64", b""),
+    ],
+)
+async def test_workspace_file_decodes_stock_envelope_without_redacting_bytes(
+    encoding, body
+):
+    payload = {
+        "object": "session.environment.filesystem.file_content",
+        "path": "report.bin",
+        "encoding": encoding,
+        "bytes": len(body),
+        "truncated": False,
+        "content": body.decode()
+        if encoding == "utf-8"
+        else base64.b64encode(body).decode(),
+    }
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
+    )
+    assert await client.get_workspace_file("session", "report.bin") == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"encoding": "unknown"},
+        {"encoding": None},
+        {"encoding": "base64", "content": "not base64!"},
+        {"content": None},
+        {"content": {"text": "report"}},
+        {"content": "\ud800"},
+        {"bytes": 99},
+        {"bytes": True},
+        {"bytes": None},
+        {"truncated": True},
+        {"truncated": "false"},
+        {"truncated": None},
+        {"path": "different.txt"},
+        {"path": None},
+        {"object": "session.environment.filesystem.file_diff"},
+        {"object": "session.environment.filesystem.unknown"},
+    ],
+)
+async def test_workspace_file_rejects_incomplete_or_malformed_stock_envelope(updates):
+    payload = {
+        "object": "session.environment.filesystem.file_content",
+        "path": "report.txt",
+        "encoding": "utf-8",
+        "bytes": 6,
+        "truncated": False,
+        "content": "report",
+        **updates,
+    }
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, content=json.dumps(payload).encode())
+        ),
+    )
+    with pytest.raises(OmnigentClientError, match="workspace file") as caught:
+        await client.get_workspace_file("session", "report.txt")
+    assert caught.value.failure_class == "integration_error"
+    assert "report" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body", [b"plain file\n", b"{broken json", b'{"content":"ordinary JSON file"}']
+)
+async def test_workspace_file_preserves_raw_bridge_resource_bytes(body):
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=body)),
+    )
+    assert await client.get_workspace_file("session", "report.txt") == body
 
 
 @pytest.mark.asyncio
@@ -852,3 +939,49 @@ async def test_harness_catalog_preserves_only_public_auth_enum(envelope, auth):
     assert await client.list_harnesses() == [
         {"id": "example", "capabilities": {"auth": auth}}
     ]
+
+
+@pytest.mark.asyncio
+async def test_workspace_diff_does_not_promote_stock_comparison_to_patch():
+    payload = {
+        "object": "session.environment.filesystem.file_diff",
+        "path": "report.txt",
+        "before": "old\n",
+        "after": "new\n",
+    }
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)),
+    )
+    with pytest.raises(OmnigentClientError, match="comparison"):
+        await client.get_workspace_diff("session", "report.txt")
+
+
+@pytest.mark.asyncio
+async def test_workspace_file_rejects_malformed_reserved_envelope_json():
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                content=b'{"object":"session.environment.filesystem.file_content","content":',
+            )
+        ),
+    )
+    with pytest.raises(OmnigentClientError, match="workspace file"):
+        await client.get_workspace_file("session", "report.txt")
+
+
+@pytest.mark.asyncio
+async def test_workspace_diff_rejects_malformed_reserved_comparison():
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                content=b'{"object":"session.environment.filesystem.file_diff","before":',
+            )
+        ),
+    )
+    with pytest.raises(OmnigentClientError, match="comparison"):
+        await client.get_workspace_diff("session", "report.txt")

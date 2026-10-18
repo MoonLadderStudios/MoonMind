@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import os
+import re
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
@@ -835,20 +838,86 @@ class OmnigentHttpClient:
         )
 
     async def get_workspace_file(self, session_id: str, path: str) -> bytes:
-        return await self._request_bytes(
+        content = await self._request_bytes(
             "GET",
             f"/v1/sessions/{quote(session_id, safe='')}"
             "/resources/environments/default/filesystem/"
             f"{quote(path, safe='')}",
         )
 
+        # Stock filesystem reads wrap bytes in JSON. Read the raw transport,
+        # not _request(), whose diagnostic redaction would mutate file data.
+        # Embedded/older byte-oriented resources remain byte-for-byte intact.
+        try:
+            envelope = json.loads(content)
+        except (ValueError, UnicodeDecodeError) as exc:
+            if re.match(
+                rb'^\s*\{\s*"object"\s*:\s*"session\.environment\.filesystem\.', content
+            ):
+                raise OmnigentClientError(
+                    "Omnigent workspace file envelope contains malformed JSON",
+                    failure_class="integration_error",
+                ) from exc
+            return content
+        if not isinstance(envelope, dict) or not str(
+            envelope.get("object", "")
+        ).startswith("session.environment.filesystem."):
+            return content
+        try:
+            if envelope.get("object") != "session.environment.filesystem.file_content":
+                raise ValueError("unexpected resource type")
+            if envelope.get("path") != path:
+                raise ValueError("mismatched resource path")
+            if envelope.get("truncated") is not False:
+                raise ValueError("incomplete content")
+            encoded = envelope["content"]
+            if not isinstance(encoded, str):
+                raise TypeError("invalid content")
+            if envelope.get("encoding") == "utf-8":
+                decoded = encoded.encode("utf-8")
+            elif envelope.get("encoding") == "base64":
+                decoded = base64.b64decode(encoded, validate=True)
+            else:
+                raise ValueError("unknown encoding")
+            expected_bytes = envelope["bytes"]
+            if type(expected_bytes) is not int or expected_bytes != len(decoded):
+                raise ValueError("invalid byte length")
+        except (KeyError, TypeError, ValueError, UnicodeError, binascii.Error) as exc:
+            raise OmnigentClientError(
+                "Omnigent workspace file envelope is malformed or truncated",
+                failure_class="integration_error",
+            ) from exc
+        return decoded
+
     async def get_workspace_diff(self, session_id: str, path: str) -> bytes:
-        return await self._request_bytes(
+        content = await self._request_bytes(
             "GET",
             f"/v1/sessions/{quote(session_id, safe='')}"
             "/resources/environments/default/diff/"
             f"{quote(path, safe='')}",
         )
+
+        try:
+            envelope = json.loads(content)
+        except (ValueError, UnicodeDecodeError) as exc:
+            if re.match(
+                rb'^\s*\{\s*"object"\s*:\s*"session\.environment\.filesystem\.', content
+            ):
+                raise OmnigentClientError(
+                    "Omnigent workspace comparison contains malformed JSON",
+                    failure_class="integration_error",
+                ) from exc
+            return content
+        if isinstance(envelope, dict) and str(envelope.get("object", "")).startswith(
+            "session.environment.filesystem."
+        ):
+            # Stock before/after is a bounded, lossy comparison with no complete
+            # patch guarantee. Existing capture records this as unavailable.
+            raise OmnigentClientError(
+                "Omnigent workspace comparison is not a complete patch",
+                failure_class="integration_error",
+            )
+        return content
 
     async def list_session_files(self, session_id: str) -> dict[str, Any]:
         return await self._request(
