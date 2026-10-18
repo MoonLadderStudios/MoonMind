@@ -136,8 +136,8 @@ describe('fetchApi', () => {
     await fetchApi('/api/upload', { method: 'POST', body: form });
     await fetchApi('/api/json', { method: 'POST', body: JSON.stringify({ a: 1 }) });
 
-    const uploadHeaders = new Headers(fetchMock.mock.calls[0][1].headers);
-    const jsonHeaders = new Headers(fetchMock.mock.calls[1][1].headers);
+    const uploadHeaders = new Headers(fetchMock.mock.calls[0]?.[1].headers);
+    const jsonHeaders = new Headers(fetchMock.mock.calls[1]?.[1].headers);
     expect(uploadHeaders.has('Content-Type')).toBe(false);
     expect(jsonHeaders.get('Content-Type')).toBe('application/json');
   });

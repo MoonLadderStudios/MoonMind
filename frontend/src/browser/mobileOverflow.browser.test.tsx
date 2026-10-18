@@ -624,7 +624,7 @@ describe('Agents inventory in the dashboard shell (MoonMind#4559)', () => {
       expect(buttons).toHaveLength(1);
       return buttons[0]!;
     });
-    expect(visible(screen.getAllByText('Agents request failed (503)'))).toHaveLength(1);
+    expect(visible(screen.getAllByText('Agents request failed (503): unavailable'))).toHaveLength(1);
     expectUsableLayout('Agents error state at 320px');
 
     await userEvent.click(retry);

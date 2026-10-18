@@ -82,8 +82,16 @@ function readableErrorMessage(
  * `new Error(response.statusText)` so the status survives for retry decisions
  * and not-found/unavailable states.
  */
+async function readBody(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return '';
+  }
+}
+
 export async function responseError(response: Response, context?: string): Promise<ApiError> {
-  const body = await response.text().catch(() => '');
+  const body = await readBody(response);
   const parsed = body ? parseJson(body) : undefined;
   const detail =
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
