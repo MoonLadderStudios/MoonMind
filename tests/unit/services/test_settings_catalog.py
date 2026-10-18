@@ -1772,7 +1772,8 @@ async def test_default_provider_profile_ref_uses_saved_settings_without_changing
         )
         await session.commit()
         service = SettingsCatalogService(session=session, env={})
-        assert await service.default_provider_profile_ref(scope="workspace") == expected
+        defaults = await service.workflow_creation_defaults(scope="workspace")
+        assert defaults.provider_profile_ref == expected
         if profile_state != "missing":
             profile = await session.get(ManagedAgentProviderProfile, "saved")
             assert profile.is_default is False
@@ -1811,16 +1812,18 @@ async def test_default_provider_profile_ref_keeps_user_workspace_and_environment
             user_id=user_id,
             env={"MOONMIND_DEFAULT_PROVIDER_PROFILE_REF": "environment"},
         )
-        assert await service.default_provider_profile_ref(scope="user") == "user"
-        assert (
-            await service.default_provider_profile_ref(scope="workspace") == "workspace"
-        )
+        user_defaults = await service.workflow_creation_defaults(scope="user")
+        workspace_defaults = await service.workflow_creation_defaults(scope="workspace")
+        assert user_defaults.provider_profile_ref == "user"
+        assert workspace_defaults.provider_profile_ref == "workspace"
         await session.delete(user)
         await session.commit()
-        assert await service.default_provider_profile_ref(scope="user") == "workspace"
+        defaults = await service.workflow_creation_defaults(scope="user")
+        assert defaults.provider_profile_ref == "workspace"
         await session.delete(workspace)
         await session.commit()
-        assert await service.default_provider_profile_ref(scope="user") == "environment"
+        defaults = await service.workflow_creation_defaults(scope="user")
+        assert defaults.provider_profile_ref == "environment"
 
 
 @pytest.mark.asyncio

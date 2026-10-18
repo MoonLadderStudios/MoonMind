@@ -12,10 +12,10 @@ import logging
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Optional, cast, get_args
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast, get_args
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -26,6 +26,9 @@ from moonmind.workflows.temporal.workflow_registry import (
     is_historical_workflow_type,
     product_workflow_types,
 )
+
+if TYPE_CHECKING:
+    from api_service.services.settings_catalog import WorkflowCreationDefaults
 
 logger = logging.getLogger(__name__)
 
@@ -8762,30 +8765,26 @@ async def _load_provider_profile_for_runtime(
         ) from exc
 
 
-async def _saved_default_provider_profile_ref(
+async def _workflow_creation_defaults(
     *,
     session: Any,
     user: Any,
     payloads: Sequence[Mapping[str, Any]],
     task_payload: Mapping[str, Any],
     parameter_payload: Mapping[str, Any],
-) -> str | None:
-    """Fill only omitted agent account intent through the Settings Catalog."""
-    if not workflow_requires_agent(task_payload, parameter_payload):
-        return None
-    for payload in payloads:
-        if payload.get("agentProfile") is not None:
-            return None
-        # A selector delegates account choice to the provider pool. An exact
-        # saved default would constrain that pool, not merely fill an omission.
-        if has_profile_selector(payload):
-            return None
-        if provider_profile_ref_from_mapping(payload):
-            return None
+    agent_profile: object = None,
+) -> WorkflowCreationDefaults:
+    """Resolve submission fallbacks once, preserving explicit account intent."""
     from api_service.services.settings_catalog import (
         SettingsCatalogService,
+        WorkflowCreationDefaults,
         coerce_settings_subject_id,
     )
+
+    if not workflow_requires_agent(task_payload, parameter_payload):
+        return WorkflowCreationDefaults(
+            default_runtime=settings.workflow.default_runtime, provider_profile_ref=None
+        )
 
     user_id = coerce_settings_subject_id(getattr(user, "id", None))
     catalog = SettingsCatalogService(
@@ -8793,9 +8792,21 @@ async def _saved_default_provider_profile_ref(
         workspace_id=coerce_settings_subject_id(getattr(user, "workspace_id", None)),
         user_id=user_id,
     )
-    return await catalog.default_provider_profile_ref(
+    defaults = await catalog.workflow_creation_defaults(
         scope="user" if user_id is not None else "workspace"
     )
+    if agent_profile is not None:
+        return replace(defaults, provider_profile_ref=None)
+    for payload in payloads:
+        if payload.get("agentProfile") is not None:
+            return replace(defaults, provider_profile_ref=None)
+        # A selector delegates account choice to the provider pool. An exact
+        # saved default would constrain that pool, not merely fill an omission.
+        if has_profile_selector(payload):
+            return replace(defaults, provider_profile_ref=None)
+        if provider_profile_ref_from_mapping(payload):
+            return replace(defaults, provider_profile_ref=None)
+    return defaults
 
 
 async def _profile_route_runtime(
@@ -9937,6 +9948,7 @@ async def _preset_expansion_target_runtime(
     session: Any,
     user: Any,
     profile_routes: dict[str, str] | None,
+    workflow_settings: Any,
 ) -> str:
     """Resolve the runtime preset steps inherit, as Workflow Create will.
 
@@ -9984,7 +9996,7 @@ async def _preset_expansion_target_runtime(
             ),
             routes=profile_routes,
         ),
-        workflow_settings=settings.workflow,
+        workflow_settings=workflow_settings or settings.workflow,
         # The admission that follows records the selection; this is its preview.
         record_metrics=False,
     ).runtime_id
@@ -9997,6 +10009,7 @@ async def _expand_goal_preset_for_workflow_submission(
     session: Any,
     user: Any,
     profile_routes: dict[str, str] | None = None,
+    workflow_settings: Any = None,
 ) -> None:
     target_runtime = await _preset_expansion_target_runtime(
         task_payload=task_payload,
@@ -10004,6 +10017,7 @@ async def _expand_goal_preset_for_workflow_submission(
         session=session,
         user=user,
         profile_routes=profile_routes,
+        workflow_settings=workflow_settings,
     )
     if has_unexpanded_task_template({"workflow": task_payload}):
         from api_service.services.presets.catalog import (
@@ -12550,14 +12564,15 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(f"{field_name} can have a maximum of 10 items.")
 
     # Resolve once before preset expansion so it and admission share the same
-    # saved account, even if Settings changes while this request is in flight.
-    default_profile_ref = await _saved_default_provider_profile_ref(
+    # configured defaults, even if Settings changes while this request is in flight.
+    creation_defaults = await _workflow_creation_defaults(
         task_payload=task_payload,
         parameter_payload=payload,
         session=session,
         user=user,
         payloads=(_coerce_mapping(task_payload.get("runtime")), task_payload, payload),
     )
+    default_profile_ref = creation_defaults.provider_profile_ref
     if default_profile_ref:
         task_payload["runtime"] = {
             **_coerce_mapping(task_payload.get("runtime")),
@@ -12573,6 +12588,7 @@ async def _create_execution_from_workflow_request(
             session=session,
             user=user,
             profile_routes=profile_routes,
+            workflow_settings=creation_defaults,
         )
         _reject_submit_version_identity(task_payload)
 
@@ -12866,7 +12882,7 @@ async def _create_execution_from_workflow_request(
             ),
             authored_runtime=authored_runtime,
             profile_runtime=profile_runtime,
-            workflow_settings=settings.workflow,
+            workflow_settings=creation_defaults,
         )
         raw_target_runtime = new_work_selection.runtime_id
         new_work_runtime_evidence = new_work_evidence(new_work_selection)
@@ -13603,19 +13619,24 @@ def _recurring_workflow_payload(
     return None, {}
 
 
-async def _resolve_recurring_runtime_metadata(
+async def _resolve_recurring_runtime_selection(
     request_payload: Mapping[str, Any],
     *,
     session: Any | None,
     user: Any = None,
-) -> dict[str, Any]:
+) -> (
+    tuple[dict[str, Any], Mapping[str, Any], Any, Mapping[str, Any], dict[str, Any]]
+    | None
+):
+    """Resolve one creation snapshot without taking ownership of model admission."""
+
     workflow_type = str(
         request_payload.get("workflowType")
         or request_payload.get("workflow_type")
         or "MoonMind.UserWorkflow"
     ).strip()
     if workflow_type != "MoonMind.UserWorkflow":
-        return {}
+        return None
 
     parameter_payload = request_payload
     raw_initial_parameters = request_payload.get("initialParameters")
@@ -13624,6 +13645,13 @@ async def _resolve_recurring_runtime_metadata(
     if isinstance(raw_initial_parameters, Mapping):
         parameter_payload = raw_initial_parameters
 
+    try:
+        validate_workflow_runtime_targets(request_payload)
+        if parameter_payload is not request_payload:
+            validate_workflow_runtime_targets(parameter_payload)
+    except ValueError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
     _task_key, task_payload = _recurring_workflow_payload(parameter_payload)
     if not task_payload and parameter_payload is not request_payload:
         _task_key, task_payload = _recurring_workflow_payload(request_payload)
@@ -13631,11 +13659,13 @@ async def _resolve_recurring_runtime_metadata(
     raw_runtime_payload = (
         task_payload.get("runtime")
         if isinstance(task_payload.get("runtime"), Mapping)
-        else parameter_payload.get("runtime")
-        if isinstance(parameter_payload.get("runtime"), Mapping)
-        else {}
+        else (
+            parameter_payload.get("runtime")
+            if isinstance(parameter_payload.get("runtime"), Mapping)
+            else {}
+        )
     )
-    default_profile_ref = await _saved_default_provider_profile_ref(
+    creation_defaults = await _workflow_creation_defaults(
         task_payload=task_payload,
         parameter_payload=parameter_payload,
         session=session,
@@ -13647,53 +13677,42 @@ async def _resolve_recurring_runtime_metadata(
             request_payload,
         ),
     )
+    default_profile_ref = creation_defaults.provider_profile_ref
     if default_profile_ref:
         raw_runtime_payload = {
             **raw_runtime_payload,
             "providerProfileRef": default_profile_ref,
         }
-    runtime_payload = _validate_runtime_tier_intent_for_submit(
+    for source in (
         raw_runtime_payload,
-        field_name="payload.workflow.runtime",
-    )
+        task_payload,
+        parameter_payload,
+        request_payload,
+    ):
+        selector = source.get("profileSelector")
+        if has_profile_selector(source):
+            raw_runtime_payload = {
+                **raw_runtime_payload,
+                "profileSelector": dict(selector),
+            }
+            break
+    runtime_payload = raw_runtime_payload
     steps_payload = task_payload.get("steps")
-    normalized_step_tier_previews: dict[int, dict[str, Any]] = {}
-    if isinstance(steps_payload, Sequence) and not isinstance(steps_payload, (str, bytes)):
-        for index, step_payload in enumerate(steps_payload):
-            if not isinstance(step_payload, Mapping):
-                continue
-            step_runtime = step_payload.get("runtime")
-            if isinstance(step_runtime, Mapping):
-                validated_step_runtime = _validate_runtime_tier_intent_for_submit(
-                    step_runtime,
-                    field_name=f"payload.workflow.steps[{index}].runtime",
-                )
-                normalized_preview = validated_step_runtime.get("tierPreview")
-                if isinstance(normalized_preview, Mapping):
-                    normalized_step_tier_previews[index] = dict(normalized_preview)
+    # Use the launch owner's complete alias/layer precedence before stamping
+    # resolved metadata. Every named runtime still needs ownership validation.
+    selection_target = (
+        request_payload
+        if isinstance(raw_initial_parameters, Mapping)
+        else {"initialParameters": request_payload}
+    )
+    authored_selection = resolve_launch_target_profile_selection(selection_target)
     runtime_was_authored = runtime_payload.get("authored") is not False
     authored_runtime = (
-        (
-            request_payload.get("targetRuntime")
-            or parameter_payload.get("targetRuntime")
-            or runtime_payload.get("mode")
-        )
-        if runtime_was_authored
+        authored_selection.runtime_ids[0]
+        if runtime_was_authored and authored_selection.runtime_ids
         else None
     )
-    raw_profile_id = next(
-        (
-            ref
-            for source in (
-                runtime_payload,
-                task_payload,
-                parameter_payload,
-                request_payload,
-            )
-            if (ref := provider_profile_ref_from_mapping(source))
-        ),
-        None,
-    )
+    raw_profile_id = authored_selection.profile_id or default_profile_ref
     provider_profile = None
     if raw_profile_id:
         provider_profile = await _load_provider_profile_for_runtime(
@@ -13717,7 +13736,7 @@ async def _resolve_recurring_runtime_metadata(
             surface=AuthoringSurface.schedule,
             authored_runtime=authored_runtime,
             profile_runtime=profile_runtime,
-            workflow_settings=settings.workflow,
+            workflow_settings=creation_defaults,
         )
         raw_target_runtime = new_work_selection.runtime_id
         new_work_runtime_evidence = new_work_evidence(new_work_selection)
@@ -13771,6 +13790,70 @@ async def _resolve_recurring_runtime_metadata(
                     f"payload.workflow.steps[{index}].runtime.mode: {exc}"
                 ) from exc
 
+    if provider_profile is not None:
+        authored_runtimes = (
+            authored_selection.runtime_ids if runtime_was_authored else ()
+        )
+        for runtime_id in (*authored_runtimes, canonical_target_runtime):
+            _require_provider_profile_runtime(
+                profile=provider_profile,
+                profile_id=raw_profile_id,
+                selected_runtime=runtime_id,
+            )
+    metadata: dict[str, Any] = {
+        "targetRuntime": canonical_target_runtime,
+        "runtimeCutover": dict(new_work_runtime_evidence),
+    }
+    if raw_profile_id:
+        metadata["profileId"] = raw_profile_id
+    if isinstance(runtime_payload.get("profileSelector"), Mapping):
+        metadata["profileSelector"] = dict(runtime_payload["profileSelector"])
+    return (
+        metadata,
+        raw_runtime_payload,
+        provider_profile,
+        parameter_payload,
+        task_payload,
+    )
+
+
+async def _resolve_recurring_runtime_metadata(
+    request_payload: Mapping[str, Any],
+    *,
+    session: Any | None,
+    user: Any = None,
+) -> dict[str, Any]:
+    selection = await _resolve_recurring_runtime_selection(
+        request_payload, session=session, user=user
+    )
+    if selection is None:
+        return {}
+    metadata, raw_runtime_payload, provider_profile, parameter_payload, task_payload = (
+        selection
+    )
+    canonical_target_runtime = metadata["targetRuntime"]
+    raw_profile_id = metadata.get("profileId")
+    runtime_payload = _validate_runtime_tier_intent_for_submit(
+        raw_runtime_payload,
+        field_name="payload.workflow.runtime",
+    )
+    steps_payload = task_payload.get("steps")
+    normalized_step_tier_previews: dict[int, dict[str, Any]] = {}
+    if isinstance(steps_payload, Sequence) and not isinstance(
+        steps_payload, (str, bytes)
+    ):
+        for index, step_payload in enumerate(steps_payload):
+            if not isinstance(step_payload, Mapping):
+                continue
+            step_runtime = step_payload.get("runtime")
+            if isinstance(step_runtime, Mapping):
+                validated_step_runtime = _validate_runtime_tier_intent_for_submit(
+                    step_runtime,
+                    field_name=f"payload.workflow.steps[{index}].runtime",
+                )
+                normalized_preview = validated_step_runtime.get("tierPreview")
+                if isinstance(normalized_preview, Mapping):
+                    normalized_step_tier_previews[index] = dict(normalized_preview)
     raw_requested_model: str | None = runtime_payload.get("model") or None
     if raw_requested_model is None:
         raw_requested_model = parameter_payload.get(
@@ -13779,13 +13862,7 @@ async def _resolve_recurring_runtime_metadata(
     if raw_requested_model is not None:
         raw_requested_model = str(raw_requested_model)
 
-    if provider_profile is not None:
-        _require_provider_profile_runtime(
-            profile=provider_profile,
-            profile_id=raw_profile_id,
-            selected_runtime=canonical_target_runtime,
-        )
-    elif _runtime_model_tier(runtime_payload) is not None:
+    if provider_profile is None and _runtime_model_tier(runtime_payload) is not None:
         provider_profile = await _load_default_provider_profile_for_runtime(
             session=session,
             runtime_id=canonical_target_runtime,
@@ -13802,19 +13879,16 @@ async def _resolve_recurring_runtime_metadata(
         runtime_payload=runtime_payload,
         requested_model=raw_requested_model,
         compare_advisory_preview=not (
-            raw_profile_id is None
-            and bool(runtime_payload.get("profileSelector"))
+            raw_profile_id is None and bool(runtime_payload.get("profileSelector"))
         ),
     )
-    metadata: dict[str, Any] = {
-        "targetRuntime": canonical_target_runtime,
-        "model": resolved_model,
-        "requestedModel": raw_requested_model,
-        "modelSource": model_source,
-        # MoonLadderStudios/MoonMind#3931: passive new-work provenance; see
-        # workflow-create site above.
-        "runtimeCutover": dict(new_work_runtime_evidence),
-    }
+    metadata.update(
+        {
+            "model": resolved_model,
+            "requestedModel": raw_requested_model,
+            "modelSource": model_source,
+        }
+    )
     if model_tier_resolution is not None:
         metadata["modelTierResolution"] = model_tier_resolution
     if raw_profile_id:
@@ -15802,36 +15876,108 @@ async def create_execution(
             else None
         )
         initial_parameters = dict(request.initial_parameters)
+        # Preserve every authored runtime before canonicalization. The resolved
+        # request below supplies its saved fallback to the existing raw guard.
+        selects_omnigent = (
+            "omnigent"
+            in resolve_launch_target_profile_selection(
+                {"initialParameters": initial_parameters}
+            ).runtime_ids
+        )
         if request.workflow_type == "MoonMind.UserWorkflow" and existing is None:
+            try:
+                validate_workflow_runtime_targets(initial_parameters)
+            except ValueError as exc:
+                raise _invalid_workflow_request(str(exc)) from exc
             _, task_payload = _recurring_workflow_payload(initial_parameters)
             runtime_payload = task_payload.get("runtime")
             if not isinstance(runtime_payload, Mapping):
-                runtime_payload = initial_parameters.get("runtime")
-            default_profile_ref = await _saved_default_provider_profile_ref(
+                runtime_payload = _coerce_mapping(initial_parameters.get("runtime"))
+            # Account/pool inheritance uses the launch owner's runtime layer.
+            # Agent Profile authority remains explicit in either runtime block.
+            agent_profile_selection = next(
+                (
+                    source["agentProfile"]
+                    for source in (
+                        _coerce_mapping(task_payload.get("runtime")),
+                        _coerce_mapping(initial_parameters.get("runtime")),
+                        task_payload,
+                        initial_parameters,
+                        payload,
+                    )
+                    if source.get("agentProfile") is not None
+                ),
+                None,
+            )
+            creation_defaults = await _workflow_creation_defaults(
                 task_payload=task_payload,
                 parameter_payload=initial_parameters,
                 session=session,
                 user=user,
-                payloads=(
-                    runtime_payload if isinstance(runtime_payload, Mapping) else {},
-                    task_payload,
-                    initial_parameters,
-                    payload,
-                ),
+                payloads=(runtime_payload, task_payload, initial_parameters, payload),
+                agent_profile=agent_profile_selection,
             )
-            if default_profile_ref:
-                # Preserve missing saved intent before the launch owner can
-                # fall back to another eligible account. Runtime ownership is
-                # still validated by the shared service against every field.
-                await _load_provider_profile_for_runtime(
+            authored_selection = resolve_launch_target_profile_selection(
+                {"initialParameters": initial_parameters}
+            )
+            profile_ref = (
+                authored_selection.profile_id or creation_defaults.provider_profile_ref
+            )
+            provider_profile = None
+            if profile_ref:
+                # Missing saved intent must fail before another eligible account
+                # can be selected. Explicit aliases retain their existing owner.
+                provider_profile = await _load_provider_profile_for_runtime(
                     session=session,
-                    profile_id=default_profile_ref,
+                    profile_id=profile_ref,
                     selected_runtime=None,
-                    not_found_message=(
-                        f"Provider profile not found: {default_profile_ref!r}."
-                    ),
+                    not_found_message=f"Provider profile not found: {profile_ref!r}.",
                 )
-                initial_parameters["profileId"] = default_profile_ref
+            if creation_defaults.provider_profile_ref:
+                initial_parameters["profileId"] = creation_defaults.provider_profile_ref
+            authored_runtime = (
+                authored_selection.runtime_ids[0]
+                if authored_selection.runtime_ids
+                else None
+            )
+            profile_runtime = await _profile_route_runtime(
+                session=session,
+                user=user,
+                provider_profile=provider_profile,
+                authored_runtime=authored_runtime,
+                agent_profile=agent_profile_selection,
+            )
+            try:
+                selection = resolve_new_work_selection(
+                    surface=AuthoringSurface.workflow_create,
+                    authored_runtime=authored_runtime,
+                    profile_runtime=profile_runtime,
+                    workflow_settings=creation_defaults,
+                )
+            except ValueError as exc:
+                raise _invalid_workflow_request(str(exc)) from exc
+            selects_omnigent = selects_omnigent or _raw_request_selects_omnigent(
+                workflow_type=request.workflow_type,
+                parameters={
+                    **initial_parameters,
+                    "targetRuntime": selection.runtime_id,
+                },
+            )
+            if provider_profile is not None and not selects_omnigent:
+                for runtime_id in (
+                    *authored_selection.runtime_ids,
+                    selection.runtime_id,
+                ):
+                    _require_provider_profile_runtime(
+                        profile=provider_profile,
+                        profile_id=profile_ref,
+                        selected_runtime=runtime_id,
+                    )
+            # Keep checks on every authored field before writing the canonical
+            # launch runtime. Otherwise a lower conflicting alias could vanish.
+            # Omnigent requests retain the product-boundary rejection below.
+            initial_parameters["targetRuntime"] = selection.runtime_id
+            initial_parameters["runtimeCutover"] = new_work_evidence(selection)
 
         skill_validation = await validate_skill_step_inputs(
             initial_parameters=initial_parameters,
@@ -15847,10 +15993,7 @@ async def create_execution(
                 },
             )
 
-        if existing is None and _raw_request_selects_omnigent(
-            workflow_type=request.workflow_type,
-            parameters=skill_validation.parameters,
-        ):
+        if existing is None and selects_omnigent:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
