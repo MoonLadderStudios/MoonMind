@@ -15,11 +15,14 @@ import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import {
-  ExecutionStatusPill,
+  CheckpointBranchStatusPill,
+  CheckpointBranchTurnStatusPill,
+  DependencyStatusPill,
   StepExecutionStatusPill,
   StepLedgerStatusPill,
   WorkflowLifecycleStatusPill,
 } from '../components/ExecutionStatusPill';
+import { STEP_CHECK_STATUS } from '../status/statusVocabulary';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, formatWorkflowSummary, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { AttachmentImagePreview } from '../components/AttachmentImagePreview';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
@@ -4494,21 +4497,26 @@ function stepCheckStatusClass(status: string | null | undefined): string {
   return `check-${normalized || 'unknown'}`;
 }
 
-function stepCheckStatusPillProps(status: string | null | undefined) {
+function stepCheckStatusPillProps(status: string | null | undefined): Readonly<{
+  className: string;
+  'data-state'?: string;
+  'data-effect'?: 'shimmer-sweep';
+  'data-shimmer-label'?: string;
+}> {
   const normalized = String(status || '').trim().toLowerCase();
   if (normalized === 'pending') {
     return {
       ...executionStatusPillProps('executing'),
-      'data-shimmer-label': formatStatusLabel(status),
+      'data-shimmer-label': STEP_CHECK_STATUS.label(status),
     };
   }
-  return executionStatusPillProps(status);
+  return STEP_CHECK_STATUS.pillProps(status);
 }
 
 function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema> }) {
   const checkStatusClass = stepCheckStatusClass(check.status);
   const statusPillProps = stepCheckStatusPillProps(check.status);
-  const label = `${check.kind.replaceAll('_', ' ')}: ${formatStatusLabel(check.status)}`;
+  const label = `${check.kind.replaceAll('_', ' ')}: ${STEP_CHECK_STATUS.label(check.status)}`;
   const hasShimmerSweep = statusPillProps['data-effect'] === 'shimmer-sweep';
   return (
     <span
@@ -5341,7 +5349,7 @@ function BranchExplorerPanel({
                             {branch.label}
                           </button>
                           <div className="td-facts-grid">
-                            <Fact label="State"><ExecutionStatusPill status={branch.state || 'unknown'} /></Fact>
+                            <Fact label="State"><CheckpointBranchStatusPill status={branch.state} /></Fact>
                             <Fact label="Branch ID"><code className="text-xs break-all">{branch.branchId}</code></Fact>
                             <Fact label="Kind">{formatStatusLabel(branch.branchKind || 'root')}</Fact>
                             <Fact label="Children">{childCount}</Fact>
@@ -5489,7 +5497,7 @@ function BranchExplorerPanel({
             <ol className="step-execution-history" aria-label="Branch turns">
               {turns.map((turn, index) => (
                 <li key={turn.branchTurnId}>
-                  <strong>Turn {index + 1}</strong> <ExecutionStatusPill status={turn.status || 'unknown'} />
+                  <strong>Turn {index + 1}</strong> <CheckpointBranchTurnStatusPill status={turn.status} />
                   <div className="td-facts-grid">
                     <Fact label="Turn ID"><code className="text-xs break-all">{turn.branchTurnId}</code></Fact>
                     <Fact label="Instructions"><code className="text-xs break-all">{turn.instructionRef}</code></Fact>
@@ -11143,7 +11151,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                               <strong>{item.title || item.workflowId}</strong>
                             </a>
                             <code className="text-xs break-all">{item.workflowId}</code>
-                            <ExecutionStatusPill status={stateLabel} />
+                            <DependencyStatusPill status={stateLabel} />
                             {isWaitingForRerun ? (
                               <p className="small">
                                 <strong>Prerequisite failed; waiting for successful rerun.</strong>{' '}
@@ -11181,7 +11189,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                             <strong>{item.title || item.workflowId}</strong>
                           </a>
                           <code className="text-xs break-all">{item.workflowId}</code>
-                          <ExecutionStatusPill status={item.state || 'unknown'} />
+                          <DependencyStatusPill status={item.state} />
                           {item.summary ? <p className="small">{item.summary}</p> : null}
                           {item.closeStatus ? <p className="small">Close status: {formatStatusLabel(item.closeStatus)}</p> : null}
                         </div>

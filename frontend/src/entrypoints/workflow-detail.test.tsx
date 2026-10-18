@@ -4556,7 +4556,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('step scoped log line')).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Hide details for Apply patch' })).toBeTruthy();
     });
-    expect(screen.getAllByText('approval policy: passed')[0]?.className).toContain('check-passed');
+    expect(screen.getAllByText('approval policy: Passed')[0]?.className).toContain('check-passed');
 
     // MM-920: the embedded step logs drop the redundant left rail and the second
     // "Live Logs" disclosure, so the log content sits directly under the
@@ -4733,14 +4733,14 @@ describe('Workflow Detail Entrypoint', () => {
         '.step-check-badge[data-effect="shimmer-sweep"]',
       );
       expect(activeCheckBadge).toBeTruthy();
-      expect(activeCheckBadge?.textContent).toBe('approval policy: pending');
+      expect(activeCheckBadge?.textContent).toBe('approval policy: Pending');
       expect(activeCheckBadge?.dataset.effect).toBe('shimmer-sweep');
       expect(activeCheckBadge?.dataset.state).toBe('executing');
       expect(activeCheckBadge?.className).toContain('is-executing');
       expect(activeCheckBadge?.className).toContain('check-pending');
-      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: pending');
+      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: Pending');
       expect(activeCheckBadge?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe(
-        'approval policy: pending',
+        'approval policy: Pending',
       );
     });
   });
