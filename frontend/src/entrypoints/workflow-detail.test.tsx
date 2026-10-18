@@ -676,6 +676,8 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
+    // Plan and binding authority are expert detail behind Technical details.
+    fireEvent.click(await screen.findByText('Technical details'));
     expect(await screen.findByText('Omnigent authority')).toBeTruthy();
     expect(screen.getByText(planRef)).toBeTruthy();
     expect(screen.getByText(bindingRef)).toBeTruthy();
@@ -1065,7 +1067,7 @@ describe('Workflow Detail Entrypoint', () => {
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(sidebar).toBeTruthy();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
     const active = await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i });
     expect(active.getAttribute('aria-current')).toBe('page');
     expect((await within(sidebar).findByRole('link', { name: /Another workflow/i })).getAttribute('href')).toBe(
@@ -1081,7 +1083,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await screen.findByRole('heading', { level: 1 });
     await waitFor(() => {
       expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
     });
@@ -1118,7 +1120,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await screen.findByRole('heading', { level: 1 });
     await waitFor(() => {
       expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
     });
@@ -1173,7 +1175,7 @@ describe('Workflow Detail Entrypoint', () => {
     );
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(matchingListCalls()).toHaveLength(2);
   });
 
@@ -1296,7 +1298,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(pinned).getByLabelText('Status: Executing')).toBeTruthy();
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
   });
 
   it('MM-1113 keeps authorized remembered workflows outside filters in the current group only', async () => {
@@ -1443,7 +1445,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
     expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25&stateIn=failed');
   });
 
@@ -1468,7 +1470,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(await within(sidebar).findByText('Workflow navigation is unavailable.')).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     const detailCallsBeforeRetry = fetchSpy.mock.calls.filter(
       ([input]) => String(input) === '/api/executions/test-123?source=temporal',
     ).length;
@@ -1479,7 +1481,7 @@ describe('Workflow Detail Entrypoint', () => {
       const sidebarFetches = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/executions?'));
       expect(sidebarFetches.length).toBeGreaterThanOrEqual(2);
     });
-    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
     expect(
       fetchSpy.mock.calls.filter(
         ([input]) => String(input) === '/api/executions/test-123?source=temporal',
@@ -1578,7 +1580,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-workflow-list-display-mode')).toBe(
       'hidden',
@@ -1605,7 +1607,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const secondRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(secondRender.container.querySelector('.workflow-workspace-shell')?.getAttribute('data-workflow-list-display-mode')).toBe(
       'hidden',
@@ -1633,7 +1635,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await screen.findByRole('heading', { level: 1 });
     const detailCallsBeforeOpen = fetchSpy.mock.calls.filter(
       ([input]) => String(input) === '/api/executions/test-123?source=temporal',
     ).length;
@@ -1656,7 +1658,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
@@ -1744,7 +1746,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-sidebar-collapsed')).toBe(
@@ -1795,7 +1797,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
   });
@@ -1838,7 +1840,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
@@ -1849,7 +1851,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
@@ -1877,7 +1879,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Back to workflows' })).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
@@ -2004,10 +2006,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('artifact://checkpoint-head-a')).toBeTruthy();
     expect(screen.getByText('Create branch unavailable: Branch actions are disabled by workflow policy.')).toBeTruthy();
     expect(screen.getByText('Branch action unavailable: Branch actions are disabled by workflow policy.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Create branch from checkpoint' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: 'Create branch from checkpoint' }).getAttribute('title')).toBe(
-      'Branch actions are disabled by workflow policy.',
-    );
+    // An unavailable create action shows its one-line reason instead of the full form.
+    expect(screen.queryByRole('button', { name: 'Create branch from checkpoint' })).toBeNull();
+    expect(screen.queryByLabelText('Source checkpoint')).toBeNull();
+    expect(screen.queryByLabelText('Branch label')).toBeNull();
     expect((screen.getByRole('button', { name: 'Continue branch' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Continue branch' }).getAttribute('title')).toBe(
       'Branch actions are disabled by workflow policy.',
@@ -2291,7 +2293,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('href')).toBe(
       '/workflows/test-123?source=temporal',
@@ -2328,7 +2330,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+      expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
       expect(screen.queryByText(/Live updates enabled\. Polling every/i)).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
@@ -6017,6 +6019,12 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByText('Did work')).toBeTruthy();
       expect(screen.getByText('Claude Code')).toBeTruthy();
+    });
+    // The operator-facing skill selection stays visible; provenance is one click away.
+    expect(screen.getByText('Skills').closest('div')?.textContent).toContain('jira-pr-verify, fix-comments');
+    fireEvent.click(screen.getByText('Technical details'));
+
+    await waitFor(() => {
       expect(screen.getByText('Explicit Selection').closest('div')?.textContent).toContain(
         'jira-pr-verify, fix-comments',
       );
@@ -6043,8 +6051,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Harness').closest('div')?.textContent).toBe('HarnessClaude Code');
       expect(screen.getByText('Backend').closest('div')?.textContent).toBe('BackendDirect');
       expect(screen.getByText('Provider Profile').closest('div')?.textContent).toBe('Provider Profileprofile:claude-default');
-      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('Anthropic');
-      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('anthropic');
+      expect(screen.getByText('Provider').closest('div')?.textContent).toBe('ProviderAnthropic');
+      expect(screen.getByText('Provider ID').closest('div')?.textContent).toBe('Provider IDanthropic');
       expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
       expect(screen.getByText(/Created by schedule/)).toBeTruthy();
@@ -7050,7 +7058,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
     expect(screen.getByText('No inbound remediation workflows linked yet.')).toBeTruthy();
     expect(screen.getByText('Evidence bundle is missing.')).toBeTruthy();
-    expect(screen.getByText('No remediation evidence artifacts linked yet.')).toBeTruthy();
+    // An empty Remediation Evidence section is hidden rather than shown empty.
+    expect(screen.queryByRole('heading', { name: 'Remediation Evidence' })).toBeNull();
 
     const longTarget = screen.getByText('mm:target-long-workflow-id-with-many-segments-for-mobile-containment');
     expect(longTarget.closest('code')?.className).toContain('break-all');
@@ -7260,6 +7269,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
     });
 
+    expect(screen.queryByText('Skills')).toBeNull();
+    fireEvent.click(screen.getByText('Technical details'));
     expect(screen.getByText('Explicit Selection').closest('div')?.textContent).toContain('None');
     expect(screen.getByText('Delegated Skill').closest('div')?.textContent).toContain('—');
   });
@@ -8744,9 +8755,9 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      // The title renders in both the detail header and the native chat context bar.
-      expect(screen.getAllByText('Encoded task').length).toBeGreaterThan(0);
-      expect(screen.getByText('Workflow mm:test-123')).toBeTruthy();
+      // The title renders once, as the page h1; the decoded ID appears once beside the status.
+      expect(screen.getByRole('heading', { level: 1, name: 'Encoded task' })).toBeTruthy();
+      expect(screen.getAllByText('mm:test-123')).toHaveLength(1);
     });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/mm%3Atest-123?source=temporal');

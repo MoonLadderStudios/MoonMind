@@ -2,12 +2,12 @@
 // application (MoonLadderStudios/MoonMind#3639). It owns workflow context and
 // bounded navigation only — it must stay visually subordinate to the native
 // application and must not duplicate the native session header or control
-// cluster (composer, queue, approvals, tools, file rail, terminals).
-import type { MouseEvent, ReactNode } from 'react';
+// cluster (composer, queue, approvals, tools, file rail, terminals). The
+// Workflow Detail page header already shows the title and status, so the bar
+// carries only chat-specific context.
+import type { MouseEvent } from 'react';
 
 interface WorkflowChatContextBarProps {
-  workflowTitle: string;
-  statusPill?: ReactNode;
   stepLabel?: string | null;
   runtimeLabel?: string | null;
   /** Bounded read-only/unavailable status label, or null when writable. */
@@ -31,8 +31,6 @@ function isPlainClick(event: MouseEvent<HTMLAnchorElement>): boolean {
 }
 
 export function WorkflowChatContextBar({
-  workflowTitle,
-  statusPill = null,
   stepLabel = null,
   runtimeLabel = null,
   statusLabel = null,
@@ -52,11 +50,7 @@ export function WorkflowChatContextBar({
   return (
     <header className="wf-native-chat__context-bar" aria-label="Workflow chat context">
       <div className="wf-native-chat__identity">
-        <span className="wf-native-chat__title" title={workflowTitle}>
-          {workflowTitle}
-        </span>
         <span className="wf-native-chat__meta">
-          {statusPill}
           {statusLabel ? (
             <span className="wf-native-chat__status-label">{statusLabel}</span>
           ) : null}
