@@ -565,6 +565,126 @@ describe('GeneratedSettingsSection', () => {
     expect(actionRow?.className).toContain('flex-wrap');
   });
 
+  it('keeps a cleared number field empty and blocks Save when the setting has a default', async () => {
+    renderWithClient(<ControlledGeneratedSettingsSection />);
+
+    await screen.findByText('Default Publish Mode');
+    const canary = screen.getByLabelText('Skills Canary Percent') as HTMLInputElement;
+    fireEvent.change(canary, { target: { value: '' } });
+
+    expect(canary.value).toBe('');
+    const preview = screen.getByLabelText('Pending settings preview');
+    expect(within(preview).getByText('Enter a number.')).toBeTruthy();
+    expect((within(preview).getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  describe('optional settings without a default', () => {
+    const profileDescriptor = {
+      ...workspaceCatalog.categories.Workflow[0],
+      key: 'workflow.default_provider_profile_ref',
+      title: 'Default Provider Profile',
+      description: 'Provider profile used when a request does not select one.',
+      type: 'string',
+      ui: 'provider_profile_picker',
+      default_value: null,
+      effective_value: 'codex-team',
+      options: null,
+      order: 70,
+      value_version: 4,
+    };
+    const timeoutDescriptor = {
+      ...workspaceCatalog.categories.Workflow[1],
+      key: 'workflow.optional_timeout_seconds',
+      title: 'Optional Timeout Seconds',
+      default_value: null,
+      effective_value: 30,
+      constraints: { minimum: 1, maximum: null },
+      order: 80,
+      value_version: 5,
+    };
+
+    beforeEach(() => {
+      fetchSpy.mockImplementation((input, init) => {
+        const url = String(input);
+        requests.push({ url, init });
+        if (url.includes('/api/v1/settings/catalog')) {
+          return Promise.resolve(jsonResponse({
+            section: 'user-workspace',
+            scope: 'workspace',
+            categories: { Workflow: [profileDescriptor, timeoutDescriptor] },
+          }));
+        }
+        if (url === '/api/v1/provider-profiles') {
+          return Promise.resolve(jsonResponse([
+            { profile_id: 'codex-team', runtime_id: 'codex_cli', provider_id: 'openai', provider_label: 'OpenAI' },
+            { profile_id: 'claude-team', runtime_id: 'claude_code', provider_id: 'anthropic', provider_label: 'Anthropic' },
+          ]));
+        }
+        if (url === '/api/v1/settings/workspace') {
+          return Promise.resolve(jsonResponse({ scope: 'workspace', values: {} }));
+        }
+        return Promise.resolve(jsonResponse({ error: 'not_found' }, false, 404));
+      });
+    });
+
+    it('picks the default Provider Profile from saved profiles', async () => {
+      renderWithClient(<ControlledGeneratedSettingsSection />);
+
+      const picker = await screen.findByRole('combobox', { name: 'Default Provider Profile' }) as HTMLSelectElement;
+      await waitFor(() => expect(Array.from(picker.options).map((option) => option.value)).toEqual(['', 'codex-team', 'claude-team']));
+      expect(picker.value).toBe('codex-team');
+      expect(Array.from(picker.options).map((option) => option.textContent)).toEqual([
+        'Not set',
+        expect.stringContaining('codex-team'),
+        expect.stringContaining('claude-team'),
+      ]);
+
+      fireEvent.change(picker, { target: { value: 'claude-team' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => {
+        const save = requests.find((request) => request.init?.method === 'PATCH');
+        expect(JSON.parse(String(save?.init?.body)).changes).toEqual({ 'workflow.default_provider_profile_ref': 'claude-team' });
+      });
+    });
+
+    it('keeps a missing Provider Profile value visible instead of replacing it', async () => {
+      fetchSpy.mockImplementation((input, init) => {
+        const url = String(input);
+        requests.push({ url, init });
+        if (url.includes('/api/v1/settings/catalog')) {
+          return Promise.resolve(jsonResponse({
+            section: 'user-workspace',
+            scope: 'workspace',
+            categories: { Workflow: [{ ...profileDescriptor, effective_value: 'retired-profile' }] },
+          }));
+        }
+        if (url === '/api/v1/provider-profiles') return Promise.resolve(jsonResponse([]));
+        return Promise.resolve(jsonResponse({ error: 'not_found' }, false, 404));
+      });
+      renderWithClient(<ControlledGeneratedSettingsSection />);
+
+      const picker = await screen.findByRole('combobox', { name: 'Default Provider Profile' }) as HTMLSelectElement;
+      await waitFor(() => expect(Array.from(picker.options).map((option) => option.value)).toEqual(['', 'retired-profile']));
+      expect(picker.value).toBe('retired-profile');
+      expect(screen.queryByLabelText('Pending settings preview')).toBeNull();
+    });
+
+    it('submits a cleared optional number as not set', async () => {
+      renderWithClient(<ControlledGeneratedSettingsSection />);
+
+      const timeout = await screen.findByLabelText('Optional Timeout Seconds') as HTMLInputElement;
+      fireEvent.change(timeout, { target: { value: '' } });
+      expect(timeout.value).toBe('');
+      const preview = screen.getByLabelText('Pending settings preview');
+      expect(within(preview).getByText('New: Not set')).toBeTruthy();
+      fireEvent.click(within(preview).getByRole('button', { name: 'Save changes' }));
+      await waitFor(() => {
+        const save = requests.find((request) => request.init?.method === 'PATCH');
+        expect(JSON.parse(String(save?.init?.body)).changes).toEqual({ 'workflow.optional_timeout_seconds': null });
+      });
+    });
+  });
+
   it('keeps generated settings usable when an audit request fails', async () => {
     fetchSpy.mockImplementation((input, init) => {
       const url = String(input);

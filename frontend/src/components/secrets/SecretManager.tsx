@@ -1,8 +1,10 @@
 import { FormEvent, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
-import { useSettingsDraftRegistration } from '../settings/SettingsDraftGuard';
+import { useSettingsDraftGuard, useSettingsDraftRegistration } from '../settings/SettingsDraftGuard';
 import { formatStatusLabel } from '../../utils/formatters';
+
+const SECRET_DRAFT_ID = 'managed-secret-editor';
 
 interface SecretMetadata {
   slug: string;
@@ -77,6 +79,7 @@ export function SecretManager({
   const [usageLoadingSlug, setUsageLoadingSlug] = useState<string | null>(null);
   const [usageErrorBySlug, setUsageErrorBySlug] = useState<Record<string, string>>({});
 
+  const { requestDeparture } = useSettingsDraftGuard();
   const discardSecretDraft = () => {
     setSlug('');
     setPlaintext('');
@@ -85,11 +88,24 @@ export function SecretManager({
     setRotatePromptSlug('');
     setRotatePromptVal('');
   };
+  // Only entered text is a draft: an Edit or Rotate opened without a new value
+  // has nothing to lose.
   useSettingsDraftRegistration(
-    'managed-secret-editor',
-    Boolean(slug || plaintext || isEditing || rotatePromptOpen || rotatePromptVal),
+    SECRET_DRAFT_ID,
+    Boolean(plaintext || rotatePromptVal || (!isEditing && slug)),
     discardSecretDraft,
   );
+  const editSecret = (targetSlug: string) => {
+    requestDeparture(
+      () => {
+        setSlug(targetSlug);
+        setPlaintext('');
+        setIsEditing(true);
+      },
+      `Edit ${targetSlug}? Your unsaved secret draft will be discarded.`,
+      [SECRET_DRAFT_ID],
+    );
+  };
 
   const createOp = useMutation({
     mutationFn: async ({
@@ -416,11 +432,7 @@ export function SecretManager({
                           </button>
                           <button
                             type="button"
-                            onClick={() => {
-                              setSlug(secret.slug);
-                              setPlaintext('');
-                              setIsEditing(true);
-                            }}
+                            onClick={() => editSecret(secret.slug)}
                             className="btn btn-sm btn-outline"
                           >
                             Edit
