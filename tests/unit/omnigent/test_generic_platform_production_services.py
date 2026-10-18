@@ -4054,6 +4054,28 @@ async def test_late_predecessor_delivery_leaves_successor_authority_intact(
 
 
 @pytest.mark.asyncio
+async def test_resumed_unfenced_binding_retains_its_recorded_projection():
+    from dataclasses import replace
+
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+    await _prime_attested_host_binding(harness, plan)
+    acquired = replace(
+        harness.acquired,
+        lease=replace(harness.acquired.lease, fencing_generation=7),
+    )
+    harness.realizer._provider_leases.acquire_all = AsyncMock(return_value=(acquired,))
+    result = await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+    assert result.summary == "done"
+    binding = await harness.runtime_store.get(stable_binding_id(
+        execution_plan_ref=plan.planRef, idempotency_key=harness.publish_request.idempotency_key
+    ))
+    assert binding.providerLeases["primary-model"]["leaseFencingGeneration"] is None
+
+
+@pytest.mark.asyncio
 async def test_resumed_host_renews_capabilities_before_session_starts() -> None:
     """A retried activity cannot know how much of the old token remains."""
 

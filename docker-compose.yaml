@@ -17,10 +17,10 @@
 # `tests/unit/omnigent/test_static_host_consolidation.py` fails if any service
 # drifts from this anchor. Do not introduce templating that hides the contract.
 #
-# Rollback: set OMNIGENT_SHARED_HOST_IMAGE_REF to the prior pinned digest, or
-# revert this file; the thin `start-*-oauth-host.sh` / `check-*-oauth-host.sh`
-# wrappers keep their old container paths during migration. The legacy
-# OMNIGENT_HOST_IMAGE_REF variable is honored only as a bounded alias by
+# Rollback: set OMNIGENT_SHARED_HOST_IMAGE_REF to the prior image. To restore
+# earlier startup behavior, revert the corresponding checkout change, including
+# this file and its mounted scripts; an image change alone cannot restore them.
+# The legacy OMNIGENT_HOST_IMAGE_REF variable is honored only as a bounded alias by
 # `moonmind.omnigent.harness_platform.static_hosts.resolve_static_host_image_ref`
 # when OMNIGENT_SHARED_HOST_IMAGE_REF is unset; legacy mutable
 # OMNIGENT_HOST_IMAGE / OMNIGENT_HOST_IMAGE_TAG construction is not honored
@@ -1399,10 +1399,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
-    entrypoint: ["/opt/moonmind/init-codex-oauth-host.sh"]
+    entrypoint: ["/opt/moonmind/init-oauth-host.sh"]
     environment:
       OMNIGENT_STATE_PATH: /home/app/.omnigent
-      CODEX_HOME: /home/app/.codex
+      OAUTH_HOME: /home/app/.codex
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
       - omnigent-host-artifacts:/artifacts

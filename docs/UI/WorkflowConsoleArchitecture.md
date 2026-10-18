@@ -192,6 +192,8 @@ The canonical detail route is `/workflows/{workflowId}`. Because `workflowId` is
 
 Steps load before generic artifact browsing because the step ledger is the primary comprehension surface.
 
+Long-running workflows produce thousands of artifacts, so the generic artifact listing shows bounded pages with human-readable sizes and folds Omnigent event-stream chunks (`runtime.omnigent.sse.*`) into one expandable entry. Deleted artifacts stay in the history behind "Show deleted (n)" and offer no actions, because their content is no longer readable. Open previews through the artifact's default read (preview or redacted) artifact, or the raw artifact when raw access is allowed and its content type is inert, via `artifactDownload?inline=true`. The server renders only inert types inline, sandboxed. Download is always an attachment.
+
 ### 10.3 Observability fetch sequence
 
 The Live Logs panel loads in this order:

@@ -210,14 +210,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         pathId="omnigent.legacy.codex_static_host_startup",
         owner="omnigent-deployment",
         description=(
-            "Codex-specific static host startup, health, and init scripts kept "
-            "as thin wrappers over the consolidated generic entrypoint (#3834)."
+            "Codex host start wrapper retained for OAuth runtime launches, "
+            "with the dedicated Compose host and initializer."
         ),
         retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
         surfaces=(
             "script:start-codex-oauth-host.sh",
-            "script:check-codex-oauth-host.sh",
-            "script:init-codex-oauth-host.sh",
             "compose-service:omnigent-host-codex",
             "compose-service:omnigent-host-codex-init",
             "compose-profile:omnigent-host-codex",
@@ -228,13 +226,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         pathId="omnigent.legacy.claude_static_host_startup",
         owner="omnigent-deployment",
         description=(
-            "Claude-specific static host startup and health scripts kept as thin "
-            "wrappers over the consolidated generic entrypoint (#3834)."
+            "Claude host start wrapper retained for OAuth runtime launches, "
+            "with the dedicated Compose host and initializer."
         ),
         retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
         surfaces=(
             "script:start-claude-oauth-host.sh",
-            "script:check-claude-oauth-host.sh",
             "compose-service:omnigent-host-claude",
             "compose-service:omnigent-host-claude-init",
             "compose-profile:omnigent-host-claude",

@@ -23,6 +23,32 @@ def test_provider_capabilities_are_adapted_to_complete_canonical_namespace():
     assert "unknownProviderControl" not in adapted
 
 
+def test_native_message_protocol_support_requires_attestation_and_absent_map():
+    assert adapt_provider_capabilities(None)["sendMessage"] is False
+    supported = adapt_provider_capabilities(None, native_session_protocol=True)
+    assert supported["sendMessage"] is True
+    assert supported["viewTranscript"] is True
+    assert supported["stopSession"] is False
+    assert supported["mutateWorkspace"] is False
+    for explicit in ({}, {"sendMessage": False}, {"sendFollowUp": False}):
+        assert (
+            adapt_provider_capabilities(explicit, native_session_protocol=True)[
+                "sendMessage"
+            ]
+            is False
+        )
+
+
+def test_explicit_provider_denials_override_presentation_and_alias_support():
+    adapted = adapt_provider_capabilities({
+        "viewTranscript": False, "sendMessage": False, "sendFollowUp": True,
+        "stopSession": True, "stop": False,
+    })
+    assert adapted["viewTranscript"] is False
+    assert adapted["sendMessage"] is False
+    assert adapted["stopSession"] is False
+
+
 def _authority(**overrides):
     value = {
         "agentProfileRef": "agent-profile://p/versions/7",

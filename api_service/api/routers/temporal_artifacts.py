@@ -448,9 +448,41 @@ async def presign_artifact_download(
         raise
     return PresignDownloadResponse(url=url, expires_at=expires_at)
 
+_INERT_INLINE_CONTENT_TYPES = frozenset(
+    {
+        "application/json",
+        "text/plain",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+        "image/bmp",
+    }
+)
+
+
+def artifact_read_response_policy(
+    artifact: object, *, as_attachment: bool
+) -> tuple[str, dict[str, str]]:
+    """Only inert content types may render inline on the operator's origin."""
+
+    content_type = str(getattr(artifact, "content_type", "") or "")
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    inline = not as_attachment and media_type in _INERT_INLINE_CONTENT_TYPES
+    return "inline" if inline else "attachment", {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'",
+    }
+
+
 @router.get("/api/artifacts/{artifact_id}/download")
 async def download_artifact(
     artifact_id: str,
+    inline: bool = Query(
+        False,
+        description="Preview inert content types instead of downloading them.",
+    ),
     principal: str = Depends(_resolve_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ):
@@ -461,10 +493,15 @@ async def download_artifact(
         )
         is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
         filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
+        disposition, policy_headers = artifact_read_response_policy(
+            artifact, as_attachment=not inline
+        )
         return FileResponse(
             path,
             filename=filename,
             media_type=artifact.content_type or "application/octet-stream",
+            content_disposition_type=disposition,
+            headers=policy_headers if inline else None,
         )
     except TemporalArtifactValidationError:
         pass
@@ -483,11 +520,15 @@ async def download_artifact(
 
     is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
     filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
+    disposition, policy_headers = artifact_read_response_policy(
+        artifact, as_attachment=not inline
+    )
     return StreamingResponse(
         chunks,
         media_type=artifact.content_type or "application/octet-stream",
         headers={
-            "content-disposition": f'attachment; filename="{filename}"'
+            **(policy_headers if inline else {}),
+            "content-disposition": f'{disposition}; filename="{filename}"',
         },
     )
 

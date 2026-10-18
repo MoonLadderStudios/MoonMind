@@ -1740,6 +1740,93 @@ async def test_provider_profile_override_preserves_resettable_source(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "profile_state, expected",
+    [("missing", "saved"), ("disabled", "saved"), ("unready", "saved"), ("ready", "saved")],
+)
+async def test_default_provider_profile_ref_uses_saved_settings_without_changing_account(
+    settings_session_maker, profile_state, expected
+):
+    async with settings_session_maker() as session:
+        if profile_state != "missing":
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="saved",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    enabled=profile_state != "disabled",
+                    is_default=False,
+                    auth_state=(
+                        ProviderProfileAuthState.CONNECTED
+                        if profile_state == "ready"
+                        else ProviderProfileAuthState.NOT_CONFIGURED
+                    ),
+                )
+            )
+        session.add(
+            SettingsOverride(
+                scope="workspace",
+                key="workflow.default_provider_profile_ref",
+                value_json="saved",
+            )
+        )
+        await session.commit()
+        service = SettingsCatalogService(session=session, env={})
+        defaults = await service.workflow_creation_defaults(scope="workspace")
+        assert defaults.provider_profile_ref == expected
+        if profile_state != "missing":
+            profile = await session.get(ManagedAgentProviderProfile, "saved")
+            assert profile.is_default is False
+
+
+@pytest.mark.asyncio
+async def test_default_provider_profile_ref_keeps_user_workspace_and_environment_precedence(
+    settings_session_maker,
+):
+    user_id = uuid4()
+    async with settings_session_maker() as session:
+        for profile_id in ("environment", "workspace", "user"):
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    enabled=True,
+                )
+            )
+        workspace = SettingsOverride(
+            scope="workspace",
+            key="workflow.default_provider_profile_ref",
+            value_json="workspace",
+        )
+        user = SettingsOverride(
+            scope="user",
+            user_id=user_id,
+            key="workflow.default_provider_profile_ref",
+            value_json="user",
+        )
+        session.add_all([workspace, user])
+        await session.commit()
+        service = SettingsCatalogService(
+            session=session,
+            user_id=user_id,
+            env={"MOONMIND_DEFAULT_PROVIDER_PROFILE_REF": "environment"},
+        )
+        user_defaults = await service.workflow_creation_defaults(scope="user")
+        workspace_defaults = await service.workflow_creation_defaults(scope="workspace")
+        assert user_defaults.provider_profile_ref == "user"
+        assert workspace_defaults.provider_profile_ref == "workspace"
+        await session.delete(user)
+        await session.commit()
+        defaults = await service.workflow_creation_defaults(scope="user")
+        assert defaults.provider_profile_ref == "workspace"
+        await session.delete(workspace)
+        await session.commit()
+        defaults = await service.workflow_creation_defaults(scope="user")
+        assert defaults.provider_profile_ref == "environment"
+
+
+@pytest.mark.asyncio
 async def test_late_diagnostics_report_restored_reference_gaps_without_plaintext(
     settings_session_maker,
 ) -> None:

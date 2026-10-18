@@ -653,9 +653,9 @@ def _session_authority_observation(
         raw_capabilities = snapshot.get("capabilities")
     capabilities = (
         {
-            str(key): value
+            str(key): value is True
             for key, value in raw_capabilities.items()
-            if isinstance(key, str) and isinstance(value, bool)
+            if isinstance(key, str)
         }
         if isinstance(raw_capabilities, Mapping)
         else None
@@ -2939,6 +2939,7 @@ async def run_omnigent_execution(
                     endpoint_ref=str(selection.endpoint_ref or "default"),
                     capabilities=snapshot_capabilities,
                     session_status=snapshot_status,
+                    session_snapshot=initial_snapshot,
                 )
             if (
                 pre_dispatch_item_ids is None

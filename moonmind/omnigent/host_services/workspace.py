@@ -41,6 +41,9 @@ from moonmind.omnigent.workspace_sources import (
     verify_existing_workspace_grant,
     verify_existing_workspace_grant_signature,
 )
+from moonmind.omnigent.workspace_publication import (
+    publication_failure_is_transient,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.workflows.temporal.runtime.workspace_locators import (
@@ -56,21 +59,18 @@ _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _LOGGER = logging.getLogger(__name__)
 
 # Bounded recovery for transient git transport failures during the initial
-# sandbox clone (e.g. mm:68d074f1-...-2026-09-22T00:00:00Z failed with
-# ``Could not resolve host: github.com``). Same pre-connection classification
-# as the publication path in ``workspace_publication.py``: only DNS/connect
-# failures retry. Authentication, not-found, TLS, and repository errors fail
-# closed without retry, per docs/Temporal/ErrorTaxonomy.md.
+# sandbox clone: DNS/connect failures (``Could not resolve host: github.com``),
+# hosting outages, and connections dropped mid-transfer (``RPC failed; curl 92
+# HTTP/2 stream ... CANCEL``, ``early EOF``). Unlike a push, a clone has no
+# remote side effects and retries into an emptied target, so it shares the
+# publication outage classifier. Authentication, TLS, configuration, and
+# repository errors fail closed without retry, per docs/Temporal/ErrorTaxonomy.md.
 _CLONE_MAX_ATTEMPTS = 4
-_CLONE_TRANSIENT_FAILURE = re.compile(
-    r"Could not resolve (?:host|proxy): |Failed to connect to ",
-    re.IGNORECASE,
-)
 
 
 def _is_transient_clone_failure(stderr: str) -> bool:
-    """Return True when git stderr shows a pre-connection transport failure."""
-    return _CLONE_TRANSIENT_FAILURE.search(stderr or "") is not None
+    """Return True when git stderr shows a transient transport failure."""
+    return publication_failure_is_transient(stderr)
 
 
 def _is_complete_checkout(path: Path) -> bool:
@@ -786,8 +786,9 @@ class OmnigentWorkspaceMaterializer:
         # The commit identity does persist there: it is deployment
         # configuration rather than a secret, and a skill that owns its own
         # publication has nowhere else to read one from.
-        # Transient pre-connection failures (DNS, connect) retry in place
-        # with exponential backoff; anything else fails closed immediately.
+        # Transient transport failures (DNS, connect, mid-transfer drops)
+        # retry in place with exponential backoff; anything else fails closed
+        # immediately.
         # Cleanup never deletes another overlapping materialization's
         # completed checkout: that checkout is reused instead.
         last_stderr = ""

@@ -215,13 +215,13 @@ The shell owns:
 - optional command palette provider;
 - shared workspace and collection-display state.
 
-On desktop, the masthead contains the brand, the primary links Workflows and Create, and the System menu trigger. Recurring and Skills are System destinations grouped under **Workflow resources**. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation; the System trigger is active on Recurring and Skills routes.
+On desktop, the masthead contains the brand, the primary links Workflows and Create, and the System menu trigger. The brand wordmark is not a heading: each routed page renders its own title as the page's single `h1` and sets the browser tab title, usually through the shared `PageHeader`. Recurring and Skills are System destinations grouped under **Workflow resources**. Navigation uses router-native links (`Link`, `NavLink`, or equivalent), and active state comes from the current route rather than direct DOM mutation; the System trigger is active on Recurring and Skills routes.
 
 Below it, the dashboard content region hosts route-family workspaces. A collection workspace may render one contextual collection sidebar as its first column and a primary pane as its second. That sidebar lists Workflows, Recurring schedules, or Skills for the active route; it never contains top-level page links. The workspace must never render an application-navigation sidebar beside the collection sidebar.
 
 `docs/UI/CollectionWorkspaceLayout.md` is canonical for geometry, shared sidebar anatomy, and the common Workflow/Recurring detail frame. List-display controls for participating collections live in the shell/workspace utility area associated with that collection.
 
-Required primitives include `DashboardNavigation`, `DashboardSystemMenu`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Primary destinations (Workflows and Create) render as direct masthead links. Feature-enabled workflow-resource, operations, and system destinations — including Recurring and Skills — render under the System control: a popover on desktop and an inline section in the mobile navigation drawer. Their direct destination URLs remain canonical; System is a menu trigger, not a route or landing page.
+Required primitives include `DashboardNavigation`, `DashboardSystemMenu`, `CollectionWorkspace`, `CollectionSidebar`, and `EntityDetailFrame`. Primary destinations (Workflows and Create) render as direct masthead links. Feature-enabled workflow-resource, operations, and system destinations — including Recurring and Skills — render under the System control: a popover on desktop and an inline section in the mobile navigation drawer. Their direct destination URLs remain canonical; System is a menu trigger, not a route or landing page. If `/api/ui/info` fails, System still lists every System destination from the client registry with a note that availability could not be checked, rather than disappearing.
 
 Collection sidebars remain entity lists for their owning collection and never become application navigation. Grouping a destination under System does not move its content or change its route.
 
@@ -264,8 +264,6 @@ Representative response:
     "workflows": "/api/executions",
     "workflowDetail": "/api/executions/{workflowId}",
     "workflowSteps": "/api/executions/{workflowId}/steps",
-    "workflowUpdatesStream": "/api/workflows/updates/stream",
-    "workflowEventsStream": "/api/workflows/{workflowId}/events/stream",
     "artifacts": "/api/artifacts",
     "skills": "/api/workflows/skills"
   }
@@ -285,9 +283,9 @@ Rules:
 
 ## 9.1 Build coherence and version skew
 
-The SPA is code-split: the served HTML references a hashed entry bundle, and the entry bundle references hashed lazy page chunks. Every file must come from one build. Skew has two independent defenses; neither may be removed without the other being strengthened:
+The SPA is code-split: the served HTML references a hashed entry bundle, and the entry bundle references hashed lazy page chunks. The workflows workspace loads the Create and Detail chunks only when their route renders; its desktop shell lives outside the Detail chunk so the sidebar can render while Detail loads. The API gzips static assets and JSON for clients that accept it (`api_service/response_compression.py`), excluding SSE and `text/plain` log streams because compression would hold back streamed output. Every file must come from one build. Skew has two independent defenses; neither may be removed without the other being strengthened:
 
-- **Client-side skew detection (fail-soft, loud).** The client compiles in its dashboard destination registry and compares it against `destinations` from `/api/ui/info`. A mismatch means the browser is executing assets from a different build than the API. The client must **not** discard the `uiInfo` payload on mismatch — server-provided capability flags remain the runtime truth and feature-gated navigation (for example the System menu) must keep working. Instead it renders a visible `role="alert"` version-skew banner (`.ui-version-skew-banner`) naming the server build id and logs the mismatch. Lazy chunk-load failures reload once per build id (`dynamicImportRecovery`) and otherwise surface the styled route error state.
+- **Client-side skew detection (fail-soft, loud).** The client compiles in its dashboard destination registry (`frontend/src/lib/dashboardRoutes.ts`, which also drives route resolution) and compares the shared contract — destination keys, paths and capability keys — against `destinations` from `/api/ui/info`. Labels and icons are not compared, so a wording change is not reported as skew. A mismatch means the browser is executing assets from a different build than the API. The client must **not** discard the `uiInfo` payload on mismatch — server-provided capability flags remain the runtime truth and feature-gated navigation (for example the System menu) must keep working. Instead it renders a visible `role="alert"` version-skew banner (`.ui-version-skew-banner`) naming the server build id and logs the mismatch. Lazy chunk-load failures reload once per build id (`dynamicImportRecovery`) and otherwise surface the styled route error state.
 - **Deployment-side coherence verification.** `tools/verify_deployed_ui_assets.py --base-url <deployment>` fetches the served HTML, every asset it references, and every lazy chunk referenced by the entry bundle, and fails on any 404 or cross-build incoherence. Run it after every deploy.
 
 Operational rule: never hot-patch individual dist files into a running container (`docker cp` of an entry bundle without its chunks leaves a mixed-build static directory that appears to work only for browsers with warm caches). Ship UI changes by rebuilding and redeploying the image; the frontend dist is always rebuilt from source during the image build and verified by `tools/verify_vite_manifest.py`.
@@ -358,23 +356,15 @@ Client stores must not become a second copy of durable server data. Server snaps
 
 ## 11.3 Live updates
 
-The persistent shell should own live update lifecycle. Preferred contracts:
-
-```http
-GET /api/workflows/updates/stream
-GET /api/workflows/{workflowId}/events/stream
-```
-
-or WebSocket equivalents when bidirectional behavior is required.
+Each server-snapshot query owns its refresh through its own `refetchInterval`; no shell-level stream or interval invalidates queries behind their backs. MoonMind serves no dashboard workflow update or event stream, so `/api/ui/info` advertises none and the shell opens no `EventSource`. A second, shell-level refresh owner would bypass the list's pause toggle and keep polling while the footer says updates are paused.
 
 Rules:
 
-- list-level events patch compact list rows;
-- detail events patch or invalidate scoped detail/step/artifact queries;
-- background tabs pause or reduce live connections;
-- disconnected streams degrade to compact polling;
-- ended runs do not keep unnecessary live connections open;
-- stream errors never erase existing artifact-backed or query-backed content.
+- list polling stops when the operator turns off "Poll for live updates", while a filter popover is open, and while the tab is hidden;
+- detail, step and artifact queries poll only while their workflow can still change; the detail query also stops on a non-transient error such as a missing or forbidden workflow;
+- bridge resource evidence keeps polling in persistent error states, and while still pending after the workflow ends, so late evidence is collected, but backs off to a 60 s cap;
+- an action (cancel, rerun, approve, …) invalidates the queries it affects immediately, independent of polling;
+- stream-driven row patching belongs here only once a real stream route exists and is advertised; stream errors must then degrade to the same per-query polling and never erase existing content.
 
 ---
 

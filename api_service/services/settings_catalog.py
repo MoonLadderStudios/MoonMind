@@ -116,6 +116,14 @@ _SECRET_LIKE_SUBSTRINGS = (
 )
 
 
+@dataclass(frozen=True)
+class WorkflowCreationDefaults:
+    """One submission's configured fallbacks, not authored runtime intent."""
+
+    default_runtime: str | None
+    provider_profile_ref: str | None
+
+
 class SettingOption(BaseModel):
     value: str
     label: str
@@ -451,6 +459,18 @@ class SettingsDiagnosticRead(BaseModel):
 class SettingsDiagnosticsResponse(BaseModel):
     scope: SettingScope
     values: dict[str, SettingsDiagnosticRead]
+
+
+def coerce_settings_subject_id(value: Any) -> UUID | None:
+    """Normalize persisted settings subjects; machine identities have no user scope."""
+    if isinstance(value, UUID):
+        return value
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def settings_permissions_for_user(user: Any) -> set[str]:
@@ -1156,6 +1176,35 @@ class SettingsCatalogService:
             ),
             value_version=version,
             diagnostics=diagnostics,
+        )
+
+    async def workflow_creation_defaults(
+        self, *, scope: Literal["user", "workspace"]
+    ) -> WorkflowCreationDefaults:
+        """Read runtime and account defaults from the same settings snapshot.
+
+        Missing, disabled, and unready accounts must reach admission validation;
+        treating them as an omission could silently authorize another account.
+        The runtime setting is workspace-only; account intent may be user-scoped.
+        """
+        scopes: dict[str, SettingScope] = {
+            "workflow.default_runtime": "workspace",
+            "workflow.default_provider_profile_ref": scope,
+        }
+        overrides = await self._get_effective_overrides(scope=scope, keys=list(scopes))
+        values = {
+            key: self._resolve_value_from_overrides(
+                self._entries_by_key[key], scope=value_scope, overrides=overrides
+            )[0]
+            for key, value_scope in scopes.items()
+        }
+        runtime = values["workflow.default_runtime"]
+        profile = values["workflow.default_provider_profile_ref"]
+        return WorkflowCreationDefaults(
+            default_runtime=runtime.strip() if isinstance(runtime, str) else None,
+            provider_profile_ref=(
+                profile.strip() or None if isinstance(profile, str) else None
+            ),
         )
 
     async def effective_values_async(

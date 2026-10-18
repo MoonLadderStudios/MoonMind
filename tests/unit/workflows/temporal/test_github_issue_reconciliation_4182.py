@@ -154,7 +154,6 @@ def test_crash_reconciled_from_conclusive_evidence_without_reimplementation() ->
         proposed_disposition="code_review",
         trusted_handoff_present=True,
         remote_handoff={"activity": "releasing", "attemptId": ATTEMPT_ID},
-        local_workflow_available=False,
     )
     assert decision.action == recon.ACTION_COMPLETE
     assert decision.to_target == "to_code_review"
@@ -183,7 +182,6 @@ def test_inconclusive_crash_evidence_surfaced_not_repaired() -> None:
         proposed_disposition="code_review",
         trusted_handoff_present=True,
         remote_handoff={"activity": "active", "attemptId": ATTEMPT_ID},
-        local_workflow_available=False,
     )
     assert decision.action == recon.ACTION_ATTENTION
     assert decision.to_target == ""
@@ -277,7 +275,6 @@ def test_manual_in_progress_surfaced_without_age_clear() -> None:
     decision = recon.decide_issue_reconciliation(
         issue=_issue("status: in-progress"),
         trusted_handoff_present=False,
-        manual_in_progress=True,
     )
     assert decision.action == recon.ACTION_ATTENTION
     assert decision.reason_code == "manual_in_progress_surfaced"
@@ -290,7 +287,6 @@ def test_silent_owner_surfaced_with_old_status_retained() -> None:
         trusted_handoff_present=True,
         writer_evidence={"writers_stopped": False},
         remote_handoff={"activity": "active", "attemptId": ATTEMPT_ID},
-        local_workflow_available=False,
     )
     assert decision.action == recon.ACTION_ATTENTION
     assert decision.reason_code == "unresponsive_owner_uncertain"
@@ -392,6 +388,63 @@ async def test_stale_status_label_without_attempt_evidence_is_reclaimed(tmp_path
     # No operator is summoned and no attempt history is invented.
     assert service.created == []
     assert service.added == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("label", ["status: code-review", "status: needs-attention"])
+async def test_reconciliation_leaves_external_work_and_operator_holds_unchanged(
+    tmp_path, label
+) -> None:
+    """Missing MoonMind metadata does not make an external owner unresponsive."""
+    service = FakeGitHubService(
+        issues={11: _issue(label)},
+        comments={11: ["An operator-requested session owns this work."]},
+    )
+    result = await acts.reconcile_github_issue_handoffs(
+        repository=REPO, issue_numbers=[11], state_dir=str(tmp_path), service=service
+    )
+    outcome = result["results"][0]
+    assert outcome["action"] == recon.ACTION_NO_ACTION, outcome
+    assert outcome["reasonCode"] == "no_interrupted_transition"
+    assert service.issues[11] == _issue(label)
+    assert service.added == service.removed == service.created == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["labels", "comments", "unreadable"])
+async def test_attention_escalation_rechecks_the_evidence_before_writing(
+    tmp_path, change
+) -> None:
+    class ChangingService(FakeGitHubService):
+        reads = 0
+
+        async def get_issue(self, *, repo, issue_number):
+            self.reads += 1
+            if self.reads == 2:
+                if change == "labels":
+                    self.issues[issue_number] = _issue("status: code-review")
+                elif change == "comments":
+                    self.comments[issue_number].append(
+                        "Operator resolved the incident."
+                    )
+                else:
+                    return {"ok": False, "reasonCode": "outcome_unknown"}
+            return await super().get_issue(repo=repo, issue_number=issue_number)
+
+    service = ChangingService(
+        issues={11: _issue("status: unrecognized")}, comments={11: []}
+    )
+    result = await acts.reconcile_github_issue_handoffs(
+        repository=REPO, issue_numbers=[11], state_dir=str(tmp_path), service=service
+    )
+    outcome = result["results"][0]
+    assert outcome["action"] == recon.ACTION_DEFERRED_UNKNOWN, outcome
+    assert outcome["reasonCode"] == (
+        "attention_read_unknown"
+        if change == "unreadable"
+        else "attention_evidence_changed"
+    )
+    assert service.added == service.removed == service.created == []
 
 
 # -- Acceptance: uncertainty preserved across failure modes --------------------
@@ -535,27 +588,33 @@ def test_local_terminal_evidence_distinguished_from_remote_unresponsive() -> Non
     local = recon.classify_evidence_source(
         local_terminal_record={"terminal_recorded": True, "primaryOutcome": "failed"},
         remote_handoff=None,
-        local_workflow_available=True,
     )
     assert local["locallyConfirmed"] is True
     assert local["sourceOutcome"] == "failed"
     assert local["sourceOutcomePreserved"] is True
     remote = recon.classify_evidence_source(
-        local_terminal_record=None, remote_handoff={"activity": "active"}, local_workflow_available=False
+        local_terminal_record=None, remote_handoff={"activity": "active"}
     )
     assert remote["locallyConfirmed"] is False
     assert remote["remoteUnresponsive"] is True
 
 
 def test_missing_local_record_is_not_remote_failure() -> None:
-    source = recon.classify_evidence_source(local_terminal_record=None, remote_handoff=None, local_workflow_available=False)
-    assert source["remoteUnresponsive"] is True
+    source = recon.classify_evidence_source(
+        local_terminal_record=None, remote_handoff=None
+    )
+    assert source["remoteUnresponsive"] is False
     assert source["locallyConfirmed"] is False
-    # Uncertainty surfaces attention; it never fabricates a local failure.
+    assert source["remoteReleaseClaimed"] is False
+    assert (
+        source["summary"]
+        == "No managed attempt evidence or known interrupted transition."
+    )
+    # An actual in-progress label still surfaces uncertainty without inventing
+    # a failed execution or assuming the old writer stopped.
     decision = recon.decide_issue_reconciliation(
         issue=_issue("status: in-progress"),
         trusted_handoff_present=False,
-        manual_in_progress=True,
     )
     assert decision.action == recon.ACTION_ATTENTION
 

@@ -225,7 +225,11 @@ async def test_batch_coordinator_publish_scope_survives_parent_and_child_plannin
         )
         resolver_inputs = resolver_plan["nodes"][0]["inputs"]
         assert resolver_inputs["publishMode"] == incident["childPublishMode"]
-        assert resolver_inputs["runtime"] == runtime_config
+        assert resolver_inputs["runtime"] == {
+            **runtime_config,
+            "profileId": runtime_config["executionProfileRef"],
+            "providerProfile": runtime_config["executionProfileRef"],
+        }
         assert resolver_inputs["branch"] == pr["headRefName"]
         assert resolver_request["initial_parameters"]["workspaceSpec"] == {
             "repository": incident["repository"],

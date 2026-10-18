@@ -55,3 +55,10 @@ export function formatDurationMs(value: number | null | undefined): string {
   const minutes = totalMinutes % 60;
   return `${hours}h ${String(minutes).padStart(2, '0')}m`;
 }
+
+export function formatBytes(value?: number | null): string {
+  if (value == null) return 'Unknown size';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}

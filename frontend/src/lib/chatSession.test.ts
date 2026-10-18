@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createChatSessionState,
   mapObservabilityEventToChatSessionEvent,
@@ -372,5 +372,64 @@ describe('chat session observability projection for MM-1013', () => {
       text: 'Continue',
       sequenceStart: 10,
     });
+  });
+});
+
+describe('chat session bookkeeping cost (MoonLadderStudios/MoonMind#4870)', () => {
+  it('copies session state a bounded number of times however many events arrive', () => {
+    const RealSet = Set;
+    let setCopies = 0;
+    class CountingSet<T> extends RealSet<T> {
+      constructor(values?: Iterable<T> | null) {
+        super(values);
+        if (values) setCopies += 1;
+      }
+    }
+    const rows = Array.from({ length: 2_000 }, (_, index) => (
+      index % 4 === 0
+        ? row(index + 1, 'turn_started', `turn ${index}`)
+        : row(index + 1, 'assistant_message_delta', `delta ${index} `)
+    ));
+
+    vi.stubGlobal('Set', CountingSet);
+    let blocks: ReturnType<typeof projectChatSessionBlocks>['blocks'];
+    try {
+      blocks = projectChatSessionBlocks(rows).blocks;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // One working copy per projection, not one per event.
+    expect(setCopies).toBeLessThanOrEqual(2);
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks.some((block) => block.kind === 'assistant' && block.text.includes('delta 3 '))).toBe(true);
+  });
+
+  it('streams deltas only into the open assistant block when earlier turns share its scope', () => {
+    const { blocks } = projectChatSessionBlocks([
+      row(1, 'turn_started', 'turn one'),
+      row(2, 'assistant_message_delta', 'first '),
+      row(3, 'assistant_message_delta', 'answer'),
+      row(4, 'turn_started', 'turn two'),
+      row(5, 'assistant_message_delta', 'second '),
+      row(6, 'assistant_message_delta', 'answer'),
+    ]);
+
+    expect(blocks.filter((block) => block.kind === 'assistant').map((block) => block.text))
+      .toEqual(['first answer', 'second answer']);
+  });
+
+  it('keeps single-event reduction immutable', () => {
+    const before = reduceChatSessionEvents(createChatSessionState(), [
+      mapObservabilityEventToChatSessionEvent(row(1, 'runtime_status', 'running')),
+    ]);
+    const snapshot = before.blocks.slice();
+    const after = reduceChatSessionEvents(before, [
+      mapObservabilityEventToChatSessionEvent(row(2, 'runtime_status', 'still running')),
+    ]);
+
+    expect(before.blocks).toEqual(snapshot);
+    expect(before.seenEventIds.size).toBe(1);
+    expect(after.blocks).toHaveLength(2);
   });
 });

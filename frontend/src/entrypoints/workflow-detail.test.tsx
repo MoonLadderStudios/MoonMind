@@ -715,6 +715,8 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
+    // Plan and binding authority are expert detail behind Technical details.
+    fireEvent.click(await screen.findByText('Technical details'));
     expect(await screen.findByText('Omnigent authority')).toBeTruthy();
     expect(screen.getByText(planRef)).toBeTruthy();
     expect(screen.getByText(bindingRef)).toBeTruthy();
@@ -1104,7 +1106,7 @@ describe('Workflow Detail Entrypoint', () => {
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(sidebar).toBeTruthy();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
     const active = await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i });
     expect(active.getAttribute('aria-current')).toBe('page');
     expect((await within(sidebar).findByRole('link', { name: /Another workflow/i })).getAttribute('href')).toBe(
@@ -1120,7 +1122,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await screen.findByRole('heading', { level: 1 });
     await waitFor(() => {
       expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
     });
@@ -1157,7 +1159,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await screen.findByRole('heading', { level: 1 });
     await waitFor(() => {
       expect(document.querySelector('.toolbar-identity-row [data-effect="shimmer-sweep"]')).toBeTruthy();
     });
@@ -1212,7 +1214,7 @@ describe('Workflow Detail Entrypoint', () => {
     );
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(matchingListCalls()).toHaveLength(2);
   });
 
@@ -1335,7 +1337,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(pinned).getByLabelText('Status: Executing')).toBeTruthy();
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
   });
 
   it('MM-1113 keeps authorized remembered workflows outside filters in the current group only', async () => {
@@ -1482,7 +1484,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
     expect(within(sidebar).queryByRole('link', { name: 'Expand to full list' })).toBeNull();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25&stateIn=failed');
   });
 
@@ -1507,7 +1509,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(await within(sidebar).findByText('Workflow navigation is unavailable.')).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     const detailCallsBeforeRetry = fetchSpy.mock.calls.filter(
       ([input]) => String(input) === '/api/executions/test-123?source=temporal',
     ).length;
@@ -1518,7 +1520,7 @@ describe('Workflow Detail Entrypoint', () => {
       const sidebarFetches = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/executions?'));
       expect(sidebarFetches.length).toBeGreaterThanOrEqual(2);
     });
-    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
     expect(
       fetchSpy.mock.calls.filter(
         ([input]) => String(input) === '/api/executions/test-123?source=temporal',
@@ -1617,7 +1619,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-workflow-list-display-mode')).toBe(
       'hidden',
@@ -1644,7 +1646,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const secondRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(secondRender.container.querySelector('.workflow-workspace-shell')?.getAttribute('data-workflow-list-display-mode')).toBe(
       'hidden',
@@ -1672,7 +1674,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    await screen.findByRole('heading', { level: 1 });
     const detailCallsBeforeOpen = fetchSpy.mock.calls.filter(
       ([input]) => String(input) === '/api/executions/test-123?source=temporal',
     ).length;
@@ -1695,7 +1697,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
@@ -1783,7 +1785,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-sidebar-collapsed')).toBe(
@@ -1834,7 +1836,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
   });
@@ -1877,7 +1879,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
@@ -1888,7 +1890,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
@@ -1916,7 +1918,7 @@ describe('Workflow Detail Entrypoint', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Back to workflows' })).toBeNull();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
@@ -2043,10 +2045,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('artifact://checkpoint-head-a')).toBeTruthy();
     expect(screen.getByText('Create branch unavailable: Branch actions are disabled by workflow policy.')).toBeTruthy();
     expect(screen.getByText('Branch action unavailable: Branch actions are disabled by workflow policy.')).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Create branch from checkpoint' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: 'Create branch from checkpoint' }).getAttribute('title')).toBe(
-      'Branch actions are disabled by workflow policy.',
-    );
+    // An unavailable create action shows its one-line reason instead of the full form.
+    expect(screen.queryByRole('button', { name: 'Create branch from checkpoint' })).toBeNull();
+    expect(screen.queryByLabelText('Source checkpoint')).toBeNull();
+    expect(screen.queryByLabelText('Branch label')).toBeNull();
     expect((screen.getByRole('button', { name: 'Continue branch' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Continue branch' }).getAttribute('title')).toBe(
       'Branch actions are disabled by workflow policy.',
@@ -2330,7 +2332,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('href')).toBe(
       '/workflows/test-123?source=temporal',
@@ -2367,7 +2369,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+      expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
       expect(screen.queryByText(/Live updates enabled\. Polling every/i)).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
@@ -3930,6 +3932,194 @@ describe('Workflow Detail Entrypoint', () => {
       expect(inArtifacts.getByText('fix.patch')).toBeTruthy();
       expect(inArtifacts.getByText('output.txt').closest('tr')?.textContent).toContain('reports');
     });
+  });
+
+  it('MoonLadderStudios/MoonMind#4870 bounds the evidence browser, groups stream chunks and hides deleted artifacts', async () => {
+    window.history.pushState({}, 'Evidence Test', '/workflows/test-123/artifacts?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Long running workflow',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    const chunk = (index: number, status: string) => ({
+      artifactId: `art-chunk-${index}`,
+      contentType: 'application/x-ndjson',
+      sizeBytes: 190 * 1024,
+      status,
+      metadata: { name: `runtime.omnigent.sse.normalized.${String(index).padStart(8, '0')}.jsonl` },
+      links: [{ linkType: 'runtime.omnigent.sse.normalized' }],
+    });
+    const artifacts = [
+      ...Array.from({ length: 1157 }, (_, index) => chunk(index, 'deleted')),
+      ...Array.from({ length: 40 }, (_, index) => chunk(2000 + index, 'complete')),
+      ...Array.from({ length: 120 }, (_, index) => ({
+        artifactId: `art-file-${index}`,
+        contentType: 'text/plain',
+        sizeBytes: 1536,
+        status: 'complete',
+        metadata: { filename: `context-${index}.txt` },
+      })),
+      {
+        artifactId: 'art-redacted',
+        contentType: 'application/octet-stream',
+        sizeBytes: 3 * 1024 * 1024,
+        status: 'complete',
+        rawAccessAllowed: false,
+        defaultReadRef: { artifactId: 'art-redacted-preview' },
+        metadata: { filename: 'secret-context.bin' },
+      },
+    ];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts }) } as Response);
+      }
+      if (url.includes('/steps')) {
+        return Promise.resolve({ ok: true, json: async () => ({ steps: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    const region = await waitFor(() => {
+      const found = document.querySelector('.td-artifacts-region');
+      expect(found?.querySelector('tbody')).toBeTruthy();
+      return found as HTMLElement;
+    });
+    const inRegion = within(region);
+    const bodyRows = () => region.querySelectorAll('tbody tr');
+
+    // Deleted artifacts are hidden by default; their history stays reachable.
+    expect(inRegion.getByText(/Artifact Browser \| 161 artifacts/)).toBeTruthy();
+    expect(region.querySelector('[data-artifact-deleted]')).toBeNull();
+    // A long list renders a bounded page with human-readable sizes.
+    expect(bodyRows()).toHaveLength(50);
+    expect(inRegion.getAllByText('1.5 KB').length).toBeGreaterThan(0);
+    const fileRow = inRegion.getByText('context-0.txt').closest('tr') as HTMLElement;
+    expect(within(fileRow).getByRole('link', { name: 'Open' }).getAttribute('href')).toBe(
+      '/api/artifacts/art-file-0/download?inline=true',
+    );
+    expect(within(fileRow).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe(
+      '/api/artifacts/art-file-0/download',
+    );
+
+    fireEvent.click(inRegion.getByRole('button', { name: 'Next' }));
+    fireEvent.click(inRegion.getByRole('button', { name: 'Next' }));
+    // Open previews through the default read ref; Download is an explicit download.
+    const redactedRow = inRegion.getByText('secret-context.bin').closest('tr') as HTMLElement;
+    expect(within(redactedRow).getByText('3.0 MB')).toBeTruthy();
+    expect(within(redactedRow).getByRole('link', { name: 'Open' }).getAttribute('href')).toBe(
+      '/api/artifacts/art-redacted-preview/download?inline=true',
+    );
+    expect(within(redactedRow).getByRole('link', { name: 'Download' }).hasAttribute('download')).toBe(true);
+    // Stream chunks collapse to one expandable entry.
+    const chunkGroup = inRegion.getByRole('button', { name: 'Omnigent event stream chunks (40)' });
+    expect(chunkGroup.closest('tr')?.textContent).toContain('7.4 MB');
+    expect(inRegion.queryByText(/runtime\.omnigent\.sse\.normalized/)).toBeNull();
+    fireEvent.click(chunkGroup);
+    expect(inRegion.getByText('runtime.omnigent.sse.normalized.00002000.jsonl')).toBeTruthy();
+    expect(bodyRows().length).toBeLessThanOrEqual(50);
+
+    // Deleted rows are shown on request, without download or open actions.
+    fireEvent.click(inRegion.getByRole('button', { name: 'Show deleted (1157)' }));
+    fireEvent.click(inRegion.getByRole('button', { name: 'Next' }));
+    fireEvent.click(inRegion.getByRole('button', { name: 'Next' }));
+    expect(inRegion.getByRole('button', { name: 'Omnigent event stream chunks (1197)' })).toBeTruthy();
+    const deletedRows = region.querySelectorAll<HTMLElement>('[data-artifact-deleted]');
+    expect(deletedRows.length).toBeGreaterThan(0);
+    expect(bodyRows().length).toBeLessThanOrEqual(50);
+    for (const row of deletedRows) {
+      expect(within(row).queryByRole('link')).toBeNull();
+    }
+  });
+
+  it('opens a new run artifact collection on its first page with deleted rows hidden', async () => {
+    window.history.pushState({}, 'Evidence Test', '/workflows/test-123/artifacts?source=temporal');
+    let currentRunId = '02-run';
+    const files = (prefix: string, status = 'complete') =>
+      Array.from({ length: 120 }, (_, index) => ({
+        artifactId: `art-${prefix}-${status}-${index}`,
+        contentType: 'text/plain',
+        sizeBytes: 1536,
+        status,
+        metadata: { filename: `${prefix}-${status}-${index}.txt` },
+      }));
+    const artifactsByRun: Record<string, unknown[]> = {
+      '02-run': [...files('first', 'deleted'), ...files('first')],
+      '03-run': [...files('next', 'deleted'), ...files('next')],
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        const runId = url.includes('/03-run/') ? '03-run' : '02-run';
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: artifactsByRun[runId] }),
+        } as Response);
+      }
+      if (url.includes('/steps')) {
+        return Promise.resolve({ ok: true, json: async () => ({ steps: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          temporalRunId: currentRunId,
+          runId: currentRunId,
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'Rerun workflow',
+          summary: 'Execution summary',
+          status: 'completed',
+          state: 'succeeded',
+          rawState: 'succeeded',
+          temporalStatus: 'completed',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          actions: {},
+        }),
+      } as Response);
+    });
+
+    const { queryClient } = renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+    const region = () => document.querySelector('.td-artifacts-region') as HTMLElement;
+    await waitFor(() => expect(within(region()).getByText('first-complete-0.txt')).toBeTruthy());
+    fireEvent.click(within(region()).getByRole('button', { name: 'Show deleted (120)' }));
+    fireEvent.click(within(region()).getByRole('button', { name: 'Next' }));
+    fireEvent.click(within(region()).getByRole('button', { name: 'Next' }));
+    expect(region().querySelector('[data-artifact-deleted]')).toBeTruthy();
+
+    // The same workflow moves to a new run while the detail stays mounted.
+    currentRunId = '03-run';
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    await waitFor(() => expect(within(region()).getByText('next-complete-0.txt')).toBeTruthy());
+    expect(region().querySelector('[data-artifact-deleted]')).toBeNull();
+    expect(within(region()).getByRole('button', { name: 'Show deleted (120)' })).toBeTruthy();
   });
 
   it('does not poll terminal workflow detail surfaces after the initial load', async () => {
@@ -6014,6 +6204,12 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
       expect(screen.getByText('Did work')).toBeTruthy();
       expect(screen.getByText('Claude Code')).toBeTruthy();
+    });
+    // The operator-facing skill selection stays visible; provenance is one click away.
+    expect(screen.getByText('Skills').closest('div')?.textContent).toContain('jira-pr-verify, fix-comments');
+    fireEvent.click(screen.getByText('Technical details'));
+
+    await waitFor(() => {
       expect(screen.getByText('Explicit Selection').closest('div')?.textContent).toContain(
         'jira-pr-verify, fix-comments',
       );
@@ -6040,8 +6236,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Harness').closest('div')?.textContent).toBe('HarnessClaude Code');
       expect(screen.getByText('Backend').closest('div')?.textContent).toBe('BackendDirect');
       expect(screen.getByText('Provider Profile').closest('div')?.textContent).toBe('Provider Profileprofile:claude-default');
-      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('Anthropic');
-      expect(screen.getByText('Provider').closest('div')?.textContent).toContain('anthropic');
+      expect(screen.getByText('Provider').closest('div')?.textContent).toBe('ProviderAnthropic');
+      expect(screen.getByText('Provider ID').closest('div')?.textContent).toBe('Provider IDanthropic');
       expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
       expect(screen.getByText(/Created by schedule/)).toBeTruthy();
@@ -7235,7 +7431,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('No inbound remediation workflows linked yet.')).toBeTruthy();
     expect(screen.getByText('Evidence bundle is missing.')).toBeTruthy();
     expect(screen.getByText('Live follow is unavailable; durable remediation artifacts remain authoritative.')).toBeTruthy();
-    expect(screen.getByText('No remediation evidence artifacts linked yet.')).toBeTruthy();
+    // An empty Remediation Evidence section is hidden rather than shown empty.
+    expect(screen.queryByRole('heading', { name: 'Remediation Evidence' })).toBeNull();
 
     const longTarget = screen.getByText('mm:target-long-workflow-id-with-many-segments-for-mobile-containment');
     expect(longTarget.closest('code')?.className).toContain('break-all');
@@ -7460,6 +7657,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Example task')).toBeTruthy();
     });
 
+    expect(screen.queryByText('Skills')).toBeNull();
+    fireEvent.click(screen.getByText('Technical details'));
     expect(screen.getByText('Explicit Selection').closest('div')?.textContent).toContain('None');
     expect(screen.getByText('Delegated Skill').closest('div')?.textContent).toContain('—');
   });
@@ -8484,7 +8683,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(artifactsRegion).not.toBeNull();
       const inArtifacts = within(artifactsRegion as HTMLElement);
       expect(inArtifacts.getByText('art-001')).toBeTruthy();
-      expect(inArtifacts.getByText('512')).toBeTruthy();
+      expect(inArtifacts.getByText('512 B')).toBeTruthy();
       expect(inArtifacts.getByText('complete')).toBeTruthy();
       expect(inArtifacts.getByRole('link', { name: /Download/i }).getAttribute('href')).toBe(
         '/api/artifacts/art-001/download'
@@ -8944,9 +9143,9 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      // The title renders in both the detail header and the native chat context bar.
-      expect(screen.getAllByText('Encoded task').length).toBeGreaterThan(0);
-      expect(screen.getByText('Workflow mm:test-123')).toBeTruthy();
+      // The title renders once, as the page h1; the decoded ID appears once beside the status.
+      expect(screen.getByRole('heading', { level: 1, name: 'Encoded task' })).toBeTruthy();
+      expect(screen.getAllByText('mm:test-123')).toHaveLength(1);
     });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/executions/mm%3Atest-123?source=temporal');
@@ -9629,7 +9828,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const imageDownloadLinks = screen
       .getAllByRole('link', { name: 'Download' })
-      .filter((link) => link.getAttribute('download'));
+      .filter((link) => link.getAttribute('download') && !link.closest('.td-artifacts-region'));
     expect(imageDownloadLinks.map((link) => link.getAttribute('href'))).toEqual([
       '/api/artifacts/art-objective/download',
       '/api/artifacts/art-step/download',
@@ -12624,6 +12823,36 @@ describe('LiveLogsPanel', () => {
 
     expect(screen.getByTestId('live-logs-legacy-viewer')).toBeTruthy();
     expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+  });
+
+  it('MoonLadderStudios/MoonMind#4870 renders ANSI safely and virtualizes the default log viewer', async () => {
+    const tail = Array.from(
+      { length: 300 },
+      (_, index) =>
+        `--- ${index % 2 ? 'stderr' : 'stdout'} ---\n\u001b[31mline ${index} failed\u001b[0m <b>not html</b>`,
+    ).join('\n');
+    mockFetchSequence(activeExecution, activeSummary, `${tail}\n`);
+    virtuosoPropsSpy.mockClear();
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByText('Live Logs'));
+    const viewer = await screen.findByTestId('live-logs-legacy-viewer');
+    await waitFor(() => expect(viewer.textContent).toContain('line 299 failed'));
+
+    // ANSI becomes styled text; escapes and markup never reach the DOM as code.
+    expect(viewer.textContent).not.toContain('\u001b');
+    expect(viewer.textContent).toContain('<b>not html</b>');
+    expect(viewer.querySelector('b')).toBeNull();
+    const colored = within(viewer).getAllByText('line 0 failed')[0] as HTMLElement;
+    expect(colored.dataset.ansiFragment).toBe('true');
+    expect(colored.style.color).not.toBe('');
+    // The long log renders through the virtualized list with a fixed viewport.
+    expect(within(viewer).getByTestId('mock-virtuoso')).toBeTruthy();
+    const legacyList = virtuosoPropsSpy.mock.calls
+      .map(([props]) => props)
+      .filter((props) => (props.data ?? []).length >= 300)
+      .at(-1);
+    expect(legacyList?.style).toEqual({ height: 400 });
   });
 
   it('uses the legacy line viewer when the session timeline feature flag is absent', async () => {

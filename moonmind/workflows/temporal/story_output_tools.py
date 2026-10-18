@@ -35,6 +35,15 @@ from moonmind.workflows.skills.acceptance_contract import (
 )
 from moonmind.workflows.skills.plan_validation import validate_json_value
 from moonmind.workflows.skills.tool_definitions import (
+    DOCUMENT_UPDATE_TASKS_TOOL_NAME,
+    GITHUB_CREATE_ISSUES_TOOL_NAME,
+    GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME,
+    GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME,
+    GITHUB_STORY_TOOL_NAMES,
+    JIRA_CREATE_ISSUES_TOOL_NAME,
+    JIRA_IMPLEMENT_TASKS_TOOL_NAME,
+    JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
+    JIRA_STORY_TOOL_NAMES,
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
     JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
@@ -95,16 +104,6 @@ from moonmind.workflows.temporal.issue_claim_store import (
 )
 from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
 
-JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
-JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
-JIRA_IMPLEMENT_TASKS_TOOL_NAME = "story.create_jira_implement_tasks"
-GITHUB_CREATE_ISSUES_TOOL_NAME = "story.create_github_issues"
-GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME = (
-    "story.create_github_issue_orchestrate_workflows"
-)
-GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME = (
-    "story.create_github_issue_implement_workflows"
-)
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 ISSUE_BRIEF_LOADER_TOOL_NAMES = frozenset(
     {JIRA_LOAD_PRESET_BRIEF_TOOL_NAME, GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME}
@@ -122,20 +121,6 @@ GITHUB_MANUAL_ONLY_LABEL = "manual-only"
 # to classify results.
 _GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS = 10.0
 _GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS = 15.0
-JIRA_STORY_TOOL_NAMES = frozenset(
-    {
-        JIRA_CREATE_ISSUES_TOOL_NAME,
-        JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
-        JIRA_IMPLEMENT_TASKS_TOOL_NAME,
-    }
-)
-GITHUB_STORY_TOOL_NAMES = frozenset(
-    {
-        GITHUB_CREATE_ISSUES_TOOL_NAME,
-        GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME,
-        GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME,
-    }
-)
 _SOURCE_DOCUMENT_PATH_RE = re.compile(
     r"(?P<path>(?:docs/(?:[A-Za-z0-9_.@+=-]+/)*[A-Za-z0-9_.@+=-]+|"
     r"(?<![A-Za-z0-9_])AGENTS)\.md)"
@@ -227,7 +212,6 @@ _ACCEPTANCE_HEADING_RE = re.compile(
 )
 
 DOCUMENT_DISCOVER_TOOL_NAME = "document.discover"
-DOCUMENT_UPDATE_TASKS_TOOL_NAME = "story.create_document_update_tasks"
 _GITHUB_OWNER_REPO_PATTERN = re.compile(
     r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$"
 )
@@ -5605,38 +5589,50 @@ async def _load_github_issue_preset_brief(
             },
         )
     own_claim = bool((_context or {}).get("verified_issue_claim"))
-    if not search_evidence and not own_claim and (
-        not is_complete_open_issue(issue_data, repository)
-        or issue_data["number"] != issue_number
-        or has_in_progress_status(issue_data)
-        or not is_lifecycle_selectable_candidate(
-            issue_data, _github_status_attempt_context(inputs, _context)
-        )
-        or not _github_shared_admission_decision(
+    if not search_evidence and not own_claim:
+        admission = _github_shared_admission_decision(
             inputs=inputs,
             context=_context,
             repository=repository,
             issue_number=issue_number,
             issue=issue_data,
-        ).allowed
-    ):
-        # Direct issue loads run the same admission policy as search: an
-        # explicit issue reference is not a bypass around lifecycle state.
-        # Both paths route through the one shared exact-issue admission
-        # boundary (issue #4178) with the full Req-1 evidence bundle; search
-        # selections use ENTRYPOINT_SEARCH instead.
-        return ToolResult(
-            status="FAILED",
-            outputs={
-                "error": (
-                    "Direct GitHub issue load failed lifecycle admission: the issue "
-                    "is not an Available or Recovery-needed candidate."
-                ),
-                "repository": repository,
-                "issueNumber": issue_number,
-                "candidateDisposition": "ineligible",
-            },
         )
+        valid_issue = (
+            is_complete_open_issue(issue_data, repository)
+            and issue_data["number"] == issue_number
+        )
+        selectable = is_lifecycle_selectable_candidate(
+            issue_data, _github_status_attempt_context(inputs, _context)
+        )
+        if not admission.allowed or not valid_issue or not selectable:
+            decision = admission.to_dict()
+            if admission.allowed:
+                decision.update(
+                    allowed=False,
+                    reasonCode=(
+                        "invalid_issue_evidence"
+                        if not valid_issue
+                        else "active_attempt_conflict"
+                    ),
+                    summary=(
+                        "Trusted issue detail is incomplete or does not match the requested identity."
+                        if not valid_issue
+                        else "Unresolved active-attempt evidence blocks admission."
+                    ),
+                )
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "error": "Direct GitHub issue load failed lifecycle admission: "
+                    + decision["summary"],
+                    "repository": repository,
+                    "issueNumber": issue_number,
+                    "candidateDisposition": "ineligible",
+                    "reasonCode": decision["reasonCode"],
+                    "decision": "blocked",
+                    "admissionDecision": decision,
+                },
+            )
     issue = _github_issue_payload(issue_data, repository)
     receipt = (_context or {}).get("issue_claim_receipt")
     if own_claim:

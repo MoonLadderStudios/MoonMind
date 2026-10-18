@@ -80,6 +80,7 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from api_service.services.settings_catalog import WorkflowCreationDefaults
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from moonmind.config.settings import (
     FeatureFlagsSettings,
@@ -489,7 +490,14 @@ def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
 
 
 def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
-    return SimpleNamespace(execute=AsyncMock(return_value=_ExecuteResult(rows)))
+    from api_service.db.models import SettingsOverride
+
+    async def execute(statement):
+        if statement.column_descriptions[0].get("entity") is SettingsOverride:
+            return _ExecuteResult([])
+        return _ExecuteResult(rows)
+
+    return SimpleNamespace(execute=AsyncMock(side_effect=execute))
 
 
 class _SnapshotReuseSession:
@@ -1783,6 +1791,20 @@ def _reset_default_runtime_for_legacy_tests(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
     yield
+
+
+@pytest.fixture(autouse=True)
+def settings_overrides(monkeypatch):
+    """Keep router tests' settings storage hermetic, with explicit saved rows."""
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    overrides = {}
+
+    async def get_overrides(_service, *, scopes, **_kwargs):
+        return {key: row for key, row in overrides.items() if key[0] in scopes}
+
+    monkeypatch.setattr(SettingsCatalogService, "_get_overrides", get_overrides)
+    return overrides
 
 
 @pytest.fixture
@@ -4888,7 +4910,10 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
-    db_session = SimpleNamespace(get=AsyncMock(return_value=None))
+    db_session = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        commit=AsyncMock(),
+    )
     test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     snapshot = {
         "profileId": "default",
@@ -4904,7 +4929,7 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
     with patch(
         "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
         new=AsyncMock(return_value=snapshot),
-    ):
+    ) as resolve_default_profile:
         response = test_client.post(
             "/api/executions",
             json={
@@ -4927,7 +4952,15 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
         )
 
     assert response.status_code == 422, response.text
-    assert "Selected Provider Profile" in response.json()["detail"]["message"]
+    assert response.json()["detail"] == {
+        "code": "invalid_execution_request",
+        "message": "Provider profile not found: 'codex-oauth-profile'.",
+    }
+    db_session.get.assert_awaited_once_with(
+        ManagedAgentProviderProfile, "codex-oauth-profile"
+    )
+    resolve_default_profile.assert_not_awaited()
+    db_session.commit.assert_not_awaited()
     service.create_execution.assert_not_awaited()
 
 
@@ -9404,11 +9437,36 @@ def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
     }
     assert initial_parameters["workflow"]["publish"] == {"mode": "none"}
 
+
+@pytest.fixture
+def caller_runtime_profile_session() -> SimpleNamespace:
+    provider_profile = ManagedAgentProviderProfile(
+        profile_id="codex_default",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        enabled=True,
+        default_model="gpt-profile-default",
+        default_effort="low",
+        model_tiers=[],
+        default_model_tier=None,
+    )
+
+    async def get_row(model, key):
+        if model is ManagedAgentProviderProfile and key == provider_profile.profile_id:
+            return provider_profile
+        return None
+
+    return SimpleNamespace(get=AsyncMock(side_effect=get_row))
+
+
 def test_create_task_shaped_execution_inherits_caller_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
+    db_session = caller_runtime_profile_session
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     service.describe_execution.return_value = SimpleNamespace(
         workflow_id="mm:parent-task",
         owner_id=str(user.id),
@@ -9450,11 +9508,17 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
         },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
+    db_session.get.assert_any_await(ManagedAgentProviderProfile, "codex_default")
+    service.create_execution.assert_awaited_once()
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
+    assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
     assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert initial_parameters["profileId"] == "codex_default"
+    assert initial_parameters["requestedModel"] == "gpt-5.4"
+    assert initial_parameters["modelSource"] == "task_override"
     assert initial_parameters["model"] == "gpt-5.4"
     assert initial_parameters["effort"] == "high"
     runtime = initial_parameters["workflow"]["runtime"]
@@ -9481,6 +9545,7 @@ def _execution_fanout_token(*, parent_workflow_id: str = "mm:parent-task") -> st
 
 def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, service, user = client
     for dependency in tuple(test_client.app.dependency_overrides):
@@ -9507,9 +9572,8 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
         search_attributes={},
     )
 
-    test_client.app.dependency_overrides[get_async_session] = lambda: (
-        SimpleNamespace(get=AsyncMock(return_value=None))
-    )
+    db_session = caller_runtime_profile_session
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     response = test_client.post(
         "/api/executions",
         headers={
@@ -9532,13 +9596,20 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
         },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
+    db_session.get.assert_any_await(ManagedAgentProviderProfile, "codex_default")
+    service.create_execution.assert_awaited_once()
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
     assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
     assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert initial_parameters["profileId"] == "codex_default"
+    assert initial_parameters["workflow"]["runtime"]["executionProfileRef"] == (
+        "codex_default"
+    )
     assert service.create_execution.await_args.kwargs["owner_id"] == user.id
+    assert service.create_execution.await_args.kwargs["owner_type"] == "user"
 
 
 def test_execution_fanout_cannot_author_recovery_or_profile_snapshots(
@@ -11052,6 +11123,139 @@ def test_create_execution_accepts_matching_github_issue_repository(
 
     assert response.status_code == 201, response.json()
     service.create_execution.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "connection_ref",
+    ["repository-connection:git-default", "repository-connection:operator-choice"],
+)
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "release/operator-choice",
+        "refs/heads/release/operator-choice",
+        "refs/tags/release-v1",
+    ],
+)
+def test_create_execution_keeps_explicit_repository_branch_and_connection(
+    client,
+    connection_ref,
+    branch,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    repository_target = {
+        "provider": "git",
+        "connectionRef": connection_ref,
+        "repository": {"name": "MoonLadderStudios/Tactics"},
+        "branch": {"name": branch},
+    }
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_target,
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                },
+            },
+        },
+    )
+    assert response.status_code == 201, response.json()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["repository"] == repository_target
+    assert executions_module.authored_repository_access(parameters) == (
+        connection_ref,
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "branch, target_patch, issue_number",
+    [
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2490", {}, 2490),
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2491", {}, 2490),
+        ("https://github.com/other/repo/issues/2490", {}, 2490),
+        ("https://example.com/unrelated", {}, 2490),
+        ("git@github.com:MoonLadderStudios/Tactics.git", {}, 2490),
+        ("operator@git.example.com:group/repository.git", {}, 2490),
+        ("git.example.com:group/repository.git", {}, 2490),
+        ("ssh://git@git.example.com/group/repository.git", {}, 2490),
+        ("//git.example.com/group/repository.git", {}, 2490),
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2490?x=1", {}, 2490),
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2490", {}, None),
+        (
+            "https://github.com/MoonLadderStudios/Tactics/issues/2490",
+            {"connectionRef": "repository-connection:explicit"},
+            2490,
+        ),
+        (
+            "https://github.com/MoonLadderStudios/Tactics/issues/2490",
+            {"revision": {"kind": "git_commit", "commitSha": "abcdef012345"}},
+            2490,
+        ),
+    ],
+)
+def test_create_execution_rejects_ambiguous_url_branch(
+    client,
+    branch,
+    target_patch,
+    issue_number,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": {
+                    "provider": "git",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                    "branch": {"name": branch},
+                    **target_patch,
+                },
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": issue_number,
+                        }
+                    },
+                },
+            },
+        },
+    )
+    assert response.status_code == 422, response.json()
+    assert "branch must be a branch name" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_rerun_workspace_readmission_rejects_issue_url_branch():
+    repository = "MoonLadderStudios/Tactics"
+    with pytest.raises(HTTPException) as raised:
+        executions_module._readmit_edited_workspace_source(
+            {"workspace": None},
+            recorded_parameters={
+                "repository": {
+                    "provider": "git",
+                    "repository": {"name": repository},
+                    "branch": {"name": f"https://github.com/{repository}/issues/2490"},
+                },
+            },
+            workflow_id="mm:readmission",
+        )
+    assert "branch must be a branch name" in raised.value.detail["message"]
 
 
 def test_create_execution_requires_repository_for_github_issue_authority(
@@ -20109,6 +20313,262 @@ def test_mm3833_cli_profile_pin_selects_the_create_route(monkeypatch) -> None:
     assert parameters["runtimeCutover"]["selectionSource"] == "profile"
 
 
+@pytest.mark.parametrize("entrypoint", ["api", "cli", "recurring"])
+@pytest.mark.parametrize("setting_scope", ["workspace", "user"])
+def test_saved_profile_default_selects_create_route_and_model(
+    monkeypatch, settings_overrides, entrypoint, setting_scope
+) -> None:
+    from api_service.db.models import SettingsOverride
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = ManagedAgentProviderProfile(
+        profile_id="saved-subscription",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        enabled=True,
+        is_default=False,
+        default_model="gpt-saved-default",
+        default_model_tier=1,
+        model_tiers=[],
+        secret_refs={},
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=0,
+    )
+    saved_default = SettingsOverride(
+        scope=setting_scope,
+        key="workflow.default_provider_profile_ref",
+        value_json=profile.profile_id,
+        value_version=1,
+    )
+
+    settings_overrides[(setting_scope, saved_default.key)] = saved_default
+
+    async def execute(statement):
+        entity = statement.column_descriptions[0].get("entity")
+        rows = [profile] if entity is ManagedAgentProviderProfile else []
+        return SimpleNamespace(
+            all=lambda: rows,
+            scalars=lambda: SimpleNamespace(all=lambda: rows),
+        )
+
+    body = (
+        build_execution_payload(instructions="Use the saved default Profile.")
+        if entrypoint == "cli"
+        else {
+            "type": "workflow",
+            "payload": {"workflow": {"instructions": "Use the saved default Profile."}},
+        }
+    )
+    create_definition = AsyncMock(
+        return_value=SimpleNamespace(
+            id=uuid4(),
+            name="Saved default",
+            cron="0 * * * *",
+            timezone="UTC",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    if entrypoint == "recurring":
+        body["payload"]["schedule"] = {"mode": "recurring", "cron": "0 * * * *"}
+        monkeypatch.setattr(
+            "api_service.services.recurring_workflows_service.RecurringWorkflowsService.create_definition",
+            create_definition,
+        )
+    for test_client, service in _mm3788_client(profile, execute=execute):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    if entrypoint == "recurring":
+        parameters = create_definition.await_args.kwargs["target"]["initialParameters"]
+        assert (
+            parameters["workflow"]["runtime"]["providerProfileRef"]
+            == profile.profile_id
+        )
+        service.create_execution.assert_not_awaited()
+    else:
+        parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["profileId"] == "saved-subscription"
+    assert parameters["model"] == "gpt-saved-default"
+    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "recurring"])
+@pytest.mark.parametrize(
+    "selector",
+    [{"providerId": "minimax", "tagsAll": ["team"]}, {}],
+    ids=["explicit-pool", "empty-selector"],
+)
+def test_saved_profile_default_preserves_explicit_profile_selector(
+    monkeypatch, entrypoint, selector
+) -> None:
+    default_ref = AsyncMock(
+        return_value=WorkflowCreationDefaults("codex_cli", "saved-openai")
+    )
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
+        default_ref,
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="saved-openai", runtime_id="codex_cli"
+    )
+    profile.provider_id = "openai"
+    body = {
+        "type": "workflow",
+        "payload": {
+            "workflow": {
+                "instructions": "Choose an available account from the requested pool.",
+                "runtime": {"mode": "codex_cli", "profileSelector": selector},
+            }
+        },
+    }
+    create_definition = AsyncMock(
+        return_value=SimpleNamespace(
+            id=uuid4(),
+            name="Selector",
+            cron="0 * * * *",
+            timezone="UTC",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    if entrypoint == "recurring":
+        body["payload"]["schedule"] = {"mode": "recurring", "cron": "0 * * * *"}
+        monkeypatch.setattr(
+            "api_service.services.recurring_workflows_service.RecurringWorkflowsService.create_definition",
+            create_definition,
+        )
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = (
+        create_definition.await_args.kwargs["target"]["initialParameters"]
+        if entrypoint == "recurring"
+        else service.create_execution.await_args.kwargs["initial_parameters"]
+    )
+    expected_profile = None if selector else profile.profile_id
+    assert parameters.get("profileId") == expected_profile
+    runtime = parameters["workflow"]["runtime"]
+    assert runtime.get("providerProfileRef") == expected_profile
+    assert runtime["profileSelector"] == selector
+    default_ref.assert_awaited_once()
+
+
+def test_saved_profile_default_does_not_replace_explicit_profile(monkeypatch) -> None:
+    from moonmind.workflow_cli import build_execution_payload
+
+    default_ref = AsyncMock(
+        return_value=WorkflowCreationDefaults("codex_cli", "another-account")
+    )
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
+        default_ref,
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="pinned-account", runtime_id="codex_cli"
+    )
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=build_execution_payload(
+                instructions="Keep my chosen account.",
+                provider_profile=profile.profile_id,
+            ),
+        )
+
+    assert response.status_code == 201, response.text
+    assert (
+        service.create_execution.await_args.kwargs["initial_parameters"]["profileId"]
+        == profile.profile_id
+    )
+    default_ref.assert_awaited_once()
+
+
+def test_saved_profile_default_does_not_replace_agent_profile_account(
+    client, monkeypatch
+) -> None:
+    from moonmind.workflow_cli import build_execution_payload
+
+    default_ref = AsyncMock(
+        return_value=WorkflowCreationDefaults("codex_cli", "another-account")
+    )
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
+        default_ref,
+    )
+    body = build_execution_payload(
+        instructions="Keep the Agent Profile account.",
+        agent_profile="team-codex",
+        provider_profile="oauth-team",
+    )
+    # The account is pinned only inside the explicit Agent Profile selection.
+    body["payload"]["task"].pop("providerProfileRef")
+    test_client, service, _user = client
+    response, compile_plan, _binding = _mm3935_post_through_plan_owner(
+        test_client, service, body, db_session=_Mm3833AgentProfileAdmissionSession()
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["agentProfileSnapshot"]["providerProfileRef"] == "oauth-team"
+    default_ref.assert_awaited_once()
+
+
+def test_saved_profile_default_is_fixed_before_preset_expansion(monkeypatch) -> None:
+    from moonmind.workflows.executions.preset_goal_scheduler import GoalPresetSchedule
+
+    default_ref = AsyncMock(
+        side_effect=[
+            WorkflowCreationDefaults("omnigent", "subscription"),
+            WorkflowCreationDefaults("omnigent", "different-account"),
+        ]
+    )
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
+        default_ref,
+    )
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    captured = {}
+
+    class Catalog:
+        def __init__(self, session):
+            pass
+
+        async def expand_template(self, **kwargs):
+            captured.update(kwargs)
+            return {"steps": [{"id": "step-1", "instructions": "Run"}]}
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal, slug="goal-preset", inputs={}, reason="test", issue_key=None
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService", Catalog
+    )
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {"workflow": {"goal": "Run a preset"}},
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert captured["context"]["targetRuntime"] == "codex_cli"
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["profileId"] == "subscription"
+    default_ref.assert_awaited_once()
+
+
 def test_mm3833_cli_envelope_with_a_forged_runtime_fails_before_effects() -> None:
     from moonmind.workflow_cli import build_execution_payload
 
@@ -20716,16 +21176,14 @@ async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
                 service=service,
                 session=session,
                 user=user,
-                # The pre-#3935 `moonmind workflow run --provider-profile` body.
+                # No Profile or runtime intent: the configured default applies.
                 payload={
                     "workflowType": "MoonMind.UserWorkflow",
                     "idempotencyKey": "mm3935-raw-default",
                     "initialParameters": {
                         "task": {
                             "instructions": "Run with the default runtime.",
-                            "providerProfileRef": "codex_minimax_team",
                         },
-                        "providerProfileRef": "codex_minimax_team",
                     },
                 },
             )
@@ -20912,6 +21370,56 @@ def test_mm3935_cli_run_payload_reaches_the_plan_owner(
     )
     assert kwargs["title"] == "CLI run"
     assert kwargs["idempotency_key"] == "mm3935-cli"
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "cli"])
+def test_saved_omnigent_runtime_reaches_the_plan_owner(
+    client, settings_overrides, entrypoint
+) -> None:
+    from api_service.db.models import SettingsOverride
+    from moonmind.workflow_cli import build_execution_payload
+
+    saved = SettingsOverride(
+        scope="workspace", key="workflow.default_runtime", value_json="omnigent"
+    )
+    settings_overrides[("workspace", saved.key)] = saved
+    body = (
+        build_execution_payload(instructions="Use the saved Omnigent backend.")
+        if entrypoint == "cli"
+        else {
+            "type": "workflow",
+            "payload": {
+                "workflow": {"instructions": "Use the saved Omnigent backend."}
+            },
+        }
+    )
+    test_client, service, _user = client
+    provider = _mm3788_provider_profile(
+        profile_id="codex-openai-oauth", runtime_id="codex_cli"
+    )
+    provider.provider_id = "openai"
+    session = SimpleNamespace(
+        get=AsyncMock(
+            side_effect=lambda model, key: (
+                provider
+                if model is ManagedAgentProviderProfile and key == provider.profile_id
+                else None
+            )
+        ),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client, service, body, db_session=session
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "omnigent"
+    assert parameters["runtimeCutover"]["selectionSource"] == "rollout_default"
+    assert parameters["omnigentExecutionPlan"]["planRef"] == plan_binding.plan_ref
+    assert settings.workflow.default_runtime == "codex_cli"
 
 
 class _Mm3833AgentProfileAdmissionSession:

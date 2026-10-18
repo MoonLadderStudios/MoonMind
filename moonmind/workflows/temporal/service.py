@@ -2206,7 +2206,7 @@ class TemporalExecutionService:
             owner_type=owner_type,
         )
         if idempotency_key:
-            existing = await self._find_by_create_idempotency(
+            existing = await self.find_create_execution(
                 idempotency_key=idempotency_key,
                 owner_id=owner,
                 owner_type=owner_type_enum,
@@ -2586,7 +2586,7 @@ class TemporalExecutionService:
             await self._session.rollback()
             if not idempotency_key:
                 raise
-            existing = await self._find_by_create_idempotency(
+            existing = await self.find_create_execution(
                 idempotency_key=idempotency_key,
                 owner_id=owner,
                 owner_type=owner_type_enum,
@@ -6097,6 +6097,25 @@ class TemporalExecutionService:
 
     def _default_title_for_type(self, workflow_type: TemporalWorkflowType) -> str:
         return "Run"
+
+    async def find_create_execution(
+        self,
+        *,
+        idempotency_key: str,
+        owner_id: UUID | str | None,
+        owner_type: str | None = None,
+        workflow_type: str,
+    ) -> TemporalExecutionCanonicalRecord | None:
+        """Find admitted create intent before resolving mutable submission defaults."""
+        owner_type_enum, owner = self._resolve_owner_metadata(
+            owner_id=owner_id, owner_type=owner_type
+        )
+        return await self._find_by_create_idempotency(
+            idempotency_key=idempotency_key,
+            owner_id=owner,
+            owner_type=owner_type_enum,
+            workflow_type=self._parse_workflow_type(workflow_type),
+        )
 
     async def _find_by_create_idempotency(
         self,

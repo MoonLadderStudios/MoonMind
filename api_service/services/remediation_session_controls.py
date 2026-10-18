@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api_service.db import models
 from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
@@ -16,6 +16,17 @@ SESSION_CONTROLS = {
     "session.interrupt_turn": ("interrupt", "interruptTurn"),
     "session.cancel": ("stop_session", "stopSession"),
 }
+
+
+async def refresh_session_control_authority(session: AsyncSession, row: Any) -> None:
+    """Use the native owner to revalidate a plan-bound control target."""
+    metadata = row.metadata_ or {}
+    if metadata.get("executionPlanRef") or metadata.get("runtimeAuthority") is not None:
+        from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
+        await OmnigentBridgeSessionStore(
+            async_sessionmaker(session.bind, expire_on_commit=False)
+        ).refresh_chat_runtime_authority(row)
 
 
 async def resolve_remediation_session(
@@ -46,6 +57,7 @@ async def resolve_remediation_session(
     row = rows[0]
     if params.get("agentRunId") and params["agentRunId"] != row.moonmind_agent_run_id:
         raise ValueError("agentRunId does not match the persisted session binding")
+    await refresh_session_control_authority(session, row)
     return row
 
 
