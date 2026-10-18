@@ -99,6 +99,34 @@ describe('IssueLifecyclePanel', () => {
     expect((details as HTMLDetailsElement).open).toBe(false);
   });
 
+  it('reports a failed action request as an error, not a server block', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith('/actions/submit')) {
+          const body = JSON.stringify({ detail: { message: 'Lifecycle store unavailable' } });
+          return {
+            ok: false,
+            status: 503,
+            statusText: 'Service Unavailable',
+            text: async () => body,
+            json: async () => JSON.parse(body),
+          };
+        }
+        return { ok: true, json: async () => PROJECTION };
+      }) as unknown as typeof fetch,
+    );
+    renderWithClient(
+      <IssueLifecyclePanel apiBase="/api" evidence={{ repository: 'o/r', issueNumber: 4183 }} />,
+    );
+    const hold = await screen.findByRole('button', { name: 'Hold processing' });
+    fireEvent.click(hold);
+
+    await waitFor(() => expect(screen.getByText(/Submission failed/)).not.toBeNull());
+    expect(screen.getByText(/Lifecycle store unavailable/)).not.toBeNull();
+    expect(screen.queryByText(/Blocked by the server/)).toBeNull();
+  });
+
   it('reports pending/unknown rather than a false remote state on fetch failure', async () => {
     vi.stubGlobal(
       'fetch',

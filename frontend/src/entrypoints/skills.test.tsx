@@ -424,6 +424,63 @@ describe('Skills Entrypoint', () => {
     });
   });
 
+  it('keeps ordered-list numbering across interrupting blocks and shows front matter as metadata', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/workflows/skills?includeContent=true')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: { worker: ['front-matter-skill'] },
+            legacyItems: [
+              {
+                id: 'front-matter-skill',
+                markdown: [
+                  '---',
+                  'name: front-matter-skill',
+                  'description: Resolves review threads',
+                  '---',
+                  '',
+                  '# Steps',
+                  '',
+                  '1. Fetch threads',
+                  '2. Reply',
+                  '',
+                  'Pause for CI here.',
+                  '',
+                  '3. Resolve threads',
+                  '4. Report',
+                ].join('\n'),
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        text: async () => 'Unhandled fetch',
+      } as Response);
+    });
+
+    renderSkills({ path: '/skills/front-matter-skill', mode: 'sidebar' });
+
+    const preview = await screen.findByTestId('skill-markdown-preview');
+    await waitFor(() => {
+      expect(preview.querySelectorAll('ol')).toHaveLength(2);
+    });
+    const [firstList, secondList] = Array.from(preview.querySelectorAll('ol'));
+    expect(firstList?.getAttribute('start')).toBeNull();
+    expect(secondList?.getAttribute('start')).toBe('3');
+
+    const frontMatter = within(preview).getByRole('group', { name: 'Skill front matter' });
+    expect(within(frontMatter).getByText('name')).toBeTruthy();
+    expect(within(frontMatter).getByText('front-matter-skill')).toBeTruthy();
+    expect(within(frontMatter).getByText('Resolves review threads')).toBeTruthy();
+    expect(preview.textContent).not.toContain('name: front-matter-skill');
+    expect(within(preview).getByRole('heading', { name: 'Steps' })).toBeTruthy();
+  });
+
   it('creates a new skill, refreshes the list, and navigates to the created skill', async () => {
     renderSkills({ path: '/skills' });
 

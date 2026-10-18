@@ -116,20 +116,22 @@ describe('Workflows Entrypoint', () => {
   });
 
   it('shows structured API validation detail when the workflow list request fails', async () => {
+    const body = JSON.stringify({
+      detail: {
+        code: 'execution_filter_validation_failed',
+        message: 'Cannot combine stateIn and stateNotIn.',
+      },
+    });
     fetchSpy.mockResolvedValue({
       ok: false,
+      status: 400,
       statusText: 'Bad Request',
-      json: async () => ({
-        detail: {
-          code: 'execution_filter_validation_failed',
-          message: 'Cannot combine stateIn and stateNotIn.',
-        },
-      }),
+      text: async () => body,
     } as Response);
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    expect(await screen.findByText(/Cannot combine stateIn and stateNotIn\./)).toBeTruthy();
     expect(screen.queryByLabelText('Live updates')).toBeNull();
   });
 

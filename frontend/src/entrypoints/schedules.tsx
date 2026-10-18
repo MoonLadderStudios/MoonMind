@@ -13,6 +13,7 @@ import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { responseError } from '../lib/api/client';
 import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 import { newRequestId } from '../lib/requestId';
 import {
@@ -1158,7 +1159,7 @@ function ScheduleDetailPage({
         body: JSON.stringify({ enabled, version }),
       });
       if (!response.ok) {
-        throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
+        throw await responseError(response, `Failed to ${enabled ? 'resume' : 'pause'} schedule`);
       }
       return ScheduleSchema.parse(await response.json());
     },

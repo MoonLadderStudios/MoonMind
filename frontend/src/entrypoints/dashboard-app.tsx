@@ -391,7 +391,7 @@ function useDashboardUiInfo() {
     queryFn: async (): Promise<DashboardUiInfo> => {
       const response = await fetch('/api/ui/info', { credentials: 'same-origin' });
       if (!response.ok) {
-        throw new Error(`UI info request failed: ${response.status}`);
+        throw await responseError(response, 'UI info request failed');
       }
       const uiInfo = (await response.json()) as DashboardUiInfo;
       if (uiInfo.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations)) {
