@@ -7,6 +7,7 @@ import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionSidebar, type CollectionSidebarRow } from '../components/CollectionSidebar';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
+import { RouterSearchListener } from '../components/RouterSearchListener';
 import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/WorkflowColumnHeader';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { responseError } from '../lib/api/client';
@@ -14,6 +15,8 @@ import { responseError } from '../lib/api/client';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { responseError } from '../lib/api/client';
+import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 import { newRequestId } from '../lib/requestId';
 import {
   clearRecurringScheduleFocusRequest,
@@ -323,6 +326,39 @@ function appendScheduleListParams(
   }
   const serialized = params.toString();
   return `${path}${serialized ? `?${serialized}` : ''}${hash ? `#${hash}` : ''}`;
+}
+
+type RecurringListUrlState = {
+  filters: RecurringFilters;
+  pageSize: number;
+  cursor: string;
+  sort: RecurringSortKey;
+  sortDir: RecurringSortDirection;
+};
+
+/** The table's shareable URL query; the shell reads it back to open the first visible row. */
+function recurringListUrlQuery({ filters, pageSize, cursor, sort, sortDir }: RecurringListUrlState): string {
+  const params = new URLSearchParams();
+  params.set('limit', String(pageSize));
+  params.set('sort', sort);
+  params.set('sortDir', sortDir);
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+  for (const [key, value] of activeRecurringFilterEntries(filters)) {
+    params.set(key, value);
+  }
+  return params.toString();
+}
+
+function recurringListUrlStateFromSearch(params: URLSearchParams): RecurringListUrlState {
+  return {
+    filters: parseRecurringFilters(params),
+    pageSize: parsePageSize(params.get('limit')),
+    cursor: cleanCursor(params.get('cursor')),
+    sort: parseRecurringSortKey(params.get('sort')),
+    sortDir: parseRecurringSortDirection(params.get('sortDir')),
+  };
 }
 
 function scheduleRouteDefinitionId(payload: BootPayload): string | null {
@@ -1132,7 +1168,7 @@ function ScheduleDetailPage({
         body: JSON.stringify({ enabled, version }),
       });
       if (!response.ok) {
-        throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
+        throw await responseError(response, `Failed to ${enabled ? 'resume' : 'pause'} schedule`);
       }
       return ScheduleSchema.parse(await response.json());
     },
@@ -1965,13 +2001,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   const routeDefinitionId = useMemo(() => scheduleRouteDefinitionId(payload), [payload]);
   const listDisplayMode = recurringListDisplayMode(payload, Boolean(routeDefinitionId));
 
-  const initialParams = useMemo(() => safeRecurringSearchParams(), []);
-  const [filters, setFilters] = useState<RecurringFilters>(() => parseRecurringFilters(initialParams));
-  const [pageSize, setPageSize] = useState(() => parsePageSize(initialParams.get('limit')));
-  const [cursor, setCursor] = useState(() => cleanCursor(initialParams.get('cursor')));
+  const initialUrlState = useMemo(() => recurringListUrlStateFromSearch(safeRecurringSearchParams()), []);
+  const [filters, setFilters] = useState<RecurringFilters>(initialUrlState.filters);
+  const [pageSize, setPageSize] = useState(initialUrlState.pageSize);
+  const [cursor, setCursor] = useState(initialUrlState.cursor);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const [sort, setSort] = useState<RecurringSortKey>(() => parseRecurringSortKey(initialParams.get('sort')));
-  const [sortDir, setSortDir] = useState<RecurringSortDirection>(() => parseRecurringSortDirection(initialParams.get('sortDir')));
+  const [sort, setSort] = useState<RecurringSortKey>(initialUrlState.sort);
+  const [sortDir, setSortDir] = useState<RecurringSortDirection>(initialUrlState.sortDir);
   const [openFilter, setOpenFilter] = useState<RecurringFilterKey | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const baseListEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
@@ -2000,6 +2036,11 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   });
 
   const schedules = data?.items || [];
+  const visibleScheduleIds = useMemo(
+    () => (!routeDefinitionId && data ? data.items.map((schedule) => schedule.id) : null),
+    [data, routeDefinitionId],
+  );
+  usePublishVisibleCollectionItems('recurring', visibleScheduleIds);
   const activeFilters = activeRecurringFilterEntries(filters);
   const nextCursor = cleanCursor(data?.nextPageToken || null);
   const pageIndex = cursorStack.length;
@@ -2018,29 +2059,35 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   }, [data?.activeCount, data?.attentionCount, data?.next24hCount, schedules, totalCount]);
   const isMobileLayout = useSchedulesMobileLayout();
 
+  const listUrlQuery = recurringListUrlQuery({ filters, pageSize, cursor, sort, sortDir });
   useEffect(() => {
     if (typeof window === 'undefined' || routeDefinitionId) {
       return;
     }
     const timer = window.setTimeout(() => {
-    const params = new URLSearchParams();
-    params.set('limit', String(pageSize));
-    params.set('sort', sort);
-    params.set('sortDir', sortDir);
-    if (cursor) {
-      params.set('cursor', cursor);
-    }
-    for (const [key, value] of activeRecurringFilterEntries(filters)) {
-      params.set(key, value);
-    }
-    const query = params.toString();
-    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}`;
-    if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
-      window.history.replaceState(window.history.state, '', nextUrl);
-    }
+      const nextUrl = `${window.location.pathname}${listUrlQuery ? `?${listUrlQuery}` : ''}`;
+      if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+        // Through the router, so the shell's location matches the address bar.
+        navigateTo(nextUrl, { replace: true });
+      }
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [cursor, filters, pageSize, routeDefinitionId, sort, sortDir]);
+  }, [listUrlQuery, routeDefinitionId]);
+
+  // Follow URL changes this table did not write (the Recurring nav link,
+  // Back/Forward): the page stays mounted across query changes.
+  const adoptUrlSearch = (search: string) => {
+    const next = recurringListUrlStateFromSearch(new URLSearchParams(search));
+    if (recurringListUrlQuery(next) === listUrlQuery) {
+      return;
+    }
+    setFilters(next.filters);
+    setPageSize(next.pageSize);
+    setCursor(next.cursor);
+    setCursorStack([]);
+    setSort(next.sort);
+    setSortDir(next.sortDir);
+  };
 
   const setFilter = (key: RecurringFilterKey, value: string) => {
     setFilters((current) => ({ ...current, [key]: value.slice(0, 160) }));
@@ -2125,6 +2172,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="schedules-page stack">
+      <RouterSearchListener onSearchChange={adoptUrlSearch} />
       <header className="toolbar schedules-toolbar">
         <div>
           <h2 className="page-title" tabIndex={-1} data-recurring-table-title>Recurring Schedules</h2>

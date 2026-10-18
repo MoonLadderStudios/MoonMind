@@ -155,7 +155,7 @@ Legacy workflow-prefixed classes may remain temporarily, but new page adapters m
 
 ## 8. Resilience and accessibility
 
-Sidebar and detail requests are independent: a sidebar failure must not blank an authorized detail, and a detail failure must not erase a loaded sidebar. Refetches preserve selection and focus. Remembered selections are reauthorized before use.
+Sidebar and detail requests are independent: a sidebar failure must not blank an authorized detail, and a detail failure must not erase a loaded sidebar. Refetches preserve selection and focus. A remembered selection opens only when the visible, filtered and sorted list contains it; otherwise the list's first visible row opens.
 
 All rails, filters, rows, mode controls, tabs, and actions are keyboard reachable with visible focus. Landmarks have entity-specific accessible names. Active state is not color-only. Route changes restore focus deterministically. Reduced-motion settings suppress large layout transitions.
 

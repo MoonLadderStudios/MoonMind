@@ -46,12 +46,12 @@ The masthead exposes the shared three-option radio group named **Skills list dis
 
 | Current route | No list | Sidebar list | Full table |
 | --- | --- | --- | --- |
-| `/skills` with available skills | Open the remembered or first visible skill without a sidebar | Open the remembered or first visible skill with the sidebar | Stay on the catalog table |
+| `/skills` with available skills | Open the remembered skill when the filtered table shows it, otherwise the first visible skill, without a sidebar | Same selection, with the sidebar | Stay on the catalog table |
 | `/skills` with no available skills | Stay on the empty table and announce that no skill can be opened | Same | Stay on the empty table |
 | `/skills/{skillId}` | Stay on the detail route and hide the sidebar | Stay on the detail route and show the sidebar | Navigate to `/skills` |
 | `/skills/{staleId}` | Localized not-found state without guessing another route | Usable catalog sidebar plus a localized not-found detail state | Navigate to `/skills` |
 
-Rules: a direct `/skills` visit is always the table; a direct detail visit honors persisted `hidden`/`sidebar` and coerces a persisted `table` to `sidebar` without redirecting; a remembered skill is verified against the catalog (and cleared when stale) before it is used to leave the table; the desktop-only control stays out of the mobile accessibility tree.
+Rules: a direct `/skills` visit is always the table; a direct detail visit honors persisted `hidden`/`sidebar` and coerces a persisted `table` to `sidebar` without redirecting; a remembered skill the filtered catalog table does not show is dropped rather than opened; the desktop-only control stays out of the mobile accessibility tree.
 
 ### 3.3 Desktop Workspace Layout
 

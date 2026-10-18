@@ -16,11 +16,13 @@ import {
   BrowserRouter,
   Link,
   Navigate,
+  NavigationType,
   NavLink,
   Route,
   Routes,
   useLocation,
   useNavigate,
+  useNavigationType,
 } from 'react-router-dom';
 import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PanelLeft, Plus, Rows3, ScrollText, Square } from 'lucide-react';
@@ -55,6 +57,13 @@ import {
   type CollectionListDisplayMode,
 } from '../lib/collectionListDisplayMode';
 import { requestRecurringScheduleFocus } from '../lib/recurringScheduleFocus';
+import { responseError } from '../lib/api/client';
+import {
+  VisibleCollectionItemsContext,
+  chooseVisibleItem,
+  type VisibleCollection,
+  type VisibleCollectionItemsRegistry,
+} from '../lib/visibleCollectionItems';
 import {
   DASHBOARD_PREFERENCES_CHANGED_EVENT,
   readDashboardPreferences,
@@ -209,6 +218,24 @@ function iconForWorkflowListMode(icon: string) {
   return Rows3;
 }
 
+/**
+ * The Workflows mode a path shows for the saved choice. `/workflows` is the
+ * route-owned table; Create and detail routes cannot show the table, so a saved
+ * `table` maps to their documented defaults without being rewritten.
+ */
+function workflowModeForPath(
+  normalizedPath: string,
+  savedMode: CollectionListDisplayMode,
+): CollectionListDisplayMode {
+  if (normalizedPath === '/workflows') {
+    return 'table';
+  }
+  if (savedMode !== 'table') {
+    return savedMode;
+  }
+  return normalizedPath === '/workflows/new' ? 'hidden' : 'sidebar';
+}
+
 function workflowRowId(row: unknown): string {
   if (!row || typeof row !== 'object') {
     return '';
@@ -217,68 +244,35 @@ function workflowRowId(row: unknown): string {
   return String(record.workflowId || record.taskId || '').trim();
 }
 
-function firstVisibleWorkflowIdFromDocument(): string | null {
-  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/workflows/"]'));
-  for (const link of links) {
-    const url = new URL(link.href, window.location.origin);
-    const id = decodeWorkflowIdFromPath(url.pathname);
-    if (id) {
-      return id;
-    }
-  }
-  return null;
+function listItems(body: unknown): unknown[] {
+  return body && typeof body === 'object' && Array.isArray((body as { items?: unknown }).items)
+    ? (body as { items: unknown[] }).items
+    : [];
 }
 
-async function authorizedWorkflowId(apiBase: string, workflowId: string, search: URLSearchParams): Promise<string | null> {
-  const encoded = encodeURIComponent(workflowId);
-  const source = search.get('source') || 'temporal';
-  const params = new URLSearchParams({ source });
-  const response = await fetch(`${apiBase}/executions/${encoded}?${params}`);
-  if (!response.ok) {
-    return null;
-  }
-  return workflowId;
-}
-
-async function firstVisibleWorkflowId(apiBase: string, search: URLSearchParams): Promise<string | null> {
+// The fetchers below are the first-item fallback while a table has not
+// published its visible rows yet: they read the same list query the table
+// reads from the URL.
+async function workflowListIds(apiBase: string, search: URLSearchParams): Promise<string[]> {
   const response = await fetch(`${apiBase}/executions?${workflowListApiQueryFromContext(search)}`);
   if (!response.ok) {
-    if (response.status === 404) {
-      return firstVisibleWorkflowIdFromDocument();
-    }
-    throw new Error(`Failed to resolve first workflow: ${response.statusText}`);
+    throw await responseError(response, 'Failed to resolve first workflow');
   }
-  const body = (await response.json()) as { items?: unknown[] } | null;
-  const items = body && typeof body === 'object' && Array.isArray(body.items) ? body.items : null;
-  const firstRow = items ? items.find((row) => workflowRowId(row)) : null;
-  return firstRow ? workflowRowId(firstRow) : null;
+  return listItems(await response.json()).map(workflowRowId).filter(Boolean);
 }
 
-async function firstVisibleRecurringDefinitionId(apiBase: string): Promise<string | null> {
-  const response = await fetch(`${apiBase}/recurring-workflows`, { credentials: 'include' });
+async function recurringListIds(apiBase: string, search: string): Promise<string[]> {
+  const response = await fetch(`${apiBase}/recurring-workflows${search}`, { credentials: 'include' });
   if (!response.ok) {
-    throw new Error(`Recurring schedule list request failed: ${response.status}`);
+    throw await responseError(response, 'Recurring schedule list request failed');
   }
-  const payload = (await response.json()) as { items?: Array<{ id?: unknown; definitionId?: unknown }> } | null;
-  const first = payload?.items?.find((item) => (
-    (typeof item.id === 'string' && item.id.trim()) ||
-    (typeof item.definitionId === 'string' && item.definitionId.trim())
-  ));
-  if (!first) {
-    return null;
-  }
-  return typeof first.id === 'string' && first.id.trim()
-    ? first.id.trim()
-    : String(first.definitionId).trim();
-}
-
-async function authorizedRecurringDefinitionId(apiBase: string, definitionId: string): Promise<string | null> {
-  const encoded = encodeURIComponent(definitionId);
-  const response = await fetch(`${apiBase}/recurring-workflows/${encoded}`, { credentials: 'include' });
-  if (!response.ok) {
-    return null;
-  }
-  return definitionId;
+  return listItems(await response.json())
+    .map((item) => {
+      const record = item && typeof item === 'object' ? (item as { id?: unknown; definitionId?: unknown }) : {};
+      const id = typeof record.id === 'string' ? record.id.trim() : '';
+      return id || (typeof record.definitionId === 'string' ? record.definitionId.trim() : '');
+    })
+    .filter(Boolean);
 }
 
 async function visibleSkillIds(apiBase: string): Promise<string[]> {
@@ -286,7 +280,7 @@ async function visibleSkillIds(apiBase: string): Promise<string[]> {
     headers: { Accept: 'application/json' },
   });
   if (!response.ok) {
-    throw new Error(`Skill catalog request failed: ${response.status}`);
+    throw await responseError(response, 'Skill catalog request failed');
   }
   const payload = (await response.json()) as { legacyItems?: Array<{ id?: unknown }> } | null;
   return (payload?.legacyItems ?? [])
@@ -345,12 +339,16 @@ function LazyPageView({
 }) {
   const [reloadKey, setReloadKey] = useState(0);
   const LazyPage = useMemo(() => lazy(PAGE_IMPORTS[page]), [page, reloadKey]);
+  // Workflows and Skills keep one page instance across paths, so the boundary
+  // resets on pathname instead of relying on a remount.
+  const { pathname } = useLocation();
 
   return (
     <QueryErrorResetBoundary>
       {({ reset }) => (
         <DashboardRouteErrorBoundary
           key={reloadKey}
+          resetKey={pathname}
           buildId={buildId ?? null}
           onReset={() => {
             reset();
@@ -393,7 +391,7 @@ function useDashboardUiInfo() {
     queryFn: async (): Promise<DashboardUiInfo> => {
       const response = await fetch('/api/ui/info', { credentials: 'same-origin' });
       if (!response.ok) {
-        throw new Error(`UI info request failed: ${response.status}`);
+        throw await responseError(response, 'UI info request failed');
       }
       const uiInfo = (await response.json()) as DashboardUiInfo;
       if (uiInfo.destinations && !matchesDashboardDestinationRegistry(uiInfo.destinations)) {
@@ -989,18 +987,6 @@ function AppShell({
             </p>
           </section>
         ) : null}
-        <section className="worker-pause-banner" data-worker-pause hidden aria-live="polite">
-          <p>
-            <span className="worker-pause-label" data-worker-pause-status>
-              Workers: Running
-            </span>
-            <span className="worker-pause-reason" data-worker-pause-reason />
-            <Link className="worker-pause-manage" to="/settings/operations" data-worker-pause-manage>
-              Manage operations
-            </Link>
-          </p>
-        </section>
-
         <div className="dashboard-shell-full">
           <DashboardNavigation
             uiInfo={uiInfo}
@@ -1066,6 +1052,18 @@ function RoutedDashboardPage({
     () => readDashboardPreferences().lastSelectedSkillId.trim() || null,
   );
   const [resolutionStatus, setResolutionStatus] = useState<string | null>(null);
+  // Each collection table publishes the ids it shows so "first item" means the
+  // first row the operator saw, after the table's filters and sort.
+  const visibleItemsRef = useRef(new Map<VisibleCollection, readonly string[]>());
+  const visibleItemsRegistry = useMemo<VisibleCollectionItemsRegistry>(() => ({
+    publish: (collection, ids) => {
+      if (ids) {
+        visibleItemsRef.current.set(collection, ids);
+      } else {
+        visibleItemsRef.current.delete(collection);
+      }
+    },
+  }), []);
   // Legacy path redirects per SettingsPage.md 5.4: /secrets -> providers-secrets, /workers -> operations, preserving safe filters with replacement history.
   // Computed unconditionally here; the redirect is returned only after every
   // hook below has been called so the hook count stays stable across renders.
@@ -1162,14 +1160,15 @@ function RoutedDashboardPage({
     const syncPreferences = () => {
       const prefs = readDashboardPreferences();
       const normalizedPath = window.location.pathname.replace(/\/$/, '');
-      // The `/workflows` route is always the full-screen table surface, and
-      // The route-owned mode must not be replaced by the persisted detail mode;
-      // doing so would clobber the table selection back to
-      // `sidebar` whenever a preference change fires (for example when the
-      // already-selected "Full screen table" button re-persists preferences),
-      // so leave the route-owned `table` mode untouched on this surface.
+      // `/workflows` keeps its route-owned mode (the table, or the mode being
+      // resolved after a choice); other Workflows routes show the saved choice,
+      // with a saved `table` mapped to the route's default.
       if (normalizedPath !== '/workflows') {
-        setRequestedMode(prefs.workflowListDisplayMode);
+        setRequestedMode(
+          normalizedPath.startsWith('/workflows/')
+            ? workflowModeForPath(normalizedPath, prefs.workflowListDisplayMode)
+            : prefs.workflowListDisplayMode,
+        );
       }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
       // Recurring preferences are seeded into local state on mount, so a
@@ -1214,18 +1213,12 @@ function RoutedDashboardPage({
 
   useEffect(() => {
     const normalizedPath = location.pathname.replace(/\/$/, '');
-    if (normalizedPath === '/workflows') {
-      setRequestedMode('table');
-    } else if (normalizedPath === '/workflows/new') {
-      if (requestedMode === 'table') {
-        updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
-      }
-      setRequestedMode((mode) => (mode === 'table' ? 'hidden' : mode));
-    } else if (normalizedPath.startsWith('/workflows/')) {
-      if (requestedMode === 'table') {
-        updateDashboardPreferences({ workflowListDisplayMode: 'sidebar' });
-      }
-      setRequestedMode((mode) => (mode === 'table' ? 'sidebar' : mode));
+    if (normalizedPath === '/workflows' || normalizedPath.startsWith('/workflows/')) {
+      // Only an explicit mode choice saves the mode; opening a workflow from
+      // the table restores the saved No list/Sidebar choice instead.
+      setRequestedMode(
+        workflowModeForPath(normalizedPath, readDashboardPreferences().workflowListDisplayMode),
+      );
     } else if (normalizedPath === '/schedules') {
       setRequestedRecurringMode('table');
     } else if (normalizedPath.startsWith('/schedules/')) {
@@ -1240,17 +1233,26 @@ function RoutedDashboardPage({
       const persistedSkillsMode = readDashboardPreferences().skillsListDisplayMode;
       setRequestedSkillsMode(persistedSkillsMode === 'table' ? 'sidebar' : persistedSkillsMode);
     }
+  }, [location.pathname, location.search]);
+
+  // A pending first-item request belongs to the path it was made on. A table
+  // rewriting its own query (Recurring canonicalizes it after mount) must not
+  // cancel it, but leaving the path does.
+  useEffect(() => {
     pendingRequestRef.current = null;
-    setResolutionStatus(null);
+  }, [location.pathname]);
+  useEffect(() => {
+    if (!pendingRequestRef.current) {
+      setResolutionStatus(null);
+    }
   }, [location.pathname, location.search]);
 
   const handleCollectionListModeSelect = async (mode: CollectionListDisplayMode) => {
     const selectedMode = mode;
     const search = new URLSearchParams(location.search);
-    const requestLocation = `${location.pathname}${location.search}`;
+    const requestPathname = location.pathname;
     const requestIsCurrent = (requestId: symbol) => (
-      pendingRequestRef.current === requestId
-      && `${window.location.pathname}${window.location.search}` === requestLocation
+      pendingRequestRef.current === requestId && window.location.pathname === requestPathname
     );
     pendingRequestRef.current = null;
     setResolutionStatus(null);
@@ -1263,21 +1265,12 @@ function RoutedDashboardPage({
         updateDashboardPreferences({ recurringListDisplayMode: selectedMode });
         setResolutionStatus('Opening first recurring schedule...');
         try {
-          const rememberedId = lastSelectedDefinitionId?.trim() || '';
-          const authorizedRememberedId = rememberedId
-            ? await authorizedRecurringDefinitionId(apiBase, rememberedId)
-            : null;
+          const visibleIds = visibleItemsRef.current.get('recurring')
+            ?? await recurringListIds(apiBase, location.search);
           if (!requestIsCurrent(requestId)) {
             return;
           }
-          if (rememberedId && !authorizedRememberedId) {
-            setLastSelectedDefinitionId(null);
-            updateDashboardPreferences({ lastSelectedDefinitionId: '' });
-          }
-          const targetDefinitionId = authorizedRememberedId || await firstVisibleRecurringDefinitionId(apiBase);
-          if (!requestIsCurrent(requestId)) {
-            return;
-          }
+          const targetDefinitionId = chooseVisibleItem(visibleIds, lastSelectedDefinitionId);
           if (!targetDefinitionId) {
             setResolutionStatus('No recurring schedule to open.');
             return;
@@ -1332,19 +1325,11 @@ function RoutedDashboardPage({
         updateDashboardPreferences({ skillsListDisplayMode: selectedMode });
         setResolutionStatus('Opening first skill...');
         try {
-          const catalogSkillIds = await visibleSkillIds(apiBase);
+          const visibleIds = visibleItemsRef.current.get('skill') ?? await visibleSkillIds(apiBase);
           if (!requestIsCurrent(requestId)) {
             return;
           }
-          const rememberedId = lastSelectedSkillId?.trim() || '';
-          const rememberedIsVisible = Boolean(rememberedId) && catalogSkillIds.includes(rememberedId);
-          if (rememberedId && !rememberedIsVisible) {
-            // Clear a stale remembered skill before falling back so it is never
-            // used to navigate to a missing detail route.
-            setLastSelectedSkillId(null);
-            updateDashboardPreferences({ lastSelectedSkillId: '' });
-          }
-          const targetSkillId = rememberedIsVisible ? rememberedId : catalogSkillIds[0] ?? null;
+          const targetSkillId = chooseVisibleItem(visibleIds, lastSelectedSkillId);
           if (!targetSkillId) {
             setResolutionStatus('No skill to open.');
             return;
@@ -1394,21 +1379,11 @@ function RoutedDashboardPage({
       setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
       try {
-        const rememberedId = lastSelectedWorkflowId?.trim() || '';
-        const authorizedRememberedId = rememberedId
-          ? await authorizedWorkflowId(apiBase, rememberedId, search)
-          : null;
+        const visibleIds = visibleItemsRef.current.get('workflow') ?? await workflowListIds(apiBase, search);
         if (!requestIsCurrent(requestId)) {
           return;
         }
-        if (rememberedId && !authorizedRememberedId) {
-          setLastSelectedWorkflowId(null);
-          updateDashboardPreferences({ lastSelectedWorkflowId: '' });
-        }
-        const targetWorkflowId = authorizedRememberedId || await firstVisibleWorkflowId(apiBase, search);
-        if (!requestIsCurrent(requestId)) {
-          return;
-        }
+        const targetWorkflowId = chooseVisibleItem(visibleIds, lastSelectedWorkflowId);
         if (!targetWorkflowId) {
           setResolutionStatus('No workflow to open.');
           return;
@@ -1529,7 +1504,7 @@ function RoutedDashboardPage({
         ? routedPayload.initialData
         : {}),
       workflowListDisplayMode: resolvedDisplay.effectiveMode,
-      listDisplayStatus: resolutionStatus ?? resolvedDisplay.status,
+      workflowListDisplayStatus: resolutionStatus ?? resolvedDisplay.status,
     };
   }
   if (resolvedRecurringDisplay) {
@@ -1553,13 +1528,17 @@ function RoutedDashboardPage({
   const layout = readSharedLayout(routedPayload);
   // Workflows and Skills keep a stable key so their workspaces stay mounted
   // across table/detail navigation (preserving sidebar filter state); other
-  // pages remount per path. Settings, Omnigent inventories and Artifacts read
-  // their query reactively, so typing a filter must not remount them.
+  // pages remount per path. Settings, Omnigent inventories, Artifacts and
+  // Recurring follow their query reactively, so a filter change or a hash
+  // section link must not remount them.
   const routeKey = route.page === 'workflows-workspace'
     ? 'workflows-workspace'
     : route.page === 'skills'
       ? 'skills'
-      : route.page.startsWith('settings-') || route.page === 'omnigent-inventory' || route.page === 'artifacts'
+      : route.page.startsWith('settings-')
+        || route.page === 'omnigent-inventory'
+        || route.page === 'artifacts'
+        || route.page === 'schedules'
         ? `${route.page}:${route.currentPath}`
         : `${route.page}:${route.currentPath}${location.search}${location.hash}`;
 
@@ -1573,13 +1552,90 @@ function RoutedDashboardPage({
       listDisplayStatus={resolutionStatus ?? activeListDisplay?.status}
       onListDisplayModeSelect={handleCollectionListModeSelect}
     >
-      <PageContent
-        key={routeKey}
-        payload={routedPayload}
-        buildId={uiInfo?.buildId ?? null}
-      />
+      <VisibleCollectionItemsContext.Provider value={visibleItemsRegistry}>
+        <PageContent
+          key={routeKey}
+          payload={routedPayload}
+          buildId={uiInfo?.buildId ?? null}
+        />
+      </VisibleCollectionItemsContext.Provider>
     </AppShell>
   );
+}
+
+// About one second of animation frames: long enough for a lazily loaded page
+// to render its sections, short enough not to scroll long after arrival.
+const HASH_TARGET_FRAME_ATTEMPTS = 60;
+
+function scrollToHashTarget(hash: string): () => void {
+  let id = hash.slice(1);
+  try {
+    id = decodeURIComponent(id);
+  } catch {
+    // Keep the raw fragment when it is not valid percent-encoding.
+  }
+  let frame = 0;
+  let attempts = 0;
+  const attempt = () => {
+    const target = id ? document.getElementById(id) : null;
+    if (target) {
+      if (typeof target.scrollIntoView === 'function') {
+        target.scrollIntoView();
+      }
+      return;
+    }
+    attempts += 1;
+    if (attempts < HASH_TARGET_FRAME_ATTEMPTS) {
+      frame = window.requestAnimationFrame(attempt);
+    }
+  };
+  attempt();
+  return () => window.cancelAnimationFrame(frame);
+}
+
+/**
+ * BrowserRouter keeps the window scroll across route changes, so opening an
+ * item from a scrolled list would land mid-page. A navigation to another path
+ * starts at the top, and a hash target scrolls into view instead. Back/Forward
+ * is left to the browser's own restoration, and inner scroll containers (such
+ * as the collection sidebar) keep their position because only the window is
+ * reset.
+ */
+function useRouteScrollReset(): void {
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const previousRef = useRef({ pathname: location.pathname, hash: location.hash });
+  // navigateTo() announces programmatic pushes and replaces with a synthetic
+  // popstate, which the router also reports as POP; only a trusted popstate is
+  // a real Back/Forward.
+  const browserTraversalRef = useRef(false);
+
+  useEffect(() => {
+    const recordTraversal = (event: PopStateEvent) => {
+      browserTraversalRef.current = event.isTrusted;
+    };
+    window.addEventListener('popstate', recordTraversal);
+    return () => window.removeEventListener('popstate', recordTraversal);
+  }, []);
+
+  useLayoutEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = { pathname: location.pathname, hash: location.hash };
+    if (navigationType === NavigationType.Pop && browserTraversalRef.current) {
+      return undefined;
+    }
+    const pathnameChanged = location.pathname !== previous.pathname;
+    if (location.hash) {
+      const hashRequested = pathnameChanged
+        || location.hash !== previous.hash
+        || navigationType === NavigationType.Push;
+      return hashRequested ? scrollToHashTarget(location.hash) : undefined;
+    }
+    if (pathnameChanged && (window.scrollX !== 0 || window.scrollY !== 0)) {
+      window.scrollTo(0, 0);
+    }
+    return undefined;
+  }, [location.key, location.pathname, location.hash, navigationType]);
 }
 
 function DashboardRouter({ payload }: { payload: BootPayload }) {
@@ -1589,6 +1645,7 @@ function DashboardRouter({ payload }: { payload: BootPayload }) {
     <RoutedDashboardPage payload={payload} uiInfo={uiInfo} isUiInfoPending={uiInfoQuery.isPending} />
   );
   const navigate = useNavigate();
+  useRouteScrollReset();
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {

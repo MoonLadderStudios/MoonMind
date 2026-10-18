@@ -762,11 +762,16 @@ describe("SchedulesPage", () => {
       expect(latest).not.toContain("cursor=opaque-cursor");
     });
     expect(screen.getAllByRole("button", { name: "Schedule filter: nightly" }).length).toBeGreaterThanOrEqual(1);
+    // The URL is written through the router (navigateTo replace), so the shell
+    // sees the same location as the address bar.
     await waitFor(() => {
-      expect(window.location.search).toContain("schedule=nightly");
-      expect(window.location.search).not.toContain("unsafe=");
-      expect(window.location.search).not.toContain("targetPayload=");
-      expect(window.location.search).not.toContain("prompt=");
+      const [writtenUrl, options] = vi.mocked(navigateTo).mock.calls.at(-1) ?? [];
+      expect(options).toEqual({ replace: true });
+      expect(String(writtenUrl)).toMatch(/^\/schedules\?/);
+      expect(String(writtenUrl)).toContain("schedule=nightly");
+      expect(String(writtenUrl)).not.toContain("unsafe=");
+      expect(String(writtenUrl)).not.toContain("targetPayload=");
+      expect(String(writtenUrl)).not.toContain("prompt=");
     });
   });
 
