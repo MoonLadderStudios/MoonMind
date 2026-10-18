@@ -361,7 +361,8 @@ Each server-snapshot query owns its refresh through its own `refetchInterval`; n
 Rules:
 
 - list polling stops when the operator turns off "Poll for live updates", while a filter popover is open, and while the tab is hidden;
-- detail, step and artifact queries poll only while their workflow can still change, and back off in persistent pending or error states;
+- detail, step and artifact queries poll only while their workflow can still change; the detail query also stops on a non-transient error such as a missing or forbidden workflow;
+- bridge resource evidence keeps polling in persistent error states, and while still pending after the workflow ends, so late evidence is collected, but backs off to a 60 s cap;
 - an action (cancel, rerun, approve, …) invalidates the queries it affects immediately, independent of polling;
 - stream-driven row patching belongs here only once a real stream route exists and is advertised; stream errors must then degrade to the same per-query polling and never erase existing content.
 
