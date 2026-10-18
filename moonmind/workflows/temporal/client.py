@@ -10,7 +10,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from temporalio.client import Client, WorkflowExecutionDescription, WorkflowUpdateStage
+from temporalio.api.common.v1 import WorkflowExecution
+from temporalio.api.enums.v1 import ResetReapplyExcludeType
+from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
+from temporalio.client import (
+    Client,
+    WorkflowExecutionDescription,
+    WorkflowHistory,
+    WorkflowUpdateStage,
+)
 from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
@@ -588,6 +596,46 @@ class TemporalClientAdapter:
         """Describe an existing workflow execution."""
         handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
         return await handle.describe()
+
+    async def fetch_workflow_history(
+        self, workflow_id: str, *, run_id: str
+    ) -> WorkflowHistory:
+        """Fetch the complete recorded history of one exact run."""
+        handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
+        return await handle.fetch_history()
+
+    async def reset_workflow_execution(
+        self,
+        workflow_id: str,
+        *,
+        run_id: str,
+        workflow_task_finish_event_id: int,
+        reason: str,
+        request_id: str,
+    ) -> str:
+        """Reset one run to a workflow task and return the new run's id.
+
+        Signals and updates recorded after the reset point belong to the
+        replaced attempt, so they are not reapplied to the new run. Temporal
+        deduplicates repeated requests with the same ``request_id``.
+        """
+        client = await self.get_client()
+        response = await client.workflow_service.reset_workflow_execution(
+            ResetWorkflowExecutionRequest(
+                namespace=client.namespace,
+                workflow_execution=WorkflowExecution(
+                    workflow_id=workflow_id, run_id=run_id
+                ),
+                reason=reason,
+                workflow_task_finish_event_id=workflow_task_finish_event_id,
+                request_id=request_id,
+                reset_reapply_exclude_types=[
+                    ResetReapplyExcludeType.RESET_REAPPLY_EXCLUDE_TYPE_SIGNAL,
+                    ResetReapplyExcludeType.RESET_REAPPLY_EXCLUDE_TYPE_UPDATE,
+                ],
+            )
+        )
+        return str(response.run_id)
 
     async def read_workflow_start_input(
         self, workflow_id: str, *, run_id: str
