@@ -21,10 +21,14 @@ The settings owner (`moonmind/omnigent/settings.py`), `evidence_resolver.py`, an
 | Deployable-image behavior | `tools/run_omnigent_exact_artifact_conformance.py` and its current CI job. |
 | Provider-controlled live observations | `tools/run_omnigent_live_conformance.py` and the protected workflow/action-adapter boundary. |
 | Existing aggregate report format | `tools/build_omnigent_conformance_report.py` and the owning schema/validator. |
-| Useful generic runtime verification | The actual providing feature tests. |
+| Useful generic runtime verification | `tests/integration/omnigent/test_generic_native_durable_journey.py` and `test_native_default_admission.py`, alongside focused feature tests. |
 | Recovery/action verification | Existing remediation action/verification owners. |
 | Shared-provider accounting and release | Existing ProviderProfileManager/lease owners. |
 | Save, restore, and publication | Existing artifact/workspace/publisher owners. |
+
+The native journeys synchronize stock picker/agent wire shapes, derive launch-ready Profiles from creation-owned contracts, and run Codex OAuth, Claude OAuth, and OpenCode auth JSON through the registered lifecycle. HTTP Create with a saved Profile and explicit model produces the actual plan exercised for omitted Backend; explicit Omnigent selects the same owner. The controlled turn reads admitted Skill bytes, generates a report, saves it before cleanup, and does not repeat on redelivery. Generic Codex is explicitly opted in; an unqualified admission control retains its profile-bound owner. Docker, provider HTTP, Temporal scheduling/grants, and image metadata are controlled; these tests do not establish live providers, installed images, PostgreSQL locking, browser interaction, or eventual workflow-owned capacity release.
+
+The existing credential-free exact host-replacement row checks stock harness/agent discovery and OpenCode plan admission against its inspected, dedicated OpenCode host image. Both session snapshots must be idle with no task error across replacement. Its driver supplies the verified server registry digest separately from host identity. This row submits no provider input and retains the existing runner and receipt owner; it does not establish Codex or Claude host-image coverage.
 
 These links are not a serial approval pipeline. Completed feature tests can supply evidence to several consumers. A coordinator should not run another copy of every child suite or build a permanent ledger of claim completion.
 
