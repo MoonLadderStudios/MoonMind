@@ -168,6 +168,7 @@ done
 # checkout. The upgrade starts at the old release and retains that worktree.
 DEPLOY_DIR="$REPO_ROOT"
 COMPOSE_OVERRIDES=()
+ISOLATION_OVERRIDE=""
 
 # Teardown and failure diagnostics pass a leading time bound in seconds so a
 # stuck daemon cannot hold the run open. It applies when coreutils timeout
@@ -181,8 +182,12 @@ compose() {
     fi
     shift
   fi
+  local isolation=()
+  if [[ -n "$ISOLATION_OVERRIDE" && -f "$ISOLATION_OVERRIDE" ]]; then
+    isolation=(-f "$ISOLATION_OVERRIDE")
+  fi
   ${bound[@]+"${bound[@]}"} "${COMPOSE_CMD[@]}" --project-name "$PROJECT_NAME" \
-    -f "$DEPLOY_DIR/docker-compose.yaml" -f "$ISOLATION_OVERRIDE" ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} \
+    -f "$DEPLOY_DIR/docker-compose.yaml" ${isolation[@]+"${isolation[@]}"} ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} \
     --project-directory "$DEPLOY_DIR" "$@"
 }
 
@@ -195,7 +200,7 @@ JOURNEY_FAILED=1
 ENV_STASH_DIR=""
 cleanup() {
   if [[ "$JOURNEY_FAILED" != "0" ]]; then
-    mkdir -p "$LOG_DIR"
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
     compose "$CLEANUP_TIMEOUT" logs --no-color --tail 300 2>/dev/null | redact \
       > "$LOG_DIR/compose-logs-tail.log" 2>/dev/null || true
     compose "$CLEANUP_TIMEOUT" ps -a 2>/dev/null > "$LOG_DIR/compose-ps.log" || true
