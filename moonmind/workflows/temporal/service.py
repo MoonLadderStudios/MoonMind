@@ -132,7 +132,6 @@ from moonmind.workflows.executions.title_derivation import (
 )
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
-    RemediationLifecyclePublisher,
     load_remediation_target,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
@@ -366,11 +365,17 @@ def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
     return settings.temporal.merge_automation_workflow_task_queue
 
 
-ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
-    {"observe_only", "approval_gated", "admin_auto"}
-)
-ALLOWED_REMEDIATION_MODES = frozenset(
-    {"snapshot", "live_follow", "snapshot_then_follow"}
+# A remediation reads its target's evidence and changes only its own
+# workspace, and its context is a snapshot taken at admission. These are the
+# only authority and mode a remediation link records.
+REMEDIATION_AUTHORITY_MODE = "observe_only"
+REMEDIATION_MODE = "snapshot"
+# Inputs that configured typed target actions, which remediation no longer has.
+RETIRED_REMEDIATION_ACTION_INPUTS = (
+    "actionPolicyRef",
+    "approvalPolicy",
+    "lockPolicy",
+    "verificationPolicy",
 )
 MAX_REMEDIATION_STEP_SELECTORS = 25
 # Closed runs are queried by replaying their history on a worker.
@@ -426,11 +431,6 @@ def _recovery_source_block_from_record(record: TemporalExecutionRecord) -> Mappi
         return recovery_source
     return {}
 
-
-ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
-PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
-    {"awaiting_approval", "approval_required"}
-)
 
 import logging
 
@@ -897,18 +897,16 @@ class TemporalExecutionService:
         *,
         owner_id: str | None,
         owner_type: TemporalExecutionOwnerType,
-        authority_mode: str,
     ) -> bool:
+        # A remediation only observes its target, so system-owned runs such as
+        # schedule-started ones are as remediable as the caller's own runs.
         if self._can_reference_dependency_target(
             record,
             owner_id=owner_id,
             owner_type=owner_type,
         ):
             return True
-        return (
-            record.owner_type is TemporalExecutionOwnerType.SYSTEM
-            and authority_mode == "observe_only"
-        )
+        return record.owner_type is TemporalExecutionOwnerType.SYSTEM
 
     @classmethod
     def _validate_remediation_evidence_policy(cls, value: Any) -> None:
@@ -967,16 +965,6 @@ class TemporalExecutionService:
             f"{path} must use a MoonMind artifact ref."
         )
 
-    @staticmethod
-    def _autonomous_remediation_release_authorized() -> bool:
-        """Keep autonomous authority closed independently of optional live proof.
-
-        Operator certification never authorizes autonomous mutation. A future
-        change must deliberately implement that authority through this owner.
-        """
-
-        return False
-
     async def _validate_remediation_link(
         self,
         *,
@@ -1016,23 +1004,23 @@ class TemporalExecutionService:
         authority_mode = str(
             remediation.get("authorityMode")
             or remediation.get("authority_mode")
-            or "observe_only"
-        ).strip() or "observe_only"
-        if authority_mode not in ALLOWED_REMEDIATION_AUTHORITY_MODES:
-            supported = ", ".join(sorted(ALLOWED_REMEDIATION_AUTHORITY_MODES))
+            or REMEDIATION_AUTHORITY_MODE
+        ).strip() or REMEDIATION_AUTHORITY_MODE
+        if authority_mode != REMEDIATION_AUTHORITY_MODE:
             raise TemporalExecutionValidationError(
                 "Unsupported workflow.remediation.authorityMode "
-                f"'{authority_mode}'. Supported values: {supported}."
+                f"'{authority_mode}'. A remediation never acts on its target; "
+                f"the only supported value is '{REMEDIATION_AUTHORITY_MODE}'."
             )
 
         remediation_mode = str(
-            remediation.get("mode") or "snapshot_then_follow"
-        ).strip() or "snapshot_then_follow"
-        if remediation_mode not in ALLOWED_REMEDIATION_MODES:
-            supported = ", ".join(sorted(ALLOWED_REMEDIATION_MODES))
+            remediation.get("mode") or REMEDIATION_MODE
+        ).strip() or REMEDIATION_MODE
+        if remediation_mode != REMEDIATION_MODE:
             raise TemporalExecutionValidationError(
                 "Unsupported workflow.remediation.mode "
-                f"'{remediation_mode}'. Supported values: {supported}."
+                f"'{remediation_mode}'. The remediation context is a snapshot "
+                f"taken at admission; the only supported value is '{REMEDIATION_MODE}'."
             )
 
         authored_branch = repository_branch_from_value(
@@ -1077,19 +1065,9 @@ class TemporalExecutionService:
             target_record,
             owner_id=owner_id,
             owner_type=owner_type,
-            authority_mode=authority_mode,
         ):
             raise TemporalExecutionValidationError(
                 f"Remediation target unauthorized: {target_workflow_id}"
-            )
-        if (
-            authority_mode == "admin_auto"
-            and not self._autonomous_remediation_release_authorized()
-        ):
-            raise TemporalExecutionValidationError(
-                "workflow.remediation.authorityMode 'admin_auto' is disabled until "
-                "the server-owned remediation authority policy separately "
-                "authorizes autonomous mutation (MoonLadderStudios/MoonMind#3626)."
             )
         if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
             wf_type_value = getattr(
@@ -1276,17 +1254,11 @@ class TemporalExecutionService:
 
         evidence_policy = remediation.get("evidencePolicy")
         self._validate_remediation_evidence_policy(evidence_policy)
-        for policy_name in (
-            "approvalPolicy",
-            "lockPolicy",
-            "verificationPolicy",
-        ):
-            policy = remediation.get(policy_name)
-            if policy is None:
-                continue
-            if not isinstance(policy, Mapping):
+        for retired_input in RETIRED_REMEDIATION_ACTION_INPUTS:
+            if remediation.get(retired_input) is not None:
                 raise TemporalExecutionValidationError(
-                    f"workflow.remediation.{policy_name} must be an object."
+                    f"workflow.remediation.{retired_input} is not supported: a "
+                    "remediation never acts on its target."
                 )
         checkpoint_branch_policy = remediation.get("checkpointBranchPolicy")
         if checkpoint_branch_policy is not None:
@@ -1343,16 +1315,6 @@ class TemporalExecutionService:
         elif trigger is not None:
             raise TemporalExecutionValidationError(
                 "workflow.remediation.trigger must be an object."
-            )
-        action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
-        if (
-            action_policy_ref
-            and action_policy_ref not in ALLOWED_REMEDIATION_ACTION_POLICY_REFS
-        ):
-            supported = ", ".join(sorted(ALLOWED_REMEDIATION_ACTION_POLICY_REFS))
-            raise TemporalExecutionValidationError(
-                "Unsupported workflow.remediation.actionPolicyRef "
-                f"'{action_policy_ref}'. Supported values: {supported}."
             )
 
         return TemporalExecutionRemediationLink(
@@ -1866,134 +1828,6 @@ class TemporalExecutionService:
                 "checkpoint_branch_links",
                 branch_links_by_remediation.get(link.remediation_workflow_id, []),
             )
-
-    async def record_remediation_approval_decision(
-        self,
-        *,
-        remediation_workflow_id: str,
-        request_id: str,
-        decision: str,
-        comment: str | None,
-        actor: str | None,
-        actor_can_approve_high_risk: bool = False,
-    ) -> dict[str, Any]:
-        if decision not in {"approved", "rejected"}:
-            raise TemporalExecutionValidationError(
-                "decision must be 'approved' or 'rejected'."
-            )
-        record = await self._require_source_execution(remediation_workflow_id)
-        link = await self._session.get(
-            TemporalExecutionRemediationLink,
-            remediation_workflow_id,
-        )
-        approval = link.approval_state if link is not None else None
-        expected_request_id = (
-            str(approval.get("requestId") or "")
-            if isinstance(approval, Mapping)
-            else ""
-        )
-        if (
-            link is None
-            or link.authority_mode != "approval_gated"
-            or link.status not in PENDING_REMEDIATION_APPROVAL_STATUSES
-            or request_id != expected_request_id
-        ):
-            raise TemporalExecutionValidationError(
-                "request_id must reference a pending approval-gated remediation."
-            )
-        assert isinstance(approval, Mapping)
-        if (
-            approval.get("reviewerRule") == "high_risk_reviewer"
-            and not actor_can_approve_high_risk
-        ):
-            raise TemporalExecutionValidationError(
-                "high-risk approval requires a privileged reviewer."
-            )
-        if actor and actor == approval.get("requestingActor"):
-            raise TemporalExecutionValidationError(
-                "the requesting actor cannot approve its own remediation action."
-            )
-        current_status = str(approval.get("status") or "")
-        normalized_decision = "denied" if decision == "rejected" else decision
-        if current_status == normalized_decision:
-            return {
-                "accepted": True,
-                "workflowId": remediation_workflow_id,
-                "requestId": request_id,
-                "decision": decision,
-            }
-        if current_status != "pending":
-            raise TemporalExecutionValidationError(
-                "approval decision is terminal and cannot be reinterpreted."
-            )
-        decided_at = datetime.now(UTC)
-        try:
-            expires_at = datetime.fromisoformat(str(approval.get("expiresAt") or ""))
-        except ValueError as exc:
-            raise TemporalExecutionValidationError("approval expiration is invalid.") from exc
-        if expires_at <= decided_at:
-            link.approval_state = {**dict(approval), "status": "expired"}
-            await self._session.commit()
-            raise TemporalExecutionValidationError("approval request has expired.")
-        link.approval_state = {
-            **dict(approval),
-            "status": normalized_decision,
-            "decisionActor": actor,
-            "rationale": (comment[:500] if comment else None),
-            "decidedAt": decided_at.isoformat(),
-        }
-        decision_artifact = await RemediationLifecyclePublisher(
-            session=self._session,
-            artifact_service=TemporalArtifactService(
-                TemporalArtifactRepository(self._session)
-            ),
-        ).publish_json_artifact(
-            remediation_workflow_id=remediation_workflow_id,
-            artifact_type="remediation.approval_decision",
-            name=f"decisions/remediation_approval-{request_id}.json",
-            payload={
-                "schemaVersion": "v1",
-                "approvalRef": approval.get("approvalRef"),
-                "requestDigest": approval.get("requestDigest"),
-                "decision": normalized_decision,
-                "decisionActor": actor,
-                "rationale": (comment[:500] if comment else None),
-                "decidedAt": decided_at.isoformat(),
-                "approvalRequestArtifactRef": dict(
-                    approval.get("artifactRefs") or {}
-                ).get("approvalRequest"),
-            },
-            target_workflow_id=link.target_workflow_id,
-            target_run_id=link.target_run_id,
-        )
-        link.approval_state = {
-            **dict(link.approval_state),
-            "artifactRefs": {
-                **dict(approval.get("artifactRefs") or {}),
-                "approvalDecision": decision_artifact.artifact_id,
-            },
-        }
-        detail_parts = [f"requestId={request_id}"]
-        if actor:
-            detail_parts.append(f"actor={actor}")
-        if comment:
-            detail_parts.append(f"comment={comment[:500]}")
-        self._append_intervention_audit(
-            record,
-            action=f"remediation_approval_{decision}",
-            transport="api",
-            summary=f"Remediation approval {decision}.",
-            detail="; ".join(detail_parts),
-        )
-        await self._session.commit()
-        await self._session.refresh(record)
-        await self._sync_projection_best_effort(record)
-        return {
-            "accepted": True,
-            "workflowId": remediation_workflow_id,
-            "requestId": request_id,
-            "decision": decision,
-        }
 
     async def list_prerequisites(
         self, dependent_workflow_id: str
@@ -4558,27 +4392,8 @@ class TemporalExecutionService:
         return await self._propagate_terminal_result(record)
 
     async def _propagate_terminal_result(self, record):
-        from moonmind.workflows.temporal.remediation_tools import (
-            resume_pending_action_verifications,
-        )
-
-        resume_error = None
-        try:
-            await resume_pending_action_verifications(
-                self._session, workflow_id=record.workflow_id
-            )
-        except Exception as exc:
-            # The canonical terminal effect is already committed. Preserve the
-            # observation failure for Activity retry without starving unrelated
-            # dependents or leaving a failed SQL transaction in their path.
-            resume_error = exc
-            await self._session.rollback()
-            await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
-        projection = await self._sync_projection_best_effort(record)
-        if resume_error is not None:
-            raise resume_error
-        return projection
+        return await self._sync_projection_best_effort(record)
 
     def _attach_terminal_governance_report(
         self,

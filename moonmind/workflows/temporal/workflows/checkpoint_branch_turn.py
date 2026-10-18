@@ -445,12 +445,9 @@ def checkpoint_branch_turn_terminal_disposition(
 _BRANCH_TURN_VERIFICATION_HANDOFF_SCHEMA_VERSION = (
     "checkpoint-branch-verification-handoff/v1"
 )
-# Result-verification handoff owned by MoonLadderStudios/MoonMind#3622
-# (moonmind.workflows.temporal.remediation_verification): creating a branch
-# turn produces a *candidate*; the target objective is resolved only when the
-# target itself reaches success. This module stays free of that owner's
-# database coupling; the unit boundary asserts these identifiers agree with
-# the owning verification contract.
+# Result-verification handoff: creating a branch turn produces a *candidate*;
+# the target objective is resolved only when the target itself reaches
+# success. The identifiers are recorded on the turn's diagnostics.
 _BRANCH_TURN_VERIFICATION_ACTION_KIND = (
     "checkpoint_branch.create_from_remediation_context"
 )

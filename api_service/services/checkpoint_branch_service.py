@@ -283,13 +283,6 @@ class CheckpointBranchService:
                     REMEDIATION_HEAD_STALE_VERSION,
                     "verification version was reused with different evidence",
                 )
-            from moonmind.workflows.temporal.remediation_tools import (
-                resume_pending_action_verifications,
-            )
-
-            await resume_pending_action_verifications(
-                self._session, workflow_id=workflow_id
-            )
             return head
         result = await self._session.execute(
             update(WorkflowCheckpointBranch)
@@ -320,13 +313,6 @@ class CheckpointBranchService:
             artifact_kind=artifact_kind,
         )
         await self._session.refresh(branch)
-        from moonmind.workflows.temporal.remediation_tools import (
-            resume_pending_action_verifications,
-        )
-
-        await resume_pending_action_verifications(
-            self._session, workflow_id=workflow_id
-        )
         return self._remediation_head(branch)
 
     async def record_remediation_verifier_output(
@@ -1426,7 +1412,6 @@ class CheckpointBranchService:
                 raise ValueError(
                     "immutable terminal field checkpoint_digest cannot be changed"
                 )
-            await self._notify_terminal_turn(workflow_id, turn)
             return turn
         # A turn owns the branch head only while the head it started from is
         # still current. A late turn whose source was superseded keeps its own
@@ -1526,26 +1511,7 @@ class CheckpointBranchService:
                     digest=digest,
                 )
         await self._session.flush()
-        await self._notify_terminal_turn(workflow_id, turn)
         return turn
-
-    async def _notify_terminal_turn(self, workflow_id, turn):
-        if turn.completed_at is None or turn.status not in {
-            "failed",
-            "canceled",
-            "blocked",
-        }:
-            return
-        # Commit accepted terminal evidence before observation; an Activity
-        # retry can replay this notification without repeating turn compute.
-        await self._session.commit()
-        from moonmind.workflows.temporal.remediation_tools import (
-            resume_pending_action_verifications,
-        )
-
-        await resume_pending_action_verifications(
-            self._session, workflow_id=workflow_id
-        )
 
     @staticmethod
     def _require_launch_replay_matches(
