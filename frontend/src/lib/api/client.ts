@@ -83,12 +83,7 @@ function readableErrorMessage(
  * and not-found/unavailable states.
  */
 export async function responseError(response: Response, context?: string): Promise<ApiError> {
-  let body = '';
-  try {
-    body = await response.text();
-  } catch {
-    body = '';
-  }
+  const body = await response.text().catch(() => '');
   const parsed = body ? parseJson(body) : undefined;
   const detail =
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
