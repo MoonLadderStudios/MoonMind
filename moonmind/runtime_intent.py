@@ -7,6 +7,16 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+#: Aliases an authored payload may use to name a Provider Profile, in the
+#: precedence order the executions router already applies to the same payload.
+PROVIDER_PROFILE_REF_KEYS: tuple[str, ...] = (
+    "providerProfileRef",
+    "profileId",
+    "providerProfile",
+    "executionProfileRef",
+    "execution_profile_ref",
+)
+
 MODEL_TIER_KEY = "modelTier"
 TIER_FALLBACK_KEY = "tierFallback"
 HARD_OVERRIDE_AUDIT_KEY = "hardOverrideAudit"
@@ -53,6 +63,27 @@ def is_custom_selection(runtime: Mapping[str, Any] | None) -> bool:
     )
 
 
+def provider_profile_ref_from_mapping(source: Any) -> str | None:
+    """Return the Provider Profile named directly on *source*, if any."""
+
+    if not isinstance(source, Mapping):
+        return None
+    for key in PROVIDER_PROFILE_REF_KEYS:
+        value = source.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def has_profile_selector(runtime: Mapping[str, Any]) -> bool:
+    """Whether account choice is explicitly delegated to a provider pool."""
+    selector = runtime.get("profileSelector")
+    return isinstance(selector, Mapping) and bool(selector)
+
+
 def merge_runtime_selection(
     parent: Mapping[str, Any], child: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -63,6 +94,11 @@ def merge_runtime_selection(
     Resolved snapshots remain diagnostics, never an authored companion value.
     """
     merged = dict(parent)
+    if has_profile_selector(child) or provider_profile_ref_from_mapping(child):
+        # A child pool or exact account supersedes inherited exact aliases.
+        # Keep any exact pin authored alongside the child's own selector.
+        for key in (*PROVIDER_PROFILE_REF_KEYS, "inheritedProfileId"):
+            merged.pop(key, None)
     if "modelTier" in child or is_custom_selection(child):
         for key in (
             *MODEL_SELECTION_KEYS,

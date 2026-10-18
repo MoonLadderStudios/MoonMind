@@ -49,6 +49,7 @@ from moonmind.runtime_intent import (
     MODEL_SELECTION_KEYS,
     SELECTION_DERIVED_KEYS,
     merge_runtime_selection,
+    provider_profile_ref_from_mapping,
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.agent_skills.agent_skills_activities import (
@@ -1614,7 +1615,11 @@ def _build_runtime_planner():
             )
 
         # --- Resolve runtime mode ---
-        runtime_payload = _coerce_mapping(task_payload.get("runtime"))
+        runtime_payload = _coerce_mapping(
+            task_payload.get("runtime")
+            if isinstance(task_payload.get("runtime"), Mapping)
+            else parameter_payload.get("runtime")
+        )
         runtime_mode = _normalize_runtime_mode(
             runtime_payload.get("mode") or parameter_payload.get("targetRuntime")
         )
@@ -1629,10 +1634,16 @@ def _build_runtime_planner():
             if key in selection_source:
                 runtime_node[key] = selection_source[key]
 
+        for source in (runtime_payload, task_payload, parameter_payload):
+            selector = source.get("profileSelector")
+            if isinstance(selector, Mapping) and selector:
+                runtime_node["profileSelector"] = dict(selector)
+                break
+
         profile_id = (
-            runtime_payload.get("profileId")
-            or runtime_payload.get("providerProfile")
-            or parameter_payload.get("profileId")
+            provider_profile_ref_from_mapping(runtime_payload)
+            or provider_profile_ref_from_mapping(task_payload)
+            or provider_profile_ref_from_mapping(parameter_payload)
         )
         if isinstance(profile_id, str) and profile_id.strip():
             normalized_profile_id = profile_id.strip()
@@ -1646,7 +1657,7 @@ def _build_runtime_planner():
             or parameter_payload.get("execution_profile_ref")
         )
         if isinstance(exec_profile_ref, str) and exec_profile_ref.strip():
-            runtime_node["executionProfileRef"] = exec_profile_ref.strip()
+            runtime_node["executionProfileRef"] = profile_id or exec_profile_ref.strip()
 
         # --- Build node inputs ---
         node_inputs: dict[str, Any] = {

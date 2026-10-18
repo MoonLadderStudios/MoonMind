@@ -17,8 +17,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
+        has_profile_selector,
         merge_runtime_selection,
         model_selection_fields,
+        provider_profile_ref_from_mapping,
     )
     from moonmind.workflows.temporal.run_failure_diagnostics import RunFailureDiagnostics
     from pydantic import ValidationError
@@ -339,6 +341,7 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
+RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH = "run-step-profile-selection-inheritance-v1"
 
 
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
@@ -22530,14 +22533,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Prefer runtime_block profile values (set by the runtime planner)
         # over top-level node_inputs keys, which may have been corrupted
         # by AI-generated plan modifications or template injection.
-        raw_execution_profile_ref = (
-            runtime_block.get("executionProfileRef")
-            or runtime_block.get("profileId")
-            or runtime_block.get("providerProfile")
-            or node_inputs.get("executionProfileRef")
-            or node_inputs.get("profileId")
-            or node_inputs.get("providerProfile")
+        profile_selection_inheritance = self._workflow_patch_enabled(
+            RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH
         )
+        if profile_selection_inheritance:
+            raw_execution_profile_ref = (
+                provider_profile_ref_from_mapping(runtime_block)
+                or provider_profile_ref_from_mapping(node_inputs)
+            )
+        else:
+            # Keep retained command payloads on their recorded alias precedence.
+            raw_execution_profile_ref = (
+                runtime_block.get("executionProfileRef")
+                or runtime_block.get("profileId")
+                or runtime_block.get("providerProfile")
+                or node_inputs.get("executionProfileRef")
+                or node_inputs.get("profileId")
+                or node_inputs.get("providerProfile")
+            )
         execution_profile_ref = None
         if raw_execution_profile_ref is not None:
             candidate = str(raw_execution_profile_ref).strip() or None
@@ -22547,7 +22560,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 source_label="Plan node",
             )
             execution_profile_ref = candidate
-        if execution_profile_ref is None and workflow_parameters is not None:
+        if (
+            execution_profile_ref is None
+            and workflow_parameters is not None
+            and not (
+                profile_selection_inheritance
+                and (
+                    has_profile_selector(runtime_block)
+                    or has_profile_selector(node_inputs)
+                )
+            )
+        ):
             execution_profile_ref = self._inherited_execution_profile_ref(
                 workflow_parameters,
                 agent_id=agent_id,

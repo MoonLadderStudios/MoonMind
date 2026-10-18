@@ -26,6 +26,10 @@ from __future__ import annotations
 from typing import Any, Mapping, NamedTuple
 
 from api_service.db.models import ManagedAgentProviderProfile
+from moonmind.runtime_intent import (
+    PROVIDER_PROFILE_REF_KEYS as PROVIDER_PROFILE_REF_KEYS,
+    provider_profile_ref_from_mapping,
+)
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 PROVIDER_PROFILE_RUNTIME_MISMATCH_CODE = "provider_profile_runtime_mismatch"
@@ -35,15 +39,6 @@ PROVIDER_PROFILE_RUNTIME_MISMATCH_CODE = "provider_profile_runtime_mismatch"
 #: compatibility is enforced against the selected execution target by
 #: :mod:`api_service.services.omnigent_agent_profile_selection`.
 OMNIGENT_RUNTIME_ID = "omnigent"
-
-#: Aliases an authored payload may use to name a Provider Profile, in the
-#: precedence order the executions router already applies to the same payload.
-PROVIDER_PROFILE_REF_KEYS: tuple[str, ...] = (
-    "providerProfileRef",
-    "profileId",
-    "providerProfile",
-    "executionProfileRef",
-)
 
 _TASK_PAYLOAD_KEYS: tuple[str, ...] = ("workflow", "task")
 
@@ -190,21 +185,6 @@ async def load_provider_profile_for_runtime(
         selected_runtime=selected_runtime,
     )
     return profile
-
-
-def provider_profile_ref_from_mapping(source: Any) -> str | None:
-    """Return the Provider Profile named directly on *source*, if any."""
-
-    if not isinstance(source, Mapping):
-        return None
-    for key in PROVIDER_PROFILE_REF_KEYS:
-        value = source.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return None
 
 
 def _task_payload(source: Mapping[str, Any]) -> Mapping[str, Any] | None:
