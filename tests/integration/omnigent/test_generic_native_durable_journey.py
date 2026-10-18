@@ -273,6 +273,20 @@ class NativeTurnServer(FakeOmnigentServer):
         self.items.append(item)
         return item
 
+    def append_assistant_response(self, text):
+        assistant = self.append_message(
+            "assistant", [{"type": "output_text", "text": text}]
+        )
+        self.publish(
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    key: value for key, value in assistant.items() if key != "data"
+                }
+                | assistant["data"],
+            }
+        )
+
     async def post_event(self, request):
         if (fault := await self._fault(request, "sessions.events")) is not None:
             return fault
@@ -320,18 +334,7 @@ class NativeTurnServer(FakeOmnigentServer):
             callback, self.on_first_message = self.on_first_message, None
             if callback is not None:
                 await callback()
-            assistant = self.append_message(
-                "assistant", [{"type": "output_text", "text": result}]
-            )
-            self.publish(
-                {
-                    "type": "response.output_item.done",
-                    "item": {
-                        key: value for key, value in assistant.items() if key != "data"
-                    }
-                    | assistant["data"],
-                }
-            )
+            self.append_assistant_response(result)
             self.status = self.terminal_status
             assert self.status in {"idle", "failed"}
             terminal = {
@@ -343,6 +346,20 @@ class NativeTurnServer(FakeOmnigentServer):
                 terminal["error"] = self.snapshot(session_id)["last_task_error"]
             self.publish(terminal)
             self.turn_active = False
+        else:
+            # A consumed follow-up can produce another native assistant item in
+            # the active session. Answer from the actual mounted workspace; the
+            # queued acknowledgement below remains separate from this output.
+            prompt = "".join(
+                part["text"] for part in content if part.get("type") == "input_text"
+            )
+            report = (self.workspace / RESULT_PATH).read_text()
+            answer = (
+                report.splitlines()[0]
+                if prompt == "Return only the heading of the generated report."
+                else report
+            )
+            self.append_assistant_response(answer)
         # Native injection is queued, not an already-persisted item response.
         return web.json_response({"queued": True, "pending_id": pending_id})
 
