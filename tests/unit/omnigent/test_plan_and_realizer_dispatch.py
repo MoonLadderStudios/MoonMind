@@ -355,20 +355,18 @@ def _codex_plan_inputs(launch_policy_ref: str = "codex-on-demand@1") -> dict:
     }
 
 
-def test_workflow_cannot_author_realizer():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["execution_realizer_ref", "executionRealizerRef"])
+async def test_workflow_cannot_author_realizer(field):
     plan_inputs = _codex_plan_inputs()
-    # Workflow tries to author generic realizer for codex – must fail closed (trusted planner only)
-    # Trusted for codex-native is codex-profile-bound@1, workflow cannot force generic
-    with pytest.raises(Exception) as exc:
-        compile_execution_plan(
-            **plan_inputs,
-            execution_realizer_ref="generic-omnigent-host@1",  # workflow-authored
-        )
-    assert "realizer" in str(exc.value).lower()
-
-    # Without workflow authoring, planner selects trusted codex-profile-bound@1
-    envelope2 = compile_execution_plan(**plan_inputs)
-    assert envelope2.payload.executionRealizerRef == "codex-profile-bound@1"
+    plan_inputs[field] = "generic-omnigent-host@1"
+    store = InMemoryExecutionPlanStore()
+    envelope = await store.load_or_compile(
+        compile_fn=compile_execution_plan,
+        compile_kwargs=plan_inputs,
+    )
+    assert envelope.payload.executionRealizerRef == "codex-profile-bound@1"
+    assert await store.load(envelope.planRef) == envelope
 
 
 def _codex_dispatch_request(plan, *, target: str, policy: str):
@@ -706,7 +704,7 @@ def test_select_execution_realizer_codex_gate(monkeypatch):
     )
 
 
-def test_codex_generic_plan_fails_closed_until_qualified(monkeypatch):
+def test_codex_plan_keeps_profile_bound_until_qualified(monkeypatch):
     from moonmind.omnigent.harness_platform.planner import (
         select_execution_realizer,
     )
@@ -719,15 +717,16 @@ def test_codex_generic_plan_fails_closed_until_qualified(monkeypatch):
         select_execution_realizer(harness_id="codex-native", is_codex=True)
         == "codex-profile-bound@1"
     )
-    # Explicit generic selection fails closed — never a silent fallback.
-    with pytest.raises(Exception) as exc:
-        _compile_codex_plan(execution_realizer_ref="generic-omnigent-host@1")
-    assert "execution realizer" in str(exc.value).lower()
+    envelope = _compile_codex_plan()
+    assert envelope.payload.executionRealizerRef == "codex-profile-bound@1"
 
 
 def test_codex_generic_plan_when_qualified(monkeypatch):
     from moonmind.omnigent.harness_platform.planner import (
         select_execution_realizer,
+    )
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RUNTIME_PROVIDER_ROLLBACK_ENV,
     )
 
     monkeypatch.setenv(_GATE_ENV, "1")
@@ -736,8 +735,11 @@ def test_codex_generic_plan_when_qualified(monkeypatch):
     )
     envelope = _compile_codex_plan()
     assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
-    # Explicit profile-bound remains selectable while the realizer exists.
-    envelope2 = _compile_codex_plan(execution_realizer_ref="codex-profile-bound@1")
+    # Deployment policy can restore the retained profile-bound default.
+    monkeypatch.setenv(
+        RUNTIME_PROVIDER_ROLLBACK_ENV, "restore_legacy_or_direct_default"
+    )
+    envelope2 = _compile_codex_plan()
     assert envelope2.payload.executionRealizerRef == "codex-profile-bound@1"
 
 
@@ -832,19 +834,27 @@ def test_repository_codex_default_selects_admitted_capable_realizer():
     assert plan.payload.credentialBindings["primary-model"].providerProfileRef == "p1"
 
 
-def test_repository_codex_explicit_model_only_realizer_cannot_gain_authority():
-    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["execution_realizer_ref", "executionRealizerRef"])
+async def test_repository_codex_ignores_caller_realizer(field):
     from moonmind.omnigent.runtime_provider_rollout import (
         default_runtime_provider_rollout_policy,
     )
 
     inputs = _codex_repository_plan_inputs()
-    inputs.update(
-        rollout_policy=default_runtime_provider_rollout_policy(env={_GATE_ENV: "true"}),
-        execution_realizer_ref=CodexProfileBoundRealizer.ref,
+    inputs["rollout_policy"] = default_runtime_provider_rollout_policy(
+        env={_GATE_ENV: "true"}
     )
-    with pytest.raises(HarnessPlatformError, match="authority kinds"):
-        compile_execution_plan(**inputs)
+    inputs[field] = CodexProfileBoundRealizer.ref
+    store = InMemoryExecutionPlanStore()
+    plan = await store.load_or_compile(
+        compile_fn=compile_execution_plan,
+        compile_kwargs=inputs,
+    )
+    assert plan.payload.executionRealizerRef == GenericOmnigentHostRealizer.ref
+    assert (
+        plan.payload.credentialBindings["source"].connectionRef == "selected-repository"
+    )
 
 
 def test_unknown_realizer_cannot_declare_admission_authority():
@@ -908,9 +918,6 @@ def test_claude_generic_plan_fails_closed_when_explicitly_disabled(monkeypatch):
     with pytest.raises(Exception) as exc:
         _compile_claude_plan()
     assert "execution realizer" in str(exc.value).lower()
-    with pytest.raises(Exception) as exc2:
-        _compile_claude_plan(execution_realizer_ref="generic-omnigent-host@1")
-    assert "execution realizer" in str(exc2.value).lower()
 
 # ---- #3833: rollout decision frozen into immutable execution authority ----
 
@@ -1140,9 +1147,6 @@ def test_rollback_control_blocks_new_generic_codex_admission(monkeypatch):
     with pytest.raises(Exception) as exc:
         _compile_codex_plan()
     assert "realizer" in str(exc.value).lower()
-    with pytest.raises(Exception) as explicit_exc:
-        _compile_codex_plan(execution_realizer_ref="generic-omnigent-host@1")
-    assert "execution realizer" in str(explicit_exc.value).lower()
 
     # Restoring the explicitly supported legacy default re-admits it, and the
     # plan records that truthful path.
