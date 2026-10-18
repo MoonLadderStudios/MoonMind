@@ -743,6 +743,8 @@ def _request(
         ("codex-on-demand@1", True, None),
         ("codex-on-demand@1", False, "idle"),
         ("codex-on-demand@1", False, "busy"),
+        ("codex-on-demand@1", False, "idle_static"),
+        ("codex-on-demand@1", False, "busy_static"),
         ("codex-on-demand@1", False, "valid"),
         ("codex-static@1", False, "valid"),
     ],
@@ -849,8 +851,8 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
         if retained_binding:
             from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 
-            # An earlier failed launch persisted its admitted on-demand policy,
-            # but the omitted bootstrap selector left its mode marker empty.
+            # Retained on-demand bindings can lack their mode marker, including
+            # older records that also persisted a discovered static host ID.
             snapshot = json.loads(
                 await TemporalOmnigentArtifactGateway(
                     session_factory, principal="system"
@@ -862,7 +864,8 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
                 endpoint_ref="default",
                 static_host_id=(
                     host_id
-                    if retained_binding == "valid" and "static" in launch_policy
+                    if (retained_binding == "valid" and "static" in launch_policy)
+                    or retained_binding.endswith("_static")
                     else None
                 ),
                 host_launch_profile_ref=(
@@ -874,7 +877,7 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
                 launch_policy_ref=launch_policy,
                 effective_launch_snapshot=snapshot,
             )
-            if retained_binding == "busy":
+            if retained_binding.startswith("busy"):
                 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 
                 await hosts.create_or_get_host_lease(
@@ -908,10 +911,14 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             ),
             plan,
         )
-        if retained_binding == "valid":
+        if retained_binding:
             current = await hosts.get_binding_for_profile(PROFILE_ID)
-            assert current.host_launch_profile_ref == retained.host_launch_profile_ref
-            assert current.static_host_id == retained.static_host_id
+            if retained_binding == "valid":
+                assert current.host_launch_profile_ref == retained.host_launch_profile_ref
+                assert current.static_host_id == retained.static_host_id
+            else:
+                assert current.host_launch_profile_ref == launch_policy
+                assert current.static_host_id is None
     finally:
         await running.runner.cleanup()
 

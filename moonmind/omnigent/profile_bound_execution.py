@@ -1414,12 +1414,24 @@ class OmnigentProfileBoundExecutionCoordinator:
                 selected_on_demand
                 and binding is not None
                 and not binding.host_launch_profile_ref
-                and not binding.static_host_id
+                and (
+                    not binding.static_host_id
+                    or (
+                        (binding.effective_launch_snapshot or {}).get("hostMode")
+                        == "on_demand_docker"
+                        and binding.launch_policy_ref
+                        == effective_launch["launchPolicyRef"]
+                    )
+                )
             )
             binding = await self._hosts.create_or_update_static_binding(
                 profile_id=profile_id,
                 endpoint_ref=str(effective_launch["endpointRef"]),
-                static_host_id=binding.static_host_id if binding is not None else None,
+                static_host_id=(
+                    binding.static_host_id
+                    if binding is not None and not repair_missing_launch_ref
+                    else None
+                ),
                 host_launch_profile_ref=(
                     binding.host_launch_profile_ref
                     if binding is not None and not repair_missing_launch_ref
@@ -1433,8 +1445,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 launch_policy_ref=str(effective_launch["launchPolicyRef"]),
                 effective_launch_snapshot=effective_launch,
                 # Older omitted-target launches could persist an on-demand
-                # snapshot without its mode marker. Repair only an idle
-                # binding, under the same lock as host lease admission.
+                # snapshot without its mode marker, even after discovering a
+                # static host. Repair only an idle binding whose stored launch
+                # proves that mode, under the same lock as host lease admission.
                 require_idle=repair_missing_launch_ref,
             )
             await emit(
