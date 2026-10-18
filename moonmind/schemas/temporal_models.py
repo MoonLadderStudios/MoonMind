@@ -2791,6 +2791,31 @@ class UpdateExecutionRequest(BaseModel):
     title: Optional[str] = Field(None, alias="title")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
+
+class RetryFromStepRequest(BaseModel):
+    """Restart a closed run from one of its steps under the same workflow."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=128)
+    step_id: Optional[str] = Field(None, alias="stepId", min_length=1)
+    source_run_id: Optional[str] = Field(None, alias="sourceRunId", min_length=1)
+
+
+class RetryFromStepResponse(BaseModel):
+    """The new run that continues the workflow from the chosen step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: Literal[True] = Field(True, alias="accepted")
+    workflow_id: str = Field(..., alias="workflowId")
+    run_id: str = Field(..., alias="runId")
+    source_run_id: str = Field(..., alias="sourceRunId")
+    step_id: str = Field(..., alias="stepId")
+    step_title: Optional[str] = Field(None, alias="stepTitle")
+    message: str = Field(..., alias="message")
+
+
 class RecoverFromFailedStepRequest(BaseModel):
     """Request payload for creating a failed-step recovery follow-up execution."""
 

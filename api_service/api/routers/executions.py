@@ -205,6 +205,8 @@ from moonmind.schemas.temporal_models import (
     RecoverFromSelectedStepRequest,
     RecoveryEligibilityDiagnosticModel,
     RescheduleExecutionRequest,
+    RetryFromStepRequest,
+    RetryFromStepResponse,
     ScheduleCreatedResponse,
     ScheduleParameters,
     SignalExecutionRequest,
@@ -323,7 +325,9 @@ from moonmind.workflows.temporal import (
     TemporalExecutionRecoveryCheckpointError,
     TemporalExecutionRerunPlanError,
     TemporalExecutionRerunSkillSnapshotError,
+    TemporalExecutionRetryUnavailableError,
     TemporalExecutionService,
+    TemporalExecutionTargetRunChangedError,
     TemporalExecutionValidationError,
 )
 from moonmind.workflows.temporal.artifacts import (
@@ -21522,6 +21526,58 @@ async def retry_execution_publication(
         ),
         rolloutGeneration=policy.generation,
     )
+
+
+@router.post(
+    "/{workflow_id}/retry-from-step",
+    response_model=RetryFromStepResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_execution_from_step(
+    workflow_id: str,
+    request: RetryFromStepRequest = Body(...),
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+    temporal_client: Client = Depends(get_temporal_client),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> RetryFromStepResponse:
+    """Restart a failed run from one of its steps; earlier steps are kept."""
+
+    record = await _get_owned_execution(
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        include_orphaned_projection=True,
+    )
+    ledger = await _load_execution_step_ledger(
+        temporal_client=temporal_client,
+        workflow_id=record.workflow_id,
+        fallback_record=record,
+    )
+    try:
+        result = await service.retry_execution_from_step(
+            record,
+            ledger_rows=[
+                step.model_dump(by_alias=True, mode="json") for step in ledger.steps
+            ],
+            idempotency_key=request.idempotency_key,
+            step_id=request.step_id,
+            expected_run_id=request.source_run_id,
+        )
+    except TemporalExecutionTargetRunChangedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "retry_from_step_unavailable",
+                "reason": "run_changed",
+                "message": str(exc),
+            },
+        ) from exc
+    except TemporalExecutionRetryUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=exc.detail
+        ) from exc
+    return RetryFromStepResponse.model_validate(result)
 
 
 @router.post(

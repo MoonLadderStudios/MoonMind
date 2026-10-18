@@ -95,6 +95,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -592,6 +593,22 @@ class TemporalExecutionRerunPlanError(TemporalExecutionValidationError):
 
 class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError):
     """Raised when failed-step Recovery checkpoint evidence is missing or invalid."""
+
+
+class TemporalExecutionRetryUnavailableError(TemporalExecutionValidationError):
+    """Raised when a closed run cannot be retried from the requested step."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @property
+    def detail(self) -> dict[str, Any]:
+        return {
+            "code": "retry_from_step_unavailable",
+            "reason": self.reason,
+            "message": str(self),
+        }
 
 
 class TemporalExecutionHistoricalTypeError(TemporalExecutionValidationError):
@@ -3385,6 +3402,219 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         return response
+
+    async def retry_execution_from_step(
+        self,
+        record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+        *,
+        ledger_rows: Sequence[Mapping[str, Any]],
+        idempotency_key: str,
+        step_id: str | None = None,
+        expected_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Restart a closed run from one of its steps by resetting its history.
+
+        Temporal keeps every event before the chosen step, so completed steps
+        and the workflow state they produced are reused exactly; the chosen
+        step and everything after it run again on the installed code under
+        the same workflow id.
+        """
+
+        from moonmind.workflows.temporal.retry_from_step import (
+            RetryFromStepUnavailable,
+            plan_retry_from_step,
+            replay_failure_before_reset,
+        )
+
+        reject_historical_control(record)
+        if record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW:
+            raise TemporalExecutionRetryUnavailableError(
+                "unsupported_workflow_type",
+                "Retry from a step is available for MoonMind.UserWorkflow runs.",
+            )
+        if idempotency_key and idempotency_key == record.last_update_idempotency_key:
+            cached = record.last_update_response
+            if isinstance(cached, dict) and cached.get("retryFromStep"):
+                return dict(cached)
+        source_run_id = str(record.run_id or "").strip()
+        if expected_run_id and expected_run_id != source_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "The run changed before the retry was requested; reload the workflow."
+            )
+        try:
+            description = await self._client_adapter.describe_workflow(
+                record.workflow_id
+            )
+        except Exception as exc:
+            raise TemporalExecutionRetryUnavailableError(
+                "history_unavailable",
+                "Temporal could not describe this run; retry when it is reachable.",
+            ) from exc
+        if str(description.run_id or "") != source_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "A newer run of this workflow exists; reload the workflow."
+            )
+        if description.status not in {
+            WorkflowExecutionStatus.FAILED,
+            WorkflowExecutionStatus.CANCELED,
+            WorkflowExecutionStatus.TERMINATED,
+            WorkflowExecutionStatus.TIMED_OUT,
+        }:
+            raise TemporalExecutionRetryUnavailableError(
+                "run_not_failed",
+                "Only a failed, canceled, terminated, or timed-out run can be retried.",
+            )
+        if getattr(description, "parent_id", None):
+            raise TemporalExecutionRetryUnavailableError(
+                "child_workflow",
+                "This run belongs to a parent workflow, which owns its retries.",
+            )
+        try:
+            history = await self._client_adapter.fetch_workflow_history(
+                record.workflow_id, run_id=source_run_id
+            )
+        except Exception as exc:
+            raise TemporalExecutionRetryUnavailableError(
+                "history_unavailable",
+                "The run's Temporal history is unavailable, so it cannot be retried "
+                "from a step; rerun it instead.",
+            ) from exc
+        memo = dict(record.memo or {})
+        finish_summary = getattr(record, "finish_summary_json", None)
+        if not isinstance(finish_summary, Mapping):
+            finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+        failure = (
+            finish_summary.get("failure") if isinstance(finish_summary, Mapping) else None
+        )
+        failed_step_id = (
+            str(failure.get("stepId") or "").strip() or None
+            if isinstance(failure, Mapping)
+            else None
+        )
+        try:
+            plan = plan_retry_from_step(
+                events=history.events,
+                ledger_rows=ledger_rows,
+                decode_memo_value=MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payload,
+                requested_step_id=step_id,
+                failed_step_id=failed_step_id,
+            )
+        except RetryFromStepUnavailable as exc:
+            raise TemporalExecutionRetryUnavailableError(exc.reason, str(exc)) from exc
+        await self._require_live_issue_claim(record)
+        replay_failure = await replay_failure_before_reset(
+            history, until_event_id=plan.replay_until_event_id
+        )
+        if replay_failure is not None:
+            logger.warning(
+                "Retry of %s from %s refused: installed code cannot replay its history: %s",
+                record.workflow_id,
+                plan.logical_step_id,
+                replay_failure,
+            )
+            raise TemporalExecutionRetryUnavailableError(
+                "history_not_replayable",
+                "The installed MoonMind code cannot replay this run's earlier "
+                "steps, so it cannot continue the run; rerun it instead.",
+            )
+        new_run_id = await self._client_adapter.reset_workflow_execution(
+            record.workflow_id,
+            run_id=source_run_id,
+            workflow_task_finish_event_id=plan.reset_event_id,
+            reason=f"MoonMind retry from step {plan.logical_step_id}",
+            request_id=idempotency_key,
+        )
+        response = {
+            "accepted": True,
+            "retryFromStep": True,
+            "workflowId": record.workflow_id,
+            "runId": new_run_id,
+            "sourceRunId": source_run_id,
+            "stepId": plan.logical_step_id,
+            "stepTitle": plan.title,
+            "message": (
+                f"Retrying from {plan.title or plan.logical_step_id}; "
+                "earlier steps are kept."
+            ),
+        }
+        if idempotency_key:
+            record.last_update_idempotency_key = idempotency_key
+            record.last_update_response = dict(response)
+        await self._session.commit()
+        await self._sync_retried_run_projection(record.workflow_id, new_run_id)
+        return response
+
+    async def _require_live_issue_claim(
+        self,
+        record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    ) -> None:
+        """Refuse a retry whose GitHub issue claim can no longer be renewed.
+
+        The retried steps renew the run's claim. Once its lease expired or the
+        claim was released, that renewal fails and the work would stop, and
+        the issue lifecycle's own continuation owns the issue instead.
+        """
+
+        from api_service.db.models import GitHubIssueClaim
+        from moonmind.workflows.temporal.github_issue_attempts import (
+            parse_attempt_comment,
+        )
+        from moonmind.workflows.temporal.github_issue_claim_lease import expired
+
+        owner = f"{record.namespace or 'default'}/{record.workflow_id}"
+        row = await self._session.get(GitHubIssueClaim, owner)
+        if row is None:
+            return
+        if row.released or row.ownership_ended:
+            raise TemporalExecutionRetryUnavailableError(
+                "issue_claim_released",
+                f"The run released its claim on issue #{row.issue_number}; the "
+                "issue lifecycle continues it from the saved work.",
+            )
+        handoff = parse_attempt_comment(row.comment_body or "").handoff
+        if handoff is None or expired(handoff):
+            raise TemporalExecutionRetryUnavailableError(
+                "issue_claim_expired",
+                f"The run's claim on issue #{row.issue_number} expired; the issue "
+                "lifecycle continues it from the saved work.",
+            )
+
+    async def _sync_retried_run_projection(
+        self, workflow_id: str, run_id: str
+    ) -> None:
+        """Show the retried run as current; we just created it, so it is newer."""
+
+        from api_service.core.sync import (
+            map_temporal_state_to_projection,
+            mutate_execution_projection,
+        )
+
+        try:
+            description = await self._client_adapter.describe_workflow(
+                workflow_id, run_id=run_id
+            )
+            payload = await map_temporal_state_to_projection(description)
+            loaded = bool(payload.pop("_temporal_memo_loaded", False))
+            # The reset keeps the memo and search attributes of the restarted
+            # step, so their mm_updated_at predates the failure. The reset is
+            # positive successor evidence for the new run.
+            payload["updated_at"] = datetime.now(UTC)
+            payload["first_run_id"] = payload.get("first_run_id") or run_id
+            await mutate_execution_projection(
+                self._session,
+                workflow_id=workflow_id,
+                payload=payload,
+                owner="temporal",
+                metadata_loaded=loaded,
+            )
+            await self._session.commit()
+        except Exception as exc:
+            await self._session.rollback()
+            logger.warning(
+                "Projection refresh after retrying %s failed; the next sync repairs it: %s",
+                workflow_id,
+                exc,
+            )
 
     @staticmethod
     def _is_terminal_update_error(exc: Exception) -> bool:
