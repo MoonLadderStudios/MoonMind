@@ -1131,8 +1131,13 @@ async def test_materializer_retries_clone_interrupted_mid_transfer(
         "fatal: Authentication failed for 'https://github.com/o/r.git/'",
         "error: RPC failed; HTTP 401 curl 22 The requested URL returned error: 401",
         "fatal: Remote branch does-not-exist not found in upstream origin",
-        "fatal: unable to access 'https://github.com/o/r.git/': "
-        "SSL certificate problem: unable to get local issuer certificate",
+        (
+            "fatal: unable to access 'https://github.com/o/r.git/': "
+            "SSL certificate problem: unable to get local issuer certificate"
+        ),
+        "error: RPC failed; curl 60 SSL peer certificate was not OK",
+        "error: RPC failed; curl 67 Login denied",
+        "error: RPC failed; curl 77 Problem with the SSL CA cert",
     ],
 )
 def test_clone_failure_classification_keeps_deterministic_errors_fail_closed(
