@@ -9129,25 +9129,12 @@ button.workflow-workspace-sidebar-row:active {
   overflow-wrap: anywhere;
 }
 
-.td-remediation-approval {
-  display: grid;
-  gap: 0.6rem;
-  margin-top: 0.65rem;
-}
-
-.td-remediation-approval-controls,
-.td-remediation-operator-controls,
 .td-remediation-lifecycle {
   margin-top: 0.65rem;
   padding: 0.7rem;
   border: 1px solid rgb(var(--mm-border) / 0.68);
   border-radius: 0.7rem;
   background: rgb(var(--mm-panel) / 0.38);
-}
-
-.td-remediation-approval-controls textarea {
-  width: 100%;
-  min-width: 0;
 }
 
 .td-remediation-canonical pre {
@@ -9159,26 +9146,6 @@ button.workflow-workspace-sidebar-row:active {
   background: rgb(var(--mm-panel) / 0.86);
   color: rgb(var(--mm-ink));
   white-space: pre-wrap;
-}
-
-.td-remediation-create-preview {
-  width: 100%;
-  min-width: 0;
-}
-
-.td-remediation-create-preview label {
-  display: grid;
-  gap: 0.3rem;
-  min-width: 0;
-  color: rgb(var(--mm-muted));
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-.td-remediation-create-preview select,
-.td-remediation-create-preview input {
-  width: 100%;
-  min-width: 0;
 }
 
 .td-actions-region {

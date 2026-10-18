@@ -104,18 +104,16 @@ const createdRelationship = {
   remediationRunId: 'remediation-run',
   targetWorkflowId: 'source-workflow',
   targetRunId: 'source-run',
-  mode: 'snapshot_then_follow',
-  authorityMode: 'approval_gated',
-  status: 'executing',
-  deliveryStatus: 'pending',
-  verificationOutcome: null,
+  mode: 'snapshot',
+  authorityMode: 'observe_only',
+  status: 'created',
   contextArtifactRef: 'art_remediation_context',
   selectedSteps: ['run-tests'],
   currentTargetState: 'failed',
   authoredContract: {
     instructions: 'Repair the routed browser failure with bounded evidence.',
     runtime: { mode: 'omnigent' },
-    remediation: { authorityMode: 'approval_gated' },
+    remediation: { authorityMode: 'observe_only' },
   },
   selectedStepEvidence: [
     {
@@ -126,12 +124,7 @@ const createdRelationship = {
   contextEvidenceAvailability: [
     { class: 'step_ledger', status: 'available', bounded: true },
   ],
-  contextBoundedness: { rawLogBodiesIncluded: false, maxTailLines: 2000 },
-  lifecycleSummary: {
-    repair: { repairOutcome: 'running' },
-    prevention: { status: 'pending' },
-    cleanup: 'pending',
-  },
+  contextBoundedness: { rawLogBodiesIncluded: false, maxAgentRunIds: 20 },
   checkpointBranches: [
     {
       workflowId: 'source-workflow',
@@ -160,13 +153,6 @@ const createdRelationship = {
       ],
     },
   ],
-  approvalState: {
-    requestId: 'approval-routed-1',
-    actionKind: 'checkpoint_branch.create',
-    riskTier: 'medium',
-    decision: 'pending',
-    canDecide: false,
-  },
   createdAt: '2026-08-12T00:06:00Z',
   updatedAt: '2026-08-12T00:07:00Z',
 };
@@ -206,24 +192,6 @@ const readyOmnigentCatalog = {
   ineligibleProviderProfiles: [],
   hostModes: ['on_demand_docker'],
   gateReasons: [],
-  remediationRelease: {
-    policyVersion: 'moonmind.operator-remediation-release/v1',
-    matrixVersion: 'operator-remediation-support-matrix/v1',
-    manualDiagnosisSupported: false,
-    manualMutationSupported: false,
-    autonomousRolloutAuthorized: false,
-    promotionAllowed: false,
-    manualPromotionAllowed: false,
-    rollbackRequired: false,
-    expiresAt: null,
-    telemetry: {},
-    alerts: [{
-      code: 'remediation_release_evidence_missing',
-      severity: 'warning',
-      operatorAction: 'collect_optional_live_support_evidence',
-    }],
-    blockers: ['autonomous_rollout_gate_closed'],
-  },
 };
 
 const uiInfo = {
@@ -404,7 +372,6 @@ beforeEach(() => {
 afterEach(async () => {
   cleanupRender?.();
   cleanupRender = null;
-  readyOmnigentCatalog.remediationRelease.autonomousRolloutAuthorized = false;
   fetchSpy.mockRestore();
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -415,8 +382,6 @@ afterEach(async () => {
 describe('routed remediation operator journey', () => {
   for (const viewport of [DESKTOP, MOBILE]) {
     it(`authors through normal Create and inspects the created lifecycle at ${viewport.width}px`, async () => {
-      // Even a positive optional report cannot grant autonomous authority.
-      readyOmnigentCatalog.remediationRelease.autonomousRolloutAuthorized = viewport === DESKTOP;
       await page.viewport(viewport.width, viewport.height);
       const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
       cleanupRender = unmount;
@@ -454,23 +419,8 @@ describe('routed remediation operator journey', () => {
         screen.getByLabelText('Instructions'),
         'Repair the routed browser failure with bounded evidence.',
       );
-      expect((screen.getByLabelText('Action policy') as HTMLSelectElement).value)
-        .toBe('admin_healer_default');
-      expect(
-        within(screen.getByLabelText('Authority')).getByRole('option', {
-          name: 'Administrator automatic (disabled)',
-        }),
-      ).toBeDisabled();
-      expect(
-        screen.getByText(/Autonomous mutation remains disabled by the remediation authority policy/i),
-      ).toBeTruthy();
-      await userEvent.click(screen.getByText('Live remediation observations'));
-      expect(screen.getByText('Manual diagnosis')).toBeTruthy();
-      expect(screen.getAllByText('Unverified')).toHaveLength(2);
-      expect(screen.queryByText('Manual promotion')).toBeNull();
-      expect(screen.queryByText('Rollback')).toBeNull();
-      expect(screen.getByText(/Optional live observations do not authorize actions/)).toBeTruthy();
-      expect(screen.getByText(/warning: remediation_release_evidence_missing/)).toBeTruthy();
+      expect(screen.queryByLabelText('Authority')).toBeNull();
+      expect(screen.queryByLabelText('Action policy')).toBeNull();
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });
@@ -496,8 +446,6 @@ describe('routed remediation operator journey', () => {
                 workflowId: 'source-workflow',
                 runId: 'source-run',
               },
-              authorityMode: 'approval_gated',
-              actionPolicyRef: 'admin_healer_default',
               checkpointBranchPolicy: {
                 gitWorkBranch: 'remediation/routed-browser-edited',
               },

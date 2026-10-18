@@ -18,9 +18,6 @@ from api_service.services.checkpoint_branch_turn_execution import (
     _launch_retry_payloads_equivalent,
     build_branch_turn_execution_identity,
 )
-from moonmind.workflows.temporal.remediation_verification import (
-    verification_contract_for,
-)
 from moonmind.workflows.temporal.workflows import (
     checkpoint_branch_turn as branch_turn_module,
 )
@@ -1245,13 +1242,8 @@ def test_branch_turn_verification_handoff_carries_exact_candidate_and_objective(
     assert handoff["objective"]["sourceWorkflowId"] == "source-workflow"
     assert handoff["objective"]["sourceRunId"] == "source-run"
     assert handoff["verificationPending"] is True
-
-    contract = verification_contract_for(
-        "checkpoint_branch.create_from_remediation_context"
-    )
-    assert contract.automatically_verifiable is True
-    assert handoff["verifier"] == contract.verifier
-    assert handoff["actionKind"] == contract.action_kind
+    assert handoff["verifier"] == "checkpoint_branch"
+    assert handoff["actionKind"] == "checkpoint_branch.create_from_remediation_context"
 
 
 def test_branch_turn_verification_pending_is_not_graph_success() -> None:

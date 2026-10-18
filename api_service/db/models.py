@@ -2533,35 +2533,8 @@ class TemporalExecutionRemediationLink(Base):
         ForeignKey("temporal_artifacts.artifact_id", ondelete="SET NULL"),
         nullable=True,
     )
-    active_lock_scope: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    active_lock_holder: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
+    # Set when a corrective checkpoint branch is created from this remediation.
     latest_action_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # ``outcome`` records the latest action *delivery* status.
-    outcome: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # ``resolution`` records the terminal remediation *lifecycle* resolution
-    # (issue #3622). It is stored separately from ``outcome`` so the final
-    # lifecycle summary never overwrites the delivery projection, and the two
-    # never change meaning across phases.
-    resolution: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # ``verification_outcome`` records the trusted post-action *repair*
-    # verification classification (issue #3622), kept distinct from delivery so
-    # a delivered action never relabels the target as repaired.
-    verification_outcome: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True
-    )
-    mutation_guard_lock_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        mutable_json_dict(), nullable=True
-    )
-    mutation_guard_ledger_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        mutable_json_dict(), nullable=True
-    )
-    # Canonical, bounded reviewer approval lifecycle for this remediation.
-    # Credential bodies and raw infrastructure authority are forbidden here.
-    approval_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        mutable_json_dict(), nullable=True
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

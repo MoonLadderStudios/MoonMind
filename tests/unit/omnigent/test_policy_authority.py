@@ -5,14 +5,11 @@ from pydantic import ValidationError
 
 from moonmind.omnigent.policies import (
     PolicyDocument,
-    bind_approval_request,
     compile_policy_snapshot,
     document_digest,
     normalize_document,
     policy_authority_evidence,
     reject_retired_policy_sections,
-    resolve_action,
-    validate_approval_binding,
     validate_policy_authority_evidence,
     without_retired_policy_sections,
 )
@@ -133,16 +130,6 @@ def test_policy_rejects_secret_bodies_raw_paths_and_docker_socket():
             PolicyDocument.model_validate(document)
 
 
-def test_actions_resolve_deterministically_and_fail_closed():
-    snapshot = compile_policy_snapshot(policy_id="p", version=1, document=policy_document(), validation={"valid": True})
-    assert resolve_action(snapshot, "read")["decision"] == "allow"
-    assert resolve_action(snapshot, "publish") == {
-        "decision": "approval_required", "reason": "publication",
-        "approvalClass": "release", "reviewerRule": "owner",
-    }
-    assert resolve_action(snapshot, "unknown")["decision"] == "deny"
-
-
 def test_policy_authority_evidence_is_compact_and_rejects_stale_records():
     snapshot = compile_policy_snapshot(
         policy_id="p", version=1, document=policy_document(), validation={"valid": True}
@@ -212,50 +199,13 @@ def test_production_checkpoint_evidence_is_cold_restore_eligible():
         validate_policy_authority_evidence(legacy_evidence, snapshot)
 
 
-def _bootstrap_snapshot():
+def test_bootstrap_policy_seeds_no_remediation_action_rules():
+    # A remediation never acts on its target, so a fresh bootstrap policy
+    # seeds approval rules only for reads and publication.
     document = bootstrap_document(
         host_mode="static_compose", execution_profile_ref="omnigent-codex@1"
     )
-    return compile_policy_snapshot(
-        policy_id="omnigent-codex", version=1, document=document,
-        validation={"valid": True},
-    )
-
-
-def test_bootstrap_policy_authorizes_every_remediation_action_identity():
-    # Imported lazily so the module-level import graph stays free of the
-    # temporal package cycle; every production remediation adapter must have a
-    # non-deny rule under the default bootstrap policy.
-    from moonmind.workflows.temporal.remediation_actions import (
-        remediation_action_kinds,
-    )
-
-    snapshot = _bootstrap_snapshot()
-    for kind in remediation_action_kinds():
-        assert resolve_action(snapshot, kind)["decision"] != "deny", kind
-
-
-def test_bootstrap_keeps_mutating_remediation_actions_approval_gated():
-    from moonmind.workflows.temporal.remediation_actions import (
-        remediation_action_kinds,
-    )
-
-    snapshot = _bootstrap_snapshot()
-    evidence_only = {"cleanup.verify", "target.annotate", "target.verify"}
-    for kind in remediation_action_kinds():
-        decision = resolve_action(snapshot, kind)
-        if kind in evidence_only:
-            assert decision["decision"] == "allow", kind
-        else:
-            # State-mutating actions stay approval-gated (never silently allow)
-            # and carry a complete, bindable approval rule.
-            assert decision["decision"] == "approval_required", kind
-            assert decision["approvalClass"] and decision["reviewerRule"]
-
-
-def test_bootstrap_does_not_authorize_unready_action():
-    snapshot = _bootstrap_snapshot()
-    assert resolve_action(snapshot, "host.restart")["decision"] == "deny"
+    assert set(document.approvals.actions) == {"read", "publish"}
 
 
 def test_policy_authority_evidence_rejects_unvalidated_snapshot():
@@ -327,45 +277,6 @@ def test_approval_required_rule_must_be_complete_at_document_validation():
     del document["approvals"]["actions"]["publish"]["reviewerRule"]
     with pytest.raises(ValidationError, match="approval_required needs"):
         PolicyDocument.model_validate(document)
-
-
-def test_approval_binding_carries_exact_policy_authority_and_expected_state():
-    snapshot = compile_policy_snapshot(
-        policy_id="p", version=3, document=policy_document(), validation={"valid": True}
-    )
-    binding = bind_approval_request(
-        snapshot, "publish", target_expected_state="ready"
-    )
-    assert binding == {
-        "policyRef": "p@3",
-        "policyDigest": snapshot["policyDigest"],
-        "snapshotRef": snapshot["snapshotRef"],
-        "targetExpectedState": "ready",
-        "approvalClass": "release",
-        "reviewerRule": "owner",
-    }
-    validate_approval_binding(binding, snapshot, target_current_state="ready")
-
-
-@pytest.mark.parametrize(
-    ("field", "replacement"),
-    (
-        ("policyRef", "p@4"),
-        ("policyDigest", "sha256:stale"),
-        ("snapshotRef", "omnigent-policy:sha256:stale"),
-        ("targetExpectedState", "changed"),
-    ),
-)
-def test_approval_binding_rejects_stale_policy_or_target_state(field, replacement):
-    snapshot = compile_policy_snapshot(
-        policy_id="p", version=3, document=policy_document(), validation={"valid": True}
-    )
-    binding = bind_approval_request(
-        snapshot, "publish", target_expected_state="ready"
-    )
-    binding[field] = replacement
-    with pytest.raises(ValueError, match="stale approval binding"):
-        validate_approval_binding(binding, snapshot, target_current_state="ready")
 
 
 @pytest.mark.parametrize("request_model_name", ["CreatePolicy", "NewVersion"])

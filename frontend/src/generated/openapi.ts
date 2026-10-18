@@ -1886,23 +1886,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/remediation/approvals/{request_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Record Remediation Approval Decision */
-        post: operations["record_remediation_approval_decision_api_executions__workflow_id__remediation_approvals__request_id__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/executions": {
         parameters: {
             query?: never;
@@ -10418,10 +10401,6 @@ export interface components {
             cutover: {
                 [key: string]: unknown;
             };
-            /** Remediationrelease */
-            remediationRelease: {
-                [key: string]: unknown;
-            };
             /** Admissionreadiness */
             admissionReadiness: {
                 [key: string]: unknown;
@@ -12198,132 +12177,6 @@ export interface components {
             /** Message */
             message?: string | null;
         };
-        /** RemediationActionCapabilityModel */
-        RemediationActionCapabilityModel: {
-            /** Actionkind */
-            actionKind: string;
-            /** Requestable */
-            requestable: boolean;
-            /** Dryrunsupported */
-            dryRunSupported: boolean;
-            /** Executionbackendready */
-            executionBackendReady: boolean;
-            /** Approvalbackendready */
-            approvalBackendReady: boolean;
-            /** Verificationbackendready */
-            verificationBackendReady: boolean;
-            /** Supportedtargetruntimes */
-            supportedTargetRuntimes: string[];
-            /** Supportedhostmodes */
-            supportedHostModes: string[];
-            /** Requiredevidenceclasses */
-            requiredEvidenceClasses: string[];
-            /** Blockedreasons */
-            blockedReasons: string[];
-            /**
-             * Targetselectorrequired
-             * @default false
-             */
-            targetSelectorRequired: boolean;
-            /** Targetselectoroptions */
-            targetSelectorOptions?: string[];
-        };
-        /** RemediationApprovalDecisionRequest */
-        RemediationApprovalDecisionRequest: {
-            /** Decision */
-            decision: string;
-            /** Comment */
-            comment?: string | null;
-        };
-        /** RemediationApprovalDecisionResponse */
-        RemediationApprovalDecisionResponse: {
-            /** Accepted */
-            accepted: boolean;
-            /** Workflowid */
-            workflowId: string;
-            /** Requestid */
-            requestId: string;
-            /** Decision */
-            decision: string;
-        };
-        /** RemediationApprovalStateModel */
-        RemediationApprovalStateModel: {
-            /** Requestid */
-            requestId?: string | null;
-            /** Actionkind */
-            actionKind?: string | null;
-            /** Risktier */
-            riskTier?: string | null;
-            /** Preconditions */
-            preconditions?: string | null;
-            /** Blastradius */
-            blastRadius?: string | null;
-            /** Decision */
-            decision: string;
-            /** Decisionactor */
-            decisionActor?: string | null;
-            /** Decisionat */
-            decisionAt?: string | null;
-            /**
-             * Candecide
-             * @default false
-             */
-            canDecide: boolean;
-            /** Auditref */
-            auditRef?: string | null;
-            /** Approvalref */
-            approvalRef?: string | null;
-            /** Requestdigest */
-            requestDigest?: string | null;
-            /** Parameterdigest */
-            parameterDigest?: string | null;
-            /** Requestingactor */
-            requestingActor?: string | null;
-            /** Requestedat */
-            requestedAt?: string | null;
-            /** Expiresat */
-            expiresAt?: string | null;
-            /** Rationale */
-            rationale?: string | null;
-            /** Status */
-            status?: string | null;
-            /** Decidedat */
-            decidedAt?: string | null;
-            /** Consumedat */
-            consumedAt?: string | null;
-            /** Consumedbyactionid */
-            consumedByActionId?: string | null;
-            /** Expectedtargetstate */
-            expectedTargetState?: string | null;
-            /** Checkpointref */
-            checkpointRef?: string | null;
-            /** Stepexecutionid */
-            stepExecutionId?: string | null;
-            /** Bridgesessionid */
-            bridgeSessionId?: string | null;
-            /** Omnigentsessionid */
-            omnigentSessionId?: string | null;
-            /** Hostref */
-            hostRef?: string | null;
-            /** Hostleaseref */
-            hostLeaseRef?: string | null;
-            /** Providerprofileleaseref */
-            providerProfileLeaseRef?: string | null;
-            /** Credentialgeneration */
-            credentialGeneration?: number | null;
-            /** Policyref */
-            policyRef?: string | null;
-            /** Policydigest */
-            policyDigest?: string | null;
-            /** Policysnapshotref */
-            policySnapshotRef?: string | null;
-            /** Securityprofileref */
-            securityProfileRef?: string | null;
-            /** Artifactrefs */
-            artifactRefs?: {
-                [key: string]: string;
-            } | null;
-        };
         /** RemediationCheckpointBranchLinkModel */
         RemediationCheckpointBranchLinkModel: {
             /** Workflowid */
@@ -12518,10 +12371,6 @@ export interface components {
             mode: string;
             /** Latestactionsummary */
             latestActionSummary?: string | null;
-            /** Deliverystatus */
-            deliveryStatus?: string | null;
-            /** Resolution */
-            resolution?: string | null;
             /**
              * Createdat
              * Format: date-time
@@ -12601,35 +12450,18 @@ export interface components {
             authorityMode: string;
             /** Status */
             status: string;
-            /** Activelockscope */
-            activeLockScope?: string | null;
-            /** Activelockholder */
-            activeLockHolder?: string | null;
             /** Latestactionsummary */
             latestActionSummary?: string | null;
-            /** Deliverystatus */
-            deliveryStatus?: string | null;
-            /** Verificationoutcome */
-            verificationOutcome?: string | null;
-            /** Resolution */
-            resolution?: string | null;
             /** Contextartifactref */
             contextArtifactRef?: string | null;
             /** Selectedsteps */
             selectedSteps?: string[] | null;
             /** Currenttargetstate */
             currentTargetState?: string | null;
-            /** Allowedactions */
-            allowedActions?: string[] | null;
-            /** Actioncapabilities */
-            actionCapabilities?: components["schemas"]["RemediationActionCapabilityModel"][];
             /** Evidencedegraded */
             evidenceDegraded?: boolean | null;
             /** Unavailableevidenceclasses */
             unavailableEvidenceClasses?: string[] | null;
-            liveObservation?: components["schemas"]["RemediationLiveObservationModel"] | null;
-            lockOutcome?: components["schemas"]["RemediationLockOutcomeModel"] | null;
-            approvalState?: components["schemas"]["RemediationApprovalStateModel"] | null;
             /** Checkpointbranches */
             checkpointBranches?: components["schemas"]["RemediationCheckpointBranchLinkModel"][];
             /** Authoredcontract */
@@ -12654,19 +12486,6 @@ export interface components {
             diagnosisHints?: string[] | null;
             /** Lifecycleartifacts */
             lifecycleArtifacts?: components["schemas"]["RemediationLifecycleArtifactModel"][] | null;
-            /** Latestactionrequest */
-            latestActionRequest?: {
-                [key: string]: unknown;
-            } | null;
-            /** Latestactionresult */
-            latestActionResult?: {
-                [key: string]: unknown;
-            } | null;
-            /** Lifecyclesummary */
-            lifecycleSummary?: {
-                [key: string]: unknown;
-            } | null;
-            operatorControls?: components["schemas"]["RemediationOperatorControlsModel"] | null;
             /**
              * Createdat
              * Format: date-time
@@ -12685,30 +12504,6 @@ export interface components {
             /** Items */
             items: components["schemas"]["RemediationLinkSummaryModel"][];
         };
-        /** RemediationLiveObservationModel */
-        RemediationLiveObservationModel: {
-            /** Status */
-            status?: string | null;
-            /** Label */
-            label?: string | null;
-            /** Sequencecursor */
-            sequenceCursor?: string | null;
-            /** Reconnectstate */
-            reconnectState?: string | null;
-            /** Epoch */
-            epoch?: string | null;
-            /** Fallbackreason */
-            fallbackReason?: string | null;
-        };
-        /** RemediationLockOutcomeModel */
-        RemediationLockOutcomeModel: {
-            /** State */
-            state?: string | null;
-            /** Holder */
-            holder?: string | null;
-            /** Releasedat */
-            releasedAt?: string | null;
-        };
         /** RemediationNextActionBaselineModel */
         RemediationNextActionBaselineModel: {
             /** Checkpointref */
@@ -12717,33 +12512,6 @@ export interface components {
             workspaceDigest: string;
             /** Headversion */
             headVersion: number;
-        };
-        /** RemediationOperatorControlsModel */
-        RemediationOperatorControlsModel: {
-            /**
-             * Cancancel
-             * @default false
-             */
-            canCancel: boolean;
-            /**
-             * Cantakeover
-             * @default false
-             */
-            canTakeOver: boolean;
-            /**
-             * Canresume
-             * @default false
-             */
-            canResume: boolean;
-            /**
-             * Paused
-             * @default false
-             */
-            paused: boolean;
-            /** Disabledreasons */
-            disabledReasons?: {
-                [key: string]: string;
-            };
         };
         /** RemediationPolicy */
         RemediationPolicy: {
@@ -18202,42 +17970,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckpointBranchModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_remediation_approval_decision_api_executions__workflow_id__remediation_approvals__request_id__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-                request_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RemediationApprovalDecisionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RemediationApprovalDecisionResponse"];
                 };
             };
             /** @description Validation Error */
