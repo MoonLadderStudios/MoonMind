@@ -4885,7 +4885,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Steps: 403 (/api/executions/test-123/steps)')).toBeTruthy();
+      expect(screen.getByText('Steps (/api/executions/test-123/steps): Request failed with HTTP 403')).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
     });
 
@@ -11041,7 +11041,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: false,
           status: 409,
-          json: async () => ({ detail: 'Follow-up is not supported for this session.' }),
+          text: async () => JSON.stringify({ detail: 'Follow-up is not supported for this session.' }),
         } as Response);
       }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
