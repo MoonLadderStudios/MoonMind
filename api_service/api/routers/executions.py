@@ -15788,8 +15788,54 @@ async def create_execution(
         if route.recurring_response is not None:
             return route.recurring_response
 
+        # Match the service's create identity for scoped fan-out as well as
+        # ordinary instance-owned requests. An admitted retry keeps its saved
+        # selection even if today's default account changed or disappeared.
+        scoped_owner = (principal_context or {}).get("verified_principal") is not None
+        owner_id = getattr(user, "id", None) if scoped_owner else None
+        owner_type = getattr(user, "owner_type", None) if scoped_owner else None
+        existing = (
+            await service.find_create_execution(
+                idempotency_key=request.idempotency_key,
+                owner_id=owner_id,
+                owner_type=owner_type,
+                workflow_type=request.workflow_type,
+            )
+            if request.idempotency_key
+            else None
+        )
+        initial_parameters = dict(request.initial_parameters)
+        if request.workflow_type == "MoonMind.UserWorkflow" and existing is None:
+            _, task_payload = _recurring_workflow_payload(initial_parameters)
+            runtime_payload = task_payload.get("runtime")
+            if not isinstance(runtime_payload, Mapping):
+                runtime_payload = initial_parameters.get("runtime")
+            default_profile_ref = await _saved_default_provider_profile_ref(
+                session=session,
+                user=user,
+                payloads=(
+                    runtime_payload if isinstance(runtime_payload, Mapping) else {},
+                    task_payload,
+                    initial_parameters,
+                    payload,
+                ),
+            )
+            if default_profile_ref:
+                # Preserve missing saved intent before the launch owner can
+                # fall back to another eligible account. Runtime ownership is
+                # still validated by the shared service against every field.
+                await _load_provider_profile_for_runtime(
+                    session=session,
+                    profile_id=default_profile_ref,
+                    selected_runtime=None,
+                    not_found_message=(
+                        f"Provider profile not found: {default_profile_ref!r}."
+                    ),
+                )
+                initial_parameters["profileId"] = default_profile_ref
+
         skill_validation = await validate_skill_step_inputs(
-            initial_parameters=request.initial_parameters,
+            initial_parameters=initial_parameters,
             session=session,
         )
         if not skill_validation.valid:
@@ -15824,12 +15870,8 @@ async def create_execution(
             # instance-owned (SYSTEM default) with no human-owner lookup.
             # Workflow-scoped fan-out children keep their contract (§6.5)
             # same-owner inheritance via the scoped authority user.
-            owner_id=getattr(user, "id", None)
-            if (principal_context or {}).get("verified_principal") is not None
-            else None,
-            owner_type=getattr(user, "owner_type", None)
-            if (principal_context or {}).get("verified_principal") is not None
-            else None,
+            owner_id=owner_id,
+            owner_type=owner_type,
             title=request.title,
             input_artifact_ref=request.input_artifact_ref,
             plan_artifact_ref=request.plan_artifact_ref,
