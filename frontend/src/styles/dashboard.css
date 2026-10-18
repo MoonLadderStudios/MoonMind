@@ -7841,6 +7841,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow: none;
 }
 
+/* The submit outcome sits in the fixed submit bar; long diagnostics scroll
+   inside it instead of covering the form. */
+.queue-floating-bar .queue-submit-message {
+  max-height: 7rem;
+  overflow-y: auto;
+}
+
+.queue-advanced-override-count {
+  color: rgb(var(--mm-muted));
+}
+
 .inline-code {
   font-family: var(--mm-font-mono);
   background: rgb(var(--mm-panel) / 0.72);
