@@ -92,10 +92,10 @@ async def _during_active_session(journey, callback):
     assert called and result.failure_class is None, result
 
 
-def _message():
+def _message(text="Bound follow-up"):
     return {
         "type": "message",
-        "data": {"content": [{"type": "input_text", "text": "Bound follow-up"}]},
+        "data": {"content": [{"type": "input_text", "text": text}]},
     }
 
 
@@ -109,6 +109,7 @@ async def test_attested_generic_native_binding_reads_and_sends(
 ):
     journey = native_journey
     store = OmnigentBridgeSessionStore(session_factory)
+    follow_up = _message("Return only the heading of the generated report.")
 
     async def active():
         row = await store.resolve_projection_session(
@@ -138,23 +139,45 @@ async def test_attested_generic_native_binding_reads_and_sends(
             assert response.json()["status"] == "running"
             response = await client.post(
                 path + "/events",
-                json=_message(),
+                json=follow_up,
                 headers={"Idempotency-Key": "bound-follow-up"},
             )
             assert response.status_code == 200, response.text
             assert response.json() == {"queued": True, "pending_id": "pending-2"}
+            # Queue acceptance is not answer completion. Observe the actual
+            # consumed input and a distinct useful response through the bridge.
+            transcript = await client.get(path)
+            assert transcript.status_code == 200, transcript.text
+            items = transcript.json()["items"]
+            user_item = next(
+                item
+                for item in items
+                if item["data"]
+                == {"role": "user", "content": follow_up["data"]["content"]}
+            )
+            answers = [item for item in items if item["data"]["role"] == "assistant"]
+            assert len(answers) == 1, "queued follow-up produced no distinct answer"
+            assert answers[0]["data"]["content"] == [
+                {"type": "output_text", "text": "# Native generated result"}
+            ]
+            assert answers[0]["id"] != user_item["id"]
+            assert items.index(user_item) < items.index(answers[0])
+            assert transcript.json()["pending_inputs"] == []
             event_count = len(journey.server.events)
             replay = await client.post(
                 path + "/events",
-                json=_message(),
+                json=follow_up,
                 headers={"Idempotency-Key": "bound-follow-up"},
             )
             assert replay.status_code == 200, replay.text
             assert len(journey.server.events) == event_count
+            replay_transcript = await client.get(path)
+            assert replay_transcript.status_code == 200, replay_transcript.text
+            assert replay_transcript.json()["items"] == items
             assert event_count == 2
             assert (
                 journey.server.events[-1]["data"]["content"][0]["text"]
-                == "Bound follow-up"
+                == follow_up["data"]["content"][0]["text"]
             )
             assert "sessions.get" in journey.server.route_calls
             foreign = await client.get(
@@ -462,47 +485,50 @@ async def test_generic_native_mutation_rechecks_runtime_fence(
 
 @pytest.mark.parametrize("native_journey", ["opencode-native"], indirect=True)
 @pytest.mark.parametrize(
-    "snapshot",
+    "snapshot_overrides",
     [
-        {"id": "foreign-session", "status": "running"},
+        {"id": "foreign-session"},
         {
-            "id": "session-1",
-            "status": "running",
             "harness": "unknown",
             "host_id": "foreign",
         },
-        {"id": "session-1", "status": "running", "capabilities": {}},
+        {"capabilities": {}},
         {
-            "id": "session-1",
-            "status": "running",
             "capabilities": {"sendMessage": False},
         },
-        {"id": "session-1", "status": "running", "capabilities": None},
+        {"capabilities": None},
         {
-            "id": "session-1",
-            "status": "running",
             "capabilities": {"sendMessage": 0, "sendFollowUp": True},
         },
         {
-            "id": "session-1",
-            "status": "running",
             "capabilities": {"sendMessage": None, "sendFollowUp": True},
         },
         {
-            "id": "session-1",
-            "status": "running",
             "capabilities": {"sendMessage": "false", "sendFollowUp": True},
         },
     ],
 )
 async def test_generic_native_message_requires_observed_protocol(
-    native_journey, session_factory, snapshot
+    native_journey, session_factory, snapshot_overrides, monkeypatch
 ):
     journey = native_journey
     store = OmnigentBridgeSessionStore(session_factory)
-    journey.server.scenario.malformed_payloads["sessions.get"] = snapshot
+    original_fault = journey.server._fault
+
+    async def snapshot_fault(request, route):
+        if route == "sessions.get":
+            # Keep live session, host and harness identity valid unless this
+            # case explicitly changes it. Map denials then exercise map policy.
+            journey.server.scenario.malformed_payloads[route] = (
+                journey.server.snapshot(request.match_info["session_id"])
+                | snapshot_overrides
+            )
+        return await original_fault(request, route)
+
+    monkeypatch.setattr(journey.server, "_fault", snapshot_fault)
 
     async def active():
+        monkeypatch.setattr(journey.server, "_fault", original_fault)
         journey.server.scenario.malformed_payloads.clear()
         row = await store.resolve_projection_session(
             idempotency_key=journey.request.idempotency_key
@@ -511,6 +537,13 @@ async def test_generic_native_message_requires_observed_protocol(
             workflow_id=row.moonmind_workflow_id
         )
         assert resolution.read_only is True
+        assert "sendMessage" not in resolution.capabilities
+        if isinstance(snapshot_overrides.get("capabilities"), dict):
+            # This is a restrictive provider map, not failed identity attestation.
+            assert row.metadata_["capabilityAuthority"]["fresh"] is True
+            assert (
+                row.metadata_["capabilityAuthority"]["upstream"]["sendMessage"] is False
+            )
         binding_id = row.chat_binding_id
         calls = list(journey.server.route_calls)
         app = _application(store, os.environ["OMNIGENT_SERVER_URL"])
