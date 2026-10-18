@@ -521,10 +521,41 @@ describe('Skills Entrypoint', () => {
     expect(stored.preferences.lastSelectedSkillId).toBe('fresh-skill');
   });
 
+  it('keeps zip upload collapsed behind a disclosure in the create drawer', async () => {
+    renderSkills({ path: '/skills' });
+
+    requestSkillCreateDrawer();
+    const summary = await screen.findByText('Upload a skill zip instead');
+    const disclosure = summary.closest('details') as HTMLDetailsElement;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.contains(screen.getByLabelText('Skill Zip'))).toBe(true);
+    expect(screen.getByLabelText('Skill Name')).toBeTruthy();
+  });
+
+  it('renders the catalog title as the single page h1 and sets the tab title', async () => {
+    document.title = '';
+    renderSkills({ path: '/skills', mode: 'table' });
+
+    await screen.findByRole('table', { name: 'Skills catalog' });
+    expect(screen.getAllByRole('heading', { level: 1 }).map((heading) => heading.textContent)).toEqual(['Skills']);
+    expect(document.title).toBe('Skills | MoonMind');
+  });
+
+  it('uses the selected skill as the page h1 on a detail route', async () => {
+    document.title = '';
+    renderSkills({ path: '/skills/pr-resolver', mode: 'sidebar' });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('heading', { level: 1 }).map((heading) => heading.textContent)).toEqual(['pr-resolver']);
+    });
+    expect(document.title).toBe('pr-resolver | MoonMind');
+  });
+
   it('uploads a skill zip, refreshes the list, and navigates to the uploaded skill', async () => {
     renderSkills({ path: '/skills' });
 
     requestSkillCreateDrawer();
+    fireEvent.click(await screen.findByText('Upload a skill zip instead'));
     const file = new File(['zip-content'], 'zip-skill.zip', { type: 'application/zip' });
     fireEvent.change(screen.getByLabelText('Skill Zip'), {
       target: { files: [file] },

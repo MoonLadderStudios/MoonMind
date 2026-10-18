@@ -41,6 +41,18 @@ describe('Instance settings page (account-free)', () => {
     expect(screen.queryByLabelText('Settings scope')).toBeNull();
   });
 
+  it('renders the page title as the single h1 with plain-language scope copy', async () => {
+    renderWithClient(
+      <BrowserRouter><InstanceSettingsPage payload={mockPayload} /></BrowserRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Instance' })).toBeTruthy();
+    expect(document.querySelectorAll('h1')).toHaveLength(1);
+    expect(document.title).toBe('Instance | MoonMind');
+    expect(document.body.textContent).not.toMatch(/MoonMind#\d+/);
+    expect(screen.getByText(/older per-user overrides are kept but not edited here/i)).toBeTruthy();
+  });
+
   it('sends no account, session, or profile bootstrap request', async () => {
     renderWithClient(
       <BrowserRouter><InstanceSettingsPage payload={mockPayload} /></BrowserRouter>,

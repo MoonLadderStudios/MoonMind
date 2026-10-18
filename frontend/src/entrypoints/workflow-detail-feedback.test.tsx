@@ -262,7 +262,8 @@ describe('workflow detail load failures', () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Workflow not found' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 2, name: 'Workflow not found' })).toBeTruthy();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.getByText(/Workflow test-123 was not found\./)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
 

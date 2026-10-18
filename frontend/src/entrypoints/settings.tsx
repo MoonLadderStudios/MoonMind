@@ -1,10 +1,11 @@
 import { runtimeUnavailableReason } from "../runtime/runtimeTargets";
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import { SecretManager } from '../components/secrets/SecretManager';
 import { ConfigurationHealthSummary } from '../components/settings/ConfigurationHealthSummary';
 import {
@@ -78,25 +79,9 @@ function SettingsPageFrame({
   description: string;
   children: ReactNode;
 }) {
-  useEffect(() => {
-    document.title = `${title} | MoonMind`;
-  }, [title]);
-
   return (
     <div className="settings-page mx-auto w-full space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-      <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-            Configuration
-          </p>
-          <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">
-            {title}
-          </h2>
-          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-            {description}
-          </p>
-        </div>
-      </header>
+      <PageHeader eyebrow="Configuration" title={title} description={description} />
       {children}
     </div>
   );
@@ -233,7 +218,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
   return (
     <SettingsPageFrame
       title="Providers & Secrets"
-      description="Manage launch-ready Provider Profiles, credential references, OAuth lifecycle, and managed secret metadata."
+      description="Manage Provider Profiles and the secrets they use. Secret values are never shown after they are saved."
     >
       {canReadProviderProfiles && canReadSecretMetadata ? (
         <ConfigurationHealthSummary
@@ -252,13 +237,6 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
       )}
 
       <NoticeBanner notice={notice} />
-
-      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-        <p className="text-sm text-slate-600 dark:text-slate-400">
-          Provider Profiles keep launch metadata and SecretRefs. Managed Secrets keep encrypted
-          values or external references; profiles never expose those values after creation.
-        </p>
-      </section>
 
       {canReadProviderProfiles ? (
         providerProfilesQuery.isLoading ? (
@@ -326,7 +304,7 @@ export function ProvidersSecretsSettingsPage({ payload }: { payload: BootPayload
       ) : (
         <SettingsPageFrame
           title="Providers & Secrets"
-          description="Manage launch-ready Provider Profiles, credential references, OAuth lifecycle, and managed secret metadata."
+          description="Manage Provider Profiles and the secrets they use. Secret values are never shown after they are saved."
         >
           <SettingsUnavailableState title="Providers & Secrets" permissions={['provider_profiles.read', 'secrets.metadata.read']} />
         </SettingsPageFrame>
@@ -350,9 +328,8 @@ function InstanceSettingsContent({ payload }: { payload: BootPayload }) {
         canReadAudit={permissions.has('settings.audit.read')}
       />
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        The Instance page manages the workspace scope. Retained user-scope
-        overrides migrate under the backend unified surface (MoonMind#4350)
-        and are not edited here.
+        This page edits instance-wide settings. Older per-user overrides are
+        kept but not edited here.
       </p>
 
       <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
