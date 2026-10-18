@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from temporalio.api.enums.v1 import EventType
+from temporalio.api.enums.v1 import EventType, WorkflowTaskFailedCause
 from temporalio.api.history.v1 import HistoryEvent
 from temporalio.client import WorkflowHistory
 
@@ -142,23 +142,24 @@ def default_retry_order(
 ) -> int | None:
     """Return the step a retry should start from by default.
 
-    That is the failed step when the run records one, otherwise the last step
-    the run started.
+    That is the earliest failed step: the one the run records, or a failed
+    ledger row before it. A plan that continued past an earlier failure keeps
+    that failure in any history reset after it, so the retried run would fail
+    again. Without a failure, it is the last step the run started.
     """
 
     rows_by_order = _ledger_rows_by_order(ledger_rows)
-    if failed_step_id:
-        for order, row in rows_by_order.items():
-            if row.get("logicalStepId") == failed_step_id and order in boundaries:
-                return order
     failed_orders = [
         order
         for order, row in rows_by_order.items()
-        if str(row.get("status") or "").strip().lower() == "failed"
-        and order in boundaries
+        if order in boundaries
+        and (
+            str(row.get("status") or "").strip().lower() == "failed"
+            or (failed_step_id and row.get("logicalStepId") == failed_step_id)
+        )
     ]
     if failed_orders:
-        return max(failed_orders)
+        return min(failed_orders)
     started = [order for order in boundaries if order in rows_by_order]
     return max(started) if started else None
 
@@ -240,6 +241,64 @@ def plan_retry_from_step(
     )
 
 
+def retry_reset_reason(logical_step_id: str, request_id: str) -> str:
+    """The reset reason Temporal records; it names the request that made it."""
+
+    reason = f"MoonMind retry from step {logical_step_id}"
+    return f"{reason} (request {request_id})" if request_id else reason
+
+
+def accepted_retry_step(
+    *,
+    successor_events: Iterable[HistoryEvent],
+    source_events: Iterable[HistoryEvent],
+    ledger_rows: Sequence[Mapping[str, Any]],
+    source_run_id: str,
+    request_id: str,
+    decode_memo_value: Callable[[Any], Any],
+) -> RetryCandidate | None:
+    """Return the step a successor run restarted for this request, if it did.
+
+    A reset run begins by failing the workflow task at the reset point, naming
+    the base run and the reason. A retry Temporal accepted before MoonMind
+    saved its response is recognized by that event, so the same request can
+    return the run instead of reporting the run as changed.
+    """
+
+    if not request_id:
+        return None
+    reset_task = None
+    for event in successor_events:
+        # The kept prefix can hold the resets that created earlier runs; the
+        # last one created this run.
+        if (
+            event.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_FAILED
+            and event.workflow_task_failed_event_attributes.cause
+            == WorkflowTaskFailedCause.WORKFLOW_TASK_FAILED_CAUSE_RESET_WORKFLOW
+        ):
+            reset_task = event.workflow_task_failed_event_attributes
+    if reset_task is None or reset_task.base_run_id != source_run_id:
+        return None
+    rows_by_order = _ledger_rows_by_order(ledger_rows)
+    for order, boundary in step_boundaries(source_events, decode_memo_value).items():
+        row = rows_by_order.get(order)
+        if row is None:
+            continue
+        logical_step_id = str(row.get("logicalStepId")).strip()
+        if boundary.workflow_task_started_event_id == int(
+            reset_task.started_event_id
+        ) and reset_task.failure.message == retry_reset_reason(
+            logical_step_id, request_id
+        ):
+            return RetryCandidate(
+                logical_step_id=logical_step_id,
+                order=order,
+                title=_text(row.get("title")),
+                status=_text(row.get("status")),
+            )
+    return None
+
+
 def _replay_workflows() -> list[type]:
     """The installed workflow classes a retried run will execute."""
 
@@ -287,9 +346,11 @@ __all__ = [
     "RetryFromStepPlan",
     "RetryFromStepUnavailable",
     "StepBoundary",
+    "accepted_retry_step",
     "default_retry_order",
     "plan_retry_from_step",
     "replay_failure_before_reset",
     "retry_candidates",
+    "retry_reset_reason",
     "step_boundaries",
 ]

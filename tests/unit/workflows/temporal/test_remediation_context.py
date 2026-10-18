@@ -35,6 +35,7 @@ from moonmind.workflows.temporal import (
     remediation_tools,
 )
 from moonmind.workflows.temporal.remediation_context import (
+    MAX_FAILURE_EVIDENCE_STEPS,
     RemediationContextBuilder,
     RemediationContextError,
     RemediationLifecyclePublisher,
@@ -786,6 +787,37 @@ async def test_scheduled_failed_run_remediation_context_embeds_failure_evidence(
         ]
         assert evidence["unavailable"] == []
         ledger_handle.query.assert_awaited_once_with("get_step_ledger")
+        # The ledger comes from the failed run the link pins, not from a
+        # successor a retry may have started meanwhile.
+        mock_client_adapter.get_workflow_handle.assert_awaited_once_with(
+            target_id, run_id="scheduled-run"
+        )
+
+
+@pytest.mark.asyncio
+async def test_failure_steps_keep_the_failed_step_when_the_ledger_is_bounded():
+    rows = [
+        {"logicalStepId": f"step-{order}", "order": order, "status": "completed"}
+        for order in range(1, MAX_FAILURE_EVIDENCE_STEPS + 31)
+    ]
+    rows[69]["status"] = "failed"
+    loader = AsyncMock(return_value=rows)
+    builder = RemediationContextBuilder(
+        session=None, artifact_service=None, step_ledger_loader=loader
+    )
+
+    steps, reason = await builder._failure_steps(
+        "mm:wf", run_id="run-1", failed_step_id="step-80"
+    )
+
+    assert reason is None
+    loader.assert_awaited_once_with("mm:wf", "run-1")
+    orders = [step["order"] for step in steps]
+    assert len(orders) == MAX_FAILURE_EVIDENCE_STEPS
+    assert orders == sorted(orders)
+    # The failed row, the recorded failed step, and their neighbors survive.
+    assert {68, 69, 70, 71, 72, 78, 79, 80, 81, 82} <= set(orders)
+    assert steps[orders.index(70)]["status"] == "failed"
 
 
 @pytest.mark.asyncio
