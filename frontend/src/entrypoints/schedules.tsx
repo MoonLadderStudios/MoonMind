@@ -8,6 +8,8 @@ import { EntityDetailFrame } from '../components/EntityDetailFrame';
 import { CollectionSidebar, type CollectionSidebarRow } from '../components/CollectionSidebar';
 import { CollectionWorkspace } from '../components/CollectionWorkspace';
 import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/WorkflowColumnHeader';
+import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
+import { responseError } from '../lib/api/client';
 
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -65,6 +67,13 @@ const ScheduleRunSchema = z.object({
   message: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // `outcome` is the dispatch result; `execution` is the recorded lifecycle of
+  // the workflow that dispatch started, when one is known.
+  execution: z.object({
+    state: z.string(),
+    objectiveOutcome: z.string().nullable().optional(),
+    completionDisposition: z.string().nullable().optional(),
+  }).nullable().optional(),
 }).passthrough();
 
 const ScheduleRunsResponseSchema = z.object({
@@ -1032,7 +1041,7 @@ function ScheduleDetailPage({
     queryFn: async () => {
       const response = await fetch(runsEndpoint, { credentials: 'include' });
       if (!response.ok) {
-        throw new Error(`Failed to fetch schedule runs: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch schedule runs');
       }
       return ScheduleRunsResponseSchema.parse(await response.json());
     },
@@ -1614,8 +1623,20 @@ function ScheduleDetailPage({
               },
               {
                 key: 'outcome',
-                header: 'Status',
+                header: 'Dispatch',
                 render: (item) => titleCaseLabel(formatStatusLabel(item.outcome)),
+              },
+              {
+                key: 'execution',
+                header: 'Execution',
+                render: (item) => (item.execution ? (
+                  <WorkflowLifecycleStatusPill
+                    status={item.execution.state}
+                    enableMotion={false}
+                    completionDisposition={item.execution.completionDisposition}
+                    objectiveOutcome={item.execution.objectiveOutcome}
+                  />
+                ) : '-'),
               },
               {
                 key: 'trigger',

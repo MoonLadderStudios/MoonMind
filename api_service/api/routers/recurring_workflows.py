@@ -30,7 +30,9 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowNotFoundError,
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
+    ScheduleRunExecution,
 )
+from moonmind.schemas.temporal_models import ObjectiveOutcomeValue
 
 router = APIRouter(prefix="/api/recurring-workflows", tags=["recurring-workflows"])
 logger = logging.getLogger(__name__)
@@ -92,6 +94,19 @@ class RecurringWorkflowDefinitionListResponse(BaseModel):
     next_24h_count: Optional[int] = Field(None, alias="next24hCount")
     attention_count: Optional[int] = Field(None, alias="attentionCount")
 
+class RecurringWorkflowRunExecutionModel(BaseModel):
+    """Recorded lifecycle of the execution a run dispatched."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state: str = Field(..., alias="state")
+    objective_outcome: ObjectiveOutcomeValue | None = Field(
+        None, alias="objectiveOutcome"
+    )
+    completion_disposition: Literal["gated_continuation"] | None = Field(
+        None, alias="completionDisposition"
+    )
+
 class RecurringWorkflowRunModel(BaseModel):
     """Serialized recurring run history record."""
 
@@ -101,6 +116,8 @@ class RecurringWorkflowRunModel(BaseModel):
     definition_id: UUID = Field(..., alias="definitionId")
     scheduled_for: datetime = Field(..., alias="scheduledFor")
     trigger: str = Field(..., alias="trigger")
+    # Dispatch result (pending_dispatch, enqueued, skipped, dispatch_error),
+    # not the execution outcome; see ``execution``.
     outcome: str = Field(..., alias="outcome")
     dispatch_attempts: int = Field(..., alias="dispatchAttempts")
     dispatch_after: Optional[datetime] = Field(None, alias="dispatchAfter")
@@ -110,6 +127,9 @@ class RecurringWorkflowRunModel(BaseModel):
     message: Optional[str] = Field(None, alias="message")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
+    execution: Optional[RecurringWorkflowRunExecutionModel] = Field(
+        None, alias="execution"
+    )
 
 class RecurringWorkflowRunListResponse(BaseModel):
     """List response for recurring run history."""
@@ -225,7 +245,7 @@ def _action_permissions_for_definition(
 def _serialize_run(
     run: RecurringWorkflowRun,
     *,
-    started_at: datetime | None = None,
+    execution: ScheduleRunExecution | None = None,
 ) -> RecurringWorkflowRunModel:
     return RecurringWorkflowRunModel(
         id=run.id,
@@ -235,12 +255,21 @@ def _serialize_run(
         outcome=run.outcome.value,
         dispatch_attempts=run.dispatch_attempts,
         dispatch_after=run.dispatch_after,
-        started_at=started_at,
+        started_at=execution.started_at if execution else None,
         temporal_workflow_id=run.temporal_workflow_id,
         temporal_run_id=run.temporal_run_id,
         message=run.message,
         created_at=run.created_at,
         updated_at=run.updated_at,
+        execution=(
+            RecurringWorkflowRunExecutionModel(
+                state=execution.state,
+                objective_outcome=execution.objective_outcome,
+                completion_disposition=execution.completion_disposition,
+            )
+            if execution
+            else None
+        ),
     )
 
 def _log_route_exception(
@@ -896,7 +925,7 @@ async def list_recurring_workflow_runs(
     try:
         definition = await service.get_definition(definition_id)
         runs = await service.list_runs(definition_id=definition.id, limit=limit)
-        started_at_by_workflow_id = await service.started_at_by_workflow_id(
+        executions = await service.run_executions_by_workflow_id(
             item.temporal_workflow_id for item in runs if item.temporal_workflow_id
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -912,9 +941,7 @@ async def list_recurring_workflow_runs(
         items=[
             _serialize_run(
                 item,
-                started_at=started_at_by_workflow_id.get(
-                    str(item.temporal_workflow_id or "")
-                ),
+                execution=executions.get(str(item.temporal_workflow_id or "")),
             )
             for item in runs
         ]

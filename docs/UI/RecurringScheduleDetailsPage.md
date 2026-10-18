@@ -222,7 +222,7 @@ A recurring schedule is not itself a workflow execution. It owns a series of wor
 Rules:
 
 - The schedule detail page shows schedule-owned run history.
-- Each run row includes the spawned `workflowId`, scheduled time, actual start time when available, status, and link to workflow detail.
+- Each run row includes the spawned `workflowId`, scheduled time, actual start time when available, and link to workflow detail. **Dispatch** is the run's own `outcome` (pending dispatch, enqueued, skipped, dispatch error), which only says whether an execution was started. **Execution** is that workflow's recorded lifecycle state and derived outcome (for example Handed off or Verification blocked), shown with the Workflows list pill and read from the execution projection alongside the start time; it shows `-` until an execution is recorded.
 - Clicking a run opens the normal workflow detail page.
 - Workflow detail pages may show a compact `Created by schedule` provenance link back to `/schedules/{definitionId}` when that metadata is available.
 

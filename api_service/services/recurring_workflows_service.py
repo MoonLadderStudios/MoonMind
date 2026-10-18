@@ -7,7 +7,7 @@ import copy
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, get_args
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, and_, func, or_, select
@@ -47,6 +47,7 @@ from moonmind.runtime_intent import (
     model_selection_fields,
     validate_model_selection_submission,
 )
+from moonmind.schemas.temporal_models import ObjectiveOutcomeValue
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
@@ -83,6 +84,7 @@ from moonmind.workflows.temporal.schedule_errors import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
+_OBJECTIVE_OUTCOME_VALUES = frozenset(get_args(ObjectiveOutcomeValue))
 
 # MoonLadderStudios/MoonMind#3833: fresh occurrences follow the installed
 # backend's qualified runtime-provider target; a schedule has no target pin of
@@ -127,6 +129,15 @@ class RecurringPolicy:
     max_backfill: int = 3
     misfire_grace_seconds: int = 900
     jitter_seconds: int = 0
+
+@dataclass(frozen=True, slots=True)
+class ScheduleRunExecution:
+    """Recorded execution a schedule run dispatched (projection snapshot)."""
+
+    started_at: datetime | None
+    state: str
+    objective_outcome: str | None = None
+    completion_disposition: str | None = None
 
 @dataclass(frozen=True, slots=True)
 class RecurringScheduleRuntimeSummary:
@@ -2456,10 +2467,17 @@ class RecurringWorkflowsService:
         # Temporal reconciliation could be added here in the future using adapter.describe_schedule
         return runs
 
-    async def started_at_by_workflow_id(
+    async def run_executions_by_workflow_id(
         self,
         workflow_ids: Iterable[str],
-    ) -> dict[str, datetime]:
+    ) -> dict[str, ScheduleRunExecution]:
+        """Return the recorded execution each dispatched run started.
+
+        A run's own outcome only says whether dispatch succeeded; the
+        execution projection carries the lifecycle state and the memo-derived
+        outcome the Workflows list shows for the same execution.
+        """
+
         normalized_ids = sorted(
             {str(item).strip() for item in workflow_ids if str(item).strip()}
         )
@@ -2468,18 +2486,32 @@ class RecurringWorkflowsService:
         stmt = select(
             TemporalExecutionRecord.workflow_id,
             TemporalExecutionRecord.started_at,
-        ).where(
-            TemporalExecutionRecord.workflow_id.in_(normalized_ids),
-            TemporalExecutionRecord.started_at.is_not(None),
-        ).order_by(
-            TemporalExecutionRecord.started_at.asc(),
-        )
+            TemporalExecutionRecord.state,
+            TemporalExecutionRecord.memo,
+        ).where(TemporalExecutionRecord.workflow_id.in_(normalized_ids))
         rows = (await self._session.execute(stmt)).all()
-        return {
-            str(workflow_id): started_at
-            for workflow_id, started_at in rows
-            if started_at
-        }
+        executions: dict[str, ScheduleRunExecution] = {}
+        for workflow_id, started_at, state, memo in rows:
+            state_value = getattr(state, "value", state)
+            memo_values = memo if isinstance(memo, Mapping) else {}
+            objective_outcome = memo_values.get("objectiveOutcome")
+            executions[str(workflow_id)] = ScheduleRunExecution(
+                started_at=started_at,
+                state=str(state_value),
+                objective_outcome=(
+                    objective_outcome
+                    if objective_outcome in _OBJECTIVE_OUTCOME_VALUES
+                    else None
+                ),
+                completion_disposition=(
+                    "gated_continuation"
+                    if state_value == "completed"
+                    and memo_values.get("completionDisposition")
+                    == "gated_continuation"
+                    else None
+                ),
+            )
+        return executions
 
     async def runtime_summary_for_definition(
         self,
@@ -2571,4 +2603,5 @@ __all__ = [
     "RecurringWorkflowNotFoundError",
     "RecurringWorkflowValidationError",
     "RecurringWorkflowsService",
+    "ScheduleRunExecution",
 ]
