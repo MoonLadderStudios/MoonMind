@@ -424,3 +424,169 @@ async def test_cleanup_accepts_equivalent_save_artifact_references(cleanup_setup
         "artifact:checkpoint",
         "artifact:archive",
     ]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_serializes_deletion_with_new_workspace_claim(
+    cleanup_setup, monkeypatch
+):
+    import asyncio
+    import threading
+
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecordStore,
+        WorkspaceLocatorResolutionError,
+    )
+
+    state, bindings, leases, docker, artifacts, root, workspace = cleanup_setup
+    workspace_id = state["generatedOutput"]["workspaceId"]
+    records = SandboxWorkspaceRecordStore(root)
+    deletion_started = threading.Event()
+    release_deletion = threading.Event()
+    reader_started = threading.Event()
+    reader_finished = threading.Event()
+    original_rmtree = provider.shutil.rmtree
+
+    def paused_rmtree(path):
+        deletion_started.set()
+        assert release_deletion.wait(3), "test did not release workspace deletion"
+        original_rmtree(path)
+
+    def admit_reader():
+        reader_started.set()
+        try:
+            records.claim_existing_workspace(
+                workspace_id,
+                SimpleNamespace(grant_id="new-reader", mode="read_only"),
+                grantee_workflow_id="reader-workflow",
+            )
+        except WorkspaceLocatorResolutionError:
+            return "workspace unavailable"
+        else:
+            return "admitted"
+        finally:
+            reader_finished.set()
+
+    monkeypatch.setattr(provider.shutil, "rmtree", paused_rmtree)
+    cleanup = asyncio.create_task(
+        provider.cleanup_saved_workspace(
+            state,
+            bindings=bindings,
+            leases=leases,
+            docker=docker,
+            artifacts=artifacts,
+            workspace_root=root,
+        )
+    )
+    reader = None
+    try:
+        assert await asyncio.to_thread(deletion_started.wait, 3)
+        reader = asyncio.create_task(asyncio.to_thread(admit_reader))
+        assert await asyncio.to_thread(reader_started.wait, 3)
+        # A real claimant must wait behind deletion rather than enter between
+        # the final active-reader check and filesystem removal.
+        admitted_during_deletion = await asyncio.to_thread(reader_finished.wait, 0.2)
+    finally:
+        release_deletion.set()
+        await cleanup
+    assert reader is not None
+    outcome = await reader
+    assert not admitted_during_deletion
+    assert outcome == "workspace unavailable"
+    assert not workspace.exists()
+    assert records.load(workspace_id) is None
+    assert records._claims_dir(workspace_id).with_suffix(".claims.lock").exists()
+
+
+def test_worker_entrypoint_imports_real_runtime_in_fresh_process():
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import importlib.abc
+        import importlib.machinery
+        import runpy
+        import sys
+
+        class RuntimeLoader(importlib.abc.Loader):
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def create_module(self, spec):
+                return self.wrapped.create_module(spec)
+
+            def exec_module(self, module):
+                self.wrapped.exec_module(module)
+                async def main():
+                    from moonmind.omnigent import production
+                    assert production.run_omnigent_execution.__name__ == "controlled_provider"
+                    print("NORMAL_WORKER_MAIN_REACHED")
+                module.main_async = main
+                module._configure_worker_logging = lambda **kwargs: None
+
+        class RuntimeFinder(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path, target=None):
+                if fullname != "moonmind.workflows.temporal.worker_runtime":
+                    return None
+                spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+                spec.loader = RuntimeLoader(spec.loader)
+                return spec
+
+        sys.meta_path.insert(0, RuntimeFinder())
+        sys.argv = ["tools/single_user_journey_provider.py", "worker"]
+        runpy.run_path(sys.argv[0], run_name="__main__")
+    """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(provider.__file__).resolve().parents[1],
+        env={**os.environ, "FIRST_RUN_JOURNEY_PROJECT": "moonmind-test-first-run"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "NORMAL_WORKER_MAIN_REACHED" in result.stdout
+
+
+def test_cleanup_entrypoint_imports_real_dependencies_in_fresh_process(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    import textwrap
+
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    script = textwrap.dedent(
+        """
+        import asyncio
+        from pathlib import Path
+        import sys
+        from tools import single_user_journey_provider as provider
+
+        async def cleanup(state, **dependencies):
+            assert type(dependencies["bindings"]).__name__ == "DbRuntimeBindingStore"
+            assert type(dependencies["leases"]).__name__ == "DbOmnigentHostLeaseRepository"
+            assert type(dependencies["artifacts"]).__name__ == "TemporalOmnigentArtifactGateway"
+            print("CLEANUP_DEPENDENCIES_READY")
+            return {}
+
+        provider.cleanup_saved_workspace = cleanup
+        asyncio.run(provider._cleanup_from_file(Path(sys.argv[1])))
+    """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(state)],
+        cwd=Path(provider.__file__).resolve().parents[1],
+        env={**os.environ, "WORKFLOW_WORKSPACE_ROOT": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "CLEANUP_DEPENDENCIES_READY" in result.stdout

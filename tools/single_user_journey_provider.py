@@ -388,25 +388,38 @@ async def cleanup_saved_workspace(
             "Workspace cleanup cannot follow symlinks or leave its authority"
         )
     records = SandboxWorkspaceRecordStore(root)
-    owner = records.load(workspace_id)
-    if target.exists() and (
-        owner is None
-        or owner.workflow_id != evidence["workflowId"]
-        or owner.step_execution_id != step["stepExecutionId"]
-        or owner.relative_path != "repo"
-    ):
-        raise RuntimeError("Workspace owner record does not match the saved binding")
-    if records.read_unsaved(workspace_id) or records.active_claim_grantees(
-        workspace_id
-    ):
-        raise RuntimeError("Workspace is retained for unsaved work or an active reader")
-    if target.exists():
-        await asyncio.to_thread(shutil.rmtree, target)
-    records.discard(workspace_id)
+
+    def remove_owned_workspace() -> bool:
+        # Use the same persistent inode as grant admission. Keep all mutable
+        # ownership/retention checks and deletion in one synchronous critical
+        # section, off the event loop; discard deliberately preserves the lock.
+        with records.claims_locked(workspace_id):
+            owner = records.load(workspace_id)
+            if target.exists() and (
+                owner is None
+                or owner.workflow_id != evidence["workflowId"]
+                or owner.step_execution_id != step["stepExecutionId"]
+                or owner.relative_path != "repo"
+            ):
+                raise RuntimeError(
+                    "Workspace owner record does not match the saved binding"
+                )
+            if records.read_unsaved(workspace_id) or records.active_claim_grantees(
+                workspace_id
+            ):
+                raise RuntimeError(
+                    "Workspace is retained for unsaved work or an active reader"
+                )
+            if target.exists():
+                shutil.rmtree(target)
+            records.discard(workspace_id)
+            return not target.exists()
+
+    workspace_removed = await asyncio.to_thread(remove_owned_workspace)
     return {
         "bindingId": binding.bindingId,
         "workspaceId": workspace_id,
-        "workspaceRemoved": not target.exists(),
+        "workspaceRemoved": workspace_removed,
         "hostRemoved": True,
     }
 
@@ -446,8 +459,12 @@ def main() -> None:
             args.receipt_file.write_text(json.dumps(receipt, sort_keys=True) + "\n")
         print(json.dumps(receipt, sort_keys=True))
     else:
-        from moonmind.omnigent import production
+        # Follow the normal worker bootstrap before loading provider services.
+        # isort: off
         from moonmind.workflows.temporal import worker_runtime
+        from moonmind.omnigent import production
+
+        # isort: on
 
         production.run_omnigent_execution = controlled_provider
         worker_runtime._configure_worker_logging(

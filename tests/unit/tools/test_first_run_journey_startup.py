@@ -572,3 +572,16 @@ def test_generated_execution_uses_only_project_owned_storage_and_cleans_before_d
     assert phases[-1][0] == "generated_verify" and "--cleanup-receipt" in phases[-1]
     assert calls[0]["directory"] != str(journey.repo)
     journey.assert_cleaned()
+
+
+@pytest.mark.parametrize("blocked", ["logs", "state"])
+def test_early_log_setup_failure_restores_callers_environment(journey, blocked):
+    if blocked == "logs":
+        journey.logs.write_text("caller-owned file")
+    else:
+        (journey.logs / "fresh").mkdir(parents=True)
+        (journey.logs / "fresh/state").write_text("caller-owned file")
+    result = journey.run()
+    assert result.returncode != 0
+    assert (journey.repo / ".env").read_text() == "CALLER_ENV=must-survive\n"
+    assert "unbound variable" not in result.stderr
