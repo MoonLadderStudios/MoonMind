@@ -321,6 +321,7 @@ def _kill_owned_temporal_servers() -> None:
                         flush=True,
                     )
                 except (OSError, ValueError):
+                    # Unavailable stderr must not mask the original timeout failure.
                     pass
                 break
             for fd in exited:
