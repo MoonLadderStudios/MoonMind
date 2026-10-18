@@ -6,7 +6,7 @@ For the Codex harness on Omnigent (canonical identity `agentKind=external`, `age
 
 The Workflow Details page is the canonical view for inspecting a single MoonMind Workflow Execution. It presents the Workflow identity, current state, original Workflow configuration, execution history, outputs, errors, and all actions that are available for the Workflow in its current state.
 
-The page is declarative and state-driven. Every visible control is derived from the Workflow Execution status, the Workflow type, and explicit backend capabilities. A failed Workflow presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit Workflow**, **Rerun**, and **Resume**.
+The page is declarative and state-driven. Every visible control is derived from the Workflow Execution status, the Workflow type, and explicit backend capabilities. A failed Workflow presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit Workflow**, **Rerun**, and **Retry from failed step**.
 
 ## Route
 
@@ -61,7 +61,7 @@ type WorkflowExecutionCapabilities = {
   canRemediate: boolean;
   canRerun: boolean;
   canEditForRerun: boolean;
-  canResumeFromFailedStep: boolean;
+  canRetryFromStep: boolean;
   canUpdateInputs: boolean;
   canCancel: boolean;
   canPause: boolean;
@@ -110,7 +110,7 @@ Workflows / Customer Renewal Research
 Customer Renewal Research                     [Failed]
 Research customer renewal risks and summarize next steps.
 
-[Remediate] [Edit Workflow] [Rerun] [Resume] [More]
+[Remediate] [Edit Workflow] [Rerun] [Retry from failed step] [More]
 ```
 
 ### Title behavior
@@ -182,14 +182,14 @@ The status badge is not the only indicator of status. The status summary section
 
 The primary action bar appears in the header and remains available near the top of the page. On smaller screens, the same actions may collapse into a sticky bottom action bar or an overflow menu, but the actions remain discoverable.
 
-Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit Workflow**, **Rerun**, or **Resume** on failed Workflows.
+Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit Workflow**, **Rerun**, or **Retry from failed step** on failed Workflows.
 
 ### Failed Workflow actions
 
 For a failed MoonMind Workflow, the primary action bar contains all of the following actions when the corresponding capabilities are true:
 
 ```text
-[Remediate] [Edit Workflow] [Rerun] [Resume]
+[Remediate] [Edit Workflow] [Rerun] [Retry from failed step]
 ```
 
 The desired failed-Workflow action state is:
@@ -198,11 +198,11 @@ The desired failed-Workflow action state is:
 capabilities.canRemediate === true
 capabilities.canEditForRerun === true
 capabilities.canRerun === true
-capabilities.canResumeFromFailedStep === true // only when checkpointed progress is restorable
+capabilities.canRetryFromStep === true // a closed UserWorkflow run that no parent owns
 capabilities.canUpdateInputs === false
 ```
 
-Failed Workflows are terminal executions. The user may inspect, remediate, edit for a new run, rerun, or resume from the last failed step, but the original failed execution is not mutated in place.
+Failed Workflows are terminal executions. The user may inspect, remediate, edit for a new run, rerun, or retry from a step. Retry starts a new run of the same Workflow; the failed run stays in Temporal history and is not mutated.
 
 ### Remediate button
 
@@ -315,43 +315,23 @@ Rerun executes directly from the capability-gated action control without collect
 
 After a successful rerun request, the user is taken to the new Workflow Execution details page or shown a success toast with a link to the new run.
 
-### Resume button
+### Retry from failed step
 
-The failed-Workflow **Resume** button is present when:
+The **Retry from failed step** action and the **Retry** panel are present when:
 
 ```ts
-capabilities.canResumeFromFailedStep === true
+capabilities.canRetryFromStep === true
 ```
 
-The button label is:
+Retry behavior:
 
-```text
-Resume
-```
+- Does not open an editing form and keeps the original input, plan, and execution choices.
+- Restarts the failed step by default. The panel's **Restart from** selector can choose an earlier step that started; its button then reads **Retry from selected step**.
+- Sends `POST /api/executions/{workflowId}/retry-from-step` with the run the page shows as `sourceRunId`.
+- Keeps the `workflowId`, so the page follows the Workflow to its new run. Earlier steps keep their results.
+- Shows the backend's reason when retry is refused, such as a released issue claim or a history that no longer replays on the installed MoonMind version.
 
-The accessible name is:
-
-```text
-Resume from failed step
-```
-
-The failed-Workflow **Resume** action is separate from the paused-Workflow **Resume** lifecycle action. Failed-Workflow **Resume** retries the last failed step with the completed work before that step restored from durable checkpoints.
-
-Resume behavior:
-
-- Does not open an editing form.
-- Uses the original Workflow input snapshot unchanged.
-- Pins the source execution by both `workflowId` and `runId`.
-- Identifies the last failed step from backend progress data.
-- Restores completed prior steps from durable step output refs and workspace, branch, commit, or equivalent checkpoints.
-- Creates a linked follow-up execution.
-- Displays prior completed steps in the new execution as reused from the original run.
-- Starts new execution work at the failed step.
-- Leaves the original failed Workflow unchanged.
-
-Resume executes directly from the capability-gated action control without collecting extra operator input.
-
-After a successful Resume request, the user is taken to the resumed Workflow Execution details page or shown a success toast with a link to the resumed run.
+When editing is enabled and rerun is available, the panel also offers **Rerun from the start**. The panel stays hidden for runs that are still active or that completed.
 
 ### Cancel button
 
@@ -379,7 +359,7 @@ The lifecycle **Resume** button is present when:
 capabilities.canResume === true
 ```
 
-Only one of **Pause** or lifecycle **Resume** is visible at a time. This lifecycle action resumes a paused active Workflow and is not the failed-Workflow **Resume** action described above.
+Only one of **Pause** or lifecycle **Resume** is visible at a time. This lifecycle action resumes a paused active Workflow and is unrelated to retrying a failed one.
 
 ### More menu
 
@@ -404,17 +384,17 @@ Destructive Workflow lifecycle actions are visually separated, clearly labeled, 
 
 The page follows this desired action matrix.
 
-| Workflow status | Remediate | Edit Workflow | Rerun | Failed step recovery | Cancel | Pause | Lifecycle resume |
+| Workflow status | Remediate | Edit Workflow | Rerun | Retry from a step | Cancel | Pause | Lifecycle resume |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Pending | No | Yes, if inputs can be updated | No | No | Yes | No | No |
 | Scheduled | No | Yes, if inputs can be updated | No | No | Yes | No | No |
 | Running | No | Yes, if inputs can be updated | No | No | Yes | Yes, if supported | No |
 | Paused | No | Yes, if inputs can be updated | No | No | Yes | No | Yes |
 | Completed | No | Optional, as edit-for-rerun | Yes | No | No | No | No |
-| Failed | Yes | Yes, as edit-for-rerun | Yes | Yes, if checkpointed progress is restorable | No | No | No |
-| Canceled | No | Optional, as edit-for-rerun | Yes | No | No | No | No |
-| Timed out | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Optional, if a failed step and checkpoint are available | No | No | No |
-| Terminated | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Optional, if a failed step and checkpoint are available | No | No | No |
+| Failed | Yes | Yes, as edit-for-rerun | Yes | Yes | No | No | No |
+| Canceled | No | Optional, as edit-for-rerun | Yes | Yes | No | No | No |
+| Timed out | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Yes | No | No | No |
+| Terminated | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Yes | No | No | No |
 
 The matrix is descriptive. The final source of truth is the capability object returned with the Workflow detail data.
 
@@ -540,24 +520,12 @@ It contains:
 - Pending steps
 - Step-level timestamps
 - Step-level outputs or summaries, when available
-- Preserved steps reused from a source run, when viewing a resumed execution
 
 For running Workflows, this section updates as new progress is received.
 
 For terminal Workflows, this section displays the final execution path.
 
-For resumed executions, prior completed steps restored from the source run are displayed as preserved, for example:
-
-```text
-Step 1: Gather account context
-Status: Completed - reused from original run
-
-Step 2: Analyze renewal risk
-Status: Completed - reused from original run
-
-Step 3: Draft customer-facing summary
-Status: Running - resumed here
-```
+After a retry, the earlier steps show their recorded results and the retried step shows as a new attempt.
 
 ## Failure section
 
@@ -577,7 +545,7 @@ It contains:
 - Relevant logs or trace snippets
 - Suggested next actions
 - Remediation status, when available
-- Resume availability or the disabled reason, when a failed step exists but checkpointed progress cannot be restored
+- Retry availability, or the reason retry is unavailable
 
 The failure section must not obscure the primary action bar. Users can always see or quickly access **Remediate**, **Edit Workflow**, and **Rerun** on failed Workflows.
 
@@ -597,7 +565,7 @@ Suggested actions
 - Remediate the failed workflow to diagnose and resolve the issue.
 - Edit the workflow to change inputs or choices and run it again.
 - Rerun the workflow exactly as originally configured.
-- Resume from the failed step to reuse completed prior work, if available.
+- Retry from the failed step to keep completed prior work.
 ```
 
 ## Remediation panel
@@ -769,8 +737,7 @@ Events may include:
 - Remediation completed
 - Workflow rerun requested
 - Edited rerun created
-- Failed-step resume requested
-- Resumed run created
+- Retry from step requested
 
 Each event includes:
 
@@ -788,7 +755,6 @@ It contains:
 - Original run, when viewing a rerun
 - Reruns created from the current Workflow
 - Edited reruns created from the current Workflow
-- Resumed runs created from the current Workflow
 - Remediation-generated runs, when applicable
 
 Each related run displays:
@@ -805,10 +771,9 @@ Relationship labels:
 - Original run
 - Rerun
 - Edited rerun
-- Recovered from failed step
 - Remediation run
 
-For a failed Workflow, once the user clicks **Rerun**, clicks **Resume**, or submits an edited Workflow from **Edit Workflow**, the new run appears in this section.
+For a failed Workflow, once the user clicks **Rerun** or submits an edited Workflow from **Edit Workflow**, the new run appears in this section. A retry keeps the same Workflow, so its new run replaces the failed run as the page's current run instead.
 
 ## Metadata section
 
@@ -899,7 +864,7 @@ Rerun workflow
 Cancel workflow
 Pause workflow
 Resume workflow
-Resume from failed step
+Retry from failed step
 Copy workflow link
 ```
 
@@ -932,7 +897,7 @@ On mobile:
 Remediate
 Edit Workflow
 Rerun
-Resume
+Retry from failed step
 ```
 
 ### Failed Workflow edit banner
@@ -953,16 +918,12 @@ Toast action:
 View new run
 ```
 
-### Resume success toast
+### Retry success notice
+
+The notice carries the backend's message, for example:
 
 ```text
-Workflow resumed from failed step.
-```
-
-Toast action:
-
-```text
-View resumed run
+Retrying from Run tests; earlier steps are kept.
 ```
 
 ### Edited rerun success toast
@@ -995,10 +956,10 @@ This workflow cannot be edited because its original configuration is unavailable
 This workflow cannot be rerun because its original configuration is unavailable.
 ```
 
-### Resume unavailable message
+### Retry unavailable message
 
 ```text
-This workflow cannot be resumed because the completed work before the failed step is not recoverable.
+Retry from a step is unavailable: This run belongs to a parent workflow, which owns its retries.
 ```
 
 ## State-specific desired page examples
@@ -1008,7 +969,7 @@ This workflow cannot be resumed because the completed work before the failed ste
 A failed Workflow page contains:
 
 - Header with Workflow title and `Failed` status badge.
-- Primary action bar with **Remediate**, **Edit Workflow**, **Rerun**, and **Resume** when backend capabilities allow them.
+- Primary action bar with **Remediate**, **Edit Workflow**, **Rerun**, and **Retry from failed step** when backend capabilities allow them.
 - Status summary with failure timestamp and duration.
 - Failure section with failed step, error summary, and technical details.
 - Workflow configuration summary with original steps and choices.
@@ -1026,7 +987,7 @@ Desired failed-Workflow action model:
   canRemediate: true,
   canRerun: true,
   canEditForRerun: true,
-  canResumeFromFailedStep: true,
+  canRetryFromStep: true,
   canUpdateInputs: false,
   canCancel: false,
   canPause: false,
@@ -1105,18 +1066,15 @@ When the user clicks **Rerun** on a failed Workflow:
 4. The user receives a success toast or is routed to the new run.
 5. The new run is linked to the original execution as a rerun.
 
-### Clicking Resume on a failed Workflow
+### Clicking Retry from failed step
 
-When the user clicks **Resume** on a failed Workflow:
+When the user retries a failed Workflow:
 
-1. The backend creates a linked follow-up execution using the original Workflow input snapshot unchanged.
-2. The backend pins the source by `workflowId` and `runId`.
-3. The backend restores completed prior work from durable step output refs and workspace, branch, commit, or equivalent checkpoints.
-4. The new execution marks prior completed steps as preserved from the source run.
-5. The new execution starts newly executed work at the last failed step.
-6. The original failed execution is not modified.
-7. The user receives a success toast or is routed to the resumed run.
-8. The new run is linked to the original execution as `Recovered from failed step`.
+1. The backend checks that the run the page shows is still the latest run, that its history replays on the installed MoonMind version, and that any GitHub issue claim it holds is still live.
+2. The backend resets the run's Temporal history to the start of the chosen step, keeping the original input unchanged.
+3. Earlier steps keep their recorded results; the chosen step and later steps run again.
+4. The Workflow keeps its `workflowId` and the page shows the new run; the failed run stays in Temporal history.
+5. The user sees the backend's notice, or its reason when the retry is refused.
 
 ## Non-goals
 
@@ -1135,20 +1093,20 @@ The Workflow Details page does not reconstruct edit-form state from display-only
 
 The Workflow Details page does not collect extra operator input before invoking Workflow lifecycle actions.
 
-The Workflow Details page does not allow Workflow input editing as part of failed-step **Resume**. Editing instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies belongs to **Edit Workflow**.
+The Workflow Details page does not allow Workflow input editing as part of **Retry from failed step**. Editing instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies belongs to **Edit Workflow**.
 
 ## Acceptance criteria
 
 The page is considered correct when all of the following are true:
 
-1. A failed Workflow displays **Remediate**, **Edit Workflow**, **Rerun**, and **Resume** when the backend capabilities allow them.
+1. A failed Workflow displays **Remediate**, **Edit Workflow**, **Rerun**, and **Retry from failed step** when the backend capabilities allow them.
 2. **Remediate** opens the remediation flow.
 3. **Edit Workflow** on a failed Workflow opens `/workflows/new?rerunExecutionId={workflowId}&mode=edit`.
 4. The edit-for-rerun Create page loads every original step and selected choice exactly.
 5. Submitting an edited failed Workflow creates a new run and does not mutate the failed execution.
 6. **Rerun** creates a new run using the exact original Workflow configuration.
-7. **Resume** creates a linked follow-up execution that reuses completed prior work and starts at the last failed step.
-8. The original failed Workflow remains visible and unchanged after remediation, edit-for-rerun, rerun, or Resume.
-9. Remediation availability does not suppress edit, rerun, or Resume availability.
+7. **Retry from failed step** starts a new run of the same Workflow that keeps the earlier steps' results and runs the failed step again.
+8. The original failed run remains visible and unchanged after remediation, edit-for-rerun, rerun, or retry.
+9. Remediation availability does not suppress edit, rerun, or retry availability.
 10. All actions are rendered from explicit capability fields.
 11. Users can inspect failure details, original configuration, outputs, artifacts, logs, related runs, and metadata from the page.

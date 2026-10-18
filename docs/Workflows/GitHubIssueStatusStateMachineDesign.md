@@ -379,7 +379,7 @@ The normal continuation target is the existing trusted PR, not a new implementat
 
 A continuation records the exact repository, PR, branch, base, and head it adopted. The intended branch identity is preserved before PR creation so a lost create response can be reconciled by exact branch/PR identity. A mention of the issue number alone does not establish a canonical PR.
 
-Local filesystem and private MinIO checkpoints are not cross-device recovery points. GitHub-accessible code and a sufficient sanitized handoff are required for another device to continue independently. Exact failed-step recovery additionally requires all compatible checkpoint inputs. Starting a new attempt from preserved code is described as continuation, not falsely reported as exact resume.
+Local filesystem and private MinIO checkpoints are not cross-device recovery points. GitHub-accessible code and a sufficient sanitized handoff are required for another device to continue independently. Retry from a step additionally requires the run's retained Temporal history and its live issue claim. Starting a new attempt from preserved code is described as continuation, not falsely reported as exact resume.
 
 The state machine does not widen publication authority. Explicit None does not permit a recovery push, PR creation, or merge. When the admitted save method is local-only, the issue remains visible for owner recovery rather than promising portable recovery. Existing checkpoint and artifact owners remain authoritative.
 
