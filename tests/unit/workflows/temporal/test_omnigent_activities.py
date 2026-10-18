@@ -266,6 +266,196 @@ async def test_generic_dispatch_loads_persisted_plan_and_invokes_selected_realiz
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing_plan",
+        "missing_request_ref",
+        "other_request_ref",
+        "typed_other_plan",
+        "typed_wrong_digest",
+        "typed_flat_conflict",
+        "missing_binding",
+        "other_binding",
+        "host_binding",
+        "host_lease",
+        "host_id",
+    ],
+)
+async def test_retained_parameter_plan_dispatch_requires_persisted_bridge_authority(
+    isolated_control_plane, fault
+):
+    """Retained parameter-only dispatch keeps real persisted routing, never chat grants."""
+    from sqlalchemy import delete, select
+
+    from api_service.db import models
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
+    from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+    from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_admission import (
+        _plan_binding,
+    )
+
+    sessions = isolated_control_plane
+    plans = DbExecutionPlanStore(sessions)
+    plan = await plans.persist(_plan("opencode-go/model"))
+    assert plan.payload.effectiveLaunchSnapshotRef is None
+    bridge = OmnigentBridgeSessionStore(sessions)
+    delivered = []
+    conflicts = []
+
+    class Realizer:
+        ref = GenericOmnigentHostRealizer.ref
+
+        async def execute(self, request, admitted):
+            assert admitted == plan
+            assert request.omnigent_execution_plan is None
+            runtimes = DbRuntimeBindingStore(sessions)
+            binding = await runtimes.create_initial(
+                execution_plan_ref=admitted.planRef,
+                idempotency_key=request.idempotency_key,
+                admission_epoch=0,
+                provider_leases={
+                    "primary-model": {
+                        "providerProfileRef": "retained-profile",
+                        "providerLeaseRef": "retained-lease",
+                        "credentialGeneration": 7,
+                    }
+                },
+            )
+            binding = await runtimes.update(
+                binding.bindingId,
+                expected_revision=binding.revision,
+                expected_fencing_generation=binding.fencingGeneration,
+                updates={
+                    "hostBindingRef": "retained-host-binding",
+                    "hostLeaseRef": "retained-host-lease",
+                    "omnigentHostId": "retained-host",
+                },
+            )
+            bound = GenericOmnigentHostRealizer._bind_exact_host(
+                self, request, admitted, {"omnigentHostId": "retained-host"}, binding
+            )
+            assert bound.omnigent_execution_plan is None
+            parameters = dict(bound.parameters)
+            if fault == "missing_request_ref":
+                parameters.pop("executionPlanRef")
+            elif fault in {"other_request_ref", "typed_flat_conflict"}:
+                parameters["executionPlanRef"] = (
+                    "omnigent-execution-plan:sha256:" + "f" * 64
+                )
+            bound = bound.model_copy(update={"parameters": parameters})
+            if fault in {
+                "typed_other_plan",
+                "typed_wrong_digest",
+                "typed_flat_conflict",
+            }:
+                typed = OmnigentExecutionPlanBinding.model_validate(
+                    _plan_binding(plan.planRef)
+                )
+                if fault == "typed_other_plan":
+                    typed = OmnigentExecutionPlanBinding.model_validate(_plan_binding())
+                elif fault == "typed_wrong_digest":
+                    typed = typed.model_copy(
+                        update={"plan_digest": "sha256:" + "f" * 64}
+                    )
+                bound = bound.model_copy(update={"omnigent_execution_plan": typed})
+            authorization = dict(
+                parameters["omnigent"]["_moonmindProfileAuthorization"]
+            )
+            if fault == "other_binding":
+                authorization["runtimeBindingRef"] = (
+                    "omnigent-runtime-binding:sha256:" + "f" * 64
+                )
+            for name, key in (
+                ("host_binding", "hostBindingRef"),
+                ("host_lease", "hostLeaseRef"),
+                ("host_id", "omnigentHostId"),
+            ):
+                if fault == name:
+                    authorization[key] = "foreign-host-authority"
+            if fault in {"missing_plan", "missing_binding"}:
+                model = (
+                    models.OmnigentExecutionPlanRecord
+                    if fault == "missing_plan"
+                    else models.OmnigentRuntimeBindingRecord
+                )
+                async with sessions() as session:
+                    await session.execute(delete(model))
+                    await session.commit()
+            from moonmind.omnigent.bridge_store import OmnigentIdempotencyError
+
+            try:
+                await bridge.bind_profile_authorization(
+                    request=bound,
+                    endpoint_ref="retained-endpoint",
+                    provider_profile_id=authorization["providerProfileId"],
+                    provider_lease_id=authorization["providerLeaseRef"],
+                    credential_generation=authorization["credentialGeneration"],
+                    host_binding_ref=authorization["hostBindingRef"],
+                    host_lease_ref=authorization["hostLeaseRef"],
+                    omnigent_host_id=authorization["omnigentHostId"],
+                    effective_launch_snapshot=authorization,
+                )
+            except OmnigentIdempotencyError as exc:
+                conflicts.append(str(exc))
+                raise
+            await bridge.attach_session(bound.idempotency_key, "retained-session")
+            await bridge.record_session_created(
+                bound.idempotency_key,
+                session_id="retained-session",
+                session_status="running",
+                capabilities={"sendMessage": True},
+            )
+            delivered.append(bound.idempotency_key)
+            return AgentRunResult(summary="retained dispatch completed")
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="retained-run",
+        idempotencyKey="retained-step",
+        resolvedSkillsetRef="artifact:skills",
+        parameters={"executionPlanRef": plan.planRef},
+    )
+    result = await _try_generic_realizer_dispatch(
+        request,
+        plan_store=plans,
+        realizer_registry=SimpleNamespace(require=lambda _ref: Realizer()),
+    )
+    async with sessions() as session:
+        rows = (
+            (await session.execute(select(models.OmnigentBridgeSession)))
+            .scalars()
+            .all()
+        )
+    if fault is not None:
+        assert result.failure_class == "integration_error"
+        assert len(conflicts) == 1 and "authority conflicts" in conflicts[0]
+        assert delivered == [] and rows == []
+    else:
+        assert result == AgentRunResult(
+            summary="retained dispatch completed"
+        ), conflicts
+        assert delivered == [request.idempotency_key] and len(rows) == 1
+        assert rows[0].metadata_["executionPlanRef"] == plan.planRef
+        assert (
+            rows[0].metadata_["executionPlanDigest"]
+            == "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+        )
+        assert "runtimeAuthority" not in rows[0].metadata_
+        resolution = await bridge.resolve_chat_binding(
+            workflow_id=request.correlation_id
+        )
+        assert rows[0].omnigent_session_id == "retained-session"
+        assert resolution.state == "available"
+        assert resolution.read_only is True
+        assert resolution.capabilities.get("sendMessage") is not True
+
+
+@pytest.mark.asyncio
 async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
     """A typed realizer cause must reach the operator, not a generic code."""
 

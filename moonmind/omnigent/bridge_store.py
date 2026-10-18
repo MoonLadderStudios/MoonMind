@@ -1228,6 +1228,14 @@ class OmnigentBridgeSessionStore:
 
         routing_snapshot = effective_launch_snapshot
         runtime_authority = None
+        plan_authority = (
+            {
+                "executionPlanRef": request.omnigent_execution_plan.plan_ref,
+                "executionPlanDigest": request.omnigent_execution_plan.plan_digest,
+            }
+            if request.omnigent_execution_plan is not None
+            else {}
+        )
         if (
             effective_launch_snapshot
             and effective_launch_snapshot.get("executionRealizerRef")
@@ -1249,20 +1257,37 @@ class OmnigentBridgeSessionStore:
             plan_ref = str(effective_launch_snapshot["executionPlanRef"])
             plan = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
             admitted = request.omnigent_execution_plan
+            requested_ref = str(
+                (request.parameters or {}).get("executionPlanRef") or ""
+            ).strip()
+            plan_digest = "sha256:" + plan_ref.rsplit(":", 1)[-1]
             if (
                 plan is None
-                or admitted is None
-                or admitted.plan_ref != plan_ref
-                or admitted.plan_digest != "sha256:" + plan_ref.rsplit(":", 1)[-1]
+                or (requested_ref and requested_ref != plan_ref)
+                or (
+                    admitted is not None
+                    and (
+                        admitted.plan_ref != plan_ref
+                        or admitted.plan_digest != plan_digest
+                    )
+                )
+                or (admitted is None and requested_ref != plan_ref)
             ):
-                raise OmnigentIdempotencyError("bridge execution plan authority conflicts")
-            if plan.payload.effectiveLaunchSnapshotRef:
+                raise OmnigentIdempotencyError(
+                    "bridge execution plan authority conflicts"
+                )
+            # Retained dispatch carries only executionPlanRef. Its persisted
+            # plan and request-scoped runtime supply routing authority, without
+            # inventing the artifact identities required by a typed binding.
+            if admitted is None or plan.payload.effectiveLaunchSnapshotRef:
                 binding_id = stable_binding_id(
                     execution_plan_ref=plan_ref,
                     idempotency_key=request.idempotency_key,
                     admission_epoch=admission_epoch(request),
                 )
-                binding = await DbRuntimeBindingStore(self._session_factory).get(binding_id)
+                binding = await DbRuntimeBindingStore(self._session_factory).get(
+                    binding_id
+                )
                 if (
                     binding is None
                     or binding_id != effective_launch_snapshot.get("runtimeBindingRef")
@@ -1272,6 +1297,11 @@ class OmnigentBridgeSessionStore:
                     or binding.omnigentHostId != omnigent_host_id
                 ):
                     raise OmnigentIdempotencyError("bridge runtime authority conflicts")
+            plan_authority = {
+                "executionPlanRef": plan_ref,
+                "executionPlanDigest": plan_digest,
+            }
+            if plan.payload.effectiveLaunchSnapshotRef:
                 raw = await TemporalOmnigentArtifactGateway(
                     self._session_factory
                 ).read_bytes(plan.payload.effectiveLaunchSnapshotRef)
@@ -1283,7 +1313,9 @@ class OmnigentBridgeSessionStore:
                     "admissionEpoch": admission_epoch(request),
                     "fencingGeneration": binding.fencingGeneration,
                     "hostLeaseGeneration": binding.hostLeaseGeneration,
-                    "providerLeasesDigest": _provider_leases_digest(binding.providerLeases),
+                    "providerLeasesDigest": _provider_leases_digest(
+                        binding.providerLeases
+                    ),
                 }
                 from moonmind.omnigent.control_plane.turn_commands import (
                     CanonicalTurnCommandService,
@@ -1328,16 +1360,7 @@ class OmnigentBridgeSessionStore:
                     if effective_launch_snapshot
                     else None
                 ),
-                **(
-                    {
-                        "executionPlanRef": (request.omnigent_execution_plan.plan_ref),
-                        "executionPlanDigest": (
-                            request.omnigent_execution_plan.plan_digest
-                        ),
-                    }
-                    if request.omnigent_execution_plan is not None
-                    else {}
-                ),
+                **plan_authority,
             },
         )
         async with self._session_factory() as session:
