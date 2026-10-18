@@ -177,7 +177,7 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
             )
             monkeypatch.setattr(
                 "api_service.services.settings_catalog."
-                "SettingsCatalogService.default_provider_profile_ref",
+                "SettingsCatalogService.workflow_creation_defaults",
                 saved_account,
             )
     try:

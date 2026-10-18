@@ -87,6 +87,7 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from api_service.services.settings_catalog import WorkflowCreationDefaults
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
@@ -21404,9 +21405,11 @@ def test_saved_profile_default_selects_create_route_and_model(
 def test_saved_profile_default_preserves_explicit_profile_selector(
     monkeypatch, entrypoint, selector
 ) -> None:
-    default_ref = AsyncMock(return_value="saved-openai")
+    default_ref = AsyncMock(
+        return_value=WorkflowCreationDefaults("codex_cli", "saved-openai")
+    )
     monkeypatch.setattr(
-        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
         default_ref,
     )
     profile = _mm3788_provider_profile(
@@ -21451,18 +21454,17 @@ def test_saved_profile_default_preserves_explicit_profile_selector(
     runtime = parameters["workflow"]["runtime"]
     assert runtime.get("providerProfileRef") == expected_profile
     assert runtime["profileSelector"] == selector
-    if selector:
-        default_ref.assert_not_awaited()
-    else:
-        default_ref.assert_awaited_once()
+    default_ref.assert_awaited_once()
 
 
 def test_saved_profile_default_does_not_replace_explicit_profile(monkeypatch) -> None:
     from moonmind.workflow_cli import build_execution_payload
 
-    default_ref = AsyncMock(return_value="another-account")
+    default_ref = AsyncMock(
+        return_value=WorkflowCreationDefaults("codex_cli", "another-account")
+    )
     monkeypatch.setattr(
-        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
         default_ref,
     )
     profile = _mm3788_provider_profile(
@@ -21482,7 +21484,7 @@ def test_saved_profile_default_does_not_replace_explicit_profile(monkeypatch) ->
         service.create_execution.await_args.kwargs["initial_parameters"]["profileId"]
         == profile.profile_id
     )
-    default_ref.assert_not_awaited()
+    default_ref.assert_awaited_once()
 
 
 def test_saved_profile_default_does_not_replace_agent_profile_account(
@@ -21490,9 +21492,11 @@ def test_saved_profile_default_does_not_replace_agent_profile_account(
 ) -> None:
     from moonmind.workflow_cli import build_execution_payload
 
-    default_ref = AsyncMock(return_value="another-account")
+    default_ref = AsyncMock(
+        return_value=WorkflowCreationDefaults("codex_cli", "another-account")
+    )
     monkeypatch.setattr(
-        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
         default_ref,
     )
     body = build_execution_payload(
@@ -21511,15 +21515,20 @@ def test_saved_profile_default_does_not_replace_agent_profile_account(
     compile_plan.assert_awaited_once()
     parameters = service.create_execution.await_args.kwargs["initial_parameters"]
     assert parameters["agentProfileSnapshot"]["providerProfileRef"] == "oauth-team"
-    default_ref.assert_not_awaited()
+    default_ref.assert_awaited_once()
 
 
 def test_saved_profile_default_is_fixed_before_preset_expansion(monkeypatch) -> None:
     from moonmind.workflows.executions.preset_goal_scheduler import GoalPresetSchedule
 
-    default_ref = AsyncMock(side_effect=["subscription", "different-account"])
+    default_ref = AsyncMock(
+        side_effect=[
+            WorkflowCreationDefaults("omnigent", "subscription"),
+            WorkflowCreationDefaults("omnigent", "different-account"),
+        ]
+    )
     monkeypatch.setattr(
-        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        "api_service.services.settings_catalog.SettingsCatalogService.workflow_creation_defaults",
         default_ref,
     )
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
@@ -22169,16 +22178,14 @@ async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
                 service=service,
                 session=session,
                 user=user,
-                # The pre-#3935 `moonmind workflow run --provider-profile` body.
+                # No Profile or runtime intent: the configured default applies.
                 payload={
                     "workflowType": "MoonMind.UserWorkflow",
                     "idempotencyKey": "mm3935-raw-default",
                     "initialParameters": {
                         "task": {
                             "instructions": "Run with the default runtime.",
-                            "providerProfileRef": "codex_minimax_team",
                         },
-                        "providerProfileRef": "codex_minimax_team",
                     },
                 },
             )
@@ -22365,6 +22372,56 @@ def test_mm3935_cli_run_payload_reaches_the_plan_owner(
     )
     assert kwargs["title"] == "CLI run"
     assert kwargs["idempotency_key"] == "mm3935-cli"
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "cli"])
+def test_saved_omnigent_runtime_reaches_the_plan_owner(
+    client, settings_overrides, entrypoint
+) -> None:
+    from api_service.db.models import SettingsOverride
+    from moonmind.workflow_cli import build_execution_payload
+
+    saved = SettingsOverride(
+        scope="workspace", key="workflow.default_runtime", value_json="omnigent"
+    )
+    settings_overrides[("workspace", saved.key)] = saved
+    body = (
+        build_execution_payload(instructions="Use the saved Omnigent backend.")
+        if entrypoint == "cli"
+        else {
+            "type": "workflow",
+            "payload": {
+                "workflow": {"instructions": "Use the saved Omnigent backend."}
+            },
+        }
+    )
+    test_client, service, _user = client
+    provider = _mm3788_provider_profile(
+        profile_id="codex-openai-oauth", runtime_id="codex_cli"
+    )
+    provider.provider_id = "openai"
+    session = SimpleNamespace(
+        get=AsyncMock(
+            side_effect=lambda model, key: (
+                provider
+                if model is ManagedAgentProviderProfile and key == provider.profile_id
+                else None
+            )
+        ),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client, service, body, db_session=session
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "omnigent"
+    assert parameters["runtimeCutover"]["selectionSource"] == "rollout_default"
+    assert parameters["omnigentExecutionPlan"]["planRef"] == plan_binding.plan_ref
+    assert settings.workflow.default_runtime == "codex_cli"
 
 
 class _Mm3833AgentProfileAdmissionSession:

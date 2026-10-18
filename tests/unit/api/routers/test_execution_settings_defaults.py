@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.api.routers.executions import _saved_default_provider_profile_ref
+from api_service.api.routers.executions import _workflow_creation_defaults
 from api_service.db.models import Base, ManagedAgentProviderProfile, SettingsOverride
 
 
@@ -36,6 +36,12 @@ async def test_saved_profile_default_normalizes_settings_subjects(
                     SettingsOverride(
                         scope="workspace",
                         workspace_id=workspace_id,
+                        key="workflow.default_runtime",
+                        value_json="claude_code",
+                    ),
+                    SettingsOverride(
+                        scope="workspace",
+                        workspace_id=workspace_id,
                         key="workflow.default_provider_profile_ref",
                         value_json="workspace-default",
                     ),
@@ -61,16 +67,17 @@ async def test_saved_profile_default_normalizes_settings_subjects(
                     else workspace_id
                 ),
             )
-            selected = await _saved_default_provider_profile_ref(
+            selected = await _workflow_creation_defaults(
                 session=session,
                 user=user,
                 payloads=({},),
                 task_payload={},
                 parameter_payload={},
             )
-            assert selected == (
+            assert selected.provider_profile_ref == (
                 "workspace-default" if principal_kind == "system" else "user-default"
             )
+            assert selected.default_runtime == "claude_code"
     finally:
         await engine.dispose()
 

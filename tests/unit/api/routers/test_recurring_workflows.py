@@ -303,6 +303,7 @@ async def test_create_recurring_workflow_returns_serialized_definition() -> None
             },
         ),
         service=service,
+        session=None,
         user=user,
     )
 
@@ -474,11 +475,21 @@ async def _mm3788_session(tmp_path: Path):
                         profile_id="codex_minimax_team",
                         runtime_id="codex_cli",
                         provider_id="minimax",
+                        enabled=True,
+                        auth_state="connected",
+                        credential_source="secret_ref",
+                        secret_refs={"provider_api_key": "env://MINIMAX_API_KEY"},
+                        default_model="test-model",
                     ),
                     ManagedAgentProviderProfile(
                         profile_id="claude_minimax_team",
                         runtime_id="claude_code",
                         provider_id="minimax",
+                        enabled=True,
+                        auth_state="connected",
+                        credential_source="secret_ref",
+                        secret_refs={"provider_api_key": "env://MINIMAX_API_KEY"},
+                        default_model="test-model",
                     ),
                 ]
             )
@@ -531,6 +542,7 @@ async def _mm3788_create_owned(service, user):
             )
         ),
         service=service,
+        session=service._session,
         user=user,
     )
 
@@ -553,6 +565,7 @@ async def test_mm3788_create_route_rejects_a_cross_runtime_provider_profile(
                     )
                 ),
                 service=service,
+                session=service._session,
                 user=user,
             )
 
@@ -608,6 +621,7 @@ async def test_create_route_preserves_missing_execution_configuration_error(
                     )
                 ),
                 service=service,
+                session=service._session,
                 user=user,
             )
 
@@ -727,6 +741,7 @@ async def test_recurring_http_api_rejects_retired_retrieval_without_persisting(
     async with _mm3788_session(tmp_path) as session:
         service = _mm3788_service(session)
         app.dependency_overrides[recurring_router._get_service] = lambda: service
+        app.dependency_overrides[recurring_router.get_async_session] = lambda: session
         clean_target = _mm3788_route_target(
             target_runtime="claude_code", profile_id="claude_minimax_team"
         )
@@ -768,7 +783,7 @@ async def test_recurring_http_api_rejects_retired_retrieval_without_persisting(
         if operation == "update":
             stored = await session.get(RecurringWorkflowDefinition, UUID(before["id"]))
             await session.refresh(stored)
-            assert stored.target == clean_target
+            assert stored.target == before["target"]
             assert stored.name == before["name"]
             assert stored.version == before["version"]
         else:
@@ -820,6 +835,7 @@ async def test_mm3935_schedule_edit_route_admits_a_default_omnigent_target(
         service = _mm3788_service(session)
         service._artifact_service = SimpleNamespace()
         app.dependency_overrides[recurring_router._get_service] = lambda: service
+        app.dependency_overrides[recurring_router.get_async_session] = lambda: session
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

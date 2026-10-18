@@ -279,7 +279,7 @@ async def test_outer_account_alias_reaches_manager(
     request = next(iter(agent_requests(recorded).values()))
     assert request.execution_profile_ref == "alternative-codex_cli"
     assert await choose(ctx, request) == "alternative-codex_cli"
-    assert not ctx.settings_reads
+    assert len(ctx.settings_reads) == 1
 
 
 @pytest.mark.asyncio
