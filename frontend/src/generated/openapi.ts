@@ -12357,6 +12357,18 @@ export interface components {
             updatedAt: string;
         };
         /**
+         * RecurringWorkflowRunExecutionModel
+         * @description Recorded lifecycle of the execution a run dispatched.
+         */
+        RecurringWorkflowRunExecutionModel: {
+            /** State */
+            state: string;
+            /** Objectiveoutcome */
+            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked") | null;
+            /** Completiondisposition */
+            completionDisposition?: "gated_continuation" | null;
+        };
+        /**
          * RecurringWorkflowRunListResponse
          * @description List response for recurring run history.
          */
@@ -12410,6 +12422,7 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+            execution?: components["schemas"]["RecurringWorkflowRunExecutionModel"] | null;
         };
         /**
          * RegistryAuthorization
