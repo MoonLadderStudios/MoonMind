@@ -16058,10 +16058,15 @@ async def list_execution_facets(
             )
             items = []
             for value in values:
+                # Count the effective state the list filter matches, not raw
+                # mm_state: a canceled or terminated workflow keeps the
+                # non-terminal mm_state it last published.
+                state_clause = _state_include_clause([value])
                 count_info = await client.count_workflows(
-                    query=_and_temporal_query(
-                        base_query,
-                        f'{facet_attr}="{_escape_temporal_value(value)}"',
+                    query=(
+                        _and_temporal_query(base_query, state_clause)
+                        if state_clause
+                        else base_query
                     )
                 )
                 items.append(

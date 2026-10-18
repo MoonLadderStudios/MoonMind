@@ -33,7 +33,7 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 let fetchSpy: MockInstance;
 let cleanupRender: (() => void) | null = null;
 let listRequests: URLSearchParams[];
-let pendingAuthorization: (() => void) | null;
+let releaseHeldLists: (() => void) | null;
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -41,7 +41,7 @@ beforeEach(() => {
   window.history.replaceState({}, '',
     '/workflows/selected-workflow?source=temporal&titleContains=Roundtrip&limit=25&nextPageToken=page-two');
   listRequests = [];
-  pendingAuthorization = null;
+  releaseHeldLists = null;
   fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), window.location.origin);
     if (url.pathname === '/api/ui/info') return json(uiInfo);
@@ -64,7 +64,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanupRender?.();
   cleanupRender = null;
-  pendingAuthorization?.();
+  releaseHeldLists?.();
   fetchSpy.mockRestore();
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -85,7 +85,7 @@ function expectContext(cursor: string) {
 }
 
 describe('Workflow list expansion round trip', () => {
-  it('keeps the latest table page and filters when returning to the selected detail', async () => {
+  it('keeps the latest table page and filters and opens its first row when leaving the table', async () => {
     await page.viewport(1280, 900);
     renderApp();
     await screen.findByRole('complementary', { name: 'Workflow navigation' });
@@ -100,7 +100,9 @@ describe('Workflow list expansion round trip', () => {
     expect(screen.getByRole('columnheader', { name: /Workflow/ }).getAttribute('aria-sort')).toBe('ascending');
     screen.getByRole('radio', { name: 'Full screen table' }).focus();
     await userEvent.keyboard('{ArrowLeft}');
-    await waitFor(() => expect(window.location.pathname).toBe('/workflows/selected-workflow'));
+    // The workflow open before expanding is not on the visible page, so the
+    // page's first row opens instead of a selection the table no longer shows.
+    await waitFor(() => expect(window.location.pathname).toBe('/workflows/page-three-workflow'));
     expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Sidebar list' }));
     expectContext('page-three');
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
@@ -121,25 +123,55 @@ describe('Workflow list expansion round trip', () => {
     expect(window.location.pathname).toBe('/workflows/page-three-workflow');
   });
 
-  it('ignores a pending remembered-selection response after the list query changes', async () => {
+  it('reopens the remembered workflow when the visible page still shows it', async () => {
     await page.viewport(1280, 900);
-    renderApp();
-    await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    await userEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
-    await screen.findByRole('link', { name: 'Roundtrip page two' });
+    const visibleFirst = row('visible-first-workflow', 'Roundtrip visible first');
     const respond = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === '/api/executions/selected-workflow?source=temporal') {
-        return new Promise<Response>((resolve) => { pendingAuthorization = () => resolve(json(selected)); });
+      const url = new URL(String(input), window.location.origin);
+      if (url.pathname === '/api/executions') {
+        listRequests.push(url.searchParams);
+        return Promise.resolve(json({ items: [selected, visibleFirst], nextPageToken: null }));
       }
       return respond(input, init);
     });
+    renderApp();
+    await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    await userEvent.click(screen.getByRole('radio', { name: 'Full screen table' }));
+    await screen.findByRole('link', { name: 'Roundtrip selected' });
+    // The remembered workflow is visible but not the first row.
+    expect(screen.getAllByRole('link', { name: /^Roundtrip / }).map((link) => link.textContent))
+      .toEqual(['Roundtrip visible first', 'Roundtrip selected']);
+
     await userEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
-    await waitFor(() => expect(pendingAuthorization).not.toBeNull());
+    await waitFor(() => expect(window.location.pathname).toBe('/workflows/selected-workflow'));
+    expectContext('page-two');
+  });
+
+  it('ignores a pending first-workflow lookup after the list query changes', async () => {
+    await page.viewport(1280, 900);
+    window.history.replaceState({}, '', '/workflows?titleContains=Roundtrip&limit=25');
+    const held: Array<() => void> = [];
+    releaseHeldLists = () => held.splice(0).forEach((release) => release());
+    const respond = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), window.location.origin);
+      // Hold every list read for the filtered query, so the table has not
+      // settled and the shell must look up the first workflow itself.
+      if (url.pathname === '/api/executions' && url.searchParams.get('titleContains') === 'Roundtrip') {
+        return new Promise<Response>((resolve) => {
+          held.push(() => resolve(json({ items: [pageTwo], nextPageToken: null })));
+        });
+      }
+      return respond(input, init);
+    });
+    renderApp();
+    await userEvent.click(await screen.findByRole('radio', { name: 'Sidebar list' }));
+    await screen.findAllByText('Opening first workflow...');
     await userEvent.click(screen.getByRole('link', { name: 'MoonMind workflows' }));
     await waitFor(() => expect(new URLSearchParams(window.location.search).has('titleContains')).toBe(false));
     await screen.findByRole('link', { name: 'Roundtrip page two' });
-    pendingAuthorization!();
+    releaseHeldLists();
     await waitFor(() => expect(screen.queryByText('Opening first workflow...')).toBeNull());
     expect(window.location.pathname).toBe('/workflows');
     expect(new URLSearchParams(window.location.search).has('titleContains')).toBe(false);

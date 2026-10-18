@@ -231,8 +231,10 @@ number are authoritative.
 ### 7.4 Model
 
 The model control is a keyboard-filterable searchable combobox that always offers
-`Runtime default` followed by backend-provided choices. Custom entry is available
-only when capabilities allow it.
+`Runtime default` followed by backend-provided choices. Model names differ by
+Harness and Provider, so until both are chosen, or while capabilities are
+unavailable, it offers only `Runtime default` and the saved value rather than a
+guessed list. Custom entry is available only when capabilities allow it.
 
 | Value | Display |
 | --- | --- |
@@ -286,8 +288,10 @@ otherwise.
 fields. An `Advanced tier options` disclosure offers constrained structured
 editors for non-secret parameters, annotations, and server diagnostics. Collapsed
 data is preserved exactly, unknown keys are kept, credentials and credential
-references are rejected, JSON parse errors stay local to the card, and the normal
-model and effort workflow never requires opening it.
+references are rejected, and the normal model and effort workflow never requires
+opening it. JSON parse errors stay local to the card, but the typed text stays in
+the draft: it counts as an unsaved change, and any tier error blocks Save and
+focuses the field, so the previous value is never saved in its place.
 
 ### 7.8 Duplicate
 

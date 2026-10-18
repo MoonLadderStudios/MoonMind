@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
+import { responseError } from '../../lib/api/client';
 import { newRequestId } from '../../lib/requestId';
 import { formatStatusLabel } from '../../utils/formatters';
 
@@ -476,7 +477,7 @@ export function OperationsSettingsSection({
         headers: { Accept: 'application/json' },
       });
       if (!response.ok) {
-        throw new Error(`Failed to fetch worker status: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch worker status');
       }
       return WorkerSnapshotSchema.parse(await response.json());
     },
@@ -502,7 +503,7 @@ export function OperationsSettingsSection({
         headers: { Accept: 'application/json' },
       });
       if (!response.ok) {
-        throw new Error(`Failed to fetch worker shard health: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch worker shard health');
       }
       return WorkerShardHealthSchema.parse(await response.json());
     },
@@ -595,7 +596,7 @@ export function OperationsSettingsSection({
         { headers: { Accept: 'application/json' } },
       );
       if (!response.ok) {
-        throw new Error(`Failed to fetch deployment state: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch deployment state');
       }
       return DeploymentStackStateSchema.parse(await response.json());
     },
@@ -624,7 +625,7 @@ export function OperationsSettingsSection({
         { headers: { Accept: 'application/json' } },
       );
       if (!response.ok) {
-        throw new Error(`Failed to fetch deployment image targets: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch deployment image targets');
       }
       return ImageTargetsSchema.parse(await response.json());
     },

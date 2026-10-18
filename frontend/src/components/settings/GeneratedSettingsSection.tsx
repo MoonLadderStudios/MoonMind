@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { responseError } from '../../lib/api/client';
+import { formatHarnessLabel } from '../../runtime/runtimeTargets';
+import { fetchProviderProfiles, PROVIDER_PROFILE_QUERY_KEY } from './ProviderProfilesManager';
 import {
   useSettingsDraftGuard,
   useSettingsDraftRegistration,
@@ -284,8 +287,19 @@ function coerceInputValue(descriptor: SettingDescriptor, raw: string | boolean):
     value = Boolean(raw);
   } else if (descriptor.type === 'integer' || descriptor.type === 'number' || descriptor.ui === 'number') {
     const numeric = Number(raw);
-    value = Number.isInteger(numeric) ? numeric : Number(raw);
-    if (raw === '' || Number.isNaN(numeric)) {
+    value = numeric;
+    if (String(raw).trim() === '') {
+      // A cleared field stays empty. With no default, empty means "not set";
+      // otherwise Reset (not an empty value) is how the default comes back.
+      if (descriptor.default_value === null || descriptor.default_value === undefined) {
+        value = null;
+      } else {
+        value = '';
+        valid = false;
+        message = 'Enter a number.';
+      }
+    } else if (Number.isNaN(numeric)) {
+      value = String(raw);
       valid = false;
       message = 'Enter a number.';
     } else if (descriptor.constraints?.minimum !== null && descriptor.constraints?.minimum !== undefined && numeric < descriptor.constraints.minimum) {
@@ -299,6 +313,8 @@ function coerceInputValue(descriptor: SettingDescriptor, raw: string | boolean):
     value = parseList(String(raw));
   } else if (descriptor.type === 'object' || descriptor.ui === 'key_value') {
     value = parseKeyValue(String(raw));
+  } else if (descriptor.ui === 'provider_profile_picker') {
+    value = raw === '' ? null : String(raw);
   } else {
     value = String(raw);
     if ((descriptor.type === 'secret_ref' || descriptor.ui === 'secret_ref_picker') && value && !String(value).includes('://')) {
@@ -348,7 +364,7 @@ async function fetchCatalog(scope: SettingScope): Promise<SettingsCatalogRespons
     headers: { Accept: 'application/json' },
   });
   if (!response.ok) {
-    throw new Error(`Failed to fetch settings catalog: ${response.statusText}`);
+    throw await responseError(response, 'Failed to fetch settings catalog');
   }
   return response.json();
 }
@@ -359,7 +375,7 @@ async function fetchSettingAudit(scope: SettingScope, key: string): Promise<Sett
     headers: { Accept: 'application/json' },
   });
   if (!response.ok) {
-    throw new Error(`Failed to fetch settings audit: ${response.statusText}`);
+    throw await responseError(response, 'Failed to fetch settings audit');
   }
   return response.json();
 }
@@ -806,7 +822,8 @@ export function GeneratedSettingsSection({
           <div className="mt-4 divide-y divide-slate-200 dark:divide-slate-800">
             {categoryDescriptors.map((descriptor) => {
               const pendingChange = pending[descriptor.key];
-              const currentValue = pendingChange?.value ?? descriptor.effective_value;
+              // A pending null ("not set") is shown as such, not as the saved value.
+              const currentValue = pendingChange ? pendingChange.value : descriptor.effective_value;
               return (
                 <div key={descriptor.key} className="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
                   <div className="min-w-0 space-y-2">
@@ -912,6 +929,54 @@ export function GeneratedSettingsSection({
   );
 }
 
+/** Chooses a saved Provider Profile ID; a value with no matching profile stays visible. */
+function ProviderProfilePicker({
+  descriptor,
+  value,
+  onChange,
+}: {
+  descriptor: SettingDescriptor;
+  value: unknown;
+  onChange: (descriptor: SettingDescriptor, value: string | boolean) => void;
+}) {
+  const profilesQuery = useQuery({
+    queryKey: PROVIDER_PROFILE_QUERY_KEY,
+    queryFn: fetchProviderProfiles,
+  });
+  const profiles = profilesQuery.data ?? [];
+  const current = typeof value === 'string' ? value : '';
+  const missing = current !== '' && !profiles.some((profile) => profile.profile_id === current);
+  return (
+    <div className="space-y-1">
+      <select
+        aria-label={descriptor.title}
+        className={settingFieldClassName()}
+        value={current}
+        onChange={(event) => onChange(descriptor, event.target.value)}
+      >
+        <option value="">Not set</option>
+        {profiles.map((profile) => (
+          <option key={profile.profile_id} value={profile.profile_id}>
+            {profile.profile_id} · {formatHarnessLabel(profile.runtime_id)} /{' '}
+            {profile.provider_label || profile.provider_id}
+            {profile.enabled === false ? ' (disabled)' : ''}
+          </option>
+        ))}
+        {missing ? (
+          <option value={current}>{profilesQuery.isSuccess ? `${current} (not found)` : current}</option>
+        ) : null}
+      </select>
+      {profilesQuery.isLoading ? (
+        <p className="text-xs text-slate-500 dark:text-slate-400">Loading Provider Profiles…</p>
+      ) : profilesQuery.isError ? (
+        <p className="text-xs text-amber-700 dark:text-amber-300">
+          Provider Profiles could not be loaded. The current value is kept.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function renderControl(
   descriptor: SettingDescriptor,
   value: unknown,
@@ -1007,6 +1072,10 @@ function renderControl(
         readOnly
       />
     );
+  }
+
+  if (descriptor.ui === 'provider_profile_picker') {
+    return <ProviderProfilePicker descriptor={descriptor} value={value} onChange={onChange} />;
   }
 
   return (

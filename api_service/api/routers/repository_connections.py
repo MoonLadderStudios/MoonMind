@@ -1,7 +1,7 @@
 """Source Control connection routes (#4019) and GitHub App enrollment (#4022).
 
-Mounts the connection list/detail, PAT creation, rotation, disable, and
-assignment operations plus the trusted-boundary App setup begin/callback on
+Mounts the connection list/detail, PAT creation, rotation, disable/enable,
+and assignment operations plus the trusted-boundary App setup begin/callback on
 the existing authenticated API surface. Every write goes through
 ``RepositoryConnectionService``, the single writable authority for
 connections. PAT creation and rotation store the token as a Managed Secret
@@ -829,6 +829,37 @@ async def disable_repository_connection(
     service = RepositoryConnectionService(db)
     try:
         saved = await service.disable_connection(
+            connection_id,
+            actor_ref=principal,
+            request_id=request.request_id,
+            principal_ref=principal,
+            principal_scope=_SYSTEM_SCOPE,
+        )
+    except RepositoryRouteError as exc:
+        await db.rollback()
+        raise _connection_error_to_http(exc) from exc
+    return await _view_for(service, saved)
+
+
+@router.post(
+    "/{connection_id}/enable",
+    response_model=RepositoryConnectionView,
+    response_model_by_alias=True,
+    summary="Allow new use of a disabled connection again",
+    tags=["RepositoryConnections"],
+)
+async def enable_repository_connection(
+    connection_id: str,
+    request: ConnectionActionRequest,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionView:
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    service = RepositoryConnectionService(db)
+    try:
+        saved = await service.enable_connection(
             connection_id,
             actor_ref=principal,
             request_id=request.request_id,

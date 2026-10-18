@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { responseError } from '../lib/api/client';
 import { useUrlSearchText } from '../lib/urlSearchText';
 
 type Category = 'artifacts' | 'reports' | 'observability';
@@ -57,7 +58,7 @@ function EvidenceSection({ category, apiBase }: { category: Category; apiBase: s
       const search = new URLSearchParams({ category, offset: String(offset), limit: String(limit) });
       if (query) search.set('q', query);
       const response = await fetch(`${apiBase}/artifacts/collection?${search}`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Collection request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Collection request failed (${response.status})`);
       return response.json() as Promise<CollectionResponse>;
     },
   });
