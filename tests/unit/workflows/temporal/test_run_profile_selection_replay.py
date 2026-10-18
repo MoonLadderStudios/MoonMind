@@ -21,7 +21,18 @@ async def capture_account_requests(requests: list[dict]) -> list[dict]:
 class _LegacyAccountSelection(MoonMindRunWorkflow):
     @staticmethod
     def _workflow_patch_enabled(patch_id: str) -> bool:
-        if patch_id == RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH:
+        if patch_id in (
+            RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH,
+            "run-account-intent-normalization-v2",
+        ):
+            return False
+        return MoonMindRunWorkflow._workflow_patch_enabled(patch_id)
+
+
+class _V1AccountSelection(MoonMindRunWorkflow):
+    @staticmethod
+    def _workflow_patch_enabled(patch_id: str) -> bool:
+        if patch_id == "run-account-intent-normalization-v2":
             return False
         return MoonMindRunWorkflow._workflow_patch_enabled(patch_id)
 
@@ -54,6 +65,9 @@ def _account_requests(run: MoonMindRunWorkflow) -> list[dict]:
                     "executionProfileRef": "recorded-account",
                 },
                 {"execution_profile_ref": "chosen-account"},
+                {"profile_id": "chosen-account"},
+                {"provider_profile": "chosen-account"},
+                {"profileSelector": {"providerId": None, "tagsAll": [], "tagsAny": []}},
             ]
         )
     ]
@@ -66,6 +80,17 @@ class _LegacyAccountSelectionWorkflow:
         return await workflow.execute_activity(
             capture_account_requests,
             _account_requests(_LegacyAccountSelection()),
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+
+
+@workflow.defn(name="AccountSelectionReplayFixture")
+class _V1AccountSelectionWorkflow:
+    @workflow.run
+    async def run(self) -> list[dict]:
+        return await workflow.execute_activity(
+            capture_account_requests,
+            _account_requests(_V1AccountSelection()),
             start_to_close_timeout=timedelta(seconds=10),
         )
 
@@ -96,6 +121,24 @@ async def test_account_selection_old_and_new_activity_payloads_replay():
                     "saved-account",
                     "recorded-account",
                     "saved-account",
+                    "saved-account",
+                    "saved-account",
+                    "saved-account",
+                ],
+            ),
+            (
+                "v1",
+                _V1AccountSelectionWorkflow,
+                [
+                    None,
+                    "saved-account",
+                    "recorded-account",
+                    "chosen-account",
+                    "chosen-account",
+                    "chosen-account",
+                    "saved-account",
+                    "saved-account",
+                    None,
                 ],
             ),
             (
@@ -108,6 +151,9 @@ async def test_account_selection_old_and_new_activity_payloads_replay():
                     "chosen-account",
                     "chosen-account",
                     "chosen-account",
+                    "chosen-account",
+                    "chosen-account",
+                    "saved-account",
                 ],
             ),
         ):

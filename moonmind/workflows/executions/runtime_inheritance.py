@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
 from moonmind.runtime_intent import (
+    has_profile_selector,
+    provider_profile_ref_from_mapping,
     is_custom_selection,
     merge_runtime_selection,
     model_selection_fields,
@@ -462,21 +464,12 @@ def apply_inherited_runtime_to_payload(
     task_payload: dict[str, Any],
     inherited: InheritedRuntime,
 ) -> None:
-    """Stamp ``inherited`` runtime fields onto a normalised workflow payload.
+    """Fill omitted child intent from the admitted parent in place.
 
-    Mutates ``payload`` and ``task_payload`` in place.  Applied strictly
-    non-destructively: any field the caller already set (``targetRuntime``,
-    ``workflow.runtime.{mode,model,effort,executionProfileRef,profileId,
-    providerProfile}``, or top-level ``profileId`` / ``providerProfile``)
-    is preserved; inheritance only fills in the gaps.  The downstream
-    runtime resolution path then sees the merged request.
-
-    Note: when the caller has supplied an explicit profile selector
-    (``providerProfileRef`` / ``profileId`` / ``providerProfile`` anywhere in the payload),
-    ``executionProfileRef`` is *also* left blank.  Downstream selection
-    prefers ``executionProfileRef`` over ``profileId``/``providerProfile``
-    (see ``run.py``), so backfilling the parent's ref would silently
-    override the child's explicit profile.
+    Exact account aliases and nonempty pool selectors suppress parent account
+    backfill at every supported payload layer. Otherwise a parent pin could
+    constrain the child's own account choice at dispatch. Model intent retains
+    its independent selection inheritance.
     """
 
     runtime_block = (
@@ -488,17 +481,9 @@ def apply_inherited_runtime_to_payload(
     explicit_target_runtime = _coerce_str(
         payload.get("targetRuntime")
     ) or _coerce_str(runtime_block.get("mode"))
-    explicit_profile_id = (
-        _coerce_str(runtime_block.get("providerProfileRef"))
-        or _coerce_str(runtime_block.get("profileId"))
-        or _coerce_str(runtime_block.get("providerProfile"))
-        or _coerce_str(runtime_block.get("executionProfileRef"))
-        or _coerce_str(payload.get("providerProfileRef"))
-        or _coerce_str(payload.get("profileId"))
-        or _coerce_str(payload.get("providerProfile"))
-        or _coerce_str(task_payload.get("providerProfileRef"))
-        or _coerce_str(task_payload.get("profileId"))
-        or _coerce_str(task_payload.get("providerProfile"))
+    explicit_account_intent = any(
+        provider_profile_ref_from_mapping(source) or has_profile_selector(source)
+        for source in (runtime_block, task_payload, payload)
     )
 
     if inherited.target_runtime and not explicit_target_runtime:
@@ -520,10 +505,10 @@ def apply_inherited_runtime_to_payload(
     if (
         inherited.execution_profile_ref
         and not _coerce_str(runtime_block.get("executionProfileRef"))
-        and not explicit_profile_id
+        and not explicit_account_intent
     ):
         runtime_block["executionProfileRef"] = inherited.execution_profile_ref
-    if inherited.profile_id and not explicit_profile_id:
+    if inherited.profile_id and not explicit_account_intent:
         runtime_block["profileId"] = inherited.profile_id
     if inherited.agent_profile:
         explicit_agent_profile = payload.get("agentProfile")
@@ -531,7 +516,7 @@ def apply_inherited_runtime_to_payload(
             explicit_agent_profile = runtime_block.get("agentProfile")
         if (
             not isinstance(explicit_agent_profile, Mapping)
-            and not explicit_profile_id
+            and not explicit_account_intent
         ):
             runtime_block["agentProfile"] = dict(inherited.agent_profile)
     if inherited.omnigent and not isinstance(payload.get("omnigent"), Mapping):

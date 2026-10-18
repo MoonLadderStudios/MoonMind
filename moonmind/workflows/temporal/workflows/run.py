@@ -342,6 +342,7 @@ RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
 RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH = "run-step-profile-selection-inheritance-v1"
+RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH = "run-account-intent-normalization-v2"
 
 
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
@@ -22536,10 +22537,30 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         profile_selection_inheritance = self._workflow_patch_enabled(
             RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH
         )
-        if profile_selection_inheritance:
+        normalized_account_intent = self._workflow_patch_enabled(
+            RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH
+        )
+        if normalized_account_intent:
             raw_execution_profile_ref = (
                 provider_profile_ref_from_mapping(runtime_block)
                 or provider_profile_ref_from_mapping(node_inputs)
+            )
+        elif profile_selection_inheritance:
+            # V1 histories retain the original five aliases and selector test.
+            raw_execution_profile_ref = next(
+                (
+                    str(value).strip()
+                    for source in (runtime_block, node_inputs)
+                    for key in (
+                        "providerProfileRef",
+                        "profileId",
+                        "providerProfile",
+                        "executionProfileRef",
+                        "execution_profile_ref",
+                    )
+                    if (value := source.get(key)) is not None and str(value).strip()
+                ),
+                None,
             )
         else:
             # Keep retained command payloads on their recorded alias precedence.
@@ -22564,10 +22585,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             execution_profile_ref is None
             and workflow_parameters is not None
             and not (
-                profile_selection_inheritance
-                and (
-                    has_profile_selector(runtime_block)
-                    or has_profile_selector(node_inputs)
+                (normalized_account_intent or profile_selection_inheritance)
+                and any(
+                    (
+                        has_profile_selector(source)
+                        if normalized_account_intent
+                        else isinstance(source.get("profileSelector"), Mapping)
+                        and bool(source["profileSelector"])
+                    )
+                    for source in (runtime_block, node_inputs)
                 )
             )
         ):

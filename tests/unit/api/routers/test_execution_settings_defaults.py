@@ -62,7 +62,11 @@ async def test_saved_profile_default_normalizes_settings_subjects(
                 ),
             )
             selected = await _saved_default_provider_profile_ref(
-                session=session, user=user, payloads=({},)
+                session=session,
+                user=user,
+                payloads=({},),
+                task_payload={},
+                parameter_payload={},
             )
             assert selected == (
                 "workspace-default" if principal_kind == "system" else "user-default"

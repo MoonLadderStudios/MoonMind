@@ -143,6 +143,7 @@ from moonmind.omnigent.workspace_sources import (
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
+    has_profile_selector,
 )
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.checkpoint_branch_models import (
@@ -245,6 +246,7 @@ from moonmind.workflows.executions.control_stop_continuation import (
     ControlStopContinuationError,
 )
 from moonmind.workflows.executions.execution_contract import (
+    workflow_requires_agent,
     WorkflowContractError,
     WorkflowInputAttachmentRef,
     WorkflowSkillSelectors,
@@ -8765,15 +8767,18 @@ async def _saved_default_provider_profile_ref(
     session: Any,
     user: Any,
     payloads: Sequence[Mapping[str, Any]],
+    task_payload: Mapping[str, Any],
+    parameter_payload: Mapping[str, Any],
 ) -> str | None:
-    """Fill only omitted account intent through the Settings Catalog owner."""
+    """Fill only omitted agent account intent through the Settings Catalog."""
+    if not workflow_requires_agent(task_payload, parameter_payload):
+        return None
     for payload in payloads:
         if payload.get("agentProfile") is not None:
             return None
         # A selector delegates account choice to the provider pool. An exact
         # saved default would constrain that pool, not merely fill an omission.
-        selector = payload.get("profileSelector")
-        if isinstance(selector, Mapping) and selector:
+        if has_profile_selector(payload):
             return None
         if provider_profile_ref_from_mapping(payload):
             return None
@@ -9321,11 +9326,6 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                 ("effort", "effort"),
                 ("modelTier", "modelTier"),
                 ("tierFallback", "tierFallback"),
-                ("profileId", "profileId"),
-                ("providerProfile", "providerProfile"),
-                ("providerProfileRef", "providerProfileRef"),
-                ("executionProfileRef", "executionProfileRef"),
-                ("execution_profile_ref", "executionProfileRef"),
             ):
                 value = validated_runtime.get(source_key)
                 if (
@@ -9351,6 +9351,9 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
                         normalized_runtime[target_key] = value
                     else:
                         normalized_runtime[target_key] = normalized_value
+            profile_ref = provider_profile_ref_from_mapping(validated_runtime)
+            if profile_ref:
+                normalized_runtime["providerProfileRef"] = profile_ref
             for key in ("modelTier", "tierFallback"):
                 if key in validated_runtime:
                     normalized_runtime[key] = validated_runtime[key]
@@ -9951,25 +9954,22 @@ async def _preset_expansion_target_runtime(
         else None
     )
     provider_profile = None
-    raw_profile_id = str(
-        runtime_payload.get("providerProfileRef")
-        or runtime_payload.get("profileId")
-        or runtime_payload.get("providerProfile")
-        or task_payload.get("providerProfileRef")
-        or task_payload.get("profileId")
-        or task_payload.get("providerProfile")
-        or request_payload.get("providerProfileRef")
-        or request_payload.get("profileId")
-        or request_payload.get("providerProfile")
-        or ""
-    ).strip()
+    raw_profile_id = (
+        provider_profile_ref_from_mapping(runtime_payload)
+        or provider_profile_ref_from_mapping(task_payload)
+        or provider_profile_ref_from_mapping(request_payload)
+    )
     if raw_profile_id and not authored_runtime and session is not None:
-        provider_profile = await _load_provider_profile_for_runtime(
-            session=session,
-            profile_id=raw_profile_id,
-            selected_runtime=None,
-            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
-        )
+        try:
+            provider_profile = await load_provider_profile_for_runtime(
+                session=session,
+                profile_id=raw_profile_id,
+                selected_runtime=None,
+            )
+        except ProviderProfileNotFoundError:
+            # Expansion may prove this is tool-only work. Final admission
+            # validates every remaining account pin before launch effects.
+            provider_profile = None
     return resolve_runtime_target_selection(
         surface=AuthoringSurface.preset_expansion,
         requested_runtime=authored_runtime,
@@ -12544,6 +12544,8 @@ async def _create_execution_from_workflow_request(
     # Resolve once before preset expansion so it and admission share the same
     # saved account, even if Settings changes while this request is in flight.
     default_profile_ref = await _saved_default_provider_profile_ref(
+        task_payload=task_payload,
+        parameter_payload=payload,
         session=session,
         user=user,
         payloads=(_coerce_mapping(task_payload.get("runtime")), task_payload, payload),
@@ -12565,6 +12567,12 @@ async def _create_execution_from_workflow_request(
             profile_routes=profile_routes,
         )
         _reject_submit_version_identity(task_payload)
+
+    if default_profile_ref and not workflow_requires_agent(task_payload, payload):
+        expanded_runtime = _coerce_mapping(task_payload.get("runtime"))
+        if expanded_runtime.get("providerProfileRef") == default_profile_ref:
+            expanded_runtime.pop("providerProfileRef")
+            task_payload["runtime"] = expanded_runtime
 
     (
         objective_attachment_refs,
@@ -12797,18 +12805,11 @@ async def _create_execution_from_workflow_request(
     if derived_task_title:
         normalized_task_for_planner["title"] = derived_task_title
 
-    raw_profile_id = str(
-        runtime_payload.get("providerProfileRef")
-        or runtime_payload.get("profileId")
-        or runtime_payload.get("providerProfile")
-        or task_payload.get("providerProfileRef")
-        or task_payload.get("profileId")
-        or task_payload.get("providerProfile")
-        or payload.get("providerProfileRef")
-        or payload.get("profileId")
-        or payload.get("providerProfile")
-        or ""
-    ).strip() or None
+    raw_profile_id = (
+        provider_profile_ref_from_mapping(runtime_payload)
+        or provider_profile_ref_from_mapping(task_payload)
+        or provider_profile_ref_from_mapping(payload)
+    )
     _provider_profile = None
     if raw_profile_id and session is not None:
         _provider_profile = await _load_provider_profile_for_runtime(
@@ -13101,7 +13102,10 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             "agentProfile is supported only for targetRuntime='omnigent'."
         )
-    if canonical_target_runtime == "omnigent":
+    if canonical_target_runtime == "omnigent" and (
+        workflow_requires_agent(normalized_task_for_planner, initial_parameters)
+        or agent_profile_selection is not None
+    ):
         if agent_profile_selection is not None and not isinstance(
             agent_profile_selection, Mapping
         ):
@@ -13244,7 +13248,10 @@ async def _create_execution_from_workflow_request(
 
     persisted_omnigent_plan = None
     prelaunch_task_input_snapshot_ref = ""
-    if canonical_target_runtime == "omnigent":
+    if canonical_target_runtime == "omnigent" and (
+        workflow_requires_agent(normalized_task_for_planner, initial_parameters)
+        or agent_profile_selection is not None
+    ):
         if session is None:
             raise _invalid_workflow_request(
                 "Omnigent execution-plan compilation requires durable storage."
@@ -13627,9 +13634,16 @@ async def _resolve_recurring_runtime_metadata(
         else {}
     )
     default_profile_ref = await _saved_default_provider_profile_ref(
+        task_payload=task_payload,
+        parameter_payload=parameter_payload,
         session=session,
         user=user,
-        payloads=(raw_runtime_payload, task_payload, parameter_payload, request_payload),
+        payloads=(
+            raw_runtime_payload,
+            task_payload,
+            parameter_payload,
+            request_payload,
+        ),
     )
     if default_profile_ref:
         raw_runtime_payload = {
@@ -13665,28 +13679,19 @@ async def _resolve_recurring_runtime_metadata(
         if runtime_was_authored
         else None
     )
-    raw_profile_id = None
-    for candidate_profile_id in (
-        runtime_payload.get("providerProfileRef"),
-        runtime_payload.get("profileId"),
-        runtime_payload.get("providerProfile"),
-        runtime_payload.get("executionProfileRef"),
-        task_payload.get("providerProfileRef"),
-        task_payload.get("profileId"),
-        task_payload.get("providerProfile"),
-        parameter_payload.get("providerProfileRef"),
-        parameter_payload.get("profileId"),
-        parameter_payload.get("providerProfile"),
-        request_payload.get("providerProfileRef"),
-        request_payload.get("profileId"),
-        request_payload.get("providerProfile"),
-    ):
-        if candidate_profile_id is None:
-            continue
-        normalized_profile_id = str(candidate_profile_id).strip()
-        if normalized_profile_id:
-            raw_profile_id = normalized_profile_id
-            break
+    raw_profile_id = next(
+        (
+            ref
+            for source in (
+                runtime_payload,
+                task_payload,
+                parameter_payload,
+                request_payload,
+            )
+            if (ref := provider_profile_ref_from_mapping(source))
+        ),
+        None,
+    )
     provider_profile = None
     if raw_profile_id:
         provider_profile = await _load_provider_profile_for_runtime(
@@ -15682,6 +15687,20 @@ def _raw_request_selects_omnigent(
     reaching the legacy no-plan session supervisor.
     """
 
+    if workflow_type == "MoonMind.UserWorkflow":
+        _, task_payload = _recurring_workflow_payload(parameters)
+        if not workflow_requires_agent(task_payload, parameters) and not any(
+            source.get("agentProfile") is not None
+            or "agentProfileSnapshot" in source
+            or "omnigentExecutionPlan" in source
+            for source in (
+                _coerce_mapping(task_payload.get("runtime")),
+                _coerce_mapping(parameters.get("runtime")),
+                task_payload,
+                parameters,
+            )
+        ):
+            return False
     runtime_ids = resolve_launch_target_profile_selection(
         {"initialParameters": parameters}
     ).runtime_ids
@@ -15801,6 +15820,8 @@ async def create_execution(
             if not isinstance(runtime_payload, Mapping):
                 runtime_payload = initial_parameters.get("runtime")
             default_profile_ref = await _saved_default_provider_profile_ref(
+                task_payload=task_payload,
+                parameter_payload=initial_parameters,
                 session=session,
                 user=user,
                 payloads=(
