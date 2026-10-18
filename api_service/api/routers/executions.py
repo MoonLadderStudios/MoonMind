@@ -8759,6 +8759,39 @@ async def _load_provider_profile_for_runtime(
         ) from exc
 
 
+async def _saved_default_provider_profile_ref(
+    *,
+    session: Any,
+    user: Any,
+    payloads: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Fill only omitted account intent through the Settings Catalog owner."""
+    for payload in payloads:
+        if payload.get("agentProfile") is not None:
+            return None
+        if any(
+            str(payload.get(key) or "").strip()
+            for key in (
+                "providerProfileRef",
+                "profileId",
+                "providerProfile",
+                "executionProfileRef",
+            )
+        ):
+            return None
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    user_id = getattr(user, "id", None)
+    catalog = SettingsCatalogService(
+        session=session,
+        workspace_id=getattr(user, "workspace_id", None),
+        user_id=user_id,
+    )
+    return await catalog.default_provider_profile_ref(
+        scope="user" if user_id is not None else "workspace"
+    )
+
+
 async def _profile_route_runtime(
     *,
     session: Any,
@@ -12510,6 +12543,19 @@ async def _create_execution_from_workflow_request(
     if len(depends_on) > 10:
         raise _invalid_workflow_request(f"{field_name} can have a maximum of 10 items.")
 
+    # Resolve once before preset expansion so it and admission share the same
+    # saved account, even if Settings changes while this request is in flight.
+    default_profile_ref = await _saved_default_provider_profile_ref(
+        session=session,
+        user=user,
+        payloads=(_coerce_mapping(task_payload.get("runtime")), task_payload, payload),
+    )
+    if default_profile_ref:
+        task_payload["runtime"] = {
+            **_coerce_mapping(task_payload.get("runtime")),
+            "providerProfileRef": default_profile_ref,
+        }
+
     # The Profile route preset expansion previews is the one admission uses.
     profile_routes: dict[str, str] = {}
     if session is not None:
@@ -13554,6 +13600,7 @@ async def _resolve_recurring_runtime_metadata(
     request_payload: Mapping[str, Any],
     *,
     session: Any | None,
+    user: Any = None,
 ) -> dict[str, Any]:
     workflow_type = str(
         request_payload.get("workflowType")
@@ -13581,6 +13628,16 @@ async def _resolve_recurring_runtime_metadata(
         if isinstance(parameter_payload.get("runtime"), Mapping)
         else {}
     )
+    default_profile_ref = await _saved_default_provider_profile_ref(
+        session=session,
+        user=user,
+        payloads=(raw_runtime_payload, task_payload, parameter_payload, request_payload),
+    )
+    if default_profile_ref:
+        raw_runtime_payload = {
+            **raw_runtime_payload,
+            "providerProfileRef": default_profile_ref,
+        }
     runtime_payload = _validate_runtime_tier_intent_for_submit(
         raw_runtime_payload,
         field_name="payload.workflow.runtime",
@@ -14003,6 +14060,7 @@ async def _handle_recurring_schedule(
     runtime_metadata = await _resolve_recurring_runtime_metadata(
         request_payload,
         session=session,
+        user=user,
     )
     target = _build_recurring_target(
         request_payload,

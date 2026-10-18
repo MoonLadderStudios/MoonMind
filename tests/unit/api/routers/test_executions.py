@@ -1968,6 +1968,20 @@ def _reset_default_runtime_for_legacy_tests(monkeypatch: pytest.MonkeyPatch) -> 
     yield
 
 
+@pytest.fixture(autouse=True)
+def settings_overrides(monkeypatch):
+    """Keep router tests' settings storage hermetic, with explicit saved rows."""
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    overrides = {}
+
+    async def get_overrides(_service, *, scopes, **_kwargs):
+        return {key: row for key, row in overrides.items() if key[0] in scopes}
+
+    monkeypatch.setattr(SettingsCatalogService, "_get_overrides", get_overrides)
+    return overrides
+
+
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app = FastAPI()
@@ -21109,6 +21123,192 @@ def test_mm3833_cli_profile_pin_selects_the_create_route(monkeypatch) -> None:
     assert parameters["profileId"] == "subscription"
     assert parameters["model"] == "gpt-profile-default"
     assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "cli", "recurring"])
+@pytest.mark.parametrize("setting_scope", ["workspace", "user"])
+def test_saved_profile_default_selects_create_route_and_model(
+    monkeypatch, settings_overrides, entrypoint, setting_scope
+) -> None:
+    from api_service.db.models import SettingsOverride
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = ManagedAgentProviderProfile(
+        profile_id="saved-subscription",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        enabled=True,
+        is_default=False,
+        default_model="gpt-saved-default",
+        default_model_tier=1,
+        model_tiers=[],
+        secret_refs={},
+        max_parallel_runs=1,
+        cooldown_after_429_seconds=0,
+    )
+    saved_default = SettingsOverride(
+        scope=setting_scope,
+        key="workflow.default_provider_profile_ref",
+        value_json=profile.profile_id,
+        value_version=1,
+    )
+
+    settings_overrides[(setting_scope, saved_default.key)] = saved_default
+
+    async def execute(statement):
+        entity = statement.column_descriptions[0].get("entity")
+        rows = [profile] if entity is ManagedAgentProviderProfile else []
+        return SimpleNamespace(
+            all=lambda: rows,
+            scalars=lambda: SimpleNamespace(all=lambda: rows),
+        )
+
+    body = (
+        build_execution_payload(instructions="Use the saved default Profile.")
+        if entrypoint == "cli"
+        else {
+            "type": "workflow",
+            "payload": {"workflow": {"instructions": "Use the saved default Profile."}},
+        }
+    )
+    create_definition = AsyncMock(
+        return_value=SimpleNamespace(
+            id=uuid4(),
+            name="Saved default",
+            cron="0 * * * *",
+            timezone="UTC",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    if entrypoint == "recurring":
+        body["payload"]["schedule"] = {"mode": "recurring", "cron": "0 * * * *"}
+        monkeypatch.setattr(
+            "api_service.services.recurring_workflows_service.RecurringWorkflowsService.create_definition",
+            create_definition,
+        )
+    for test_client, service in _mm3788_client(profile, execute=execute):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    if entrypoint == "recurring":
+        parameters = create_definition.await_args.kwargs["target"]["initialParameters"]
+        assert (
+            parameters["workflow"]["runtime"]["providerProfileRef"]
+            == profile.profile_id
+        )
+        service.create_execution.assert_not_awaited()
+    else:
+        parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["profileId"] == "saved-subscription"
+    assert parameters["model"] == "gpt-saved-default"
+    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+
+
+def test_saved_profile_default_does_not_replace_explicit_profile(monkeypatch) -> None:
+    from moonmind.workflow_cli import build_execution_payload
+
+    default_ref = AsyncMock(return_value="another-account")
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        default_ref,
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="pinned-account", runtime_id="codex_cli"
+    )
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=build_execution_payload(
+                instructions="Keep my chosen account.",
+                provider_profile=profile.profile_id,
+            ),
+        )
+
+    assert response.status_code == 201, response.text
+    assert (
+        service.create_execution.await_args.kwargs["initial_parameters"]["profileId"]
+        == profile.profile_id
+    )
+    default_ref.assert_not_awaited()
+
+
+def test_saved_profile_default_does_not_replace_agent_profile_account(
+    client, monkeypatch
+) -> None:
+    from moonmind.workflow_cli import build_execution_payload
+
+    default_ref = AsyncMock(return_value="another-account")
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        default_ref,
+    )
+    body = build_execution_payload(
+        instructions="Keep the Agent Profile account.",
+        agent_profile="team-codex",
+        provider_profile="oauth-team",
+    )
+    # The account is pinned only inside the explicit Agent Profile selection.
+    body["payload"]["task"].pop("providerProfileRef")
+    test_client, service, _user = client
+    response, compile_plan, _binding = _mm3935_post_through_plan_owner(
+        test_client, service, body, db_session=_Mm3833AgentProfileAdmissionSession()
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["agentProfileSnapshot"]["providerProfileRef"] == "oauth-team"
+    default_ref.assert_not_awaited()
+
+
+def test_saved_profile_default_is_fixed_before_preset_expansion(monkeypatch) -> None:
+    from moonmind.workflows.executions.preset_goal_scheduler import GoalPresetSchedule
+
+    default_ref = AsyncMock(side_effect=["subscription", "different-account"])
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        default_ref,
+    )
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    captured = {}
+
+    class Catalog:
+        def __init__(self, session):
+            pass
+
+        async def expand_template(self, **kwargs):
+            captured.update(kwargs)
+            return {"steps": [{"id": "step-1", "instructions": "Run"}]}
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal, slug="goal-preset", inputs={}, reason="test", issue_key=None
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService", Catalog
+    )
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {"workflow": {"goal": "Run a preset"}},
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert captured["context"]["targetRuntime"] == "codex_cli"
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["profileId"] == "subscription"
+    default_ref.assert_awaited_once()
 
 
 def test_mm3833_cli_envelope_with_a_forged_runtime_fails_before_effects() -> None:

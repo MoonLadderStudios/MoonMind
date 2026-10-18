@@ -1158,6 +1158,24 @@ class SettingsCatalogService:
             diagnostics=diagnostics,
         )
 
+    async def default_provider_profile_ref(self, *, scope: SettingScope) -> str | None:
+        """Return the saved default, omitting missing or disabled Profiles.
+
+        Readiness remains the launch owner's responsibility; an unready account
+        must not silently select another account instead.
+        """
+        effective = await self.effective_value_async(
+            "workflow.default_provider_profile_ref", scope=scope
+        )
+        if not isinstance(effective.value, str) or not effective.value.strip():
+            return None
+        if any(
+            diagnostic.code in {"provider_profile_not_found", "provider_profile_disabled"}
+            for diagnostic in effective.diagnostics
+        ):
+            return None
+        return effective.value.strip()
+
     async def effective_values_async(
         self,
         *,
