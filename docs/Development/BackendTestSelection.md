@@ -223,6 +223,11 @@ The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
 cleans only SDK time-skipping and local dev-server children directly owned by
 that worker. CLI cleanup recognizes `server start-dev` for both SDK-cached and
 caller-supplied executable paths, while retaining the direct-parent boundary.
+On Linux, cleanup rechecks each child's ownership and invocation after opening
+a stable process handle, force-stops it like the SDK's normal shutdown, and
+waits at most two seconds total for exit without reaping SDK-owned children.
+This avoids leaving a CLI draining after its worker exits; an unconfirmed exit
+is reported without replacing the original timeout failure.
 Real subprocess cases retain an independently owned control server during a
 fatal worker timeout and debugger suppression. The image-build cache owner
 materializes both SDK-selected binaries before hermetic runtime execution;
