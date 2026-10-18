@@ -51,10 +51,6 @@ async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
                     "agentRunId": "old-agent-run",
-                    "recoverySource": {"workflowId": "mm:failed", "runId": "run-old"},
-                    "recoveryCheckpointRef": "artifact://checkpoint/old",
-                    "preservedSteps": [{"id": "step-1"}],
-                    "completedSteps": [{"id": "step-0"}],
                 },
                 idempotency_key=None,
             )
@@ -88,7 +84,3 @@ async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
         "runId": source.run_id,
     }
     assert "agentRunId" not in rerun.parameters
-    assert "recoverySource" not in rerun.parameters
-    assert "recoveryCheckpointRef" not in rerun.parameters
-    assert "preservedSteps" not in rerun.parameters
-    assert "completedSteps" not in rerun.parameters

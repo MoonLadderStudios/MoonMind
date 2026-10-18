@@ -109,7 +109,6 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
-    StepExecutionDetailModel,
     StepExecutionManifestModel,
     StepLedgerSnapshotModel,
     UpdateExecutionRequest,
@@ -454,7 +453,7 @@ def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
         "logicalStepId": "implement",
         "executionOrdinal": 2,
         "stepExecutionId": "wf-phase-11:run-phase-11:implement:execution:2",
-        "reason": "recover_from_failed_step",
+        "reason": "runtime_recovered",
         "status": "failed",
         "terminalDisposition": "retryable",
         "startedAt": now,
@@ -484,13 +483,6 @@ def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
             "summary": "Publish skipped.",
         },
         "outputs": {"summary": "Step failed after producing ref-only evidence."},
-        "lineage": {
-            "sourceWorkflowId": "wf-source",
-            "sourceRunId": "run-source",
-            "sourceLogicalStepId": "implement",
-            "sourceExecutionOrdinal": 1,
-            "lineageExecutionOrdinal": 2,
-        },
     }
     payload.update(overrides)
     return StepExecutionManifestModel.model_validate(payload)
@@ -755,44 +747,6 @@ def test_step_execution_detail_payload_tolerates_nullable_manifest_sections() ->
         payload["recoveryEligibility"]["disabledReasonCode"]
         == "CHECKPOINT_ARTIFACT_INVALID"
     )
-
-
-def test_step_execution_detail_payload_reads_preserved_steps_from_recovery_source() -> None:
-    payload = _step_execution_detail_payload(
-        _phase_11_manifest(
-            recoverySource={
-                "sourceWorkflowId": "wf-source",
-                "sourceRunId": "run-source",
-                "preservedSteps": [
-                    {
-                        "logicalStepId": "plan",
-                        "title": "Plan",
-                        "sourceExecutionOrdinal": 1,
-                        "stateCheckpointRef": "artifact://checkpoint/plan-state",
-                        "outputRefs": {"summaryRef": "artifact://output/plan-summary"},
-                    }
-                ],
-            },
-        ),
-        manifest_artifact_ref="artifact://manifest/implement-2",
-    )
-
-    preserved = payload["preservedStepProvenance"]
-    detail = StepExecutionDetailModel.model_validate(payload)
-
-    assert preserved == [
-        {
-            "logicalStepId": "plan",
-            "title": "Plan",
-            "sourceWorkflowId": "wf-source",
-            "sourceRunId": "run-source",
-            "sourceExecutionOrdinal": 1,
-            "stateCheckpointRef": "artifact://checkpoint/plan-state",
-            "outputRefs": {"summaryRef": "artifact://output/plan-summary"},
-        }
-    ]
-    assert detail.preserved_step_provenance[0].logical_step_id == "plan"
-    assert detail.preserved_step_provenance[0].source_workflow_id == "wf-source"
 
 
 def test_step_execution_detail_payload_exposes_environment_fix_guidance() -> None:
@@ -14417,7 +14371,6 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
         "elapsedMs": 60000,
         "serverNow": "2026-04-08T12:01:00Z",
         "precision": "live",
-        "preserved": False,
     }
 
 def test_get_execution_steps_surfaces_accepted_agent_run_progress(
@@ -14687,15 +14640,7 @@ def _step_execution_manifest_payload(
         "logicalStepId": "implement",
         "executionOrdinal": attempt,
         "executionScope": "run",
-        "lineage": {
-            "sourceWorkflowId": "mm:source",
-            "sourceRunId": "source-run",
-            "sourceLogicalStepId": "implement",
-            "sourceExecutionOrdinal": attempt,
-            "relationship": "recover_from_failed_step",
-            "lineageExecutionOrdinal": attempt + 1,
-        },
-        "reason": "recover_from_failed_step" if attempt > 1 else "initial_execution",
+        "reason": "runtime_recovered" if attempt > 1 else "initial_execution",
         "status": status,
         "terminalDisposition": "accepted" if status == "completed" else "retryable",
         "startedAt": "2026-05-19T10:00:00Z",
@@ -14825,7 +14770,6 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
         "elapsedMs": 60000,
         "serverNow": "2026-05-19T10:01:00Z",
         "precision": "fallback",
-        "preserved": False,
     }
     assert "summary" not in payload["stepExecutions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
@@ -14992,8 +14936,8 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["executionOrdinal"] == 2
-    assert body["sourceExecutionOrdinal"] == 2
-    assert body["lineage"]["relationship"] == "recover_from_failed_step"
+    assert "lineage" not in body
+    assert "sourceExecutionOrdinal" not in body
     assert body["inputRefs"] == {"preparedInputRef": "art-input-2"}
     assert body["contextRefs"] == {
         "contextBundleRef": "art-context-2",
@@ -17568,20 +17512,6 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
             ],
             "degradedReason": "step_attachment_missing",
         },
-        "recoverySource": {
-            "sourceWorkflowId": "mm:source",
-            "sourceRunId": "run-source",
-            "recoveryCheckpointRef": "artifact://resume/checkpoint",
-            "preservedSteps": [
-                {
-                    "logicalStepId": "prepare",
-                    "title": "Prepare context",
-                    "sourceExecutionOrdinal": 1,
-                    "sourceWorkflowId": "mm:source",
-                    "sourceRunId": "run-source",
-                }
-            ],
-        },
     }
     mock_service.describe_execution.return_value = record
     app.dependency_overrides[_get_service] = lambda: mock_service
@@ -17608,11 +17538,6 @@ def test_describe_execution_exposes_target_attachment_and_recovery_diagnostics(
     assert step["attachments"][0]["filename"] == "step.png"
     assert step["failures"][0]["phase"] == "materialization"
     assert step["failures"][1]["phase"] == "degraded"
-    assert diagnostics["recovery"]["resumed"] is True
-    assert diagnostics["recovery"]["sourceWorkflowId"] == "mm:source"
-    assert diagnostics["recovery"]["sourceRunId"] == "run-source"
-    assert diagnostics["recovery"]["checkpointRef"] == "artifact://resume/checkpoint"
-    assert diagnostics["recovery"]["preservedSteps"][0]["logicalStepId"] == "prepare"
 
 def test_describe_execution_distinguishes_empty_step_attachment_target(
     monkeypatch: pytest.MonkeyPatch,
@@ -17779,94 +17704,6 @@ def test_describe_execution_preserves_target_semantics_for_alias_payloads(
     assert step["refs"][0]["artifactRef"] == "artifact://context/step"
 
 
-def test_describe_execution_surfaces_failed_step_execution_recovery_phase(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = FastAPI()
-    app.include_router(router)
-    mock_service = AsyncMock()
-    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
-    record.parameters = {
-        "workflow": {"instructions": "Resume failed while executing step."},
-        "targetDiagnostics": {
-            "recovery": {
-                "resumed": True,
-                "sourceWorkflowId": "mm:source",
-                "sourceRunId": "run-source",
-                "failedRecoveryPhase": "failed_step_execution",
-            }
-        },
-    }
-    record.memo = {
-        **record.memo,
-        "recovery_checkpoint_ref": "artifact://resume/checkpoint",
-        "resume_failed_step_id": "inspect",
-        "recovery_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
-        "resume_plan_digest": "sha256:plan",
-        "resume_completed_step_refs": ["artifact://completed/prepare"],
-    }
-    mock_service.describe_execution.return_value = record
-    app.dependency_overrides[_get_service] = lambda: mock_service
-    _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
-    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
-
-    with TestClient(app) as test_client:
-        response = test_client.get("/api/executions/mm:wf-1")
-
-    assert response.status_code == 200
-    recovery = response.json()["targetDiagnostics"]["recovery"]
-    assert recovery["sourceWorkflowId"] == "mm:source"
-    assert recovery["sourceRunId"] == "run-source"
-    assert recovery["failedRecoveryPhase"] == "failed_step_execution"
-
-
-def test_describe_execution_prefers_diagnostics_failed_phase_over_disabled_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = FastAPI()
-    app.include_router(router)
-    mock_service = AsyncMock()
-    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
-    record.parameters = {
-        "workflow": {"instructions": "Resume failed while executing step."},
-        "targetDiagnostics": {
-            "recovery": {
-                "resumed": True,
-                "sourceWorkflowId": "mm:source",
-                "sourceRunId": "run-source",
-                "failedRecoveryPhase": "failed_step_execution",
-            }
-        },
-    }
-    record.memo = {
-        **record.memo,
-        "resume_failed_step_id": "inspect",
-        "resume_completed_step_refs": ["artifact://completed/prepare"],
-        "recovery_workspace_checkpoint_ref": "artifact://workspace/checkpoint",
-        "resume_plan_digest": "sha256:plan",
-    }
-    mock_service.describe_execution.return_value = record
-    app.dependency_overrides[_get_service] = lambda: mock_service
-    _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=True)
-    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    monkeypatch.setattr(
-        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
-    )
-
-    with TestClient(app) as test_client:
-        response = test_client.get("/api/executions/mm:wf-1")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert (
-        body["targetDiagnostics"]["recovery"]["failedRecoveryPhase"]
-        == "failed_step_execution"
-    )
-
-
 def test_describe_execution_omits_recovery_for_routine_recovery_action_gating(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -17900,7 +17737,7 @@ def test_describe_execution_omits_recovery_for_routine_recovery_action_gating(
     body = response.json()
     assert body["retryFromStep"]["disabledReason"] == "state_not_eligible"
     assert body["targetDiagnostics"]["targets"][0]["targetKind"] == "objective"
-    assert body["targetDiagnostics"]["recovery"] is None
+    assert "recovery" not in body["targetDiagnostics"]
 
 
 def test_mm773_serialize_execution_surfaces_comparison_source_related_run() -> None:

@@ -9041,51 +9041,6 @@ def test_jira_orchestrate_external_handoff_requires_passing_moonspec_gate(
     )
 
 
-def test_jira_orchestrate_external_handoff_uses_preserved_verify_gate_state(
-    mock_run_workflow: MoonMindRunWorkflow,
-) -> None:
-    mock_run_workflow._step_ledger_rows = [
-        {
-            "logicalStepId": "verify-final",
-            "status": "succeeded",
-            "terminalDisposition": "accepted",
-            "preservedFrom": {
-                "workflowId": "mm:source",
-                "runId": "run-source",
-                "logicalStepId": "verify-final",
-                "executionOrdinal": 1,
-            },
-        }
-    ]
-    mock_run_workflow._rebuild_step_ledger_index()
-
-    mock_run_workflow._record_preserved_step_terminal_state(
-        "verify-final",
-        {
-            "id": "verify-final",
-            "tool": {"name": "moonspec-verify"},
-            "inputs": {},
-        },
-    )
-
-    assert mock_run_workflow._step_terminal_dispositions["verify-final"] == "accepted"
-    assert mock_run_workflow._publish_context["moonSpecGate"] == {
-        "logicalStepId": "verify-final",
-        "verdict": "FULLY_IMPLEMENTED",
-    }
-    assert (
-        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
-            {
-                "id": "code-review",
-                "inputs": {
-                    "annotations": {"jiraOrchestrateRole": "code-review-handoff"},
-                },
-            }
-        )
-        is None
-    )
-
-
 def _handoff_node(role: str = "pull-request-handoff", node_id: str = "pr-handoff") -> dict[str, Any]:
     return {
         "id": node_id,

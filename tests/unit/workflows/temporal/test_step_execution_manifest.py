@@ -79,15 +79,11 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
             "schemaVersion": "v1",
             "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
             "executionScope": "run",
-            "lineage": {
-                "sourceWorkflowId": "workflow-0",
-                "sourceRunId": "run-0",
-                "sourceLogicalStepId": "implement-story",
-                "sourceExecutionOrdinal": 1,
-                "relationship": "recover_from_failed_step",
-                "lineageExecutionOrdinal": 3,
-            },
-            "reason": "recover_from_failed_step",
+            # Stored v1 manifests carry these keys, always empty since linked
+            # failed-step recovery was removed.
+            "lineage": None,
+            "recoverySource": None,
+            "reason": "runtime_recovered",
             "status": "completed",
             "terminalDisposition": "accepted",
             "input": {"taskInputSnapshotRef": "artifact-input"},
@@ -105,8 +101,7 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
     assert STEP_EXECUTION_MANIFEST_CONTENT_TYPE == (
         "application/vnd.moonmind.step-execution+json;version=1"
     )
-    assert manifest.lineage is not None
-    assert manifest.lineage.source_execution_ordinal == 1
+    assert manifest.lineage is None
     assert manifest.model_dump(by_alias=True)["terminalDisposition"] == "accepted"
 
 

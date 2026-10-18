@@ -43,39 +43,6 @@ _RESUMABLE_BOUNDARY_PRIORITY: tuple[str, ...] = (
     "before_publication",
 )
 
-# Map checkpoint validation failure codes to manifest validation outcomes.
-_VALIDATION_FAILURE_RESULT: dict[str, str] = {
-    "artifact_missing": "missing",
-    "artifact_unauthorized": "unauthorized",
-    "artifact_corrupted": "corrupted",
-    "unsafe_checkpoint": "corrupted",
-    "policy_incompatible": "incompatible",
-    "workspace_incompatible": "incompatible",
-    "checkpoint_kind_incompatible": "incompatible",
-    "unsupported_checkpoint_kind": "incompatible",
-}
-
-# Manifest validation outcome -> EvidenceRefStatusModel status for a degraded
-# checkpoint evidence ref.
-_EVIDENCE_STATUS_FOR_RESULT: dict[str, str] = {
-    "missing": "missing",
-    "corrupted": "invalid",
-    "unauthorized": "unauthorized",
-    "incompatible": "incompatible",
-    "invalid": "invalid",
-    "not_evaluated": "unavailable",
-}
-
-# Manifest validation outcome -> compact blocked reason code.
-_BLOCKED_REASON_FOR_RESULT: dict[str, str] = {
-    "missing": "no_checkpoint_evidence",
-    "corrupted": "checkpoint_corrupted",
-    "unauthorized": "checkpoint_unauthorized",
-    "incompatible": "workspace_policy_incompatible",
-    "invalid": "checkpoint_invalid",
-    "not_evaluated": "checkpoint_not_validated",
-}
-
 # Side-effect classes whose external effects cannot safely repeat; an accepted
 # (already-occurred) effect of these classes must be compensated on resume.
 _NON_IDEMPOTENT_SIDE_EFFECT_CLASSES = {
@@ -236,7 +203,6 @@ def _resolve_failed_step(
     *,
     rows: Sequence[Mapping[str, Any]],
     failure_diagnostic: Mapping[str, Any] | None,
-    recovery_failed_step_id: str | None,
 ) -> tuple[str | None, int | None]:
     """Determine the failed logical step id and its execution ordinal."""
 
@@ -251,8 +217,6 @@ def _resolve_failed_step(
                 failed_step_id = _text(row.get("logicalStepId"))
                 if failed_step_id:
                     break
-    if not failed_step_id:
-        failed_step_id = _text(recovery_failed_step_id)
     if not failed_step_id:
         return None, None
     execution_ordinal: int | None = None
@@ -292,7 +256,6 @@ def resolve_resume_checkpoint_step_id(
     terminal_dispositions: Mapping[str, str] | None = None,
     checkpoint_refs_by_boundary: Mapping[str, Mapping[str, str]] | None = None,
     failure_diagnostic: Mapping[str, Any] | None = None,
-    recovery_failed_step_id: str | None = None,
 ) -> str | None:
     """Return the step whose checkpoint evidence a resume would restore.
 
@@ -316,7 +279,6 @@ def resolve_resume_checkpoint_step_id(
     failed_step_id, _ = _resolve_failed_step(
         rows=rows,
         failure_diagnostic=failure_diagnostic,
-        recovery_failed_step_id=recovery_failed_step_id,
     )
     if _checkpoint_refs_for_step(
         failed_step_id,
@@ -342,20 +304,11 @@ def build_failed_run_recovery_manifest(
     checkpoint_refs_by_boundary: Mapping[str, Mapping[str, str]] | None = None,
     side_effect_records: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     failure_diagnostic: Mapping[str, Any] | None = None,
-    recovery_failed_step_id: str | None = None,
-    checkpoint_validation_failure: Mapping[str, Any] | None = None,
     checkpoint_kind: str | None = None,
     runtime_capabilities: RuntimeExecutionCapabilities | None = None,
     restore_route_registered: bool = False,
 ) -> FailedRunRecoveryManifestModel:
-    """Build a fail-closed recovery manifest for a failed run.
-
-    ``checkpoint_validation_failure`` is supplied when the run failed precisely
-    because a resume-path checkpoint validation/restoration failed; it carries
-    ``failureCode`` and optional ``checkpointRef`` so the manifest records the
-    real degraded outcome (missing/corrupted/unauthorized/incompatible) and
-    blocks resume rather than degrading to a silent full rerun.
-    """
+    """Build a fail-closed recovery manifest for a failed run."""
 
     rows = [row for row in step_ledger_rows if isinstance(row, Mapping)]
     rows_by_id: dict[str, Mapping[str, Any]] = {}
@@ -376,7 +329,6 @@ def build_failed_run_recovery_manifest(
     failed_step_id, failed_execution_ordinal = _resolve_failed_step(
         rows=rows,
         failure_diagnostic=failure_diagnostic,
-        recovery_failed_step_id=recovery_failed_step_id,
     )
     last_accepted_step = _resolve_last_accepted_step(
         rows=rows, terminal_dispositions=terminal_dispositions
@@ -401,56 +353,17 @@ def build_failed_run_recovery_manifest(
 
     side_effect_dispositions = _build_side_effect_dispositions(side_effect_records)
 
-    # Determine the checkpoint validation outcome.
-    validation_failure_code: str | None = None
-    degraded_result: str | None = None
-    degraded_ref: str | None = None
-    if isinstance(checkpoint_validation_failure, Mapping):
-        validation_failure_code = _text(
-            checkpoint_validation_failure.get("failureCode")
+    checkpoint_evidence = [
+        EvidenceRefStatusModel(
+            category="checkpoint",
+            status="available",
+            artifactRef=ref,
+            boundary=boundary,
         )
-        degraded_ref = _text(
-            checkpoint_validation_failure.get("checkpointRef")
-        ) or resume_ref
-        degraded_result = _VALIDATION_FAILURE_RESULT.get(
-            validation_failure_code or "", "invalid"
-        )
+        for boundary, ref in resume_refs.items()
+    ]
 
-    checkpoint_evidence: list[EvidenceRefStatusModel] = []
-    for boundary, ref in resume_refs.items():
-        is_degraded = (
-            degraded_result is not None
-            and degraded_ref is not None
-            and ref == degraded_ref
-        )
-        if is_degraded:
-            checkpoint_evidence.append(
-                EvidenceRefStatusModel(
-                    category="checkpoint",
-                    status=_EVIDENCE_STATUS_FOR_RESULT.get(degraded_result, "invalid"),
-                    artifactRef=ref,
-                    boundary=boundary,
-                    reasonCode=validation_failure_code or degraded_result,
-                )
-            )
-        else:
-            checkpoint_evidence.append(
-                EvidenceRefStatusModel(
-                    category="checkpoint",
-                    status="available",
-                    artifactRef=ref,
-                    boundary=boundary,
-                )
-            )
-
-    if degraded_result is not None:
-        validation = RecoveryCheckpointValidationModel(
-            result=degraded_result,
-            failureCode=validation_failure_code,
-            checkpointRef=degraded_ref,
-            boundary=resume_boundary,
-        )
-    elif resume_ref:
+    if resume_ref:
         validation = RecoveryCheckpointValidationModel(
             result="valid",
             checkpointRef=resume_ref,
@@ -502,16 +415,8 @@ def build_failed_run_recovery_manifest(
     else:
         if not failed_step_id:
             blocked_reason = "no_failed_step_execution_to_resume"
-        elif degraded_result is not None:
-            blocked_reason = _BLOCKED_REASON_FOR_RESULT.get(
-                degraded_result, "checkpoint_invalid"
-            )
         elif not resume_ref:
             blocked_reason = "no_checkpoint_evidence"
-        elif validation.result != "valid":
-            blocked_reason = _BLOCKED_REASON_FOR_RESULT.get(
-                validation.result, "checkpoint_not_validated"
-            )
         else:
             # Checkpoint evidence is valid; resume is blocked solely by a
             # blocked or uncompensated non-idempotent side effect.

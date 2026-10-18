@@ -50,25 +50,13 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
                 failure_policy=None,
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
-                    "recoverySource": {"workflowId": "mm:old", "runId": "run-old"},
-                    "recoveryCheckpointRef": "artifact://checkpoint/old",
-                    "preservedSteps": [{"logicalStepId": "plan"}],
-                    "completedSteps": [{"logicalStepId": "plan"}],
                     "workflow": {
                         "title": "Original failed task",
                         "instructions": "Original instructions.",
                         "recovery": {
-                            "kind": "recover_from_failed_step",
+                            "kind": "exact_full_rerun",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
-                        },
-                        "resume": {
-                            "kind": "recover_from_failed_step",
-                            "sourceWorkflowId": "mm:old",
-                            "sourceRunId": "run-old",
-                            "failedStepId": "implement",
-                            "recoveryCheckpointRef": "artifact://checkpoint/old",
-                            "taskInputSnapshotRef": "artifact://snapshot/old",
                         },
                     },
                 },
@@ -121,7 +109,6 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
     assert refreshed_source.state is MoonMindWorkflowState.FAILED
     assert refreshed_source.close_status is TemporalExecutionCloseStatus.FAILED
     assert refreshed_source.parameters["workflow"]["instructions"] == "Original instructions."
-    assert refreshed_source.parameters["recoveryCheckpointRef"] == "artifact://checkpoint/old"
 
     assert edited_retry.input_ref == "artifact://input/edited"
     assert edited_retry.parameters["rerunSource"] == {
@@ -136,8 +123,3 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
         "sourceWorkflowId": refreshed_source.workflow_id,
         "sourceRunId": refreshed_source.run_id,
     }
-    assert "recoverySource" not in edited_retry.parameters
-    assert "recoveryCheckpointRef" not in edited_retry.parameters
-    assert "preservedSteps" not in edited_retry.parameters
-    assert "completedSteps" not in edited_retry.parameters
-    assert "resume" not in edited_retry.parameters["workflow"]

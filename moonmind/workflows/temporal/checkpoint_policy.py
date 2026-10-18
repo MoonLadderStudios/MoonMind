@@ -76,28 +76,6 @@ def _boundary_token(boundary: Any) -> str:
     return str(value or "").strip()
 
 
-def _workspace_policy_from_recovery_source(
-    recovery_source: Mapping[str, Any] | None,
-) -> WorkspacePolicy:
-    workspace: Mapping[str, Any] = {}
-    if isinstance(recovery_source, Mapping):
-        candidate = recovery_source.get("recoveryWorkspace")
-        if not isinstance(candidate, Mapping):
-            candidate = recovery_source.get("recovery_workspace")
-        if isinstance(candidate, Mapping):
-            workspace = candidate
-    raw = str(
-        workspace.get("workspacePolicy")
-        or workspace.get("workspace_policy")
-        or "restore_pre_execution"
-    ).strip()
-    return (
-        "start_from_last_passed_commit"
-        if raw == "start_from_last_passed_commit"
-        else "restore_pre_execution"
-    )
-
-
 def _external_evidence(boundary: str) -> tuple[str, ...]:
     if boundary == "before_execution":
         return ("externalStateRef", "idempotencyKey", "runtimeSessionId")
@@ -112,7 +90,6 @@ def resolve_checkpoint_policy(
     capabilities: RuntimeExecutionCapabilities | None = None,
     workspace_authority: WorkspaceAuthority | None = None,
     workspace_locator: Mapping[str, Any] | None = None,
-    recovery_source: Mapping[str, Any] | None = None,
     # Transitional input only: aliases are canonicalized by the registry before
     # policy is selected. No identity-specific policy exists here.
     runtime_kind: str | None = None,
@@ -209,11 +186,7 @@ def resolve_checkpoint_policy(
             restore_activity=None, supported_checkpoint_kinds=(),
         )
         return ResolvedCheckpointPolicy(
-            workspace_policy=(
-                _workspace_policy_from_recovery_source(recovery_source)
-                if token == "before_recovery_restoration"
-                else "restore_pre_execution"
-            ),
+            workspace_policy="restore_pre_execution",
             checkpoint_kind=None,
             resumable=False,
             required_evidence=(),
@@ -252,11 +225,7 @@ def resolve_checkpoint_policy(
         supported_checkpoint_kinds=capabilities.checkpoint_capture_kinds,
     )
     return ResolvedCheckpointPolicy(
-        workspace_policy=(
-            _workspace_policy_from_recovery_source(recovery_source)
-            if token == "before_recovery_restoration"
-            else "restore_pre_execution"
-        ),
+        workspace_policy="restore_pre_execution",
         checkpoint_kind=kind,
         resumable=kind in capabilities.checkpoint_restore_kinds,
         required_evidence=required_evidence,

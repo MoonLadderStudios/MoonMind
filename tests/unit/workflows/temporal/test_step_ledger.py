@@ -18,9 +18,10 @@ from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     build_progress_summary,
     build_step_ledger_snapshot,
+    invalidate_downstream_steps_for_changed_output,
     mark_step_execution_manifest_evidence,
     mark_step_checkpoint_evidence,
-    materialize_preserved_steps,
+    record_dependency_inputs_for_step,
     refresh_ready_steps,
     upsert_step_check,
     update_step_row,
@@ -211,7 +212,6 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "elapsedMs": None,
                 "serverNow": updated_at.isoformat(),
                 "precision": "unavailable",
-                "preserved": False,
             },
             "summary": None,
             "checks": [],
@@ -273,7 +273,6 @@ def test_update_step_row_adds_live_and_terminal_timing() -> None:
         "elapsedMs": 0,
         "serverNow": started_at.isoformat(),
         "precision": "live",
-        "preserved": False,
     }
 
     completed = update_step_row(
@@ -290,7 +289,6 @@ def test_update_step_row_adds_live_and_terminal_timing() -> None:
         "elapsedMs": 102000,
         "serverNow": completed_at.isoformat(),
         "precision": "fallback",
-        "preserved": False,
     }
 
 
@@ -367,92 +365,6 @@ def test_update_step_row_preserves_terminal_timing_for_metadata_updates() -> Non
     assert updated["timing"] == original_timing
 
 
-def test_materialize_preserved_steps_keeps_original_timing() -> None:
-    created_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
-    resumed_at = datetime(2026, 4, 7, 13, 0, tzinfo=UTC)
-    source_started = datetime(2026, 4, 7, 11, 58, tzinfo=UTC)
-    source_ended = datetime(2026, 4, 7, 12, 0, 14, tzinfo=UTC)
-    rows = build_initial_step_rows(
-        ordered_nodes=[
-            {
-                "id": "plan",
-                "tool": {"type": "skill", "name": "moonspec-plan"},
-                "inputs": {"title": "Plan"},
-            }
-        ],
-        dependency_map={"plan": []},
-        updated_at=created_at,
-    )
-
-    materialize_preserved_steps(
-        rows,
-        source_workflow_id="wf-source",
-        source_run_id="run-source",
-        preserved_steps=[
-            {
-                "logicalStepId": "plan",
-                "status": "completed",
-                "stateCheckpointRef": "artifact://checkpoint/plan",
-                "sourceExecutionOrdinal": 1,
-                "artifacts": {"outputPrimary": "artifact://output/plan"},
-                "startedAt": source_started.isoformat(),
-                "updatedAt": source_ended.isoformat(),
-            }
-        ],
-        updated_at=resumed_at,
-    )
-
-    assert rows[0]["preservedFrom"] == {
-        "workflowId": "wf-source",
-        "runId": "run-source",
-        "logicalStepId": "plan",
-        "executionOrdinal": 1,
-    }
-    assert rows[0]["timing"] == {
-        "startedAt": source_started.isoformat(),
-        "endedAt": source_ended.isoformat(),
-        "durationMs": 134000,
-        "elapsedMs": 134000,
-        "serverNow": resumed_at.isoformat(),
-        "precision": "fallback",
-        "preserved": True,
-    }
-
-
-def test_snapshot_preserves_preserved_step_source_timing() -> None:
-    resumed_at = datetime(2026, 4, 7, 13, 0, tzinfo=UTC)
-    queried_at = datetime(2026, 4, 7, 13, 30, tzinfo=UTC)
-    source_started = datetime(2026, 4, 7, 11, 58, tzinfo=UTC)
-    source_ended = datetime(2026, 4, 7, 12, 0, 14, tzinfo=UTC)
-    row = {
-        "logicalStepId": "plan",
-        "status": "completed",
-        "startedAt": source_started.isoformat(),
-        "updatedAt": resumed_at.isoformat(),
-        "preservedFrom": {"workflowId": "source", "runId": "run"},
-        "timing": {
-            "startedAt": source_started.isoformat(),
-            "endedAt": source_ended.isoformat(),
-            "durationMs": 134000,
-            "elapsedMs": 134000,
-            "serverNow": resumed_at.isoformat(),
-            "precision": "fallback",
-            "preserved": True,
-        },
-    }
-
-    snapshot = build_step_ledger_snapshot(
-        workflow_id="wf",
-        run_id="run",
-        rows=[row],
-        queried_at=queried_at,
-    )
-
-    assert snapshot["steps"][0]["timing"]["endedAt"] == source_ended.isoformat()
-    assert snapshot["steps"][0]["timing"]["durationMs"] == 134000
-    assert snapshot["steps"][0]["timing"]["serverNow"] == resumed_at.isoformat()
-
-
 def test_snapshot_advances_active_timing_with_query_time() -> None:
     started_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
     mutation_at = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
@@ -469,7 +381,6 @@ def test_snapshot_advances_active_timing_with_query_time() -> None:
             "elapsedMs": 0,
             "serverNow": mutation_at.isoformat(),
             "precision": "live",
-            "preserved": False,
         },
     }
 
@@ -742,7 +653,7 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
     }
 
 
-def test_mark_step_checkpoint_evidence_marks_completed_step_eligible() -> None:
+def test_mark_step_checkpoint_evidence_tracks_latest_and_boundary_refs() -> None:
     updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)
     rows = build_initial_step_rows(
         ordered_nodes=[
@@ -782,34 +693,7 @@ def test_mark_step_checkpoint_evidence_marks_completed_step_eligible() -> None:
     assert row.refs.checkpoint_refs_by_boundary == {
         "after_execution": "artifact://step/implement/1"
     }
-    assert row.resume_preservation is not None
-    assert row.resume_preservation.eligible is True
-    assert row.resume_preservation.reason == "complete"
 
-
-def test_mark_step_checkpoint_evidence_records_bounded_ineligible_reason() -> None:
-    updated_at = datetime(2026, 4, 7, 12, 16, tzinfo=UTC)
-    rows = build_initial_step_rows(
-        ordered_nodes=[
-            {"id": "plan", "inputs": {"title": "Plan"}},
-        ],
-        dependency_map={"plan": []},
-        updated_at=updated_at,
-    )
-    update_step_row(
-        rows,
-        "plan",
-        updated_at=updated_at,
-        status="completed",
-    )
-
-    mark_step_checkpoint_evidence(rows, "plan", updated_at=updated_at)
-
-    row = StepLedgerRowModel.model_validate(rows[0])
-    assert row.resume_preservation is not None
-    assert row.resume_preservation.eligible is False
-    assert row.resume_preservation.reason == "missing_output_refs"
-    assert "output ref" in (row.resume_preservation.message or "")
 
 def test_update_step_row_allows_explicit_last_error_clear() -> None:
     updated_at = datetime(2026, 4, 7, 12, 12, tzinfo=UTC)
@@ -1013,3 +897,106 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         "artifact://attempt-2",
     ]
     assert "schemaVersion" not in second["artifacts"]
+
+
+def test_dependency_inputs_pin_specific_producing_attempt_outputs() -> None:
+    now = datetime(2026, 4, 7, 12, 20, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "prepare", "title": "Prepare"},
+            {"id": "implement", "title": "Implement"},
+        ],
+        dependency_map={"implement": ["prepare"]},
+        updated_at=now,
+    )
+    for output in ("artifact://prepare-output-v1", "artifact://prepare-output-v2"):
+        update_step_row(
+            rows,
+            "prepare",
+            updated_at=now,
+            status="succeeded",
+            increment_attempt=True,
+            artifacts={
+                "outputSummary": "artifact://prepare-summary",
+                "outputPrimary": output,
+            },
+        )
+
+    signatures = record_dependency_inputs_for_step(
+        rows,
+        "implement",
+        workflow_id="mm:run",
+        run_id="run-1",
+        updated_at=now,
+    )
+
+    assert signatures["prepare"] == {
+        "producingAttempt": {
+            "workflowId": "mm:run",
+            "runId": "run-1",
+            "logicalStepId": "prepare",
+            "executionOrdinal": 2,
+        },
+        "outputRefs": {
+            "outputSummary": "artifact://prepare-summary",
+            "outputPrimary": "artifact://prepare-output-v2",
+        },
+    }
+    assert rows[1]["dependencyInputs"] == signatures
+
+
+def test_changed_upstream_output_marks_executed_downstream_for_revalidation() -> None:
+    now = datetime(2026, 4, 7, 12, 25, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "prepare", "title": "Prepare"},
+            {"id": "implement", "title": "Implement"},
+            {"id": "verify", "title": "Verify"},
+        ],
+        dependency_map={"implement": ["prepare"], "verify": ["implement"]},
+        updated_at=now,
+    )
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=now,
+        status="succeeded",
+        increment_attempt=True,
+        artifacts={"outputPrimary": "artifact://implement-output-v1"},
+    )
+    record_dependency_inputs_for_step(
+        rows,
+        "verify",
+        workflow_id="mm:run",
+        run_id="run-1",
+        updated_at=now,
+    )
+    update_step_row(
+        rows,
+        "verify",
+        updated_at=now,
+        status="succeeded",
+        increment_attempt=True,
+        artifacts={"outputPrimary": "artifact://verify-output-v1"},
+    )
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=now,
+        status="succeeded",
+        increment_attempt=True,
+        artifacts={"outputPrimary": "artifact://implement-output-v2"},
+    )
+
+    invalidated = invalidate_downstream_steps_for_changed_output(
+        rows,
+        "implement",
+        workflow_id="mm:run",
+        run_id="run-1",
+        updated_at=now,
+    )
+
+    assert invalidated == ["verify"]
+    assert rows[2]["status"] == "pending"
+    assert rows[2]["waitingReason"] == "requires_revalidation"
+    assert rows[2]["dependencyReuseGate"]["status"] == "requires_revalidation"

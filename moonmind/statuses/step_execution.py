@@ -43,7 +43,6 @@ StepExecutionReason = Literal[
     "quality_gate_failed",
     "tests_failed",
     "runtime_recovered",
-    "recover_from_failed_step",
     "checkpoint_branch",
     "remediation_context",
     "operator_requested",
