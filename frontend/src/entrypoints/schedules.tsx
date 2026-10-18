@@ -2053,12 +2053,9 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     return () => window.clearTimeout(timer);
   }, [listUrlQuery, routeDefinitionId]);
 
-  // Follow URL changes this page did not write (the Recurring nav link,
+  // Follow URL changes this table did not write (the Recurring nav link,
   // Back/Forward): the page stays mounted across query changes.
   const adoptUrlSearch = (search: string) => {
-    if (routeDefinitionId) {
-      return;
-    }
     const next = recurringListUrlStateFromSearch(new URLSearchParams(search));
     if (recurringListUrlQuery(next) === listUrlQuery) {
       return;

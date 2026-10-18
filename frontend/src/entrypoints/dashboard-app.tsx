@@ -1160,13 +1160,16 @@ function RoutedDashboardPage({
     const syncPreferences = () => {
       const prefs = readDashboardPreferences();
       const normalizedPath = window.location.pathname.replace(/\/$/, '');
-      // `/workflows` keeps its route-owned table; other Workflows routes show
-      // the saved choice (a saved `table` maps to the route's default).
-      setRequestedMode(
-        normalizedPath === '/workflows' || normalizedPath.startsWith('/workflows/')
-          ? workflowModeForPath(normalizedPath, prefs.workflowListDisplayMode)
-          : prefs.workflowListDisplayMode,
-      );
+      // `/workflows` keeps its route-owned mode (the table, or the mode being
+      // resolved after a choice); other Workflows routes show the saved choice,
+      // with a saved `table` mapped to the route's default.
+      if (normalizedPath !== '/workflows') {
+        setRequestedMode(
+          normalizedPath.startsWith('/workflows/')
+            ? workflowModeForPath(normalizedPath, prefs.workflowListDisplayMode)
+            : prefs.workflowListDisplayMode,
+        );
+      }
       setLastSelectedWorkflowId(prefs.lastSelectedWorkflowId.trim() || null);
       // Recurring preferences are seeded into local state on mount, so a
       // preference change while the shell stays mounted (for example a reset from
