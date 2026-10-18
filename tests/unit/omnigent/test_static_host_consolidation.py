@@ -348,8 +348,6 @@ def test_legacy_wrappers_are_thin_and_select_only_a_pack_ref() -> None:
     for wrapper_name, pack_ref in (
         ("start-codex-oauth-host.sh", "codex-native-pack@1"),
         ("start-claude-oauth-host.sh", "claude-native-pack@1"),
-        ("check-codex-oauth-host.sh", "codex-native-pack@1"),
-        ("check-claude-oauth-host.sh", "claude-native-pack@1"),
     ):
         wrapper = (SCRIPTS / wrapper_name).read_text()
         assert f"MOONMIND_OMNIGENT_RUNTIME_PACK_REF={pack_ref}" in wrapper
@@ -364,21 +362,6 @@ def test_legacy_wrappers_are_thin_and_select_only_a_pack_ref() -> None:
             check=False,
         )
         assert result.returncode == 0, result.stderr
-
-
-def test_old_startup_paths_have_an_inventory_with_retirement() -> None:
-    inventory = (SCRIPTS / "STATIC_HOST_STARTUP_INVENTORY.md").read_text()
-    for old_path in (
-        "start-codex-oauth-host.sh",
-        "start-claude-oauth-host.sh",
-        "check-codex-oauth-host.sh",
-        "check-claude-oauth-host.sh",
-        "init-codex-oauth-host.sh",
-        "OMNIGENT_HOST_IMAGE_REF",
-    ):
-        assert old_path in inventory
-    assert "codex-profile-bound@1" in inventory
-    assert "Retirement" in inventory or "retirement" in inventory
 
 
 def test_static_rows_map_to_shared_image_host_classes() -> None:

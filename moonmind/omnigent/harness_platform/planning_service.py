@@ -1070,44 +1070,12 @@ class OmnigentPlannedHostResolver:
                 "exact execution plan launch artifact cannot be resolved",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
-        raw = await self._artifacts.read_bytes(
-            str(plan.payload.effectiveLaunchSnapshotRef)
+        raw = await self._artifacts.read_bytes(str(plan.payload.effectiveLaunchSnapshotRef))
+        from moonmind.omnigent.execution_profiles import (
+            validate_planned_effective_launch,
         )
-        if "sha256:" + hashlib.sha256(raw).hexdigest() != (
-            plan.payload.effectiveLaunchSnapshotDigest
-        ):
-            raise HarnessPlatformError(
-                "effective launch artifact digest conflicts with the plan",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-            )
-        try:
-            launch = json.loads(raw)
-            if not isinstance(launch, Mapping):
-                raise TypeError("effective launch artifact is not an object")
-            from moonmind.omnigent.execution_profiles import (
-                validate_effective_launch_snapshot,
-            )
 
-            validate_effective_launch_snapshot(launch)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise HarnessPlatformError(
-                "effective launch artifact is invalid",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-            ) from exc
-        expected = {
-            "launchPolicyRef": plan.payload.launchPolicyRef,
-            "hostImageRef": plan.payload.hostImageRef,
-            "harness": plan.payload.harnessId,
-        }
-        if any(
-            str(launch.get(key) or "") != str(value)
-            for key, value in expected.items()
-        ):
-            raise HarnessPlatformError(
-                "effective launch artifact conflicts with the execution plan",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
-            )
-        return launch
+        return validate_planned_effective_launch(plan, raw)
 
     @staticmethod
     def _resolve_exact_host(

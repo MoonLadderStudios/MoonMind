@@ -591,6 +591,8 @@ async function openAgents(): Promise<void> {
 async function openProviders(): Promise<void> {
   window.history.replaceState({}, '', '/settings/providers-secrets');
   renderDashboard();
+  // The profile editor opens from Add profile rather than always rendering.
+  await userEvent.click(await screen.findByRole('button', { name: 'Add profile' }));
   await screen.findByRole('list', { name: 'Model and effort tiers' });
   await screen.findByText('Managed Secrets');
 }
@@ -911,7 +913,7 @@ describe('Instance and Operations settings in the dashboard shell (MoonMind#4559
     renderDashboard();
     const workers = await screen.findByRole('region', { name: /worker operations/i });
     await within(workers).findByText(`codex-worker-${LONG_ID}`);
-    await within(workers).findByText('Pause Workers');
+    await within(workers).findByRole('button', { name: 'Pause workers' });
     const update = await screen.findByRole('region', { name: /moonmind update/i });
     await within(update).findByLabelText(/update to/i);
     await within(update).findByRole('button', { name: /retry/i });
@@ -940,7 +942,7 @@ describe('Artifacts & Observability in the dashboard shell (MoonMind#4559)', () 
     expect(screen.getByLabelText('Filter artifacts')).toBe(filter);
     expect(filter.value).toBe('final');
     await waitFor(() => expect(window.location.search).toContain('artifacts_q=final'));
-    expect(visible(screen.getAllByRole('link', { name: 'Download' }))).toHaveLength(1);
+    await waitFor(() => expect(visible(screen.getAllByRole('link', { name: 'Download' }))).toHaveLength(1));
   });
 });
 

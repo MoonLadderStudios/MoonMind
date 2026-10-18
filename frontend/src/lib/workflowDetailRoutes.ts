@@ -62,3 +62,13 @@ export function workflowDetailSubrouteHref(
 export function isWorkflowDetailPath(pathname: string): boolean {
   return decodeWorkflowIdFromPath(pathname) !== null;
 }
+
+/** The one cache identity for a workflow's detail snapshot, shared by the
+ * detail page (which fetches and polls it) and the workspace shell (which
+ * only observes it). */
+export function workflowDetailQueryKey(
+  workflowId: string | null | undefined,
+  sourceTemporal: boolean,
+) {
+  return ['workflow-detail', workflowId ? encodeURIComponent(workflowId) : null, sourceTemporal] as const;
+}

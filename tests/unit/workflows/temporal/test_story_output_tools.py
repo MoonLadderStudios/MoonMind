@@ -432,6 +432,31 @@ async def test_load_github_issue_preset_brief_rejects_direct_closed_load(
 
     assert result.status == "FAILED"
     assert "lifecycle admission" in result.outputs["error"]
+    assert result.outputs["reasonCode"] == "closed_terminal"
+    assert result.outputs["admissionDecision"]["settled"] == "closed"
+    assert "is closed" in result.outputs["error"]
+
+
+@pytest.mark.asyncio
+async def test_direct_issue_load_reports_the_actual_operator_hold(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    service = _FakeGitHubService()
+    _fake_issue_entry("MoonLadderStudios/MoonMind", 1067)["labels"] = [
+        "status: needs-attention"
+    ]
+
+    result = await load_github_issue_preset_brief(
+        {"repository": "MoonLadderStudios/MoonMind", "issueNumber": 1067},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["reasonCode"] == "operator_hold"
+    assert result.outputs["admissionDecision"]["settled"] == "needs_attention"
+    assert "requires attention" in result.outputs["error"]
+    assert service.added_labels == service.removed_labels == []
 
 
 @pytest.mark.asyncio

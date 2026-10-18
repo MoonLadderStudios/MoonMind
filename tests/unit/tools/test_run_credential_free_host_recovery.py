@@ -20,6 +20,7 @@ from tools.ci import run_credential_free_host_recovery as driver
 SHA = "1" * 40
 IMAGE_ID = "sha256:" + "2" * 64
 HOST_REF = "127.0.0.1:5000/moonmind-test-host@" + IMAGE_ID
+SERVER_DIGEST = "sha256:" + "5" * 64
 HARNESS_IDENTITY = {
     "omnigentVersion": "1.2.3",
     "omnigentBuildDigest": "sha256:" + "4" * 64,
@@ -425,6 +426,7 @@ def test_fixture_identity_matches_pinned_upstream_auth_and_strict_registration(
         dependencies=tmp_path / "deps",
         source_commit=SHA,
         host_image_ref=HOST_REF,
+        server_image_digest=SERVER_DIGEST,
         token=token,
         project="moonmind-test-fixture",
     )
@@ -473,9 +475,14 @@ def test_candidate_command_does_not_overlay_application_source(tmp_path):
         dependencies=tmp_path / "deps",
         source_commit=SHA,
         host_image_ref=HOST_REF,
+        server_image_digest=SERVER_DIGEST,
         token="ephemeral-fixture",
         project="moonmind-test-fixture",
     )
+    assert (
+        f"MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST={SERVER_DIGEST}" in command
+    )
+    assert f"MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST={IMAGE_ID}" not in command
     assert command[command.index("--entrypoint") + 1] == "python"
     assert IMAGE_ID in command
     assert not any("dst=/app" in arg for arg in command)
@@ -676,7 +683,7 @@ def test_main_checks_exact_server_then_probes_before_recovery(
     from types import SimpleNamespace
 
     pin = "f" * 40
-    server_ref = "127.0.0.1:5000/moonmind-test-server@" + IMAGE_ID
+    server_ref = "127.0.0.1:5000/moonmind-test-server@" + SERVER_DIGEST
     observed = []
 
     def image(ref):
@@ -749,6 +756,12 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         return SimpleNamespace(stdout=output, stderr="", returncode=0)
 
     def run_test(args, _root, **_identity):
+        assert (
+            f"MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST={SERVER_DIGEST}" in args
+        )
+        assert (
+            f"MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST={IMAGE_ID}" not in args
+        )
         assert observed == ["server-image", "proxy-image", "readiness", "temporal"]
         assert IMAGE_ID in args
         assert args[args.index("--network") + 1].startswith("moonmind-test-recovery-")
@@ -757,6 +770,9 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         return receipt()
 
     def run_journey(args, root, **identity):
+        assert (
+            f"MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST={SERVER_DIGEST}" in args
+        )
         assert observed[-1] == "recovery"
         assert any(arg.endswith("::" + driver.JOURNEY_TEST_NAME) for arg in args)
         assert (root / "driver" / driver.JOURNEY_TEST_FILE).is_file()
@@ -1054,9 +1070,14 @@ def test_journey_runs_repository_journey_inside_the_candidate(tmp_path):
         dependencies=tmp_path / "deps",
         source_commit=SHA,
         host_image_ref=HOST_REF,
+        server_image_digest=SERVER_DIGEST,
         token="moonmind-test-" + "e" * 32,
         project="moonmind-test-fixture",
     )
+    assert (
+        f"MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST={SERVER_DIGEST}" in command
+    )
+    assert f"MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST={IMAGE_ID}" not in command
     assert command[command.index("--entrypoint") + 1] == "python"
     assert IMAGE_ID in command
     assert not any("dst=/app" in arg for arg in command)
@@ -1083,3 +1104,115 @@ def test_temporal_readiness_runs_in_the_private_test_network():
     assert not {"--publish", "-p", "--mount", "--privileged"}.intersection(command)
     assert command[-1] == driver.TEMPORAL_READINESS_SCRIPT
     assert driver.TEMPORAL_ADDRESS in driver.TEMPORAL_READINESS_SCRIPT
+
+
+@pytest.mark.asyncio
+async def test_stock_catalog_admission_uses_distinct_server_and_host_identity(
+    tmp_path, monkeypatch
+):
+    """Local helper check; the existing exact-image row owns real-server proof."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.harness_platform import planner
+    from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
+        _admit_stock_native_catalog,
+        _host_class,
+    )
+
+    admitted_harnesses = []
+    compile_plan = planner.compile_execution_plan
+
+    def record_admission(**kwargs):
+        plan = compile_plan(**kwargs)
+        admitted_harnesses.append(plan.payload.harnessId)
+        return plan
+
+    monkeypatch.setattr(planner, "compile_execution_plan", record_admission)
+
+    class Inventory:
+        async def get_version(self):
+            return "0.10.0"
+
+        async def list_harnesses(self):
+            return [
+                {
+                    "id": "codex",
+                    "label": "Codex",
+                    "capabilities": {
+                        "integration_mode": "cli-subprocess",
+                        "auth": "omnigent-credential",
+                    },
+                }
+            ]
+
+        async def list_agents(self):
+            return [
+                {"id": name + "-id", "name": name + "-ui", "harness": name}
+                for name in ("codex-native", "claude-native", "opencode-native")
+            ]
+
+        async def list_hosts(self):
+            return []
+
+    monkeypatch.setenv(
+        "MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST", SERVER_DIGEST
+    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        host_class = _host_class(HOST_REF)
+        assert SERVER_DIGEST != host_class.omnigentBuildDigest
+        agents = await _admit_stock_native_catalog(
+            Inventory(),
+            async_sessionmaker(engine, expire_on_commit=False),
+            host_class,
+            monkeypatch,
+        )
+        assert set(agents) == {
+            "codex-native-ui",
+            "claude-native-ui",
+            "opencode-native-ui",
+        }
+        # Discovery may list other agents; this inspected image is OpenCode-only.
+        assert admitted_harnesses == ["opencode-native"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "status,last_task_error",
+    [
+        ("failed", None),
+        ("failed", {"code": "runner_failed_to_start", "message": "runner failed"}),
+        ("running", None),
+        ("waiting", None),
+        ("idle", {"code": "executor_error", "message": "task failed"}),
+    ],
+)
+def test_credential_free_session_rejects_unhealthy_snapshot_before_receipt(
+    status, last_task_error
+):
+    from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
+        _assert_credential_free_session_healthy,
+    )
+
+    snapshot = {
+        "status": status,
+        "last_task_error": last_task_error,
+        "pending_inputs": [],
+        "items": [],
+    }
+    with pytest.raises(AssertionError):
+        _assert_credential_free_session_healthy(snapshot)
+
+
+def test_credential_free_session_accepts_idle_snapshot_without_task_error():
+    from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
+        _assert_credential_free_session_healthy,
+    )
+
+    _assert_credential_free_session_healthy(
+        {"status": "idle", "last_task_error": None, "pending_inputs": [], "items": []}
+    )

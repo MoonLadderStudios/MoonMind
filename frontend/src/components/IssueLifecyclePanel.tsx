@@ -216,17 +216,8 @@ export function IssueLifecyclePanel({
     };
   }, [apiBase, repository, issueNumber, requestBody]);
 
-  if (!repository || !issueNumber) {
-    return (
-      <section className="stack" aria-label="Issue lifecycle" data-testid="issue-lifecycle-empty">
-        <h3>Issue lifecycle</h3>
-        <p className="small">
-          No GitHub issue is linked to this execution. Recovery status appears here once the
-          execution carries validated issue evidence.
-        </p>
-      </section>
-    );
-  }
+  // Without a linked issue there is nothing to recover, so the section stays hidden.
+  if (!repository || !issueNumber) return null;
 
   const context = (data?.context ?? {}) as Record<string, unknown>;
   const availability = data?.recovery_availability;

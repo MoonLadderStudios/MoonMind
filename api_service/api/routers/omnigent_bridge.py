@@ -216,6 +216,7 @@ from moonmind.omnigent.workflow_chat_facade import (
     required_capability_for_event,
 )
 from moonmind.omnigent.effective_capabilities import (
+    CAPABILITY_NAMES,
     EffectiveCapabilitySet,
     caller_capabilities_for_bridge,
     resolve_bridge_row_capabilities,
@@ -4208,6 +4209,9 @@ async def _claim_facade_message(
                 actor_principal=str(actor) or None,
             )
         except Exception as exc:
+            from moonmind.omnigent.control_plane.records import (
+                CommandIdempotencyConflictError,
+            )
             from moonmind.omnigent.control_plane.turn_admission import (
                 CanonicalTurnAdmissionRejected,
             )
@@ -4215,6 +4219,13 @@ async def _claim_facade_message(
                 CanonicalTurnAuthorityUnavailable,
             )
 
+            if isinstance(exc, CommandIdempotencyConflictError):
+                raise WorkflowChatFacadeError(
+                    "This Idempotency-Key was already used for a different message.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code=CODE_IDEMPOTENCY_CONFLICT,
+                ) from exc
             if isinstance(exc, CanonicalTurnAdmissionRejected):
                 # A refused admission -- notably a session whose cleanup has
                 # completed -- is the same actionable session-not-ready conflict
@@ -4315,6 +4326,39 @@ async def _claim_facade_message(
         metadata=pending_receipt,
     )
     if claimed:
+        if (getattr(row, "metadata_", None) or {}).get("executionPlanRef"):
+            # Claim acquisition awaits durable owners after the scan-time read.
+            # Observe cleanup/revocation again at the final transport handoff;
+            # keep a refused claim occupied so retries cannot redeliver it.
+            fresh = await store.get_session_by_chat_binding_id(row.chat_binding_id)
+            # Caller permission was checked before claim; compare only whether
+            # any runtime/policy authority changed while it was being acquired.
+            grants = dict.fromkeys(CAPABILITY_NAMES, True)
+            admitted_digest = resolve_bridge_row_capabilities(
+                row, caller_capabilities=grants
+            ).authority_digest
+            if (
+                fresh is None
+                or fresh.omnigent_session_id != row.omnigent_session_id
+                or (fresh.metadata_ or {}).get("runtimeAuthority")
+                != (row.metadata_ or {}).get("runtimeAuthority")
+                or (fresh.metadata_ or {}).get("callerAuthorities")
+                != (row.metadata_ or {}).get("callerAuthorities")
+                or ((fresh.metadata_ or {}).get("capabilityAuthority") or {}).get(
+                    "state"
+                )
+                != ((row.metadata_ or {}).get("capabilityAuthority") or {}).get("state")
+                or resolve_bridge_row_capabilities(
+                    fresh, caller_capabilities=grants
+                ).authority_digest
+                != admitted_digest
+            ):
+                raise WorkflowChatFacadeError(
+                    "The session authority changed before delivery.",
+                    failure_class="user_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code=CODE_SESSION_NOT_READY,
+                )
         return True
 
     # An existing claim for this key: reconcile against the digest it was first

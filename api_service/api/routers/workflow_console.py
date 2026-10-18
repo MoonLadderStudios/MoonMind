@@ -1756,8 +1756,6 @@ async def get_dashboard_ui_info(
             "workflowDetail": "/api/executions/{workflowId}",
             "workflowSteps": "/api/executions/{workflowId}/steps",
             "workflowUpdatesPoll": "/api/executions",
-            "workflowUpdatesStream": "/api/workflows/updates/stream",
-            "workflowEventsStream": "/api/workflows/{workflowId}/events/stream",
             "artifacts": "/api/artifacts",
             "artifactCollection": "/api/artifacts/collection",
             "skills": "/api/workflows/skills",

@@ -1664,6 +1664,19 @@ function mayEnableFromSettings(profile: ProviderProfile): boolean {
   return profile.auth_state === 'connected' && profile.disabled_reason !== 'policy_disabled';
 }
 
+function credentialMethodLabel(profile: ProviderProfile): string {
+  switch (profile.authentication_method) {
+    case 'oauth':
+      return 'OAuth';
+    case 'api_key':
+      return 'API key';
+    case 'none':
+      return 'No credentials';
+    default:
+      return profile.credential_source === 'oauth_volume' ? 'OAuth' : 'Configured credential';
+  }
+}
+
 function oauthStatusLabel(status: OAuthSessionStatus): string {
   return status
     .split('_')
@@ -1990,6 +2003,7 @@ export function ProviderProfilesManager({
     useState<ProviderProfileCreationCapabilities | null>(null);
   const [creationCapabilitiesError, setCreationCapabilitiesError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [createFormOpen, setCreateFormOpen] = useState(false);
   // Local draft state, never stored on the profile: a new profile's ID follows
   // the suggestion until the operator edits or clears it, and resumes only
   // through "Use suggested ID". Async responses never write the ID.
@@ -2665,6 +2679,7 @@ export function ProviderProfilesManager({
 
   const resetForm = () => {
     setEditingProfileId(null);
+    setCreateFormOpen(false);
     const nextForm = defaultFormState(createFormRuntimeSeed);
     resetIdentityDraftState(true);
     setForm(nextForm);
@@ -2859,16 +2874,20 @@ export function ProviderProfilesManager({
     return errors;
   }, [tierDrafts, tierJsonText]);
 
-  useSettingsDraftRegistration(
-    PROVIDER_PROFILE_DRAFT_ID,
+  const profileDraftDirty =
     canWriteProviderProfiles && (
       JSON.stringify(form) !== JSON.stringify(formBaseline) ||
       tierDraftsChanged ||
       (hasTierDraft && !tierBaseline) ||
       Object.keys(tierJsonErrors).length > 0
-    ),
-    resetForm,
-  );
+    );
+  useSettingsDraftRegistration(PROVIDER_PROFILE_DRAFT_ID, profileDraftDirty, resetForm);
+  // The editor opens for Edit or Add profile. With no profiles listed it is
+  // the only useful content, so it shows directly, and an unsaved draft keeps
+  // it open when the list changes underneath it.
+  const profileFormVisible =
+    canWriteProviderProfiles &&
+    (isEditing || createFormOpen || profiles.length === 0 || profileDraftDirty);
 
   const handleAddTier = () => {
     const newTier = runtimeDefaultTierDraft();
@@ -3751,6 +3770,7 @@ export function ProviderProfilesManager({
         // default tiers/baselines and cleared setup authority, never a mix of
         // the new identity with the prior account's custom tiers.
         setEditingProfileId(null);
+        setCreateFormOpen(false);
         const nextForm = defaultFormState(createFormRuntimeSeed);
         resetIdentityDraftState(true);
         setForm(nextForm);
@@ -4258,12 +4278,19 @@ export function ProviderProfilesManager({
   return (
     <section className="provider-profiles rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
-        <div className="space-y-2">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
-          <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
-            Manage your configured provider profiles. Select a profile below to edit, or scroll down to create a new one.
-          </p>
-        </div>
+        <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
+        {canWriteProviderProfiles && !profileFormVisible ? (
+          <button
+            type="button"
+            className="self-start rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+            onClick={() => {
+              setCreateFormOpen(true);
+              setEditorFocusRequest((current) => current + 1);
+            }}
+          >
+            Add profile
+          </button>
+        ) : null}
       </div>
 
       {onSelectRuntimeId ? (
@@ -4335,14 +4362,6 @@ export function ProviderProfilesManager({
                 Credential
               </th>
               <th
-                id="provider-profile-header-secret-refs"
-                scope="col"
-                role="columnheader"
-                className="px-3 py-3 font-medium text-slate-600 dark:text-slate-400"
-              >
-                Secret refs
-              </th>
-              <th
                 id="provider-profile-header-status"
                 scope="col"
                 role="columnheader"
@@ -4363,7 +4382,7 @@ export function ProviderProfilesManager({
           <tbody className="divide-y divide-mm-border/80 bg-transparent" role="rowgroup">
             {profiles.length === 0 ? (
               <tr role="row">
-                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={7} role="cell">
+                <td className="px-3 py-6 text-slate-500 dark:text-slate-400" colSpan={6} role="cell">
                   {selectedRuntimeId
                     ? `No Provider Profiles are configured for ${formatHarnessLabel(selectedRuntimeId)}.`
                     : 'No provider profiles configured yet.'}
@@ -4521,48 +4540,35 @@ export function ProviderProfilesManager({
                     headers="provider-profile-header-credential"
                     role="cell"
                   >
-                    <div>{profile.credential_source}</div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {profile.runtime_materialization_mode}
-                    </div>
-                    {profile.volume_ref ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        OAuth volume: {profile.volume_ref}
-                      </div>
-                    ) : null}
-                    {profile.volume_mount_path ? (
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Mount: {profile.volume_mount_path}
-                      </div>
-                    ) : null}
+                    <div>{credentialMethodLabel(profile)}</div>
                     <div className="text-xs text-slate-500 dark:text-slate-400">
                       Concurrency: {profile.max_parallel_runs}
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      Cooldown: {profile.cooldown_after_429_seconds}s
-                    </div>
-                  </td>
-                  <td
-                    className="px-3 py-4 text-xs text-slate-600 dark:text-slate-400"
-                    data-label="Secret refs"
-                    headers="provider-profile-header-secret-refs"
-                    role="cell"
-                  >
-                    <div className="font-medium text-slate-700 dark:text-slate-300">
-                      Role-aware SecretRefs
-                    </div>
-                    {Object.entries(profile.secret_refs ?? {}).length === 0 ? (
-                      <div>No secret refs</div>
-                    ) : (
-                      <dl className="space-y-1">
-                        {Object.entries(profile.secret_refs ?? {}).map(([role, ref]) => (
-                          <div key={role}>
-                            <dt className="font-mono font-semibold">{role}</dt>
-                            <dd className="font-mono">{ref}</dd>
-                          </div>
-                        ))}
-                      </dl>
-                    )}
+                    <details className="provider-profile-details mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      <summary className="cursor-pointer font-medium">Details</summary>
+                      <div className="mt-2 space-y-1">
+                        <div className="font-mono">{profile.credential_source}</div>
+                        <div className="font-mono">{profile.runtime_materialization_mode}</div>
+                        {profile.volume_ref ? <div>OAuth volume: {profile.volume_ref}</div> : null}
+                        {profile.volume_mount_path ? <div>Mount: {profile.volume_mount_path}</div> : null}
+                        <div>Cooldown: {profile.cooldown_after_429_seconds}s</div>
+                        <div className="font-medium text-slate-700 dark:text-slate-300">
+                          Role-aware SecretRefs
+                        </div>
+                        {Object.entries(profile.secret_refs ?? {}).length === 0 ? (
+                          <div>No secret refs</div>
+                        ) : (
+                          <dl className="space-y-1">
+                            {Object.entries(profile.secret_refs ?? {}).map(([role, ref]) => (
+                              <div key={role}>
+                                <dt className="font-mono font-semibold">{role}</dt>
+                                <dd className="font-mono break-all">{ref}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        )}
+                      </div>
+                    </details>
                   </td>
                   <td
                     className="px-3 py-4"
@@ -5233,7 +5239,7 @@ export function ProviderProfilesManager({
       ) : null}
 
       {/* ── Form Section ── */}
-      {canWriteProviderProfiles ? (
+      {profileFormVisible ? (
       <div className="mt-8 border-t border-slate-200 dark:border-slate-700 pt-8">
         <div className="flex flex-col gap-1 mb-6 md:flex-row md:items-end md:justify-between">
           <div>
@@ -6246,7 +6252,7 @@ export function ProviderProfilesManager({
               className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
               onClick={resetForm}
             >
-              {isEditing ? 'Cancel edit' : 'Reset form'}
+              {isEditing ? 'Cancel edit' : profiles.length === 0 ? 'Reset form' : 'Cancel'}
             </button>
           </div>
         </form>

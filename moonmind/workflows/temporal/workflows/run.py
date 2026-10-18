@@ -17,8 +17,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
+        has_profile_selector,
         merge_runtime_selection,
         model_selection_fields,
+        provider_profile_ref_from_mapping,
     )
     from moonmind.workflows.temporal.run_failure_diagnostics import RunFailureDiagnostics
     from pydantic import ValidationError
@@ -325,6 +327,8 @@ JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
+RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH = "run-step-profile-selection-inheritance-v1"
+RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH = "run-account-intent-normalization-v2"
 
 
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
@@ -532,6 +536,7 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termina
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
 RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
+RUN_BLOCKED_STEP_FAILURE_CATEGORY_PATCH = "run-blocked-step-failure-category-v1"
 RUN_WORKSPACE_BLOCK_FAILURE_POLICY_PATCH = "run-workspace-block-failure-policy-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = "run-jira-blocker-recheck-retry-floor-v1"
@@ -11236,15 +11241,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 state=STATE_FAILED,
                 close_status=CLOSE_STATUS_FAILED,
                 summary=output_message,
-                error_category=(
-                    "user_error"
-                    if self._plan_blocked_message
-                    and not (
-                        self._issue_search_capacity_retry_enabled
-                        and self._publish_context.get("capacityWait", {}).get("exhausted")
-                    )
-                    else "execution_error"
-                ),
+                error_category=self._blocked_publish_failure_category(),
             )
             raise exceptions.ApplicationError(
                 output_message,
@@ -21664,14 +21661,44 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Prefer runtime_block profile values (set by the runtime planner)
         # over top-level node_inputs keys, which may have been corrupted
         # by AI-generated plan modifications or template injection.
-        raw_execution_profile_ref = (
-            runtime_block.get("executionProfileRef")
-            or runtime_block.get("profileId")
-            or runtime_block.get("providerProfile")
-            or node_inputs.get("executionProfileRef")
-            or node_inputs.get("profileId")
-            or node_inputs.get("providerProfile")
+        profile_selection_inheritance = self._workflow_patch_enabled(
+            RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH
         )
+        normalized_account_intent = self._workflow_patch_enabled(
+            RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH
+        )
+        if normalized_account_intent:
+            raw_execution_profile_ref = (
+                provider_profile_ref_from_mapping(runtime_block)
+                or provider_profile_ref_from_mapping(node_inputs)
+            )
+        elif profile_selection_inheritance:
+            # V1 histories retain the original five aliases and selector test.
+            raw_execution_profile_ref = next(
+                (
+                    str(value).strip()
+                    for source in (runtime_block, node_inputs)
+                    for key in (
+                        "providerProfileRef",
+                        "profileId",
+                        "providerProfile",
+                        "executionProfileRef",
+                        "execution_profile_ref",
+                    )
+                    if (value := source.get(key)) is not None and str(value).strip()
+                ),
+                None,
+            )
+        else:
+            # Keep retained command payloads on their recorded alias precedence.
+            raw_execution_profile_ref = (
+                runtime_block.get("executionProfileRef")
+                or runtime_block.get("profileId")
+                or runtime_block.get("providerProfile")
+                or node_inputs.get("executionProfileRef")
+                or node_inputs.get("profileId")
+                or node_inputs.get("providerProfile")
+            )
         execution_profile_ref = None
         if raw_execution_profile_ref is not None:
             candidate = str(raw_execution_profile_ref).strip() or None
@@ -21681,7 +21708,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 source_label="Plan node",
             )
             execution_profile_ref = candidate
-        if execution_profile_ref is None and workflow_parameters is not None:
+        if (
+            execution_profile_ref is None
+            and workflow_parameters is not None
+            and not (
+                (normalized_account_intent or profile_selection_inheritance)
+                and any(
+                    (
+                        has_profile_selector(source)
+                        if normalized_account_intent
+                        else isinstance(source.get("profileSelector"), Mapping)
+                        and bool(source["profileSelector"])
+                    )
+                    for source in (runtime_block, node_inputs)
+                )
+            )
+        ):
             execution_profile_ref = self._inherited_execution_profile_ref(
                 workflow_parameters,
                 agent_id=agent_id,
@@ -24993,6 +25035,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._summary_ref = resolved_artifact_id
         except Exception as exc:
             self._get_logger().warning(f"Failed to generate finish summary: {exc}")
+
+    def _blocked_publish_failure_category(self) -> str:
+        """Classify a run that stopped before publication.
+
+        An exhausted capacity wait is an execution failure even when an
+        earlier node already failed. Otherwise a failed step keeps the
+        category it recorded (a transport failure is ``integration_error``);
+        only a block with no recorded step failure, such as a gate or policy
+        stop, is the operator's to resolve.
+        """
+
+        if not self._plan_blocked_message or (
+            self._issue_search_capacity_retry_enabled
+            and self._publish_context.get("capacityWait", {}).get("exhausted")
+        ):
+            return "execution_error"
+        recorded = (self._failure_diagnostic or {}).get("category")
+        if recorded and workflow.patched(RUN_BLOCKED_STEP_FAILURE_CATEGORY_PATCH):
+            return str(recorded)
+        return "user_error"
 
     async def _record_terminal_state(
         self,

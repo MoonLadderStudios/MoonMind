@@ -300,6 +300,12 @@ def _chat_binding_capabilities(row: OmnigentBridgeSession) -> dict[str, bool]:
     }
 
 
+def _provider_leases_digest(leases: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(leases, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _chat_binding_logical_step_id(row: OmnigentBridgeSession) -> str | None:
     metadata = getattr(row, "metadata_", None)
     if not isinstance(metadata, dict):
@@ -535,7 +541,12 @@ class OmnigentBridgeSessionStore:
                 step_execution_id=str(row.step_execution_id or row.bridge_session_id),
                 agent_run_id=str(row.moonmind_agent_run_id),
                 source_idempotency_key=str(row.idempotency_key),
-                execution_plan_ref=str(launch.get("executionPlanRef") or "") or None,
+                execution_plan_ref=str(
+                    (row.metadata_ or {}).get("executionPlanRef")
+                    or launch.get("executionPlanRef")
+                    or ""
+                )
+                or None,
                 owner_principal=actor_principal,
             ),
         )
@@ -1073,6 +1084,10 @@ class OmnigentBridgeSessionStore:
                             )
                         }
                         reset_metadata.pop(EGRESS_CLEANUP_AUTHORITY_KEY, None)
+                    if cleanup_complete and "runtimeAuthority" in reset_metadata:
+                        prior_attempt["runtimeAuthority"] = reset_metadata.pop("runtimeAuthority")
+                        reset_metadata.pop("capabilityAuthority", None)
+                        reset_metadata.pop("interventionCapabilities", None)
                     prior_attempts.append(prior_attempt)
                     reset_metadata["unpostedAttemptHistory"] = prior_attempts[-10:]
                     reset_metadata.pop("initialRetrieval", None)
@@ -1178,9 +1193,7 @@ class OmnigentBridgeSessionStore:
                 ).strip()
                 if not execution_plan_ref.startswith(
                     "omnigent-execution-plan:sha256:"
-                ) or not runtime_binding_ref.startswith(
-                    "omnigent-runtime-binding:sha256:"
-                ):
+                ) or not runtime_binding_ref.startswith("omnigent-runtime-binding:sha256:"):
                     raise OmnigentIdempotencyError(
                         "bridge generic execution authority is incomplete"
                     )
@@ -1213,6 +1226,122 @@ class OmnigentBridgeSessionStore:
                         "bridge launch policy does not match persisted policy authority"
                     )
 
+        routing_snapshot = effective_launch_snapshot
+        runtime_authority = None
+        plan_authority = (
+            {
+                "executionPlanRef": request.omnigent_execution_plan.plan_ref,
+                "executionPlanDigest": request.omnigent_execution_plan.plan_digest,
+            }
+            if request.omnigent_execution_plan is not None
+            else {}
+        )
+        if (
+            effective_launch_snapshot
+            and effective_launch_snapshot.get("executionRealizerRef")
+            == "generic-omnigent-host@1"
+        ):
+            from moonmind.omnigent.bridge_artifacts import (
+                TemporalOmnigentArtifactGateway,
+            )
+            from moonmind.omnigent.execution_profiles import (
+                validate_planned_effective_launch,
+            )
+            from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+            from moonmind.omnigent.realizers.turn_delivery import admission_epoch
+            from moonmind.omnigent.runtime_bindings import (
+                DbRuntimeBindingStore,
+                stable_binding_id,
+            )
+
+            plan_ref = str(effective_launch_snapshot["executionPlanRef"])
+            plan = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
+            admitted = request.omnigent_execution_plan
+            requested_ref = str(
+                (request.parameters or {}).get("executionPlanRef") or ""
+            ).strip()
+            plan_digest = "sha256:" + plan_ref.rsplit(":", 1)[-1]
+            if (
+                plan is None
+                or (requested_ref and requested_ref != plan_ref)
+                or (
+                    admitted is not None
+                    and (
+                        admitted.plan_ref != plan_ref
+                        or admitted.plan_digest != plan_digest
+                    )
+                )
+                or (admitted is None and requested_ref != plan_ref)
+            ):
+                raise OmnigentIdempotencyError(
+                    "bridge execution plan authority conflicts"
+                )
+            # Retained dispatch carries only executionPlanRef. Its persisted
+            # plan and request-scoped runtime supply routing authority, without
+            # inventing the artifact identities required by a typed binding.
+            if admitted is None or plan.payload.effectiveLaunchSnapshotRef:
+                binding_id = stable_binding_id(
+                    execution_plan_ref=plan_ref,
+                    idempotency_key=request.idempotency_key,
+                    admission_epoch=admission_epoch(request),
+                )
+                binding = await DbRuntimeBindingStore(self._session_factory).get(
+                    binding_id
+                )
+                if (
+                    binding is None
+                    or binding_id != effective_launch_snapshot.get("runtimeBindingRef")
+                    or binding.executionPlanRef != plan_ref
+                    or binding.hostBindingRef != host_binding_ref
+                    or binding.hostLeaseRef != host_lease_ref
+                    or binding.omnigentHostId != omnigent_host_id
+                ):
+                    raise OmnigentIdempotencyError("bridge runtime authority conflicts")
+            plan_authority = {
+                "executionPlanRef": plan_ref,
+                "executionPlanDigest": plan_digest,
+            }
+            if plan.payload.effectiveLaunchSnapshotRef:
+                raw = await TemporalOmnigentArtifactGateway(
+                    self._session_factory
+                ).read_bytes(plan.payload.effectiveLaunchSnapshotRef)
+                # Preserve the immutable launch intact, including its grants and
+                # content digest. Runtime routing/fences are a separate projection.
+                effective_launch_snapshot = validate_planned_effective_launch(plan, raw)
+                runtime_authority = {
+                    "bindingId": binding_id,
+                    "admissionEpoch": admission_epoch(request),
+                    "fencingGeneration": binding.fencingGeneration,
+                    "hostLeaseGeneration": binding.hostLeaseGeneration,
+                    "providerLeasesDigest": _provider_leases_digest(
+                        binding.providerLeases
+                    ),
+                }
+                from moonmind.omnigent.control_plane.turn_commands import (
+                    CanonicalTurnCommandService,
+                )
+                from moonmind.omnigent.realizers.turn_delivery import (
+                    resolve_admission_session_id,
+                )
+
+                commands = CanonicalTurnCommandService(self._control_plane_store)
+                canonical_id = await resolve_admission_session_id(commands, request)
+                async with self._control_plane_store.transaction() as repos:
+                    canonical = await repos.sessions.get(canonical_id)
+                    if canonical is None or canonical.execution_plan_ref != plan_ref:
+                        raise OmnigentIdempotencyError(
+                            "bridge canonical session authority is missing"
+                        )
+                    runtime_authority["canonicalSessionId"] = canonical_id
+                    runtime_authority["canonicalFencingGeneration"] = (
+                        canonical.fencing_generation
+                    )
+                await commands.bind_runtime_authority(
+                    session_id=canonical_id,
+                    execution_plan_ref=plan_ref,
+                    runtime_binding_ref=binding_id,
+                )
+
         await self.get_or_create(
             request=request,
             endpoint_ref=endpoint_ref,
@@ -1231,16 +1360,7 @@ class OmnigentBridgeSessionStore:
                     if effective_launch_snapshot
                     else None
                 ),
-                **(
-                    {
-                        "executionPlanRef": (request.omnigent_execution_plan.plan_ref),
-                        "executionPlanDigest": (
-                            request.omnigent_execution_plan.plan_digest
-                        ),
-                    }
-                    if request.omnigent_execution_plan is not None
-                    else {}
-                ),
+                **plan_authority,
             },
         )
         async with self._session_factory() as session:
@@ -1255,10 +1375,22 @@ class OmnigentBridgeSessionStore:
             if effective_launch_snapshot and (
                 stored.effective_launch_snapshot_json is not None
                 and stored.effective_launch_snapshot_json != effective_launch_snapshot
+                and not (
+                    runtime_authority is not None
+                    and stored.effective_launch_snapshot_json == routing_snapshot
+                )
             ):
                 raise OmnigentIdempotencyError(
                     "bridge authorization is already bound to another launch snapshot"
                 )
+            if runtime_authority is not None:
+                metadata = dict(stored.metadata_ or {})
+                if metadata.get("runtimeAuthority") not in (None, runtime_authority):
+                    raise OmnigentIdempotencyError(
+                        "bridge runtime authority is already bound"
+                    )
+                metadata["runtimeAuthority"] = runtime_authority
+                stored.metadata_ = metadata
             if effective_launch_snapshot:
                 stored.effective_launch_snapshot_json = effective_launch_snapshot
             if stored.omnigent_endpoint_ref == "pending":
@@ -2517,7 +2649,9 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 return None
-            return _detached(session, row)
+            row = _detached(session, row)
+        await self.refresh_chat_runtime_authority(row)
+        return row
 
     async def get_bridge_session_owner(
         self, bridge_session_id: str
@@ -2574,7 +2708,9 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 return None
-            return _detached(session, row)
+            row = _detached(session, row)
+        await self.refresh_chat_runtime_authority(row)
+        return row
 
     async def resolve_projection_session(
         self,
@@ -2827,6 +2963,17 @@ class OmnigentBridgeSessionStore:
 
         metadata = dict(getattr(row, "metadata_", None) or {})
         plan_ref = str(metadata.get("executionPlanRef") or "").strip()
+        if metadata.get("runtimeAuthority") is not None:
+            from moonmind.omnigent.effective_capabilities import (
+                CAPABILITY_NAMES,
+                resolve_bridge_row_capabilities,
+            )
+
+            await self.refresh_chat_runtime_authority(row)
+            decision = resolve_bridge_row_capabilities(
+                row, caller_capabilities=dict.fromkeys(CAPABILITY_NAMES, True)
+            )
+            return {key: value for key, value in decision.capabilities.items() if value}
         if not plan_ref:
             # Historical sessions retain their recorded compatibility behavior.
             return _chat_binding_capabilities(row)
@@ -2838,9 +2985,9 @@ class OmnigentBridgeSessionStore:
         plan = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
         # The recorded host lease identifies this execution's current binding,
         # including active legacy bindings whose scope is still the parent.
-        state = await DbRuntimeBindingStore(
-            self._session_factory
-        ).get_state_for_host_lease(str(row.host_lease_ref or ""))
+        state = await DbRuntimeBindingStore(self._session_factory).get_state_for_host_lease(
+            str(row.host_lease_ref or "")
+        )
         if plan is None or state is None or state.binding.executionPlanRef != plan_ref:
             return {}
         expected_digest = "sha256:" + plan.planRef.rsplit(":", 1)[-1]
@@ -2879,6 +3026,172 @@ class OmnigentBridgeSessionStore:
         ):
             return {}
         return _chat_binding_capabilities(row)
+
+    async def refresh_chat_runtime_authority(self, row: OmnigentBridgeSession) -> None:
+        """Recheck stable runtime ownership before native reads and handoffs.
+
+        This transient evidence is deliberately not persisted as a fresh bit:
+        cleanup, replacement and fencing must be observed on every lookup.
+        """
+        metadata = dict(row.metadata_ or {})
+        authority = metadata.get("runtimeAuthority")
+        if not isinstance(authority, dict):
+            row._chat_runtime_authority_fresh = False
+            if authority is None and metadata.get("executionPlanRef"):
+                row._chat_runtime_authority_fresh = bool(
+                    await self._authority_bound_chat_capabilities(row)
+                )
+            return
+        row._chat_runtime_authority_fresh = False
+        row._chat_native_protocol_attested = False
+        from moonmind.omnigent.execution_profiles import (
+            validate_planned_effective_launch,
+        )
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+        from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+        from moonmind.omnigent.host_leases import DbOmnigentHostLeaseRepository
+        from moonmind.omnigent.runtime_bindings import (
+            DbRuntimeBindingStore,
+            RuntimeBindingState,
+            stable_binding_id,
+        )
+
+        try:
+            plan_ref = str(metadata.get("executionPlanRef") or "")
+            plan = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
+            if plan is None or metadata.get("executionPlanDigest") != (
+                "sha256:" + plan_ref.rsplit(":", 1)[-1]
+            ):
+                return
+            launch = dict(row.effective_launch_snapshot_json or {})
+            validate_planned_effective_launch(
+                plan,
+                json.dumps(
+                    launch, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                ).encode(),
+            )
+            binding_id = stable_binding_id(
+                execution_plan_ref=plan_ref,
+                idempotency_key=row.idempotency_key,
+                admission_epoch=authority.get("admissionEpoch"),
+            )
+            if binding_id != authority.get("bindingId"):
+                return
+            binding = await DbRuntimeBindingStore(self._session_factory).get(binding_id)
+            if (
+                binding is None
+                or not _serves_native_chat(row)
+                or row.omnigent_endpoint_ref != plan.payload.endpointRef
+                or binding.executionPlanRef != plan_ref
+                or binding.state is not RuntimeBindingState.session_active
+                or binding.fencingGeneration != authority.get("fencingGeneration")
+                or (
+                    metadata.get("capabilityAuthority")
+                    and (
+                        metadata["capabilityAuthority"].get("providerSessionId")
+                        != row.omnigent_session_id
+                        or metadata["capabilityAuthority"]
+                        .get("state", {})
+                        .get("sessionEpoch")
+                        != binding.fencingGeneration
+                    )
+                )
+                or binding.hostLeaseGeneration != authority.get("hostLeaseGeneration")
+                or binding.hostBindingRef != row.host_binding_ref
+                or binding.hostLeaseRef != row.host_lease_ref
+                or binding.omnigentHostId != row.omnigent_host_id
+                or not row.omnigent_session_id
+                or binding.omnigentSessionId != row.omnigent_session_id
+                or _provider_leases_digest(binding.providerLeases)
+                != authority.get("providerLeasesDigest")
+                or launch.get("providerProfileId") != row.provider_profile_id
+                or not any(
+                    lease.get("providerProfileRef") == row.provider_profile_id
+                    and lease.get("providerLeaseRef") == row.provider_lease_id
+                    and lease.get("credentialGeneration") == row.credential_generation
+                    for lease in binding.providerLeases.values()
+                )
+                or not all(
+                    binding.attestationRefs.get(key)
+                    for key in (
+                        "hostHarnessAttestationRef",
+                        "skillDeliveryAttestationRef",
+                        "modelOptionAttestationRef",
+                        "egressAttestationRef",
+                    )
+                )
+            ):
+                return
+            from moonmind.omnigent.provider_leases import validate_bound_provider_leases
+
+            if not await validate_bound_provider_leases(
+                session_factory=self._session_factory,
+                provider_leases=binding.providerLeases,
+                execution_plan_ref=plan_ref,
+                step_execution_id=row.step_execution_id,
+                idempotency_key=row.idempotency_key,
+            ):
+                return
+            async with self._control_plane_store.transaction() as repos:
+                canonical = await repos.sessions.get(authority.get("canonicalSessionId"))
+                cleanup = await repos.cleanup.get(authority.get("canonicalSessionId"))
+            if (
+                canonical is None
+                or canonical.execution_plan_ref != plan_ref
+                or canonical.runtime_binding_ref != binding_id
+                or canonical.provider_session_ref != row.omnigent_session_id
+                or canonical.moonmind_workflow_id != row.moonmind_workflow_id
+                or (
+                    canonical.moonmind_run_id is not None
+                    and canonical.moonmind_run_id != row.moonmind_run_id
+                )
+                or canonical.step_execution_id != row.step_execution_id
+                or canonical.fencing_generation
+                != authority.get("canonicalFencingGeneration")
+                or (cleanup is not None and cleanup.state != "unclaimed")
+                or canonical.terminal_state is not None
+                or canonical.cleanup_state != "pending"
+                or canonical.historical_read_state != "live"
+            ):
+                return
+            host = await DbOmnigentHostLeaseRepository(self._session_factory).get(
+                str(row.host_lease_ref or "")
+            )
+            if (
+                host is None
+                or host.status != "ready"
+                or host.runtimeBindingId != binding_id
+                or host.bindingRef != row.host_binding_ref
+                or host.hostClassRef != plan.payload.hostClassRef
+                or host.generation != binding.hostLeaseGeneration
+                or host.omnigentHostId != row.omnigent_host_id
+                or host.expiresAt is None
+                or host.expiresAt.replace(tzinfo=UTC) <= datetime.now(UTC)
+            ):
+                return
+        except (HarnessPlatformError, TypeError, ValueError):
+            # Corrupt/mismatched authority denies access; it never falls back to
+            # provider bits or mutable profile defaults.
+            return
+        row._chat_runtime_authority_fresh = True
+        from moonmind.omnigent.harness_platform.catalog_service import (
+            DbHarnessCatalogRepository,
+        )
+
+        catalog = await DbHarnessCatalogRepository(self._session_factory).load(
+            plan.payload.harnessCatalogRef
+        )
+        row._chat_native_protocol_attested = bool(
+            _serves_native_chat(row)
+            and catalog is not None
+            and any(
+                item.id == plan.payload.harnessId
+                and item.implementation.implementation_ref()
+                == plan.payload.harnessImplementationRef
+                and item.capabilities.integrationMode in {"native-server", "native-tui"}
+                for item in catalog.snapshot.harnesses
+            )
+        )
 
     def _starting_binding(
         self,
@@ -2941,7 +3254,23 @@ class OmnigentBridgeSessionStore:
                 row.status = STATUS_CREATING
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            row = _detached(session, row)
+        runtime = (row.metadata_ or {}).get("runtimeAuthority")
+        if runtime and runtime.get("canonicalSessionId"):
+            from moonmind.omnigent.control_plane.turn_commands import (
+                CanonicalTurnCommandService,
+            )
+
+            # The initial turn already owns this canonical session. Attach at
+            # creation, before native messages can reach its shared command gate.
+            await CanonicalTurnCommandService(
+                self._control_plane_store
+            ).attach_provider_session(
+                session_id=runtime["canonicalSessionId"],
+                provider_session_ref=session_id,
+                fencing_generation=runtime["canonicalFencingGeneration"],
+            )
+        return row
 
     async def record_session_created(
         self,
@@ -2952,6 +3281,7 @@ class OmnigentBridgeSessionStore:
         endpoint_ref: str | None = None,
         capabilities: dict[str, bool] | None = None,
         session_status: str | None = None,
+        session_snapshot: Mapping[str, Any] | None = None,
     ) -> OmnigentBridgeSession:
         """Emit ``session.created`` into the durable bridge event journal.
 
@@ -3000,9 +3330,34 @@ class OmnigentBridgeSessionStore:
                 row.chat_binding_id = _generate_chat_binding_id()
                 changed = True
             previous_authority = dict(metadata.get("capabilityAuthority") or {})
+            native_protocol = False
+            snapshot_authority_fresh = (
+                not metadata.get("runtimeAuthority")
+                or previous_authority.get("fresh") is True
+            )
+            if session_snapshot is not None and metadata.get("runtimeAuthority"):
+                await self.refresh_chat_runtime_authority(row)
+                launch = dict(row.effective_launch_snapshot_json or {})
+                snapshot_authority_fresh = bool(
+                    getattr(row, "_chat_runtime_authority_fresh", False)
+                    and session_snapshot.get("id") == session_id
+                    and session_snapshot.get("host_id") == row.omnigent_host_id
+                    and session_snapshot.get("harness") == launch.get("harness")
+                    and all(
+                        isinstance(session_snapshot[key], dict)
+                        for key in ("capabilities", "interventionCapabilities")
+                        if key in session_snapshot
+                    )
+                )
+                native_protocol = bool(
+                    snapshot_authority_fresh
+                    and getattr(row, "_chat_native_protocol_attested", False)
+                    and "capabilities" not in session_snapshot
+                    and "interventionCapabilities" not in session_snapshot
+                )
             if capabilities is not None:
                 metadata["interventionCapabilities"] = capabilities
-            if capabilities is not None or previous_authority:
+            if capabilities is not None or previous_authority or native_protocol:
                 from moonmind.omnigent.effective_capabilities import (
                     adapt_provider_capabilities,
                 )
@@ -3011,14 +3366,16 @@ class OmnigentBridgeSessionStore:
                     adapt_provider_capabilities(capabilities)
                     if capabilities is not None
                     else dict(previous_authority.get("upstream") or {})
+                    if previous_authority
+                    else adapt_provider_capabilities(
+                        None, native_session_protocol=native_protocol
+                    )
                 )
                 launch = dict(row.effective_launch_snapshot_json or {})
                 # Each intersection layer comes from its own immutable launch
                 # evidence.  Never clone the provider-reported map into policy
                 # or profile authority merely because the names overlap.
-                profile_capabilities = dict(
-                    launch.get("agentProfileCapabilities") or {}
-                )
+                profile_capabilities = dict(launch.get("agentProfileCapabilities") or {})
                 launch_capabilities = dict(launch.get("capabilities") or {})
                 previous_state = dict(previous_authority.get("state") or {})
                 previous_session_id = str(
@@ -3031,9 +3388,7 @@ class OmnigentBridgeSessionStore:
                     or ""
                 )
                 try:
-                    previous_epoch = max(
-                        int(previous_state.get("sessionEpoch") or 0), 0
-                    )
+                    previous_epoch = max(int(previous_state.get("sessionEpoch") or 0), 0)
                 except (TypeError, ValueError):
                     previous_epoch = 0
                 replacing_session = bool(
@@ -3044,9 +3399,7 @@ class OmnigentBridgeSessionStore:
                         "sessionEpoch": previous_epoch + 1,
                         "activeTurnId": None,
                         "elicitationId": None,
-                        "capabilities": dict(
-                            launch.get("sessionStateCapabilities") or {}
-                        ),
+                        "capabilities": dict(launch.get("sessionStateCapabilities") or {}),
                     }
                 elif previous_state:
                     # A retry/reuse of the same provider session must not erase
@@ -3064,13 +3417,17 @@ class OmnigentBridgeSessionStore:
                         "sessionEpoch": 1,
                         "activeTurnId": None,
                         "elicitationId": None,
-                        "capabilities": dict(
-                            launch.get("sessionStateCapabilities") or {}
-                        ),
+                        "capabilities": dict(launch.get("sessionStateCapabilities") or {}),
                     }
+                if metadata.get("runtimeAuthority"):
+                    # A stable binding cannot replace its provider session; its
+                    # durable fence is this session's epoch, including retries.
+                    state["sessionEpoch"] = metadata["runtimeAuthority"][
+                        "fencingGeneration"
+                    ]
                 metadata["capabilityAuthority"] = {
                     "schemaVersion": "moonmind.omnigent.capability-authority.v1",
-                    "fresh": True,
+                    "fresh": snapshot_authority_fresh,
                     "providerProfileGeneration": row.credential_generation,
                     "providerSessionId": session_id,
                     "upstream": canonical_upstream,

@@ -127,14 +127,14 @@ Progress updates are coalesced and rate-bounded rather than emitted on every run
 | --- | --- | --- |
 | Preparing (announced, execution not started) | 5 minutes | at one sixth of the running cadence |
 | Running (active or awaiting review) | 30 minutes | every 5 minutes |
-| Waiting for unavailable local capacity | not renewed | the owner raises `ISSUE_CLAIM_CAPACITY_BLOCKED` on the renewal cadence; the parent records a deferral (`issue_claim_capacity_deferred`, no agent launched) and the issue returns to assessment |
+| Waiting for provider or host capacity | 30 minutes | renewed while the existing durable queue waits, within its original deadline |
 | Execution ends | renewal stops | the reservation is relinquished promptly |
 
 The preparing deadline is one sixth of the running lease, bounding failures between selection and dispatch. Selection probes the selected/default profile (otherwise enabled profiles) before claiming. Observable saturation/cooldown returns `local_capacity_unavailable`; unobservable capacity is not saturation. Omnigent uses its Profile's owning harness manager, not a separate capacity manager.
 
 New UserWorkflow histories keep this search unclaimed in `awaiting_slot`, rechecking every 30 seconds for 30 minutes with the original owner/profile/step/inputs and deterministic keys. A final bounded probe may finish after the deadline. Persistent saturation fails with `RESOURCE_EXHAUSTED`, retains capacity evidence, and skips dependents even under CONTINUE; it is not idle success or verified no-commit. Empty backlog remains idle. `run-issue-search-capacity-retry-v1` preserves retained histories' immediate-idle behavior. Existing schedule overlap applies; same-owner persisted receipts are recovered before selecting another issue.
 
-If capacity disappears after claiming but before the first slot grant, `ISSUE_CLAIM_CAPACITY_BLOCKED` triggers unavailable-runtime cooldown without charging allowance. After work has started, retries/later steps keep renewing while requeued (`workStarted`); they do not discard progress.
+After claiming, first launches and later steps retain the same reservation while waiting for capacity. The provider manager owns queueing; the claim guard owns authority, not another capacity timeout. Inconclusive manager reads preserve the queued request and retry observation within the original queue deadline; only confirmed absence permits reassertion. New AgentRun histories use this policy; retained histories replay the earlier capacity backoff, whose terminal failures remain recoverable without charging issue retry allowance when no agent launched.
 
 The trusted `issueClaimLease` brief binds owner, attempt, repository, issue, and comment. AgentRun verifies its durable receipt and GitHub before launch and owns renewal for managed/external runtimes. Parent integrations use the same guard; PR merge-child waits and post-merge completion retain parent renewal. The parent awaits child cancellation on lease loss.
 
@@ -158,6 +158,8 @@ Keep attempt history: update each attempt's own comment, never delete it. Unavoi
 
 The preset has one admission policy for both fresh and recovery work. Explicit issue workflows, scheduled searches, manual submissions, and retries do not gain a bypass around that policy.
 
+Git URL branches fail at submission with instructions to enter a branch name or clear the field for the remote default. Repository connection and branch choices remain authoritative.
+
 Search results and cached local records are candidate discovery aids. Direct issue, comment, and PR reads control admission. The absence of an in-progress label alone is insufficient.
 
 When a fresh GitHub read proves that a cached attempt's reservation has ended, ordinary admission ends that local ownership record while retaining its pending bookkeeping and history. The evidence must match the attempt, repository, issue, original poster, and recorded comment identity; a missing comment or changed identity does not authorize clearing the cache.
@@ -168,7 +170,7 @@ An eligible issue is open, in authorized repository/query/author scope, unblocke
 
 Search, explicit loading, continuation, publication checks, and maintenance use one ownership interpreter. Reassess advisory in-progress labels through fresh reads rather than skipping all of them. A confirmed managed label with no supporting attempt can be reconciled as leftover bookkeeping; manual labels are not age-cleared. Review/recovery/attention statuses are never age-cleared.
 
-Report live deadline, expired/legacy reservation, hold, prerequisite blocker, continuation-required PR, and unavailable evidence distinctly. Recovery stays within requested scope and receives bounded preference. Code review enters PR follow-up only when requested. Reconciliation also scans managed in-progress/attention issues, not just eligible search results; incomplete pagination/read budgets never mean no competitor.
+Report live deadline, expired/legacy reservation, hold, prerequisite blocker, continuation-required PR, and unavailable evidence distinctly. Recovery stays within requested scope and receives bounded preference. Code review enters PR follow-up only when requested. Reconciliation leaves external review work and existing operator holds unchanged when no interrupted MoonMind transition is known; missing MoonMind metadata does not establish an unresponsive owner. Attention escalation rechecks issue and comment evidence before writing, deferring changed or unreadable observations. Incomplete pagination/read budgets never mean no competitor.
 
 ### 5.2 Advisory claim
 

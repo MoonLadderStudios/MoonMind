@@ -575,6 +575,7 @@ def test_command(
     dependencies,
     source_commit,
     host_image_ref,
+    server_image_digest,
     token,
     project,
     target=f"/test-driver/{TEST_FILE}::{TEST_NAME}",
@@ -618,6 +619,7 @@ def test_command(
         "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE": host_image_ref,
         "MOONMIND_OMNIGENT_CONCURRENCY_EVIDENCE_DIR": str(work),
         "MOONMIND_CREDENTIAL_RECOVERY_SOURCE_COMMIT": source_commit,
+        "MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST": server_image_digest,
         # Match the repository-wide test fixture without importing host source.
         "WORKFLOW_TEST_MODE": "1",
         "AUTH_PROVIDER": "disabled",
@@ -837,6 +839,7 @@ def main(argv=None):
             dependencies=args.dependencies.resolve(),
             source_commit=source,
             host_image_ref=args.host_image,
+            server_image_digest=images["server"]["ref"].split("@", 1)[1],
             token=token,
             project=project,
         )
@@ -858,6 +861,7 @@ def main(argv=None):
                 dependencies=args.dependencies.resolve(),
                 source_commit=source,
                 host_image_ref=args.host_image,
+                server_image_digest=images["server"]["ref"].split("@", 1)[1],
                 token=token,
                 project=project,
             ),

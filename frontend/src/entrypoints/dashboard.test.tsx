@@ -346,7 +346,6 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     endpoints: {
       workflows: '/api/executions',
       workflowUpdatesPoll: '/api/executions',
-      workflowUpdatesStream: '/api/workflows/updates/stream',
     },
     dashboardConfig: {
       initialPath: '/workflows/new',
@@ -488,6 +487,36 @@ describe('Dashboard shared entry', () => {
     expect(document.querySelector('[data-ui-version-skew]')).toBeNull();
   });
 
+  it('leaves the page h1 to the routed page instead of the masthead wordmark', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const masthead = document.querySelector('.masthead');
+    expect(masthead).not.toBeNull();
+    expect(masthead?.querySelector('h1')).toBeNull();
+    expect(screen.getByRole('link', { name: 'MoonMind workflows' })).toBeTruthy();
+  });
+
+  it('keeps the System menu usable when /api/ui/info fails', async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => 'down',
+      json: async () => ({ detail: 'down' }),
+    } as Response));
+
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const trigger = await screen.findByRole('button', { name: 'System' }, { timeout: 10000 });
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menuitem', { name: /Recurring/ })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /Operations/ })).toBeTruthy();
+  });
+
   it('keeps feature-gated navigation and raises a version-skew alert when the server destination registry drifts', async () => {
     // Reproduces the deployed regression where a stale JS bundle met a newer
     // API registry: the old behavior threw the whole uiInfo payload away, so
@@ -496,7 +525,7 @@ describe('Dashboard shared entry', () => {
     // loud, and capability-gated navigation must keep working.
     const driftedDestinations = DASHBOARD_DESTINATIONS
       .map(({ page: _page, dataWidePanel: _wide, ...item }) => ({ ...item }))
-      .map((item) => (item.key === 'recurring' ? { ...item, navigationGroup: 'primary' as const } : item));
+      .map((item) => (item.key === 'recurring' ? { ...item, pathPatterns: ['/recurring'] } : item));
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -857,6 +886,42 @@ describe('Dashboard shared entry', () => {
       expect(document.querySelector('.panel--data-wide')).toBeTruthy();
       expect(document.querySelector('.dashboard-alerts-region')).toBeTruthy();
     });
+  });
+
+  it('MoonLadderStudios/MoonMind#4870 opens no update stream and leaves list refresh to the list query', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    const eventSourceSpy = vi.fn();
+    vi.stubGlobal('EventSource', eventSourceSpy);
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input) === '/api/ui/info') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => uiInfo({
+            dashboardConfig: { pollIntervalsMs: { list: 20, detail: 20, events: 20 } },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, text: async () => '' } as Response);
+    });
+    const payload: BootPayload = { page: 'dashboard', apiBase: '/api', initialData: {} };
+
+    try {
+      const { queryClient } = renderWithClient(<DashboardApp payload={payload} />);
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+      expect(await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 })).toBeTruthy();
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/ui/info', expect.anything()));
+
+      // Several list poll intervals pass with no shell-level refresh owner.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+
+      expect(eventSourceSpy).not.toHaveBeenCalled();
+      expect(invalidateSpy).not.toHaveBeenCalled();
+      expect(fetchSpy.mock.calls.some(([url]) => /stream/.test(String(url)))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('renders one workflow list display radio group on covered workflow surfaces', async () => {
@@ -1247,7 +1312,7 @@ describe('Dashboard shared entry', () => {
     const cardList = await screen.findByRole('list', { name: 'Recurring schedule cards' });
     expect(cardList.textContent).toContain('Daily recurring scan');
     expect(cardList.textContent).toContain('Needs attention');
-    expect(cardList.textContent).toContain('0 9 * * *');
+    expect(cardList.textContent).toContain('Daily at 09:00');
     expect(cardList.textContent).toContain('UTC');
     expect(cardList.textContent).toContain('Queue Task');
     expect(cardList.textContent).toContain('MoonLadderStudios/MoonMind');
@@ -1985,6 +2050,8 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Unknown dashboard page:')).toBeTruthy();
     expect(screen.getByText('/proposals')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'Page not found' })).toBeTruthy();
+    expect(document.title).toBe('Page not found | MoonMind');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
   });
 
@@ -2177,7 +2244,7 @@ describe('Dashboard shared entry', () => {
 
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Loading MoonMind...')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Loading MoonMind...' })).toBeTruthy();
     expect(screen.queryByText('Workflow start route loaded')).toBeNull();
 
     resolveUiInfo({

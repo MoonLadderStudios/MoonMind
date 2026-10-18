@@ -24,7 +24,7 @@ import {
   useNavigate,
   useNavigationType,
 } from 'react-router-dom';
-import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QueryErrorResetBoundary, useQuery } from '@tanstack/react-query';
 import { PanelLeft, Plus, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   RocketIcon,
@@ -36,6 +36,7 @@ import { validatePageBoot } from '../boot/pageBootSchemas';
 import { DashboardErrorState } from '../components/DashboardErrorState';
 import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBoundary';
 import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
@@ -101,11 +102,7 @@ const PAGE_IMPORTS = {
     default: (await import('./settings')).InstanceSettingsPage,
   }),
   skills: () => import('./skills'),
-  'workflow-start': () => import('./workflow-start'),
   'workflows-workspace': () => import('./workflows-workspace'),
-  'workflow-detail': () => import('./workflow-detail'),
-  'workflows-home': () => import('./workflows-home'),
-  'workflow-list': () => import('./workflow-list'),
 } satisfies Record<DashboardPage, PageImport>;
 
 for (const destination of DASHBOARD_DESTINATIONS) {
@@ -308,9 +305,9 @@ function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
 function LoadingPage() {
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 shadow-sm dark:text-slate-400">
+      <h1 className="m-0 rounded-3xl border border-mm-border/80 bg-transparent p-6 font-sans text-sm font-normal leading-normal text-slate-500 shadow-sm dark:text-slate-400">
         Loading MoonMind...
-      </div>
+      </h1>
     </div>
   );
 }
@@ -318,6 +315,7 @@ function LoadingPage() {
 function UnknownPage({ page }: { page: string }) {
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+      <PageHeader title="Page not found" />
       <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400">
         Unknown dashboard page: <code>{page}</code>
       </div>
@@ -422,175 +420,6 @@ function useDashboardUiInfo() {
     staleTime: 30_000,
     retry: 1,
   });
-}
-
-function DashboardLiveUpdateProvider({
-  uiInfo,
-  children,
-}: {
-  uiInfo: DashboardUiInfo | null;
-  children: ReactNode;
-}) {
-  const queryClient = useQueryClient();
-  const streamEndpoint =
-    typeof uiInfo?.endpoints?.workflowUpdatesStream === 'string'
-      ? uiInfo.endpoints.workflowUpdatesStream
-      : null;
-  const pollMs =
-    typeof (uiInfo?.dashboardConfig as { pollIntervalsMs?: { list?: unknown } } | undefined)
-      ?.pollIntervalsMs?.list === 'number'
-      ? ((uiInfo?.dashboardConfig as { pollIntervalsMs: { list: number } }).pollIntervalsMs.list)
-      : 5000;
-
-  useEffect(() => {
-    let eventSource: EventSource | null = null;
-    let intervalId: number | null = null;
-
-    const workflowIdFromUpdate = (event: MessageEvent | null): string | null => {
-      if (!event?.data || typeof event.data !== 'string') {
-        return null;
-      }
-      try {
-        const payload = JSON.parse(event.data);
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-          return null;
-        }
-        const payloadRecord = payload as Record<string, unknown>;
-        const row = payloadRecord.row && typeof payloadRecord.row === 'object' && !Array.isArray(payloadRecord.row)
-          ? (payloadRecord.row as Record<string, unknown>)
-          : null;
-        return String(
-          payloadRecord.workflowId ||
-            payloadRecord.workflow_id ||
-            payloadRecord.taskId ||
-            payloadRecord.task_id ||
-            row?.workflowId ||
-            row?.workflow_id ||
-            row?.taskId ||
-            row?.task_id ||
-            '',
-        ).trim() || null;
-      } catch {
-        return null;
-      }
-    };
-
-    const rowFromUpdate = (event: MessageEvent | null): Record<string, unknown> | null => {
-      if (!event?.data || typeof event.data !== 'string') {
-        return null;
-      }
-      try {
-        const payload = JSON.parse(event.data);
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-          return null;
-        }
-        const payloadRecord = payload as Record<string, unknown>;
-        const row = payloadRecord.row && typeof payloadRecord.row === 'object' && !Array.isArray(payloadRecord.row)
-          ? (payloadRecord.row as Record<string, unknown>)
-          : payloadRecord;
-        const workflowId = String(row.workflowId || row.workflow_id || row.taskId || row.task_id || '').trim();
-        return workflowId ? row : null;
-      } catch {
-        return null;
-      }
-    };
-
-    const patchWorkflowListRows = (row: Record<string, unknown>) => {
-      const workflowId = String(row.workflowId || row.workflow_id || row.taskId || row.task_id || '').trim();
-      if (!workflowId) {
-        return;
-      }
-      queryClient.setQueriesData({ queryKey: ['workflow-list'] }, (old: unknown) => {
-        if (!old || typeof old !== 'object' || !Array.isArray((old as { items?: unknown }).items)) {
-          return old;
-        }
-        let changed = false;
-        const current = old as { items: unknown[] };
-        const items = current.items.map((item) => {
-          if (!item || typeof item !== 'object') {
-            return item;
-          }
-          const itemRecord = item as Record<string, unknown>;
-          const itemWorkflowId = String(
-            itemRecord.workflowId ||
-              itemRecord.workflow_id ||
-              itemRecord.taskId ||
-              itemRecord.task_id ||
-              '',
-          ).trim();
-          if (itemWorkflowId !== workflowId) {
-            return item;
-          }
-          changed = true;
-          return { ...itemRecord, ...row };
-        });
-        return changed ? { ...current, items } : old;
-      });
-    };
-
-    const invalidateWorkflowSnapshots = (event: MessageEvent | null = null) => {
-      const workflowId = workflowIdFromUpdate(event);
-      const row = rowFromUpdate(event);
-      if (row) {
-        patchWorkflowListRows(row);
-      }
-      void queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      void queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
-      if (workflowId) {
-        const encodedWorkflowId = encodeURIComponent(workflowId);
-        void queryClient.invalidateQueries({
-          predicate: (query) => (
-            query.queryKey[0] === 'workflow-detail' &&
-            query.queryKey.includes(encodedWorkflowId)
-          ),
-        });
-      } else {
-        void queryClient.invalidateQueries({ queryKey: ['workflow-detail'] });
-      }
-    };
-
-    const start = () => {
-      if (document.visibilityState === 'hidden') {
-        return;
-      }
-      if (streamEndpoint && typeof EventSource !== 'undefined') {
-        eventSource = new EventSource(streamEndpoint, { withCredentials: true });
-        eventSource.onmessage = invalidateWorkflowSnapshots;
-        eventSource.onerror = () => {
-          eventSource?.close();
-          eventSource = null;
-          if (intervalId === null) {
-            intervalId = window.setInterval(invalidateWorkflowSnapshots, pollMs);
-          }
-        };
-        return;
-      }
-      intervalId = window.setInterval(invalidateWorkflowSnapshots, pollMs);
-    };
-
-    const stop = () => {
-      eventSource?.close();
-      eventSource = null;
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-        intervalId = null;
-      }
-    };
-
-    const handleVisibility = () => {
-      stop();
-      start();
-    };
-
-    start();
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      stop();
-    };
-  }, [pollMs, queryClient, streamEndpoint]);
-
-  return <>{children}</>;
 }
 
 function CollectionListDisplayModeControl({
@@ -700,6 +529,8 @@ function DashboardNavigation({
   const normalizedPath = location.pathname.replace(/\/$/, '');
   const isSkillsRoute = normalizedPath === '/skills' || normalizedPath.startsWith('/skills/');
   const visiblePrimaryKeys = new Set(visiblePrimaryDestinations(uiInfo).map(({ key }) => key));
+  // Shares the shell's cached query; only its error state is read here.
+  const uiInfoFailed = useDashboardUiInfo().isError;
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
   useEffect(() => {
@@ -772,10 +603,10 @@ function DashboardNavigation({
             width="256"
             height="199"
           />
-          <h1>
+          <span className="masthead-wordmark">
             <span className="masthead-brand-moon">Moon</span>
             <span className="masthead-brand-mind">Mind</span>
-          </h1>
+          </span>
         </Link>
         {listDisplayMode ? (
           <CollectionListDisplayModeControl
@@ -841,7 +672,11 @@ function DashboardNavigation({
               </AnimatedRouteNavLink>
             ) : null}
           </div>
-          <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={open} />
+          <DashboardSystemMenu
+            uiInfo={uiInfo}
+            availabilityUnknown={uiInfoFailed}
+            mobileDrawerOpen={open}
+          />
           {isSkillsRoute && uiInfo?.features?.skills === true ? (
             <button
               type="button"
@@ -985,52 +820,50 @@ function AppShell({
   const panelRef = useRef<HTMLElement>(null);
   useCollectionWorkspaceBlockSize(rootRef, panelRef);
   return (
-    <DashboardLiveUpdateProvider uiInfo={uiInfo}>
-      <main className="dashboard-root" ref={rootRef}>
-        {registrySkew ? (
-          <section className="ui-version-skew-banner" role="alert" data-ui-version-skew>
-            <p>
-              <strong>Dashboard build mismatch.</strong> The UI assets in this browser do not
-              match the server
-              {typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim()
-                ? ` (server build ${uiInfo.buildId})`
-                : ''}
-              . Hard-refresh this page; if the mismatch persists, the deployment is serving stale
-              or partially patched static assets and needs a clean redeploy.
-            </p>
-          </section>
-        ) : null}
-        <div className="dashboard-shell-full">
-          <DashboardNavigation
-            uiInfo={uiInfo}
-            listDisplayAccessibleName={listDisplayAccessibleName}
-            listDisplayMode={listDisplayMode}
-            listDisplayTableLabel={listDisplayTableLabel}
-            listDisplayStatus={listDisplayStatus}
-            onListDisplayModeSelect={onListDisplayModeSelect}
-          />
-        </div>
+    <main className="dashboard-root" ref={rootRef}>
+      {registrySkew ? (
+        <section className="ui-version-skew-banner" role="alert" data-ui-version-skew>
+          <p>
+            <strong>Dashboard build mismatch.</strong> The UI assets in this browser do not
+            match the server
+            {typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim()
+              ? ` (server build ${uiInfo.buildId})`
+              : ''}
+            . Hard-refresh this page; if the mismatch persists, the deployment is serving stale
+            or partially patched static assets and needs a clean redeploy.
+          </p>
+        </section>
+      ) : null}
+      <div className="dashboard-shell-full">
+        <DashboardNavigation
+          uiInfo={uiInfo}
+          listDisplayAccessibleName={listDisplayAccessibleName}
+          listDisplayMode={listDisplayMode}
+          listDisplayTableLabel={listDisplayTableLabel}
+          listDisplayStatus={listDisplayStatus}
+          onListDisplayModeSelect={onListDisplayModeSelect}
+        />
+      </div>
 
-        <div className="dashboard-content">
-          <div className="dashboard-state-strip">
-            <div
-              className={`dashboard-state-strip__inner${dataWidePanel ? ' dashboard-state-strip__inner--data-wide' : ''}`}
-            >
-              <div className="dashboard-alerts-region">
-                <DashboardAlerts />
-              </div>
+      <div className="dashboard-content">
+        <div className="dashboard-state-strip">
+          <div
+            className={`dashboard-state-strip__inner${dataWidePanel ? ' dashboard-state-strip__inner--data-wide' : ''}`}
+          >
+            <div className="dashboard-alerts-region">
+              <DashboardAlerts />
             </div>
           </div>
-          <section
-            ref={panelRef}
-            className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
-            aria-live="polite"
-          >
-            {children}
-          </section>
         </div>
-      </main>
-    </DashboardLiveUpdateProvider>
+        <section
+          ref={panelRef}
+          className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
+          aria-live="polite"
+        >
+          {children}
+        </section>
+      </div>
+    </main>
   );
 }
 
@@ -1508,11 +1341,7 @@ function RoutedDashboardPage({
 
   if (
     isUiInfoPending &&
-    (
-      route.page === 'workflow-start' ||
-      route.currentPath === '/workflows/new' ||
-      route.page.startsWith('settings-')
-    )
+    (route.currentPath === '/workflows/new' || route.page.startsWith('settings-'))
   ) {
     return (
       <AppShell

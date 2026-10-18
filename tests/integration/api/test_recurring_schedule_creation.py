@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -50,7 +50,10 @@ def _mock_service_override() -> AsyncMock:
 
 
 def _empty_session_override() -> SimpleNamespace:
-    return SimpleNamespace()
+    # Omitted account selection reads saved settings before schedule admission.
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    return SimpleNamespace(execute=AsyncMock(return_value=result))
 
 
 def _client() -> TestClient:

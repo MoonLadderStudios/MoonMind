@@ -53,16 +53,9 @@ from api_service.api.routers.recurring_workflows import (
 )
 from api_service.api.routers.automation import router as automation_router
 
-_ENABLE_TEST_UI_ROUTE = os.environ.get("MOONMIND_ENABLE_TEST_UI_ROUTE", "").lower() in (
-    "1",
-    "true",
-    "yes",
-)
-if _ENABLE_TEST_UI_ROUTE:
-    from api_service.test_ui_route import router as test_ui_router
-
 from api_service.api.routers.workflow_console import router as workflow_console_router
 from api_service.dashboard_static import DashboardStaticFiles
+from api_service.response_compression import add_response_compression
 from api_service.api.routers.agent_runs import router as agent_runs_router
 from api_service.api.routers.agent_runs import (
     sessions_router as session_resources_router,
@@ -1478,8 +1471,6 @@ app.include_router(auth_advanced_4124_router)
 # management through the shared #4121 session authority. Endpoints fail
 # closed unless the classified production mode is `accounts`.
 app.include_router(accounts_4122_router)
-if _ENABLE_TEST_UI_ROUTE:
-    app.include_router(test_ui_router)
 
 # Legacy fastapi-users login/register/reset/verify/users routes were removed with
 # the bundled Keycloak integration (#4129). The only /api/v1/auth/* routes are
@@ -1523,6 +1514,8 @@ def _resolve_cors_allowed_origins() -> list[str]:
             "cookie-authenticated browsers (#4121)."
         )
     return resolve_credentialed_cors_origins(explicit, allow_credentials=True)
+
+add_response_compression(app)
 
 app.add_middleware(
     CORSMiddleware,

@@ -48,7 +48,9 @@ from moonmind.omnigent.legacy_retirement import (
 from moonmind.runtime_intent import (
     MODEL_SELECTION_KEYS,
     SELECTION_DERIVED_KEYS,
+    has_profile_selector,
     merge_runtime_selection,
+    provider_profile_ref_from_mapping,
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.agent_skills.agent_skills_activities import (
@@ -56,6 +58,11 @@ from moonmind.workflows.agent_skills.agent_skills_activities import (
 )
 from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
+    dedupe_workflow_steps as _dedupe_repeated_step_entries,
+    workflow_has_explicit_steps,
+    workflow_plan_tool_type,
+    workflow_step_tool_name as _selected_step_tool_name,
+    workflow_step_tool_type as _selected_step_tool_type,
 )
 from moonmind.workflows.executions.preset_expansion import expand_preset_for_child_run
 from moonmind.workflows.executions.runtime_target_selection import (
@@ -86,6 +93,9 @@ from moonmind.workflows.skills.deployment_overview import (
     register_deployment_overview_tool_handler,
 )
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
+from moonmind.workflows.skills.tool_definitions import (
+    STORY_OUTPUT_TASK_TOOLS as _STORY_OUTPUT_TASK_TOOLS,
+)
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
@@ -119,9 +129,6 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.story_output_tools import (
-    DOCUMENT_UPDATE_TASKS_TOOL_NAME,
-    GITHUB_STORY_TOOL_NAMES,
-    JIRA_STORY_TOOL_NAMES,
     register_story_output_tool_handlers,
 )
 from moonmind.workflows.temporal.worker_healthcheck import (
@@ -874,13 +881,6 @@ def _compile_repository_operation(
 
 
 _JIRA_AGENT_SKILLS = JIRA_AGENT_SKILLS
-_STORY_OUTPUT_TASK_TOOLS = frozenset(
-    {
-        *JIRA_STORY_TOOL_NAMES,
-        *GITHUB_STORY_TOOL_NAMES,
-        DOCUMENT_UPDATE_TASKS_TOOL_NAME,
-    }
-)
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 _DIRECT_STORY_TOOL_CONTEXT_KEYS = (
     "repository",
@@ -1132,13 +1132,6 @@ def _story_breakdown_paths(
     }
 
 
-def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
-    step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
-        step_entry.get("skill")
-    )
-    return str(step_tool.get("name") or step_tool.get("id") or "").strip()
-
-
 def _has_explicit_step_skill_name(tool_name: str) -> bool:
     return tool_name.strip().lower() not in {"", "auto"}
 
@@ -1287,51 +1280,8 @@ def _direct_story_tool_context_inputs(
     }
 
 
-def _canonical_step_fingerprint(step_entry: Mapping[str, Any]) -> str:
-    try:
-        return json.dumps(step_entry, sort_keys=True, separators=(",", ":"))
-    except TypeError:
-        return repr(sorted(step_entry.items(), key=lambda item: str(item[0])))
-
-
-def _dedupe_repeated_step_entries(
-    raw_steps: list[Mapping[str, Any]],
-) -> list[Mapping[str, Any]]:
-    deduped: list[Mapping[str, Any]] = []
-    fingerprints_by_id: dict[str, str] = {}
-
-    for step_entry in raw_steps:
-        step_id = str(step_entry.get("id") or "").strip()
-        if not step_id:
-            deduped.append(step_entry)
-            continue
-
-        fingerprint = _canonical_step_fingerprint(step_entry)
-        existing_fingerprint = fingerprints_by_id.get(step_id)
-        if existing_fingerprint is None:
-            fingerprints_by_id[step_id] = fingerprint
-            deduped.append(step_entry)
-            continue
-        if existing_fingerprint == fingerprint:
-            continue
-        raise RuntimeError(
-            f"task step id {step_id!r} is duplicated with different payloads; "
-            "step ids must be unique"
-        )
-
-    return deduped
-
-
 def _selected_step_type(step_entry: Mapping[str, Any]) -> str:
     return str(step_entry.get("type") or "").strip().lower()
-
-
-def _selected_step_tool_type(step_entry: Mapping[str, Any]) -> str:
-    if _selected_step_tool_name(step_entry).lower() in _STORY_OUTPUT_TASK_TOOLS:
-        return "skill"
-    if _selected_step_type(step_entry) == "tool":
-        return "skill"
-    return "agent_runtime"
 
 
 def _jira_agent_skill_selected(tool_name: str) -> bool:
@@ -1614,7 +1564,11 @@ def _build_runtime_planner():
             )
 
         # --- Resolve runtime mode ---
-        runtime_payload = _coerce_mapping(task_payload.get("runtime"))
+        runtime_payload = _coerce_mapping(
+            task_payload.get("runtime")
+            if isinstance(task_payload.get("runtime"), Mapping)
+            else parameter_payload.get("runtime")
+        )
         runtime_mode = _normalize_runtime_mode(
             runtime_payload.get("mode") or parameter_payload.get("targetRuntime")
         )
@@ -1629,10 +1583,16 @@ def _build_runtime_planner():
             if key in selection_source:
                 runtime_node[key] = selection_source[key]
 
+        for source in (runtime_payload, task_payload, parameter_payload):
+            selector = source.get("profileSelector")
+            if isinstance(selector, Mapping) and has_profile_selector(source):
+                runtime_node["profileSelector"] = dict(selector)
+                break
+
         profile_id = (
-            runtime_payload.get("profileId")
-            or runtime_payload.get("providerProfile")
-            or parameter_payload.get("profileId")
+            provider_profile_ref_from_mapping(runtime_payload)
+            or provider_profile_ref_from_mapping(task_payload)
+            or provider_profile_ref_from_mapping(parameter_payload)
         )
         if isinstance(profile_id, str) and profile_id.strip():
             normalized_profile_id = profile_id.strip()
@@ -1646,7 +1606,7 @@ def _build_runtime_planner():
             or parameter_payload.get("execution_profile_ref")
         )
         if isinstance(exec_profile_ref, str) and exec_profile_ref.strip():
-            runtime_node["executionProfileRef"] = exec_profile_ref.strip()
+            runtime_node["executionProfileRef"] = profile_id or exec_profile_ref.strip()
 
         # --- Build node inputs ---
         node_inputs: dict[str, Any] = {
@@ -1851,27 +1811,13 @@ def _build_runtime_planner():
                 ) or _coerce_mapping(plan_entry.get("skill"))
                 if not tool_payload:
                     raise RuntimeError("task.plan entries require a tool object")
-                authored_tool_type = (
-                    str(
-                        tool_payload.get("type")
-                        or tool_payload.get("kind")
-                        or "agent_runtime"
-                    )
-                    .strip()
-                    .lower()
-                    or "agent_runtime"
-                )
                 authored_tool_name = str(
                     tool_payload.get("name") or tool_payload.get("id") or ""
                 ).strip()
                 if not authored_tool_name:
                     raise RuntimeError("task.plan tool name is required")
                 is_legacy_agent_skill_plan_entry = not has_authored_tool
-                tool_type = (
-                    "agent_runtime"
-                    if is_legacy_agent_skill_plan_entry
-                    else authored_tool_type
-                )
+                tool_type = workflow_plan_tool_type(plan_entry)
                 tool_name = (
                     runtime_mode
                     if is_legacy_agent_skill_plan_entry
@@ -1952,14 +1898,7 @@ def _build_runtime_planner():
         creates_story_breakdown_artifact = False
 
         # --- Expand task.steps[] or stepCount into multiple plan nodes ---
-        has_explicit_step_types = isinstance(raw_steps, list) and any(
-            isinstance(s, Mapping) and _selected_step_type(s) for s in raw_steps
-        )
-        has_multi_steps = (
-            isinstance(raw_steps, list)
-            and (len(raw_steps) > 1 or has_explicit_step_types)
-            and all(isinstance(s, Mapping) for s in raw_steps)
-        )
+        has_multi_steps = workflow_has_explicit_steps(raw_steps)
         if has_multi_steps:
             step_tool_names = {
                 _selected_step_tool_name(step).lower()

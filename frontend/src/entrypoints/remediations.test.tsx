@@ -32,6 +32,9 @@ describe('Remediations', () => {
     } as Response);
     renderPage();
     expect((await screen.findAllByRole('link', { name: 'Repair checkout remediation workflow' }))[0]?.getAttribute('href')).toBe('/workflows/mm%3Arepair-1');
+    expect(screen.getByRole('heading', { level: 1, name: 'Remediation' })).toBeTruthy();
+    expect(document.querySelectorAll('h1')).toHaveLength(1);
+    expect(document.title).toBe('Remediation | MoonMind');
     expect(screen.getAllByRole('link', { name: 'Checkout release source workflow' })[0]?.getAttribute('href')).toBe('/workflows/mm%3Asource-1');
     expect(screen.getAllByText(/Attention/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('observe_only · snapshot_then_follow').length).toBeGreaterThan(0);

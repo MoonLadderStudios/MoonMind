@@ -2,10 +2,12 @@ import asyncio
 import atexit
 import inspect
 import os
+import select
 import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -247,8 +249,12 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 
 
 def _kill_owned_temporal_servers() -> None:
-    """Terminate SDK Temporal server subprocesses owned by this process."""
+    """Confirm bounded shutdown of this process's SDK Temporal children."""
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        # Ownership-safe fatal cleanup is supported by the Linux test container.
+        return
     my_pid = os.getpid()
+    handles: dict[int, int] = {}
     try:
         out = subprocess.check_output(
             [
@@ -266,10 +272,63 @@ def _kill_owned_temporal_servers() -> None:
         for line in out.strip().splitlines():
             pid = int(line.strip())
             try:
-                os.kill(pid, signal.SIGTERM)
+                # Anchor the process before rechecking ownership and invocation:
+                # a reused numeric PID must never redirect the shutdown signal.
+                fd = os.pidfd_open(pid)
+                handles[fd] = pid
+                proc = Path(f"/proc/{pid}")
+                parent = next(
+                    (
+                        int(field.split()[1])
+                        for field in (proc / "status").read_text().splitlines()
+                        if field.startswith("PPid:")
+                    ),
+                    None,
+                )
+                command = (proc / "cmdline").read_bytes().split(b"\0")
+                if parent != my_pid or not (
+                    b"temporal-test-server" in command[0]
+                    or command[1:3] == [b"server", b"start-dev"]
+                ):
+                    os.close(fd)
+                    del handles[fd]
+                    continue
+                # Match SDK shutdown's kill-and-wait semantics. SIGTERM starts
+                # the CLI's graceful drain, which can outlive a crashed worker.
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
             except OSError:
-                # Best-effort: the child may already be gone or we may lack permission.
+                # The SDK can concurrently finish and reap its own child.
                 pass
+
+        poller = select.poll()
+        for fd in handles:
+            poller.register(fd, select.POLLIN)
+        deadline = time.monotonic() + 2
+        while handles:
+            exited = [
+                fd
+                for fd, event in poller.poll(
+                    max(0, int(1000 * (deadline - time.monotonic())))
+                )
+                if event & (select.POLLIN | select.POLLHUP)
+                and not event & (select.POLLERR | select.POLLNVAL)
+            ]
+            if not exited:
+                try:
+                    print(
+                        f"Temporal cleanup did not observe exit: {list(handles.values())}",
+                        file=sys.__stderr__,
+                        flush=True,
+                    )
+                except (OSError, ValueError):
+                    # Unavailable stderr must not mask the original timeout failure.
+                    pass
+                break
+            for fd in exited:
+                # Readiness confirms exit without stealing the SDK's wait/reap.
+                poller.unregister(fd)
+                os.close(fd)
+                del handles[fd]
     except (
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
@@ -279,6 +338,9 @@ def _kill_owned_temporal_servers() -> None:
         # Best-effort cleanup: if `pgrep` is unavailable, fails, or output is unexpected,
         # we silently ignore it to avoid disrupting test shutdown.
         pass
+    finally:
+        for fd in handles:
+            os.close(fd)
 
 
 atexit.register(_kill_owned_temporal_servers)

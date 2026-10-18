@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
 from api_service.db.base import get_async_session
+from api_service.db.models import SettingsOverride
 from moonmind.omnigent.remediation_workspace import (
     RemediationLoopHead,
     RemediationWorkspaceBinding,
@@ -149,8 +150,16 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
         default_model="gpt-5",
         default_effort="high",
     )
+
+    async def execute(statement):
+        # This fixture has no saved Settings overrides or other query results.
+        entities = [column.get("entity") for column in statement.column_descriptions]
+        assert entities == [SettingsOverride]
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+
     db_session = SimpleNamespace(
         get=AsyncMock(return_value=provider_profile),
+        execute=execute,
         commit=AsyncMock(),
     )
     app.dependency_overrides[get_async_session] = lambda: db_session

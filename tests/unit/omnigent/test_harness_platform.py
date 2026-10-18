@@ -1232,7 +1232,6 @@ def test_codex_continuity_preserved():
         model_effort=None,
         model_route_ref="openai",
         model_normalized_options={},
-        execution_realizer_ref="codex-profile-bound@1",
     )
     assert envelope.payload.executionRealizerRef == "codex-profile-bound@1"
     assert envelope.payload.harnessId == "codex-native"
@@ -1330,7 +1329,6 @@ def test_generic_realizer_runs_opencode():
         model_effort=None,
         model_route_ref="opencode-go",
         model_normalized_options={},
-        execution_realizer_ref="generic-omnigent-host@1",
     )
     assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
     assert envelope.payload.harnessId == "opencode-native"

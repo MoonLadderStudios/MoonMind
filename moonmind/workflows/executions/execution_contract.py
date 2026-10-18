@@ -28,6 +28,7 @@ from moonmind.services.skill_resolution import (
     extract_publish_metadata_from_skill_markdown,
     extract_required_capabilities_from_skill_markdown,
 )
+from moonmind.workflows.skills.tool_definitions import STORY_OUTPUT_TASK_TOOLS
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     resolve_skill_markdown_path,
@@ -89,6 +90,161 @@ _RETIRED_VECTOR_MESSAGE = (
     "scoped workspace access instead. Historical details remain readable; "
     "resubmit without retired requirements to start new work."
 )
+
+
+def workflow_step_tool_name(step_entry: Mapping[str, Any]) -> str:
+    step_tool = step_entry.get("tool")
+    if not isinstance(step_tool, Mapping) or not step_tool:
+        step_tool = step_entry.get("skill")
+    if not isinstance(step_tool, Mapping):
+        return ""
+    return str(step_tool.get("name") or step_tool.get("id") or "").strip()
+
+
+def _canonical_step_fingerprint(step_entry: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(step_entry, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return repr(sorted(step_entry.items(), key=lambda item: str(item[0])))
+
+
+def dedupe_workflow_steps(
+    raw_steps: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    deduped: list[Mapping[str, Any]] = []
+    fingerprints_by_id: dict[str, str] = {}
+
+    for step_entry in raw_steps:
+        step_id = str(step_entry.get("id") or "").strip()
+        if not step_id:
+            deduped.append(step_entry)
+            continue
+
+        fingerprint = _canonical_step_fingerprint(step_entry)
+        existing_fingerprint = fingerprints_by_id.get(step_id)
+        if existing_fingerprint is None:
+            fingerprints_by_id[step_id] = fingerprint
+            deduped.append(step_entry)
+            continue
+        if existing_fingerprint == fingerprint:
+            continue
+        raise RuntimeError(
+            f"task step id {step_id!r} is duplicated with different payloads; "
+            "step ids must be unique"
+        )
+
+    return deduped
+
+
+def workflow_step_tool_type(step_entry: Mapping[str, Any]) -> str:
+    """Classify an authored step using the runtime planner's dispatch rules."""
+
+    if workflow_step_tool_name(step_entry).lower() in STORY_OUTPUT_TASK_TOOLS:
+        return "skill"
+    if str(step_entry.get("type") or "").strip().lower() == "tool":
+        return "skill"
+    return "agent_runtime"
+
+
+def workflow_plan_tool_type(plan_entry: Mapping[str, Any]) -> str:
+    """Explicit plan tools own their type; legacy Skills always launch agents."""
+
+    tool = plan_entry.get("tool")
+    if not isinstance(tool, Mapping):
+        return "agent_runtime"
+    if not tool:
+        tool = plan_entry.get("skill")
+    if not isinstance(tool, Mapping):
+        return "agent_runtime"
+    return (
+        str(tool.get("type") or tool.get("kind") or "agent_runtime").strip().lower()
+        or "agent_runtime"
+    )
+
+
+def workflow_has_explicit_steps(raw_steps: Any) -> bool:
+    """Whether planning expands the authored steps instead of the task itself."""
+
+    return (
+        isinstance(raw_steps, list)
+        and all(isinstance(step, Mapping) for step in raw_steps)
+        and (
+            len(raw_steps) > 1
+            or any(str(step.get("type") or "").strip() for step in raw_steps)
+        )
+    )
+
+
+def workflow_requires_agent(
+    task: Mapping[str, Any], parameter_payload: Mapping[str, Any] | None = None
+) -> bool:
+    """Whether the task or its finishing resolver requires an agent account.
+
+    This follows planner precedence, including legacy Skill entries and the
+    single-task fallback, plus the finishing owner's implicit resolver child.
+    Runtime/model settings alone do not classify a tool workflow as agent-backed.
+    Presets must be expanded to classify their steps.
+    """
+
+    from .preset_expansion import has_unexpanded_task_template
+    from .routing import _coerce_bool, merge_automation_candidates
+
+    parameters = parameter_payload or {}
+    top_publish = parameters.get("publish")
+    task_publish = task.get("publish")
+    publication = (
+        top_publish
+        if isinstance(top_publish, Mapping) and top_publish
+        else task_publish if isinstance(task_publish, Mapping) else {}
+    )
+    for candidate in merge_automation_candidates(
+        parameters, publish_payload=publication, task_payload=task
+    ):
+        if not isinstance(candidate, Mapping):
+            continue
+        try:
+            if not _coerce_bool(candidate.get("enabled"), default=False):
+                continue
+        except ValueError:
+            # Preserve intent for the finishing owner's validation error.
+            return True
+        finish_mode = candidate.get("finishMode") or candidate.get("finish_mode")
+        if not isinstance(finish_mode, str) or finish_mode.strip() != "review_only":
+            return True
+        # Only the first enabled candidate owns finishing. Native review does
+        # not launch the resolver child, but authored steps may still use agents.
+        break
+
+    if has_unexpanded_task_template({"workflow": task}) or task.get("includes"):
+        return True
+    explicit_plan = task.get("plan")
+    if isinstance(explicit_plan, list) and explicit_plan:
+        return any(
+            not isinstance(entry, Mapping)
+            or workflow_plan_tool_type(entry) == "agent_runtime"
+            for entry in explicit_plan
+        )
+    steps = task.get("steps")
+    if (
+        isinstance(steps, list)
+        and len(steps) > 1
+        and all(isinstance(step, Mapping) for step in steps)
+    ):
+        try:
+            steps = dedupe_workflow_steps(steps)
+        except RuntimeError:
+            # Classification must not replace the planner's validation error.
+            return True
+    if workflow_has_explicit_steps(steps):
+        return any(workflow_step_tool_type(step) == "agent_runtime" for step in steps)
+    try:
+        step_count = task.get("stepCount") or (parameter_payload or {}).get("stepCount")
+        if step_count is not None and int(step_count) > 1:
+            return True
+    except (ValueError, TypeError):
+        # Invalid stepCount follows the planner's existing single-task fallback.
+        pass
+    return workflow_step_tool_name(task).lower() not in STORY_OUTPUT_TASK_TOOLS
 
 
 def _is_absent_vector_value(item: object) -> bool:

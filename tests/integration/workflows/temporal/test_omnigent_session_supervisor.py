@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -19,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity, workflow
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
+from temporalio.client import Client
 from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
@@ -30,7 +34,15 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
 from api_service.db import base as db_base
-from api_service.db.models import ProviderProfileSlotLease
+from api_service.db.models import (
+    OmnigentExecutionPlanRecord,
+    ProviderProfileSlotLease,
+    SettingsOverride,
+)
+from moonmind.omnigent.harness_platform.execution_plan import (
+    create_execution_plan_envelope,
+)
+from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
     DesiredLifecycle,
@@ -53,11 +65,16 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
 from moonmind.schemas.resilience_policy_models import compile_resilience_policy
 from moonmind.workflows.temporal.activity_catalog import (
-    AGENT_RUNTIME_TASK_QUEUE,
     ARTIFACTS_TASK_QUEUE,
     LLM_TASK_QUEUE,
+    TemporalActivityCatalog,
     build_default_activity_catalog,
     get_workflow_task_queue,
+)
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalActivityRuntimeError,
+    TemporalPlanActivities,
+    build_activity_bindings,
 )
 from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
@@ -78,10 +95,12 @@ from tests.unit.api.routers.test_executions import (
     _build_execution_record,
     _override_user_dependencies,
 )
+from tests.unit.omnigent.test_adapter_contracts import _plan as _agent_plan_envelope
 
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,
+    pytest.mark.integration_ci,
     pytest.mark.temporal_boundary,
 ]
 
@@ -284,8 +303,17 @@ async def _resolve_intent(payload: dict[str, Any]) -> dict[str, Any]:
     STATE["workflow_id"] = str(payload["workflowId"])
     STATE["step_execution_id"] = str(payload["stepExecutionId"])
     STATE["agent_run_id"] = str(payload["agentRunId"])
-    assert "request" not in payload
     execution_plan = payload.get("omnigentExecutionPlan")
+    if execution_plan is not None:
+        assert "request" not in payload
+        OmnigentExecutionPlanBinding.model_validate(execution_plan)
+    else:
+        request = AgentExecutionRequest.model_validate(payload["request"])
+        assert request.omnigent_execution_plan is None
+        assert request.agent_id == "omnigent"
+        assert request.correlation_id == payload["workflowId"]
+        assert request.idempotency_key == payload["stepExecutionId"]
+        assert request.instruction_ref
     STATE["execution_plan"] = execution_plan
     session_id = canonical_omnigent_session_id(
         workflow_id=str(payload["workflowId"]),
@@ -783,6 +811,27 @@ def _direct_session_input(session_id: str) -> OmnigentSessionWorkflowInput:
     )
 
 
+@asynccontextmanager
+async def _runtime_activity_workers(
+    client: Client, *, activities: list[Any]
+) -> AsyncIterator[None]:
+    """Poll each production route, including the isolated cleanup lane."""
+
+    catalog = build_default_activity_catalog()
+    by_queue: dict[str, list[Any]] = {}
+    for handler in activities:
+        name = activity._Definition.must_from_callable(handler).name
+        assert name is not None
+        route = catalog.resolve_activity(name)
+        by_queue.setdefault(route.task_queue, []).append(handler)
+    async with AsyncExitStack() as stack:
+        for queue, handlers in by_queue.items():
+            await stack.enter_async_context(
+                Worker(client, task_queue=queue, activities=handlers)
+            )
+        yield
+
+
 def _direct_session_activities() -> list[Any]:
     return [
         _load_reconciliation_inputs,
@@ -806,7 +855,24 @@ def _direct_session_activities() -> list[Any]:
     ]
 
 
-async def test_product_compiled_agent_run_converges_after_lost_terminal_event() -> None:
+@pytest_asyncio.fixture
+async def product_plan_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[DbExecutionPlanStore]:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/product-plan.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(OmnigentExecutionPlanRecord.__table__.create)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(db_base, "async_session_maker", sessions)
+    try:
+        yield DbExecutionPlanStore(sessions)
+    finally:
+        await engine.dispose()
+
+
+async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
+    product_plan_store: DbExecutionPlanStore,
+) -> None:
     """The #3706 product plan reaches admission and the session supervisor."""
 
     _reset_state()
@@ -819,8 +885,16 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default", provider_id="opencode-go"
     )
+
+    async def execute(statement):
+        # This fixture has no saved Settings overrides or other query results.
+        entities = [column.get("entity") for column in statement.column_descriptions]
+        assert entities == [SettingsOverride]
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+
     db_session = SimpleNamespace(
         get=AsyncMock(side_effect=[provider_profile, None]),
+        execute=execute,
         commit=AsyncMock(),
         refresh=AsyncMock(),
     )
@@ -846,9 +920,25 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
             "harness": "opencode-native",
         },
     }
+    # Keep compilation controlled, but persist its agent-only authority so the
+    # real validator must load the envelope and verify the binding digest.
+    plan_payload = _agent_plan_envelope().payload.model_dump(mode="json", by_alias=True)
+    plan_payload["agentProfileSnapshotRef"] = (
+        "omnigent-agent-profile:" + profile_snapshot["digest"]
+    )
+    plan_payload["credentialBindings"]["primary-model"]["providerProfileRef"] = (
+        profile_snapshot["providerProfileRef"]
+    )
+    plan_payload["launchPolicyRef"] = profile_snapshot["launchPolicyRef"]
+    plan_payload["policySnapshotRef"] = profile_snapshot["policyRef"]
+    plan_payload["workspaceMutation"] = "allowed"
+    plan_payload["capturePolicy"] = {"stream": True}
+    envelope = await product_plan_store.persist(
+        create_execution_plan_envelope(plan_payload)
+    )
     plan_binding = OmnigentExecutionPlanBinding(
-        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
-        planDigest="sha256:" + "b" * 64,
+        planRef=envelope.planRef,
+        planDigest="sha256:" + envelope.planRef.rsplit(":", 1)[-1],
         planArtifactRef="art_opencode_plan_3706",
         taskInputSnapshotRef="art_opencode_task_3706",
         taskInputSnapshotDigest="sha256:" + "c" * 64,
@@ -913,14 +1003,49 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
         mode="json", by_alias=True, exclude_none=True
     )
 
+    validation_activities = TemporalPlanActivities(artifact_service=None)
+    with pytest.raises(
+        TemporalActivityRuntimeError, match="bound execution plan is unavailable"
+    ):
+        await validation_activities.plan_validate(
+            plan_ref="artifact://plan/omnigent-session-3705",
+            principal="user-1",
+            omnigent_execution_plan={
+                **authored["omnigentExecutionPlan"],
+                "planRef": "omnigent-execution-plan:sha256:" + "f" * 64,
+                "planDigest": "sha256:" + "f" * 64,
+            },
+        )
+    with pytest.raises(ValueError, match="planDigest must match planRef"):
+        await validation_activities.plan_validate(
+            plan_ref="artifact://plan/omnigent-session-3705",
+            principal="user-1",
+            omnigent_execution_plan={
+                **authored["omnigentExecutionPlan"],
+                "planDigest": "sha256:" + "f" * 64,
+            },
+        )
+    catalog = build_default_activity_catalog()
+    (validation_binding,) = build_activity_bindings(
+        TemporalActivityCatalog(
+            activities=tuple(
+                item
+                for item in catalog.activities
+                if item.activity_type == "plan.validate"
+            ),
+            fleets=catalog.fleets,
+        ),
+        plan_activities=validation_activities,
+    )
+    assert validation_binding.task_queue == LLM_TASK_QUEUE
     workflow_queue = get_workflow_task_queue()
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await _register_search_attributes(env)
         async with (
             Worker(
                 env.client,
-                task_queue=LLM_TASK_QUEUE,
-                activities=[_generate_product_plan],
+                task_queue=validation_binding.task_queue,
+                activities=[_generate_product_plan, validation_binding.handler],
             ),
             Worker(
                 env.client,
@@ -945,9 +1070,8 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
                 activities=[_resolve_adapter_metadata],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=[
                     _evaluate_session_admission,
                     _resolve_intent,
@@ -1047,6 +1171,20 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
                     "AgentRun did not reach terminal state; "
                     f"state={STATE}, calls={CALLS}"
                 ) from exc
+            parent_history = await handle.fetch_history()
+            validation_event = next(
+                event
+                for event in parent_history.events
+                if event.HasField("activity_task_scheduled_event_attributes")
+                and event.activity_task_scheduled_event_attributes.activity_type.name
+                == "plan.validate"
+            )
+            assert any(
+                event.HasField("activity_task_completed_event_attributes")
+                and event.activity_task_completed_event_attributes.scheduled_event_id
+                == validation_event.event_id
+                for event in parent_history.events
+            )
             agent_history = await agent_handle.fetch_history()
             query_state = await session_handle.query("omnigent_session.state")
             session_history = await session_handle.fetch_history()
@@ -1192,7 +1330,6 @@ class _CodexCapacityActivities:
         return result
 
 
-@pytest.mark.integration_ci
 async def test_plan_bound_codex_keeps_recorded_realizer_and_replays(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1241,9 +1378,8 @@ async def test_plan_bound_codex_keeps_recorded_realizer_and_replays(
                 activities=[_resolve_adapter_metadata],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=[
                     capacity.evaluate_admission,
                     capacity.execute,
@@ -1389,9 +1525,8 @@ async def test_continue_as_new_preserves_active_provider_session(
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=[
                     _load_reconciliation_inputs,
                     _persist_decision,
@@ -1454,9 +1589,8 @@ async def test_reconciliation_failure_persists_then_runs_ordered_cleanup() -> No
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             ),
         ):
@@ -1494,9 +1628,8 @@ async def test_initial_input_failure_loads_minimal_authority_and_persists() -> N
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             ),
         ):
@@ -1534,9 +1667,8 @@ async def test_persistent_input_failure_escalates_to_claimable_cleanup() -> None
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             ),
         ):
@@ -1592,9 +1724,8 @@ async def test_exhausted_turn_submission_records_delivery_unknown_then_cleans_up
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             ),
         ):
@@ -1631,9 +1762,8 @@ async def test_exhausted_cleanup_is_visible_and_janitor_owned() -> None:
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             ),
         ):
@@ -1673,9 +1803,8 @@ async def test_post_terminal_publication_failure_still_runs_cleanup() -> None:
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             ),
         ):
@@ -1727,9 +1856,8 @@ async def test_legacy_heartbeat_crash_window_converges_after_disconnect_and_rest
                 workflows=[MoonMindOmnigentSessionWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             ),
         ):
@@ -1768,9 +1896,8 @@ async def test_inflight_workflow_worker_restart_does_not_duplicate_provider_effe
     try:
         async with await WorkflowEnvironment.start_time_skipping() as env:
             await _register_search_attributes(env)
-            activity_worker = Worker(
+            activity_worker = _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=_direct_session_activities(),
             )
             first_workflow_worker = Worker(
@@ -1857,9 +1984,8 @@ async def test_pre_supervisor_agent_run_history_replays_on_legacy_owner(
                 activities=[_resolve_adapter_metadata],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
-            Worker(
+            _runtime_activity_workers(
                 env.client,
-                task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=[
                     _legacy_profile_bound_execute,
                     _publish_artifacts,
@@ -1920,9 +2046,8 @@ async def test_disabling_new_admission_preserves_admitted_cleanup_and_history() 
                     activities=[_resolve_adapter_metadata],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
-                Worker(
+                _runtime_activity_workers(
                     env.client,
-                    task_queue=AGENT_RUNTIME_TASK_QUEUE,
                     activities=[
                         _evaluate_session_admission,
                         _resolve_intent,
@@ -2037,9 +2162,8 @@ async def test_agent_run_cancellation_preserves_session_cleanup_owner(
                     activities=[_resolve_adapter_metadata],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
-                Worker(
+                _runtime_activity_workers(
                     env.client,
-                    task_queue=AGENT_RUNTIME_TASK_QUEUE,
                     activities=[
                         _evaluate_session_admission,
                         _resolve_intent,

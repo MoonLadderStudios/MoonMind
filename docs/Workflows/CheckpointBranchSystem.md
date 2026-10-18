@@ -30,7 +30,7 @@ Controlled-failure remote preservation requires compatible scope and destination
 
 ## 2. Architectural decision summary
 
-Logical Steps, Step Executions, manifests, and checkpoints remain execution truth. A Checkpoint Branch is a product continuation lane; each semantic turn creates a Step Execution or qualified equivalent evidence. Transient retries reuse the operation identity. The execution owner allocates runtime/host/lease/session identities; callers supply intent only.
+Logical Steps, Step Executions, manifests, and checkpoints remain execution truth. Each Checkpoint Branch turn creates a Step Execution or qualified equivalent evidence. The execution owner allocates runtime/host/lease/session identities; callers supply intent only. Transient retries reuse the operation identity. After an uncertain start, remediation observes the exact persisted claim without redispatching; a lost acknowledgment cannot prove no effect or a successful repair.
 
 Repository branches are isolation bindings, not product identities; analysis-only branches need none. Provider-aware bindings follow [Lore VCS Integration Design](LoreVcsIntegrationDesign.md), not a new Git-only authoring domain. Provider sessions and URLs are runtime/diagnostic metadata, never durable branch authority.
 

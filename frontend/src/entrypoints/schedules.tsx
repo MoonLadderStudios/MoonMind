@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import { PageSizeSelector } from '../components/PageSizeSelector';
 import {
   activeRecurringFilterEntries,
@@ -32,6 +33,7 @@ import {
   readRecurringScheduleFocusRequest,
 } from '../lib/recurringScheduleFocus';
 import { formatStatusLabel } from '../utils/formatters';
+import { describeCadence, describeCron } from '../lib/cronCadence';
 
 const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
 
@@ -324,8 +326,17 @@ function formatWhen(value: string | null | undefined): string {
   return date.toLocaleString();
 }
 
-function compactId(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
+function cronPreview(cron: string, timezone: string): string {
+  const description = describeCron(cron);
+  const zone = timezone.trim();
+  const text = description
+    ? `Runs ${description.charAt(0).toLowerCase()}${description.slice(1)}`
+    : 'Custom cron expression';
+  return zone ? `${text} (${zone})` : text;
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function displayValue(value: string | null | undefined): string {
@@ -1181,18 +1192,20 @@ function ScheduleDetailPage({
     >
     <EntityDetailFrame entity="recurring" main={(
       <div className="schedules-page schedules-detail-page stack">
-      <header className="toolbar schedules-toolbar">
-        <div className="schedules-detail-title">
-          <nav className="page-meta" aria-label="Breadcrumb">
-            <a href="/schedules">Recurring</a>
-            <span>/</span>
-            <span>{schedule.name}</span>
-          </nav>
-          <h2 className="page-title" tabIndex={-1} data-recurring-detail-heading>{schedule.name}</h2>
-          <p className="page-meta">{displayValue(schedule.description)}</p>
-          <p className="page-meta" title={definitionId}>Definition ID: {definitionId}</p>
-        </div>
-        <div className="toolbar-controls">
+      <div className="schedules-detail-title">
+        <nav className="page-meta" aria-label="Breadcrumb">
+          <a href="/schedules">Recurring</a>
+          <span>/</span>
+          <span>{schedule.name}</span>
+        </nav>
+      </div>
+      <PageHeader
+        className="schedules-toolbar"
+        title={schedule.name}
+        description={schedule.description?.trim() || undefined}
+        headingProps={{ tabIndex: -1, 'data-recurring-detail-heading': '' }}
+        actions={(
+        <>
           <span className={`schedules-state schedules-state--${scheduleState(schedule)}`}>
             {stateLabel(schedule)}
           </span>
@@ -1254,8 +1267,9 @@ function ScheduleDetailPage({
               ? (schedule.enabled ? 'Pausing' : 'Resuming')
               : (schedule.enabled ? 'Pause schedule' : 'Resume schedule')}
           </button>
-        </div>
-      </header>
+        </>
+        )}
+      />
 
       <DashboardActionDialog
         open={deleteDialogOpen}
@@ -1313,7 +1327,7 @@ function ScheduleDetailPage({
         </div>
         <div className="schedules-summary-item">
           <span>Cadence</span>
-          <strong>{schedule.cron}</strong>
+          <strong title={schedule.cron}>{describeCadence(schedule.cron, schedule.timezone)}</strong>
         </div>
         <div className="schedules-summary-item">
           <span>Last Run</span>
@@ -1372,9 +1386,13 @@ function ScheduleDetailPage({
                   }}
                   required
                   aria-invalid={Boolean(visibleFormErrors.cron)}
+                  aria-describedby="schedule-cron-preview"
                 />
                 {visibleFormErrors.cron && <span className="schedules-field-error">{visibleFormErrors.cron}</span>}
               </label>
+              <p id="schedule-cron-preview" className="page-meta" aria-live="polite">
+                {cronPreview(currentForm.cron, currentForm.timezone)}
+              </p>
               <label>
                 <span>Timezone</span>
                 <input
@@ -1484,12 +1502,8 @@ function ScheduleDetailPage({
           ) : (
             <dl className="schedules-detail-list">
               <div>
-                <dt>Cron</dt>
-                <dd><code>{schedule.cron}</code></dd>
-              </div>
-              <div>
-                <dt>Timezone</dt>
-                <dd>{displayValue(schedule.timezone)}</dd>
+                <dt>Cadence</dt>
+                <dd title={schedule.cron}>{describeCadence(schedule.cron, schedule.timezone)}</dd>
               </div>
               <div>
                 <dt>Target</dt>
@@ -1511,11 +1525,18 @@ function ScheduleDetailPage({
           )}
         </section>
 
-        <aside className="panel--data schedules-detail-panel" aria-label="Schedule facts">
-          <div className="section-heading-row">
-            <h3>Facts</h3>
-          </div>
+        <aside className="panel--data schedules-detail-panel" aria-label="Schedule details">
+          <details>
+          <summary>Details</summary>
           <dl className="schedules-detail-list">
+            <div>
+              <dt>Cron Expression</dt>
+              <dd><code>{schedule.cron}</code></dd>
+            </div>
+            <div>
+              <dt>Timezone</dt>
+              <dd>{displayValue(schedule.timezone)}</dd>
+            </div>
             <div>
               <dt>Definition ID</dt>
               <dd title={definitionId}>{definitionId}</dd>
@@ -1537,6 +1558,7 @@ function ScheduleDetailPage({
               <dd>{formatWhen(schedule.updatedAt)}</dd>
             </div>
           </dl>
+          </details>
         </aside>
       </div>
 
@@ -1612,10 +1634,10 @@ function ScheduleDetailPage({
       </section>
 
       <section className="panel--data schedules-detail-panel" aria-label="Schedule target payload">
-        <div className="section-heading-row">
-          <h3>Target Payload</h3>
-        </div>
-        <pre className="schedules-json-block">{formatJsonValue(schedule.target)}</pre>
+        <details>
+          <summary>Target payload</summary>
+          <pre className="schedules-json-block">{formatJsonValue(schedule.target)}</pre>
+        </details>
       </section>
       </div>
     )} />
@@ -1677,7 +1699,7 @@ function RecurringScheduleMobileList({
             <div>
               <dt>Cadence</dt>
               <dd>
-                <code>{schedule.cron}</code>
+                <span title={schedule.cron}>{describeCron(schedule.cron) ?? schedule.cron}</span>
                 <span>{displayValue(schedule.timezone)}</span>
               </dd>
             </div>
@@ -2037,7 +2059,6 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       className="data-table__sort"
       onClick={() => changeSort(key)}
       aria-label={`${label}. Server sorted ${sort === key ? sortDir : 'not active'}.`}
-      title="Sorting is server-authoritative."
     >
       <span>{label}</span>
       <span aria-hidden="true" className="data-table__sort-indicator">
@@ -2085,12 +2106,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   return (
     <div className="schedules-page stack">
       <RouterSearchListener onSearchChange={adoptUrlSearch} />
-      <header className="toolbar schedules-toolbar">
-        <div>
-          <h2 className="page-title" tabIndex={-1} data-recurring-table-title>Recurring Schedules</h2>
-          <p className="page-meta">Managed recurring schedules for workflow targets.</p>
-        </div>
-        <div className="toolbar-controls">
+      <PageHeader
+        className="schedules-toolbar"
+        title="Recurring Schedules"
+        description="Managed recurring schedules for workflow targets."
+        headingProps={{ tabIndex: -1, 'data-recurring-table-title': '' }}
+        actions={(
+        <>
           <button type="button" className="secondary" onClick={() => void refetch()} disabled={isFetching}>
             {isFetching ? 'Refreshing' : 'Refresh'}
           </button>
@@ -2101,10 +2123,11 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
           >
             +
           </a>
-        </div>
-      </header>
+        </>
+        )}
+      />
 
-      <section className="schedules-summary-grid" aria-label="Schedule summary">
+      <section className="schedules-summary-line" aria-label="Schedule summary">
         {isLoading ? (
           <LoadingPlaceholder
             surface="schedules"
@@ -2114,24 +2137,21 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             preserveContext
           />
         ) : (
-          <>
-            <div className="schedules-summary-item">
-              <span>Total</span>
-              <strong>{stats.total}</strong>
-            </div>
-            <div className="schedules-summary-item">
-              <span>Active</span>
-              <strong>{stats.active}</strong>
-            </div>
-            <div className="schedules-summary-item">
-              <span>Next 24h</span>
-              <strong>{stats.dueSoon}</strong>
-            </div>
-            <div className="schedules-summary-item">
-              <span>Attention</span>
-              <strong>{stats.attention}</strong>
-            </div>
-          </>
+          <p className="page-meta">
+            {[
+              pluralize(stats.total, 'schedule'),
+              `${stats.active} active`,
+              stats.dueSoon > 0 ? `${stats.dueSoon} due in the next 24 hours` : null,
+            ].filter(Boolean).join(' · ')}
+            {stats.attention > 0 ? (
+              <>
+                {' '}
+                <span className="schedules-state schedules-state--attention">
+                  {stats.attention === 1 ? '1 needs attention' : `${stats.attention} need attention`}
+                </span>
+              </>
+            ) : null}
+          </p>
         )}
       </section>
 
@@ -2145,7 +2165,6 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
           >
             Filters
           </button>
-          <span className="page-meta">Sorting is server-authoritative.</span>
         </div>
         {activeFilters.length > 0 ? (
           <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
@@ -2246,7 +2265,6 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                     >
                       {item.name}
                     </a>
-                    <span title={item.id}>{compactId(item.id)}</span>
                   </div>
                 ),
               },
@@ -2298,7 +2316,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                 ),
                 render: (item) => (
                   <div className="schedules-secondary-cell">
-                    <code>{item.cron}</code>
+                    <strong title={item.cron}>{describeCron(item.cron) ?? item.cron}</strong>
                     <span>{displayValue(item.timezone)}</span>
                   </div>
                 ),

@@ -1097,7 +1097,6 @@ describe('ProviderProfilesManager form controls', () => {
       'Harness',
       'Provider',
       'Credential',
-      'Secret refs',
       'Status',
       'Actions',
     ]);
@@ -1991,6 +1990,48 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByText(/sk-ant/)).toBeNull();
   });
 
+  it('keeps capacity and readiness visible while credential internals sit in row Details', () => {
+    renderProviderProfilesManager([profileWithReadiness]);
+
+    const row = screen.getByText('codex-diagnostic').closest('tr');
+    expect(row).not.toBeNull();
+    const details = row?.querySelector<HTMLDetailsElement>('details.provider-profile-details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('summary')?.textContent).toBe('Details');
+
+    // Operational facts stay in the default row view.
+    for (const visible of ['Readiness: Blocked', 'Concurrency: 3']) {
+      expect(details?.contains(screen.getByText(visible))).toBe(false);
+    }
+    // Credential internals (source enum, cooldown, SecretRefs) are one disclosure away.
+    for (const internal of ['provider_api_key', 'Cooldown: 120s', 'db://openai-team-key']) {
+      expect(details?.contains(screen.getByText(internal))).toBe(true);
+    }
+    expect(row?.querySelector('td[data-label="Secret refs"]')).toBeNull();
+  });
+
+  it('opens the create form from an Add profile action instead of always showing it', () => {
+    renderProviderProfilesManager([profile]);
+
+    expect(screen.queryByRole('heading', { name: 'Create Profile' })).toBeNull();
+    expect(screen.queryByText(/scroll down to create/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
+
+    expect(screen.getByRole('heading', { name: 'Create Profile' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Add profile' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('heading', { name: 'Create Profile' })).toBeNull();
+  });
+
+  it('shows the create form directly when no profiles exist yet', () => {
+    renderProviderProfilesManager([]);
+
+    expect(screen.getByRole('heading', { name: 'Create Profile' })).toBeTruthy();
+  });
+
   it('condenses verbose status diagnostics behind a disclosure without losing detail', () => {
     renderProviderProfilesManager([profileWithReadiness]);
 
@@ -2065,6 +2106,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Create profile' })).toBeNull();
     expect(screen.queryByText('Create Provider Profile')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add profile' })).toBeNull();
   });
 });
 
@@ -3474,6 +3516,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
 
     renderProviderProfilesManager([profileA]);
     // Draft a new, unrelated profile while A's OAuth session is in flight.
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'profile-b' } });
     fireEvent.click(screen.getByRole('button', { name: 'OAuth profile-a' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Finalize profile-a' }));
@@ -4249,6 +4292,8 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
   }
 
   async function fillCreateForm(profileId: string) {
+    const addProfile = screen.queryByRole('button', { name: 'Add profile' });
+    if (addProfile) fireEvent.click(addProfile);
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: profileId } });
     await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));

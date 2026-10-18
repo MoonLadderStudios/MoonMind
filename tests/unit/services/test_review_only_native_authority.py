@@ -19,7 +19,9 @@ from tests.unit.services.test_omnigent_execution_plan_service import _snapshot
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("harness", ["codex-native", "opencode-native"])
-@pytest.mark.parametrize("snapshot_mutation", [None, "workspace", "digest"])
+@pytest.mark.parametrize(
+    "snapshot_mutation", [None, "workspace", "digest", "enabled", "direct_tool"]
+)
 async def test_create_review_only_freezes_compiled_workspace_before_native_admission(
     monkeypatch, tmp_path, harness, snapshot_mutation
 ) -> None:
@@ -154,6 +156,29 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
             yield session
 
     app.dependency_overrides[get_async_session] = session_dependency
+    submitted_workflow = {
+        "taskTemplate": {"slug": "pr-review-resolve", "scope": "global"},
+        "inputs": {"pull_request": "350", "review_only": True},
+    }
+    if snapshot_mutation in {"enabled", "direct_tool"}:
+        from tests.unit.api.test_pr_review_resolve_preset import _expand
+
+        submitted_workflow = await _expand(
+            tmp_path,
+            {"pull_request": "350", "review_only": True},
+            context={"repository": repository},
+        )
+        if snapshot_mutation == "enabled":
+            submitted_workflow["publish"]["mergeAutomation"]["enabled"] = "not-a-bool"
+        else:
+            submitted_workflow["publish"].pop("mergeAutomation")
+            saved_account = AsyncMock(
+                side_effect=AssertionError("unexpected account default")
+            )
+            monkeypatch.setattr(
+                "api_service.api.routers.executions._load_provider_profile_for_runtime",
+                saved_account,
+            )
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -165,28 +190,25 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
                     "payload": {
                         "repository": repository,
                         "targetRuntime": "omnigent",
-                        "workflow": {
-                            "taskTemplate": {
-                                "slug": "pr-review-resolve",
-                                "scope": "global",
-                            },
-                            "inputs": {"pull_request": "350", "review_only": True},
-                        },
+                        "workflow": submitted_workflow,
                     },
                 },
             )
 
         profile_resolver.assert_awaited_once()
         assert snapshot["document"]["workspace"] == {"mutation": "allowed"}
-        if snapshot_mutation is not None:
+        if snapshot_mutation not in {None, "direct_tool"}:
             assert response.status_code == 422, response.text
             detail = response.json()["detail"]
             assert detail["code"] == "omnigent_execution_plan_invalid"
-            assert detail["message"] == (
-                "native review graph conflicts with frozen task-input snapshot"
-                if snapshot_mutation == "workspace"
-                else "native review graph task-input snapshot digest mismatch"
-            )
+            if snapshot_mutation == "enabled":
+                assert "Unsupported boolean value: 'not-a-bool'" in detail["message"]
+            else:
+                assert detail["message"] == (
+                    "native review graph conflicts with frozen task-input snapshot"
+                    if snapshot_mutation == "workspace"
+                    else "native review graph task-input snapshot digest mismatch"
+                )
             temporal_service.create_execution.assert_not_awaited()
             async with sessions() as session:
                 assert (
@@ -203,7 +225,11 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
         assert parameters["workspace"] == {"mutation": "allowed"}
         workflow = parameters["workflow"]
         assert workflow["publish"]["mode"] == "none"
-        assert workflow["publish"]["mergeAutomation"]["finishMode"] == "review_only"
+        if snapshot_mutation == "direct_tool":
+            assert "mergeAutomation" not in workflow["publish"]
+            saved_account.assert_not_awaited()
+        else:
+            assert workflow["publish"]["mergeAutomation"]["finishMode"] == "review_only"
         assert len(workflow["steps"]) == 1
         assert workflow["steps"][0]["tool"]["id"] == (
             "github.resolve_pull_request_target"
@@ -218,6 +244,17 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
         )
         plan = await DbExecutionPlanStore(sessions).load(binding["planRef"])
         assert plan is not None
+        from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
+            agent_requests,
+        )
+
+        assert not agent_requests(parameters)
+        if snapshot_mutation == "direct_tool":
+            assert all(
+                binding.model_dump(by_alias=True).get("consumer") != "native"
+                for binding in plan.payload.credentialBindings.values()
+            )
+            return
         access = plan.payload.resolvedTools["repositoryAccess"]
         assert set(access) == {"collaboration"}
         assert plan.payload.credentialBindings["collaboration"].consumer == "native"

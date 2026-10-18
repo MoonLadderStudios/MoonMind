@@ -3,8 +3,8 @@
 Source issue: MoonLadderStudios/MoonMind#3835 (required work section 2).
 
 Plan compilation is the single new-admission boundary for every client: the
-trusted planner default, an alternate API client supplying an explicit
-``execution_realizer_ref``, a schedule, and a preset all resolve here. These
+trusted planner default, a schedule, and a preset all resolve here. Stores
+strip caller-authored realizer fields before compilation. These
 tests drive :func:`compile_execution_plan` itself — not a nearby helper — so the
 code-owned retirement class is proven to gate real Codex plan admission.
 
@@ -39,6 +39,7 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
+from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
 from moonmind.omnigent.legacy_retirement import (
     RetirementClass,
     get_retirement_record,
@@ -238,22 +239,27 @@ def test_new_admission_disabled_rejects_the_trusted_planner_default(
     assert "no longer admits new work" in str(excinfo.value)
 
 
-def test_alternate_client_cannot_bypass_the_retirement_state(
-    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["execution_realizer_ref", "executionRealizerRef"])
+async def test_caller_realizer_cannot_bypass_the_retirement_state(
+    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch, field: str
 ) -> None:
-    """An explicit client-supplied realizer is held to the same class."""
+    """A caller field cannot replace a retired deployment-selected realizer."""
 
     _reclassify(
         monkeypatch,
         retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
         new_admission_source="",
     )
+    store = InMemoryExecutionPlanStore()
+    codex_plan_inputs[field] = "generic-omnigent-host@1"
     with pytest.raises(HarnessPlatformError) as excinfo:
-        compile_execution_plan(
-            **codex_plan_inputs,
-            execution_realizer_ref=PROFILE_BOUND_REALIZER,
+        await store.load_or_compile(
+            compile_fn=compile_execution_plan,
+            compile_kwargs=codex_plan_inputs,
         )
     assert "no longer admits new work" in str(excinfo.value)
+    assert store._plans == {}
 
 
 def test_plan_compilation_takes_no_rollback_generation(codex_plan_inputs) -> None:
