@@ -23,6 +23,10 @@ from moonmind.utils.logging import (
 
 _AGENT_CATALOG_PAGE_SIZE = 1000
 _MAX_AGENT_CATALOG_PAGES = 100
+# Omnigent's public AuthModel wire enum, not credential contents.
+_PUBLIC_HARNESS_AUTH_MODELS = frozenset(
+    {"omnigent-credential", "own-auth", "session-scoped-config"}
+)
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 # A message event can synchronously wait for the runner's native-terminal
 # bootstrap. The runner may spend 30 seconds resolving the harness version and
@@ -325,6 +329,29 @@ class OmnigentClientError(RuntimeError):
             "message": redact_sensitive_text(str(self)),
             "responseBody": redact_sensitive_payload(self.response_body),
         }
+
+
+def _preserve_public_harness_auth(
+    payload: Mapping[str, Any], redacted: dict[str, Any]
+) -> None:
+    """Keep only the typed catalog auth enum through response redaction."""
+
+    for collection in ("data", "harnesses"):
+        rows = payload.get(collection)
+        if not isinstance(rows, list):
+            continue
+        for row, safe_row in zip(rows, redacted[collection], strict=True):
+            capabilities = row.get("capabilities") if isinstance(row, Mapping) else None
+            if not isinstance(capabilities, Mapping) or "auth" not in capabilities:
+                continue
+            auth = capabilities["auth"]
+            # Unsupported values must stay opaque, including objects whose
+            # nested keys would not independently trigger credential redaction.
+            safe_row["capabilities"]["auth"] = (
+                auth
+                if isinstance(auth, str) and auth in _PUBLIC_HARNESS_AUTH_MODELS
+                else "[REDACTED]"
+            )
 
 
 class OmnigentHttpClient:
@@ -908,7 +935,7 @@ class OmnigentHttpClient:
                     self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
-            return self._parse_json_response(response)
+            return self._parse_json_response(response, path=path)
 
         shared = shared_pool_client() if self._transport is None else None
         if shared is not None:
@@ -933,7 +960,7 @@ class OmnigentHttpClient:
                     self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
-            return self._parse_json_response(response)
+            return self._parse_json_response(response, path=path)
 
         async with httpx.AsyncClient(
             timeout=timeout,
@@ -960,9 +987,11 @@ class OmnigentHttpClient:
                     self._transport_error_message(exc),
                     failure_class="integration_error",
                 ) from exc
-        return self._parse_json_response(response)
+        return self._parse_json_response(response, path=path)
 
-    def _parse_json_response(self, response: httpx.Response) -> dict[str, Any]:
+    def _parse_json_response(
+        self, response: httpx.Response, *, path: str = ""
+    ) -> dict[str, Any]:
         if response.status_code < 200 or response.status_code >= 300:
             raise self._error_from_response(response.status_code, response.text)
         if not response.content:
@@ -972,7 +1001,10 @@ class OmnigentHttpClient:
         except json.JSONDecodeError:
             return {"body": self._redact(response.text)}
         if isinstance(parsed, Mapping):
-            return dict(redact_sensitive_payload(parsed))
+            redacted = dict(redact_sensitive_payload(parsed))
+            if path == "/v1/harnesses":
+                _preserve_public_harness_auth(parsed, redacted)
+            return redacted
         return {"body": redact_sensitive_payload(parsed)}
 
     async def _request_bytes(self, method: str, path: str) -> bytes:

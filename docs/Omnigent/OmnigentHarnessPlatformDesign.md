@@ -83,7 +83,7 @@ Aliases are accepted only at discovery and input edges, and only the trusted pla
 
 MoonMind projects the authenticated Omnigent catalog into a bounded immutable snapshot from three views: `/v1/harnesses` (what the endpoint understands), `/v1/agents` (selectable agents), and `/v1/hosts` (connected hosts and readiness). Only the first two are pre-host planning evidence; `/v1/hosts` cannot stand in for an on-demand host that does not exist yet.
 
-A snapshot (`moonmind.omnigent-harness-catalog.v1`) records the endpoint, build digest, plugin-load errors, and per harness its aliases, implementation (package, version, digest, entry point), runtime binary constraints, declared capabilities, and setup steps. Unknown capability values stay unknown rather than being coerced.
+A snapshot (`moonmind.omnigent-harness-catalog.v1`) records the endpoint, build digest, plugin-load errors, and per harness its aliases, implementation (package, version, digest, entry point), runtime binary constraints, declared capabilities, and setup steps. Unknown capability values stay unknown rather than being coerced. The HTTP boundary preserves only the declared public `capabilities.auth` enum (`omnigent-credential`, `own-auth`, `session-scoped-config`) for catalog normalization; credential fields remain redacted. Other auth values remain opaque without blocking discovery of known-safe sibling rows; existing trust and admission checks still own launch authority.
 
 Trust is bound to implementation identity, not a name: `core_trusted` (shipped with the approved build), `plugin_approved` (approved package, version, entry point, digest), `quarantined` (discovered; no credentials or workflows), or `blocked`.
 
