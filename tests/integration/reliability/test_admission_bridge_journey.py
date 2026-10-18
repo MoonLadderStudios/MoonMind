@@ -19,9 +19,9 @@ from moonmind.omnigent.bridge_store import (
     OmnigentIdempotencyError,
 )
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
+from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore, stable_binding_id
 from tests.support.isolated_postgres import isolated_postgres
-from tests.unit.omnigent.test_generic_platform_production_services import _exact_plan
+from tests.unit.omnigent.test_generic_platform_production_services import _plan
 from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_admission import (
     _admission,
     _capture_release_signals,
@@ -90,7 +90,10 @@ async def test_lost_ack_keeps_one_admission_across_runtime_and_bridge(
     ]
     try:
         async with isolated_postgres(tables) as sessions, httpx.AsyncClient() as client:
-            plan = _exact_plan("opencode-go/model")
+            # This captured retry owns a retained routing projection, predating
+            # immutable launch artifacts and canonical native-chat authority.
+            plan = _plan("opencode-go/model")
+            assert plan.payload.effectiveLaunchSnapshotRef is None
             await DbExecutionPlanStore(sessions).persist(plan)
 
             class Run(_ExecutingRun):
@@ -101,11 +104,22 @@ async def test_lost_ack_keeps_one_admission_across_runtime_and_bridge(
                         )
                     self.executions.append(payload)
                     # These owners are reconstructed on every Activity delivery.
-                    binding = await DbRuntimeBindingStore(sessions).create_initial(
+                    runtimes = DbRuntimeBindingStore(sessions)
+                    binding = await runtimes.create_initial(
                         execution_plan_ref=plan.planRef,
                         idempotency_key=payload.idempotency_key,
                         admission_epoch=payload.admitted_provider_capacity.admission_epoch,
                         provider_leases={"selected": {"leaseId": "one-provider-lease"}},
+                    )
+                    binding = await runtimes.update(
+                        binding.bindingId,
+                        expected_revision=binding.revision,
+                        expected_fencing_generation=binding.fencingGeneration,
+                        updates={
+                            "hostBindingRef": "one-host",
+                            "hostLeaseRef": "one-host-lease",
+                            "omnigentHostId": "controlled-host",
+                        },
                     )
                     await OmnigentBridgeSessionStore(
                         sessions
@@ -174,6 +188,21 @@ async def test_lost_ack_keeps_one_admission_across_runtime_and_bridge(
                 )
             assert len(bindings) == (1 if resume_enabled else 2)
             assert len(bridges) == 1
+            assert bridges[0].metadata_["executionPlanRef"] == plan.planRef
+            assert "runtimeAuthority" not in bridges[0].metadata_
+            first_request = run.executions[0]
+            assert bridges[0].effective_launch_snapshot_json["runtimeBindingRef"] == (
+                stable_binding_id(
+                    execution_plan_ref=plan.planRef,
+                    idempotency_key=first_request.idempotency_key,
+                    admission_epoch=first_request.admitted_provider_capacity.admission_epoch,
+                )
+            )
+            resolution = await OmnigentBridgeSessionStore(
+                sessions
+            ).resolve_chat_binding(workflow_id=bridges[0].moonmind_workflow_id)
+            assert resolution.read_only is True
+            assert resolution.capabilities.get("sendMessage") is not True
             assert len(provider_turns) == 1
             assert sum(name == "request_slot" for name, _ in run.signals) == (
                 1 if resume_enabled else 2

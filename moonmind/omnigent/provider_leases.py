@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Mapping, NoReturn, Protocol
 
@@ -95,6 +95,90 @@ class AcquiredProviderLease:
             "credentialGeneration": self.credential_generation,
             "credentialRuntimeRef": credential_runtime_ref,
         }
+
+
+async def validate_bound_provider_leases(
+    *,
+    session_factory: Any,
+    provider_leases: Mapping[str, Any],
+    execution_plan_ref: str,
+    step_execution_id: str | None,
+    idempotency_key: str,
+) -> bool:
+    """Check the current durable grant before an already-bound native operation.
+
+    The manager's persisted ledger owns live capacity. A frozen runtime binding
+    alone cannot authorize work after release, cleanup, regrant or rotation.
+    This read never acquires capacity or adopts a new credential generation.
+    """
+    from sqlalchemy import select
+
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        ProviderProfileSlotLease,
+    )
+
+    if not provider_leases:
+        return False
+    async with session_factory() as session:
+        for value in provider_leases.values():
+            if not isinstance(value, Mapping):
+                return False
+            profile = await session.get(
+                ManagedAgentProviderProfile, value.get("providerProfileRef")
+            )
+            lease_ref = str(value.get("providerLeaseRef") or "")
+            if not lease_ref.startswith("provider-profile-lease:"):
+                return False
+            lease = (
+                await session.execute(
+                    select(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.runtime_id == value.get("runtimeId"),
+                        ProviderProfileSlotLease.lease_id
+                        == lease_ref.removeprefix("provider-profile-lease:"),
+                    )
+                )
+            ).scalar_one_or_none()
+            # AgentRun admits generic workflow capacity as execution_direct;
+            # the retained consumed handle labels its transport execution_omnigent.
+            # Activity-owned grants are acquired as execution_omnigent directly.
+            expected_purpose = (
+                CredentialLeasePurpose.EXECUTION_DIRECT.value
+                if value.get("leaseOwnerIsWorkflow") is True
+                else CredentialLeasePurpose.EXECUTION_OMNIGENT.value
+            )
+            if (
+                profile is None
+                or profile.credential_generation != value.get("credentialGeneration")
+                or lease is None
+                or lease.profile_id != profile.profile_id
+                or lease.owner_id != value.get("leaseOwnerId")
+                or lease.owner_is_workflow != value.get("leaseOwnerIsWorkflow")
+                or lease.fencing_generation != value.get("leaseFencingGeneration")
+                or (
+                    lease.credential_generation != profile.credential_generation
+                    and not (
+                        not lease.owner_is_workflow
+                        and lease.credential_generation is None
+                    )
+                )
+                or lease.execution_plan_ref != execution_plan_ref
+                or lease.purpose != expected_purpose
+                or (
+                    lease.owner_is_workflow
+                    and (
+                        lease.step_execution_id != step_execution_id
+                        or lease.idempotency_key != idempotency_key
+                    )
+                )
+                or lease.capacity_scope_ref != value.get("capacityScopeRef")
+                or lease.lease_state != "held"
+                or lease.released_at is not None
+                or lease.expires_at is None
+                or lease.expires_at.replace(tzinfo=UTC) <= datetime.now(UTC)
+            ):
+                return False
+    return True
 
 
 class OmnigentProviderLeaseCoordinator:
@@ -245,6 +329,14 @@ class OmnigentProviderLeaseCoordinator:
                     credential_generation=admitted_generation,
                 ),
             )
+            observed_fence = inspection.get("fencingGeneration")
+            if observed_fence is not None:
+                if type(observed_fence) is not int or observed_fence < 1:
+                    raise HarnessPlatformError(
+                        "workflow-admitted provider grant fence is invalid",
+                        code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+                    )
+                lease = replace(lease, fencing_generation=observed_fence)
             admitted_scope_ref = getattr(
                 admitted_profile, "capacity_scope_ref", None
             )
@@ -592,4 +684,4 @@ class OmnigentProviderLeaseCoordinator:
             await self._leases.release_lease(lease)
 
 
-__all__ = ["AcquiredProviderLease", "OmnigentProviderLeaseCoordinator"]
+__all__ = ["AcquiredProviderLease", "OmnigentProviderLeaseCoordinator", "validate_bound_provider_leases"]

@@ -405,7 +405,7 @@ def test_timeout_diagnostics_report_earlier_unresolved_tool_name() -> None:
                 },
                 "status": "idle",
             },
-            ({"sendMessage": True}, "idle"),
+            ({"sendMessage": True, "unknown": False}, "idle"),
         ),
     ],
 )
@@ -414,6 +414,17 @@ def test_session_authority_observation_preserves_absent_fields(
     expected: tuple[dict[str, bool] | None, str | None],
 ) -> None:
     assert _session_authority_observation(snapshot) == expected
+
+
+@pytest.mark.parametrize("denied", [False, 0, None, "false"])
+def test_session_authority_observation_retains_explicit_denies(denied):
+    from moonmind.omnigent.effective_capabilities import adapt_provider_capabilities
+
+    observed, _ = _session_authority_observation({
+        "capabilities": {"sendMessage": denied, "sendFollowUp": True}
+    })
+    assert observed["sendMessage"] is False
+    assert adapt_provider_capabilities(observed)["sendMessage"] is False
 
 
 @pytest.mark.asyncio
@@ -5083,6 +5094,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
             "endpoint_ref": "default",
             "capabilities": None,
             "session_status": "completed",
+            "session_snapshot": {"status": "completed", "summary": "durably reattached"},
         }
     ]
     assert result.metadata["checkpointKind"] == "external_state_ref"

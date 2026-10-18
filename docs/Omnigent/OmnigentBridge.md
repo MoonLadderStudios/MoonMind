@@ -186,7 +186,7 @@ The normalized journal records `postDispatchRawEventIndex` provenance for events
 | Terminal / workspace | native terminal and file routes | Separate create/input or read/write capability, path containment, audit |
 | Model/effort/goal | native configuration route | Only when profile and launch policy permit per-session change |
 
-Effective capabilities are upstream capability ∩ immutable Agent Profile snapshot ∩ Provider Profile and launch policy ∩ Workflow/Step/session state ∩ caller permission. The native client receives the filtered set for UX, but the server recomputes it on every request, because upstream support never grants MoonMind permission.
+Effective capabilities intersect upstream support, immutable launch policy, session state, and caller permission. Generic chat verifies the launch snapshot and current runtime, provider grant, credentials, canonical session/cleanup, and host fences on lookup, after scanning, and after command claim. Parameter-only requests require a matching persisted plan and request-scoped runtime/host routing; projections without immutable launch evidence stay read-only. Stock snapshots lack capability maps: message support requires matching attested session, host, and harness. Explicit maps remain restrictive, and the native client receives the server’s filtered decision.
 
 ## 12. Resource harvesting and artifacts
 

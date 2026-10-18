@@ -441,6 +441,17 @@ class GenericOmnigentHostRealizer:
                 }
                 for item in acquired
             }
+            if prior is not None:
+                for slot, authority in provider_authority.items():
+                    recorded = prior.providerLeases.get(slot, {})
+                    if recorded.get("leaseFencingGeneration") is None:
+                        # Resume retained unfenced projections without inventing
+                        # historical grant proof. New admissions record the
+                        # inspected fence; retained rows remain chat read-only.
+                        if "leaseFencingGeneration" in recorded:
+                            authority["leaseFencingGeneration"] = None
+                        else:
+                            authority.pop("leaseFencingGeneration", None)
             owner = self._execution_owner() if self._execution_owner else None
             initial_phases = {"owner": owner} if owner else None
             # Acquired generations and their durable owner are recorded together
