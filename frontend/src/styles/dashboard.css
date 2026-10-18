@@ -2877,6 +2877,16 @@ tbody tr:hover {
   .queue-table-wrapper [data-column="repository"] {
     display: none;
   }
+
+  /* Repo's freed width, and a narrower Workflow column, keep Provider
+   * Profile wider than its longest word. */
+  .queue-table-wrapper .queue-table-column-workflow {
+    width: 15rem;
+  }
+
+  .queue-table-wrapper .queue-table-column-provider-profile {
+    width: 18%;
+  }
 }
 
 .workflow-list-data-slab .queue-table-wrapper th:first-child,
@@ -2924,9 +2934,10 @@ tbody tr:hover {
   width: 14%;
 }
 
-/* Wide enough for single-word status pills, which never wrap. */
+/* A fixed width fits single-word status pills, which never wrap; a
+ * percentage leaves too little room at tablet widths. */
 .queue-table-column-status {
-  width: max(12%, 8.5rem);
+  width: 8.5rem;
 }
 
 .queue-table-column-date {
@@ -2939,14 +2950,8 @@ tbody tr:hover {
   font-size: 0.82rem;
 }
 
-/* A rare long multi-word label truncates inside the pill instead of
- * spilling past its border. */
 .queue-table-cell-status .status {
-  display: inline-block;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: middle;
 }
 
 .queue-table-cell-workflow {
