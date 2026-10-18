@@ -2543,7 +2543,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/executions/{workflow_id}/recover": {
+    "/api/executions/{workflow_id}/retry-from-step": {
         parameters: {
             query?: never;
             header?: never;
@@ -2553,44 +2553,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Recover Execution
-         * @description Create a typed recovery destination without mutating its terminal source.
+         * Retry Execution From Step
+         * @description Restart a failed run from one of its steps; earlier steps are kept.
          */
-        post: operations["recover_execution_api_executions__workflow_id__recover_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/recover-from-failed-step": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Recover Execution From Failed Step */
-        post: operations["recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/executions/{workflow_id}/recover-from-selected-step": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Recover Execution From Selected Step */
-        post: operations["recover_execution_from_selected_step_api_executions__workflow_id__recover_from_selected_step_post"];
+        post: operations["retry_execution_from_step_api_executions__workflow_id__retry_from_step_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8275,10 +8241,10 @@ export interface components {
              */
             canResume: boolean;
             /**
-             * Canresumefromfailedstep
+             * Canretryfromstep
              * @default false
              */
-            canResumeFromFailedStep: boolean;
+            canRetryFromStep: boolean;
             /**
              * Cancontinueremediation
              * @default false
@@ -9019,8 +8985,7 @@ export interface components {
             artifactRefs?: string[];
             reportProjection?: components["schemas"]["ExecutionReportProjectionModel"] | null;
             actions?: components["schemas"]["ExecutionActionCapabilityModel"];
-            resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
-            recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
+            retryFromStep?: components["schemas"]["ExecutionRetryFromStepSummaryModel"] | null;
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
             recurrence?: components["schemas"]["ExecutionRecurrenceProvenanceModel"] | null;
@@ -9388,17 +9353,15 @@ export interface components {
             } | null;
         };
         /**
-         * ExecutionResumeSummaryModel
-         * @description Failed-step recovery availability and checkpoint summary.
+         * ExecutionRetryFromStepSummaryModel
+         * @description Whether a closed run can restart from a step, and its default step.
          */
-        ExecutionResumeSummaryModel: {
+        ExecutionRetryFromStepSummaryModel: {
             /**
              * Available
              * @default false
              */
             available: boolean;
-            /** Checkpointref */
-            checkpointRef?: string | null;
             /** Failedstepid */
             failedStepId?: string | null;
             /** Sourcerunid */
@@ -11028,7 +10991,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Scope */
-            scope?: ("global" | "personal") | null;
+            scope?: ("personal" | "global") | null;
             /** Inputmapping */
             inputMapping?: {
                 [key: string]: unknown;
@@ -11910,196 +11873,6 @@ export interface components {
             updatedAt?: string | null;
         };
         /**
-         * RecoverExecutionResponse
-         * @description Response from the canonical typed recovery command.
-         */
-        RecoverExecutionResponse: {
-            /**
-             * Accepted
-             * @default true
-             * @constant
-             */
-            accepted: true;
-            /**
-             * Applied
-             * @default created_recovery_execution
-             * @constant
-             */
-            applied: "created_recovery_execution";
-            /**
-             * Targetkind
-             * @enum {string}
-             */
-            targetKind: "failed_step" | "control_stop" | "publication" | "restoration_failure";
-            /**
-             * Continuationphase
-             * @enum {string}
-             */
-            continuationPhase: "rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "continue_to_remediation" | "resume_publication" | "retry_restoration";
-            source: components["schemas"]["ResumeExecutionRefModel"];
-            execution: components["schemas"]["ResumeExecutionRefModel"];
-            /** Recoverycheckpointref */
-            recoveryCheckpointRef: string;
-            /** Creationkey */
-            creationKey: string;
-        };
-        /**
-         * RecoverFromFailedStepRequest
-         * @description Request payload for creating a failed-step recovery follow-up execution.
-         */
-        RecoverFromFailedStepRequest: {
-            /** Idempotencykey */
-            idempotencyKey: string;
-            /** Sourceworkflowid */
-            sourceWorkflowId?: string | null;
-            /** Sourcerunid */
-            sourceRunId?: string | null;
-            /** Logicalstepid */
-            logicalStepId?: string | null;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            /** Recoverycheckpointref */
-            recoveryCheckpointRef?: string | null;
-            /** Failedrunrecoverymanifestref */
-            failedRunRecoveryManifestRef?: string | null;
-            /** Checkpointboundary */
-            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
-            /** Taskinputsnapshotref */
-            taskInputSnapshotRef?: string | null;
-            /** Planref */
-            planRef?: string | null;
-            /** Plandigest */
-            planDigest?: string | null;
-            /** Preservedsteprefs */
-            preservedStepRefs?: string[];
-            /** Dependencysignatures */
-            dependencySignatures?: {
-                [key: string]: unknown;
-            };
-            /** Workspacepolicy */
-            workspacePolicy?: ("restore_pre_execution" | "continue_from_previous_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source") | null;
-            /** Operatormetadata */
-            operatorMetadata?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * RecoverFromFailedStepResponse
-         * @description Response from the failed-step recovery command.
-         */
-        RecoverFromFailedStepResponse: {
-            /**
-             * Accepted
-             * @default true
-             * @constant
-             */
-            accepted: true;
-            /**
-             * Applied
-             * @default created_resumed_execution
-             * @constant
-             */
-            applied: "created_resumed_execution";
-            source: components["schemas"]["ResumeExecutionRefModel"];
-            execution: components["schemas"]["ResumeExecutionRefModel"];
-            /**
-             * Relationship
-             * @default Recovered from failed step
-             * @enum {string}
-             */
-            relationship: "Recovered from failed step" | "Recovered from selected step";
-            /** Recoverycheckpointref */
-            recoveryCheckpointRef: string;
-        };
-        /**
-         * RecoverFromSelectedStepRequest
-         * @description Request payload for creating a selected-step recovery follow-up execution.
-         */
-        RecoverFromSelectedStepRequest: {
-            /** Idempotencykey */
-            idempotencyKey: string;
-            /** Sourceworkflowid */
-            sourceWorkflowId: string;
-            /** Sourcerunid */
-            sourceRunId: string;
-            /** Logicalstepid */
-            logicalStepId?: string | null;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            /** Recoverycheckpointref */
-            recoveryCheckpointRef?: string | null;
-            /** Failedrunrecoverymanifestref */
-            failedRunRecoveryManifestRef?: string | null;
-            /** Checkpointboundary */
-            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
-            /** Taskinputsnapshotref */
-            taskInputSnapshotRef?: string | null;
-            /** Planref */
-            planRef?: string | null;
-            /** Plandigest */
-            planDigest?: string | null;
-            /** Preservedsteprefs */
-            preservedStepRefs?: string[];
-            /** Dependencysignatures */
-            dependencySignatures?: {
-                [key: string]: unknown;
-            };
-            /** Workspacepolicy */
-            workspacePolicy?: ("restore_pre_execution" | "continue_from_previous_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source") | null;
-            /** Operatormetadata */
-            operatorMetadata?: {
-                [key: string]: unknown;
-            };
-            /** Selectedstartstepid */
-            selectedStartStepId: string;
-        };
-        /** RecoveryCheckpointTargetModel */
-        RecoveryCheckpointTargetModel: {
-            /** Ref */
-            ref: string;
-            /** Boundary */
-            boundary: string;
-            /** Kind */
-            kind: string;
-            /** Digest */
-            digest: string;
-            /** Validationref */
-            validationRef: string;
-            /** Sourceworkspaceref */
-            sourceWorkspaceRef?: string | null;
-        };
-        /** RecoveryContinuationModel */
-        RecoveryContinuationModel: {
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "continue_to_remediation" | "resume_publication" | "retry_restoration";
-            /** Remainingworkref */
-            remainingWorkRef?: string | null;
-            /** Workspaceheadref */
-            workspaceHeadRef?: string | null;
-            /** Priorbudgetref */
-            priorBudgetRef?: string | null;
-            /** Newbudgetref */
-            newBudgetRef?: string | null;
-        };
-        /** RecoveryDestinationModel */
-        RecoveryDestinationModel: {
-            /** Workflowid */
-            workflowId: string;
-            /** Runid */
-            runId?: string | null;
-            /** Creationkey */
-            creationKey: string;
-            /** Runtimeid */
-            runtimeId: string;
-            /** Executionprofileref */
-            executionProfileRef: string;
-            /** Workspacereservationid */
-            workspaceReservationId: string;
-        };
-        /**
          * RecoveryEligibilityDiagnosticModel
          * @description Typed fail-closed checkpoint Resume decision for API and UI surfaces.
          */
@@ -12211,49 +11984,6 @@ export interface components {
             login: string;
         } & {
             [key: string]: unknown;
-        };
-        /** RecoverySourceIdentityModel */
-        RecoverySourceIdentityModel: {
-            /** Workflowid */
-            workflowId: string;
-            /** Runid */
-            runId: string;
-            /** Planref */
-            planRef?: string | null;
-            /** Plandigest */
-            planDigest?: string | null;
-            /** Taskinputsnapshotref */
-            taskInputSnapshotRef: string;
-        };
-        /** RecoveryTargetModel */
-        RecoveryTargetModel: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "failed_step" | "control_stop" | "publication" | "restoration_failure";
-            /** Logicalstepid */
-            logicalStepId?: string | null;
-            /** Sourcestepexecutionid */
-            sourceStepExecutionId?: string | null;
-            /** Controlstopkind */
-            controlStopKind?: string | null;
-            /** Reasoncode */
-            reasonCode?: string | null;
-            /** Gateresultref */
-            gateResultRef?: string | null;
-            /** Acceptedcandidateref */
-            acceptedCandidateRef?: string | null;
-            /** Publicationobservationref */
-            publicationObservationRef?: string | null;
-            /** Publicationidempotencykey */
-            publicationIdempotencyKey?: string | null;
-            /** Restoreoperationid */
-            restoreOperationId?: string | null;
-            /** Restoreidempotencykey */
-            restoreIdempotencyKey?: string | null;
-            /** Partialrestorationref */
-            partialRestorationRef?: string | null;
         };
         /**
          * RecurringWorkflowActionPermissionsModel
@@ -13121,15 +12851,6 @@ export interface components {
             /** Concurrency */
             concurrency: number;
         };
-        /** ResumeExecutionRefModel */
-        ResumeExecutionRefModel: {
-            /** Workflowid */
-            workflowId: string;
-            /** Runid */
-            runId: string;
-            /** Detailhref */
-            detailHref?: string | null;
-        };
         /** RetentionPolicy */
         RetentionPolicy: {
             /** Days */
@@ -13139,6 +12860,42 @@ export interface components {
              * @enum {string}
              */
             deletion: "after-expiry" | "manual";
+        };
+        /**
+         * RetryFromStepRequest
+         * @description Restart a closed run from one of its steps under the same workflow.
+         */
+        RetryFromStepRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Stepid */
+            stepId?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+        };
+        /**
+         * RetryFromStepResponse
+         * @description The new run that continues the workflow from the chosen step.
+         */
+        RetryFromStepResponse: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Stepid */
+            stepId: string;
+            /** Steptitle */
+            stepTitle?: string | null;
+            /** Message */
+            message: string;
         };
         /** RollbackEligibilityModel */
         RollbackEligibilityModel: {
@@ -14734,44 +14491,6 @@ export interface components {
             };
             /** Fallbackevidencerefs */
             fallbackEvidenceRefs?: string[];
-        };
-        /**
-         * WorkflowRecoveryTargetModel
-         * @description Frozen, bounded input shared by the API and recovery workflow.
-         */
-        WorkflowRecoveryTargetModel: {
-            /**
-             * Schemaversion
-             * @default workflow-recovery-target/v1
-             * @constant
-             */
-            schemaVersion: "workflow-recovery-target/v1";
-            /**
-             * Recoveryaction
-             * @default recover
-             * @constant
-             */
-            recoveryAction: "recover";
-            target: components["schemas"]["RecoveryTargetModel"];
-            source: components["schemas"]["RecoverySourceIdentityModel"];
-            checkpoint: components["schemas"]["RecoveryCheckpointTargetModel"];
-            continuation: components["schemas"]["RecoveryContinuationModel"];
-            /** Capabilitysnapshot */
-            capabilitySnapshot: {
-                [key: string]: unknown;
-            };
-            /**
-             * Preservedsteprefs
-             * @default []
-             */
-            preservedStepRefs: string[];
-            /** Sideeffectdispositionref */
-            sideEffectDispositionRef: string;
-            /** Sideeffectsafe */
-            sideEffectSafe: boolean;
-            /** Sideeffectreconciliationref */
-            sideEffectReconciliationRef?: string | null;
-            destination: components["schemas"]["RecoveryDestinationModel"];
         };
         /**
          * WorkflowRunStatus
@@ -19817,7 +19536,7 @@ export interface operations {
             };
         };
     };
-    recover_execution_api_executions__workflow_id__recover_post: {
+    retry_execution_from_step_api_executions__workflow_id__retry_from_step_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -19828,87 +19547,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WorkflowRecoveryTargetModel"];
+                "application/json": components["schemas"]["RetryFromStepRequest"];
             };
         };
         responses: {
             /** @description Successful Response */
-            201: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecoverExecutionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    recover_execution_from_failed_step_api_executions__workflow_id__recover_from_failed_step_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecoverFromFailedStepRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    recover_execution_from_selected_step_api_executions__workflow_id__recover_from_selected_step_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RecoverFromSelectedStepRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
+                    "application/json": components["schemas"]["RetryFromStepResponse"];
                 };
             };
             /** @description Validation Error */

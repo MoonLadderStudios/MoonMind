@@ -2587,8 +2587,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
   });
 
-  it('renders recovery evidence from the failed step execution detail payload', async () => {
-    window.history.pushState({}, 'Recovery Evidence Test', '/workflows/test-123/steps?source=temporal');
+  it('retries from a started step chosen in the retry panel', async () => {
+    window.history.pushState({}, 'Retry Panel Test', '/workflows/test-123/steps?source=temporal');
     const failedStepsSnapshot = {
       ...latestStepsSnapshot,
       steps: latestStepsSnapshot.steps.map((step) =>
@@ -2606,54 +2606,36 @@ describe('Workflow Detail Entrypoint', () => {
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
       workflowType: 'MoonMind.UserWorkflow',
-      title: 'Recovery task',
-      summary: 'Needs recovery',
+      title: 'Retry task',
+      summary: 'Needs a retry',
       status: 'failed',
       state: 'failed',
       rawState: 'failed',
       temporalStatus: 'failed',
       createdAt: '2026-04-09T00:00:00Z',
       updatedAt: '2026-04-09T00:00:04Z',
-      resume: {
+      retryFromStep: {
         available: true,
         failedStepId: 'apply',
+        sourceRunId: '02-run',
       },
-      actions: {},
+      actions: { canRetryFromStep: true },
     };
+    const calls: Array<{ url: string; body: string | null }> = [];
 
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes('/executions/test-123/steps/apply/step-executions/2')) {
+      calls.push({ url, body: typeof init?.body === 'string' ? init.body : null });
+      if (url.includes('/retry-from-step')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            logicalStepId: 'apply',
-            executionOrdinal: 2,
-            recoveryEligibility: {
-              eligible: true,
-              defaultAction: 'resume_from_checkpoint',
-              requiredBoundary: 'before_execution',
-              checkpointRef: 'artifact://checkpoint/before',
-              sourceWorkflowId: 'wf-source',
-              sourceRunId: 'run-source',
-              sessionRecoverable: false,
-              liveReattachReason: 'host_lease_expired',
-              workspaceRecoverable: true,
-              branchCreationAvailable: false,
-              branchCreationReason: 'capacity_unavailable',
-              checkpointValidationStatus: 'valid',
-              requiredProfileRef: 'profile://codex',
-              authoritativeWorkspaceCheckpointKind: 'worktree_archive',
-              operatorGuidance: 'resume',
-              evidence: [
-                {
-                  category: 'checkpoint',
-                  status: 'available',
-                  artifactRef: 'artifact://checkpoint/before',
-                  boundary: 'before_execution',
-                },
-              ],
-            },
+            workflowId: 'test-123',
+            runId: '03-run',
+            sourceRunId: '02-run',
+            stepId: 'plan',
+            stepTitle: 'Plan work',
+            message: 'Retrying from Plan work; earlier steps are kept.',
           }),
         } as Response);
       }
@@ -2662,9 +2644,6 @@ describe('Workflow Detail Entrypoint', () => {
           ok: true,
           json: async () => failedStepsSnapshot,
         } as Response);
-      }
-      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -2675,22 +2654,38 @@ describe('Workflow Detail Entrypoint', () => {
       } as Response);
     });
 
-    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+    const retryPayload: BootPayload = {
+      page: 'workflow-detail',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          pollIntervalsMs: { detail: 1 },
+          features: { temporalDashboard: { actionsEnabled: true } },
+        },
+      },
+    };
+    renderWithClient(<WorkflowDetailPage payload={retryPayload} />);
 
-    expect(await screen.findByRole('heading', { name: 'Recovery evidence' })).toBeTruthy();
-    expect(screen.getByText(/Resume from checkpoint is the default recovery action/)).toBeTruthy();
-    expect(screen.getByText('artifact://checkpoint/before')).toBeTruthy();
-    expect(screen.getByText('Session reattach:').parentElement?.textContent).toContain('unavailable');
-    expect(screen.getByText('Session reattach:').parentElement?.textContent).toContain('host lease expired');
-    expect(screen.getByText('Workspace restore:').parentElement?.textContent).toContain('supported');
-    expect(screen.getByText('Checkpoint branch:').parentElement?.textContent).toContain('capacity unavailable');
-    expect(screen.getByText('Checkpoint validation:').parentElement?.textContent).toContain('valid');
-    expect(screen.getByText('Required profile:').parentElement?.textContent).toContain('profile://codex');
-    expect(screen.getByText('Authoritative workspace checkpoint:').parentElement?.textContent).toContain('worktree archive');
-    expect(fetchSpy).toHaveBeenCalledWith(
-      '/api/executions/test-123/steps/apply/step-executions/2?source=temporal',
-      { credentials: 'include' },
-    );
+    expect(await screen.findByRole('heading', { name: 'Retry' })).toBeTruthy();
+    const select = (await screen.findByLabelText('Restart from')) as HTMLSelectElement;
+    // Only steps the run started, up to the failed step, are offered.
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['plan', 'apply']);
+    expect(select.value).toBe('apply');
+    expect(screen.queryByRole('button', { name: 'Rerun from the start' })).toBeNull();
+
+    fireEvent.change(select, { target: { value: 'plan' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry from selected step' }));
+
+    await waitFor(() => {
+      expect(calls.some((call) => call.url.includes('/retry-from-step'))).toBe(true);
+    });
+    const retryCall = calls.find((call) => call.url.includes('/retry-from-step'));
+    expect(retryCall?.url).toBe('/api/executions/test-123/retry-from-step');
+    expect(JSON.parse(retryCall?.body || '{}')).toMatchObject({
+      sourceRunId: '02-run',
+      stepId: 'plan',
+    });
+    expect(await screen.findByText('Retrying from Plan work; earlier steps are kept.')).toBeTruthy();
   });
 
   it('MM-801 renders Execution as the focused step ledger and run history route', async () => {
@@ -3191,7 +3186,6 @@ describe('Workflow Detail Entrypoint', () => {
               },
             ],
           },
-          recoveryEligibility: null,
         },
         {
           manifestArtifactRef: 'art-exec-2-manifest',
@@ -3245,7 +3239,6 @@ describe('Workflow Detail Entrypoint', () => {
             },
             diagnosticRefs: [],
           },
-          recoveryEligibility: null,
         },
       ],
     };
@@ -5113,7 +5106,7 @@ describe('Workflow Detail Entrypoint', () => {
         canUpdateInputs: true,
         canEditForRerun: true,
         canRerun: true,
-        canResumeFromFailedStep: true,
+        canRetryFromStep: true,
         canPause: true,
         canResume: true,
         canApprove: true,
@@ -5123,9 +5116,8 @@ describe('Workflow Detail Entrypoint', () => {
         canSendMessage: true,
         canBypassDependencies: true,
       },
-      resume: {
+      retryFromStep: {
         available: true,
-        checkpointRef: 'artifact://checkpoint/source',
         failedStepId: 'implement',
         sourceRunId: '01-run',
       },
@@ -5179,8 +5171,7 @@ describe('Workflow Detail Entrypoint', () => {
       'Edit',
       'Compare run',
       'Rerun',
-      'Resume from failed step',
-      'Recover from selected step',
+      'Retry from failed step',
       'Pause',
       'Resume',
       'Approve',
@@ -5818,7 +5809,7 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBeTruthy();
   });
 
-  it('renders failed-step Resume separately from lifecycle Resume and submits the resume command', async () => {
+  it('renders Retry from failed step separately from lifecycle Resume and submits the retry', async () => {
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -5850,12 +5841,11 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canResume: false,
-        canResumeFromFailedStep: true,
+        canRetryFromStep: true,
         canRerun: true,
       },
-      resume: {
+      retryFromStep: {
         available: true,
-        checkpointRef: 'artifact://checkpoint/source',
         failedStepId: 'implement',
         sourceRunId: '01-run',
       },
@@ -5873,10 +5863,16 @@ describe('Workflow Detail Entrypoint', () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push(init === undefined ? { url } : { url, init });
-      if (url.includes('/recover-from-failed-step')) {
+      if (url.includes('/retry-from-step')) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ accepted: true }),
+          json: async () => ({
+            workflowId: 'test-123',
+            runId: '02-run',
+            sourceRunId: '01-run',
+            stepId: 'implement',
+            message: 'Retrying from Implement; earlier steps are kept.',
+          }),
         } as Response);
       }
       if (url.includes('/artifacts')) {
@@ -5887,160 +5883,20 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    const menu = await openWorkflowActionsMenu('Resume from failed step');
-    const resumeButton = within(menu).getByRole('menuitem', { name: 'Resume from failed step' });
+    const menu = await openWorkflowActionsMenu('Retry from failed step');
+    const retryButton = within(menu).getByRole('menuitem', { name: 'Retry from failed step' });
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
-    fireEvent.click(resumeButton);
-    expect(screen.queryByRole('dialog', { name: 'Resume from failed step' })).toBeNull();
+    fireEvent.click(retryButton);
+    expect(screen.queryByRole('dialog', { name: 'Retry from failed step' })).toBeNull();
 
     await waitFor(() => {
-      expect(calls.some((call) => call.url.includes('/recover-from-failed-step'))).toBe(true);
+      expect(calls.some((call) => call.url.includes('/retry-from-step'))).toBe(true);
     });
-    const resumeCall = calls.find((call) => call.url.includes('/recover-from-failed-step'));
-    expect(JSON.parse(String(resumeCall?.init?.body || '{}')).recoveryCheckpointRef).toBe(
-      'artifact://checkpoint/source',
-    );
-  });
-
-  it('submits selected-step recovery with pinned source identity', async () => {
-    const actionPayload: BootPayload = {
-      ...mockPayload,
-      initialData: {
-        dashboardConfig: {
-          features: {
-            temporalDashboard: {
-              actionsEnabled: true,
-              temporalTaskEditing: true,
-            },
-          },
-        },
-      },
-    };
-    const mockExecution = {
-      taskId: 'test-123',
-      workflowId: 'test-123',
-      namespace: 'default',
-      temporalRunId: '01-run',
-      runId: '01-run',
-      source: 'temporal',
-      workflowType: 'MoonMind.UserWorkflow',
-      title: 'Failed workflow',
-      summary: 'Execution summary',
-      status: 'failed',
-      state: 'failed',
-      rawState: 'failed',
-      temporalStatus: 'failed',
-      createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
-      stepsHref: '/api/executions/test-123/steps',
-      actions: {
-        canResume: false,
-        canResumeFromFailedStep: true,
-      },
-      resume: {
-        available: true,
-        checkpointRef: 'artifact://checkpoint/source',
-        failedStepId: 'implement',
-        sourceRunId: '01-run',
-      },
-      relatedRuns: [],
-    };
-    const stepLedger = {
-      workflowId: 'test-123',
-      runId: '01-run',
-      runScope: 'latest',
-      steps: [
-        {
-          logicalStepId: 'plan',
-          order: 1,
-          title: 'Plan',
-          status: 'completed',
-          executionOrdinal: 1,
-          updatedAt: '2026-03-28T00:00:01Z',
-          refs: {},
-          artifacts: { outputSummary: 'artifact://summary/plan' },
-          recoveryPreservation: {
-            eligible: true,
-            reason: 'complete',
-            message: 'Step has recoverable output refs and state checkpoint evidence.',
-          },
-        },
-        {
-          logicalStepId: 'implement',
-          order: 2,
-          title: 'Implement',
-          status: 'failed',
-          executionOrdinal: 1,
-          updatedAt: '2026-03-28T00:00:02Z',
-          refs: {},
-          artifacts: {},
-          recoveryPreservation: {
-            eligible: false,
-            reason: 'not_completed',
-            message: 'Step is not completed and cannot be preserved for Resume.',
-          },
-        },
-        {
-          logicalStepId: 'publish',
-          order: 3,
-          title: 'Publish',
-          status: 'pending',
-          executionOrdinal: 0,
-          updatedAt: '2026-03-28T00:00:03Z',
-          refs: {},
-          artifacts: {},
-          recoveryPreservation: {
-            eligible: false,
-            reason: 'not_completed',
-            message: 'Step is not completed and cannot be preserved for Resume.',
-          },
-        },
-      ],
-    };
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
-    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      calls.push(init === undefined ? { url } : { url, init });
-      if (url.includes('/recover-from-selected-step')) {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ accepted: true }),
-        } as Response);
-      }
-      if (url.includes('/executions/test-123/steps')) {
-        return Promise.resolve({ ok: true, json: async () => stepLedger } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
-
-    const select = await screen.findByLabelText('Recovery start step');
-    fireEvent.change(select, { target: { value: 'plan' } });
-    await waitFor(() => {
-      expect((select as HTMLSelectElement).value).toBe('plan');
-    });
-    expect(
-      (screen.getByRole('option', { name: /Publish - after failed step/ }) as HTMLOptionElement).disabled,
-    ).toBe(true);
-    const menu = await openWorkflowActionsMenu('Recover from selected step');
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Recover from selected step' }));
-    expect(screen.queryByRole('dialog', { name: 'Recover from selected step' })).toBeNull();
-
-    await waitFor(() => {
-      expect(calls.some((call) => call.url.includes('/recover-from-selected-step'))).toBe(true);
-    });
-    const selectedCall = calls.find((call) => call.url.includes('/recover-from-selected-step'));
-    const body = JSON.parse(String(selectedCall?.init?.body || '{}'));
-    expect(body).toMatchObject({
-      sourceWorkflowId: 'test-123',
-      sourceRunId: '01-run',
-      selectedStartStepId: 'plan',
-      recoveryCheckpointRef: 'artifact://checkpoint/source',
-    });
+    const retryCall = calls.find((call) => call.url.includes('/retry-from-step'));
+    const body = JSON.parse(String(retryCall?.init?.body || '{}'));
+    expect(body.sourceRunId).toBe('01-run');
+    // The menu restarts from the failed step the server records.
+    expect(body.stepId).toBeUndefined();
   });
 
   it('omits Temporal task editing entry points when the flag is off', async () => {
@@ -6661,8 +6517,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('Resumed from mm:source')).toBeTruthy();
     expect(screen.getByText('Prepare context')).toBeTruthy();
     expect(screen.getAllByText('artifact://resume/checkpoint').length).toBeGreaterThan(0);
-    expect(screen.getByRole('heading', { name: 'Recovery evidence' })).toBeTruthy();
-    expect(screen.getByText('Preserved provenance')).toBeTruthy();
 
     fireEvent.click(screen.getByText('Diagnostics'));
     await waitFor(() => {

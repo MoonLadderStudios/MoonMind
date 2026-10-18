@@ -16,6 +16,7 @@ import {
   buildWorkflowActionMenuItems,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
+  requestRetryFromStep,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
 import { WorkflowActionsMenu } from './WorkflowActionsMenu';
@@ -48,9 +49,9 @@ const RowActionsExecutionSchema = z
     resolvedModel: z.string().nullable().optional(),
     requestedModel: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
-    resume: z
+    retryFromStep: z
       .object({
-        checkpointRef: z.string().nullable().optional(),
+        failedStepId: z.string().nullable().optional(),
         sourceRunId: z.string().nullable().optional(),
       })
       .passthrough()
@@ -89,7 +90,7 @@ const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canApprove: true,
   canPause: true,
   canResume: true,
-  canResumeFromFailedStep: true,
+  canRetryFromStep: true,
   canCancel: true,
   canForceCancel: true,
   canReject: true,
@@ -287,28 +288,13 @@ export function WorkflowRowActionsMenu({
     onError: onMutationError,
   });
 
-  const failedStepResumeMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(
-        `${apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-failed-step`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            idempotencyKey: `resume-${workflowId}-${runId || 'latest'}`,
-            ...(execution?.resume?.checkpointRef
-              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
-              : {}),
-            operatorMetadata: { requestedFrom: 'workflow-list' },
-          }),
-        },
-      );
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
-      }
-      return response.json();
-    },
+  const retryFromStepMutation = useMutation({
+    mutationFn: () =>
+      requestRetryFromStep({
+        apiBase,
+        workflowId,
+        sourceRunId: execution?.retryFromStep?.sourceRunId || runId || null,
+      }),
     onSuccess: invalidate,
     onError: onMutationError,
   });
@@ -350,7 +336,7 @@ export function WorkflowRowActionsMenu({
     updateMutation.isPending ||
     signalMutation.isPending ||
     cancelMutation.isPending ||
-    failedStepResumeMutation.isPending ||
+    retryFromStepMutation.isPending ||
     retryPublicationMutation.isPending ||
     createRemediationMutation.isPending;
 
@@ -403,9 +389,6 @@ export function WorkflowRowActionsMenu({
       rerunDisabledReason: rerunUnavailableReason
         ? formatStatusLabel(rerunUnavailableReason)
         : pendingReason,
-      selectedRecoveryOptionCount: 0,
-      selectedRecoveryStepEligible: false,
-      selectedRecoveryStepDisabledReason: null,
       canCreateRemediation: actionAvailabilityPending ? true : canCreateRemediation,
       keepRemediationVisible: true,
       handlers: {
@@ -434,11 +417,10 @@ export function WorkflowRowActionsMenu({
             },
           );
         },
-        onResumeFromFailedStep: () => {
+        onRetryFromStep: () => {
           setActionError(null);
-          failedStepResumeMutation.mutate();
+          retryFromStepMutation.mutate();
         },
-        onRecoverFromSelectedStep: () => {},
         onContinueRemediation: () => navigateTo(detailHref),
         onRetryPublication: () => {
           setActionError(null);
@@ -514,7 +496,7 @@ export function WorkflowRowActionsMenu({
     editHref,
     editTaskUnavailableReason,
     execution,
-    failedStepResumeMutation,
+    retryFromStepMutation,
     rerunUnavailableReason,
     retryPublicationMutation,
     signalMutation,
