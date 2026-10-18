@@ -18,11 +18,19 @@ from api_service.db.models import Base, ManagedAgentProviderProfile
 from api_service.services.settings_catalog import SettingsCatalogService
 from moonmind.config.settings import settings
 from moonmind.workflow_cli import build_execution_payload
+from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
+    agent_requests,
+    saved_profile_submission as _saved_profile_submission,
+    stored_parameters,
+)
 from tests.unit.api.routers.test_executions import (
     _build_execution_record,
     _override_temporal_client,
     _override_user_dependencies,
 )
+
+
+saved_profile_submission = _saved_profile_submission
 
 
 @pytest_asyncio.fixture
@@ -321,3 +329,237 @@ async def test_untouched_runtime_remains_a_saved_default_fallback(
     parameters = _parameters(context, entrypoint)
     assert parameters["targetRuntime"] == "claude_code"
     assert parameters["runtimeCutover"]["selectionSource"] == "configured_default"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preview", ["codex_cli", "omnigent"])
+@pytest.mark.parametrize("runtime_layer", ["workflow", "task", "parameters"])
+@pytest.mark.parametrize(
+    "selection", ["saved-runtime", "saved-profile", "selected-profile"]
+)
+async def test_raw_runtime_preview_uses_effective_selection_through_dispatch(
+    saved_profile_submission, preview, runtime_layer, selection
+):
+    context = saved_profile_submission
+    selected_profile = (
+        "alternative-claude_code" if selection == "selected-profile" else None
+    )
+    await context.catalog.apply_overrides(
+        scope="workspace",
+        changes={
+            "workflow.default_runtime": (
+                "claude_code" if selection == "saved-runtime" else "codex_cli"
+            ),
+            "workflow.default_provider_profile_ref": (
+                "saved-claude_code"
+                if selection == "saved-profile"
+                else ("saved-codex_cli" if selection == "selected-profile" else "")
+            ),
+        },
+    )
+    task_key = "task" if runtime_layer == "task" else "workflow"
+    runtime = {
+        "mode": preview,
+        "authored": False,
+        "model": "operator-model",
+        "effort": "high",
+    }
+    if selected_profile:
+        runtime["providerProfileRef"] = selected_profile
+    task = {
+        "instructions": "Use the effective runtime, not the untouched preview.",
+        "targetRuntime": preview,
+        "target_runtime": preview,
+    }
+    parameters = {
+        "targetRuntime": preview,
+        "target_runtime": preview,
+        task_key: task,
+    }
+    if runtime_layer == "parameters":
+        parameters["runtime"] = runtime
+    else:
+        task["runtime"] = runtime
+    context.settings_reads.clear()
+    response = await context.client.post(
+        "/api/executions",
+        json={"workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters},
+    )
+    stored = await stored_parameters(context, response)
+    # Persistence canonicalizes the accepted task envelope to workflow.
+    for source in (stored, stored["workflow"]):
+        assert source["targetRuntime"] == "claude_code"
+        assert source["target_runtime"] == "claude_code"
+    stored_runtime = (
+        stored["runtime"]
+        if runtime_layer == "parameters"
+        else stored["workflow"]["runtime"]
+    )
+    assert stored_runtime == {**runtime, "mode": "claude_code"}
+    assert stored["runtimeCutover"]["selectionSource"] == (
+        "configured_default" if selection == "saved-runtime" else "profile"
+    )
+    request = next(iter(agent_requests(stored).values()))
+    assert request.agent_id == "claude_code"
+    assert request.execution_profile_ref == (
+        selected_profile
+        or ("saved-claude_code" if selection == "saved-profile" else None)
+    )
+    assert len(context.settings_reads) == 1
+    context.service._client_adapter.start_workflow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime_layer,alias",
+    [
+        ("runtime", "mode"),
+        ("parameter-runtime", "mode"),
+        ("workflow", "targetRuntime"),
+        ("workflow", "target_runtime"),
+        ("parameters", "targetRuntime"),
+        ("parameters", "target_runtime"),
+    ],
+)
+@pytest.mark.parametrize("runtime", ["claude_code", "omnigent"])
+@pytest.mark.parametrize("authored", [None, True])
+async def test_raw_authored_alias_keeps_profile_and_product_boundaries(
+    saved_profile_submission, runtime_layer, alias, runtime, authored
+):
+    context = saved_profile_submission
+    task = {"instructions": "Honor explicitly authored runtime aliases."}
+    parameters = {"workflow": task}
+    target = {
+        "runtime": task.setdefault("runtime", {}),
+        "parameter-runtime": parameters.setdefault("runtime", {}),
+        "workflow": task,
+        "parameters": parameters,
+    }[runtime_layer]
+    if runtime_layer == "parameter-runtime":
+        task.pop("runtime")
+    target[alias] = runtime
+    if authored is not None:
+        owner = parameters if runtime_layer == "parameter-runtime" else task
+        owner["runtime"]["authored"] = authored
+    response = await context.client.post(
+        "/api/executions",
+        json={"workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters},
+    )
+    assert response.status_code == (
+        422 if runtime == "omnigent" else 409
+    ), response.text
+    assert response.json()["detail"]["code"] == (
+        "omnigent_product_boundary_required"
+        if runtime == "omnigent"
+        else "provider_profile_runtime_mismatch"
+    )
+    context.service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_empty_nested_runtime_preserves_authored_alias_over_outer_preview(
+    saved_profile_submission,
+):
+    context = saved_profile_submission
+    response = await context.client.post(
+        "/api/executions",
+        json={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "targetRuntime": "claude_code",
+                "runtime": {"mode": "omnigent", "authored": False},
+                "workflow": {"instructions": "Keep nested ownership.", "runtime": {}},
+            },
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "provider_profile_runtime_mismatch"
+    context.service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_preview_retry_keeps_admitted_runtime_and_profile(
+    saved_profile_submission,
+):
+    context = saved_profile_submission
+    await context.catalog.apply_overrides(
+        scope="workspace",
+        changes={"workflow.default_provider_profile_ref": "saved-claude_code"},
+    )
+    body = {
+        "workflowType": "MoonMind.UserWorkflow",
+        "idempotencyKey": "stable-preview-request",
+        "initialParameters": {
+            "workflow": {
+                "instructions": "Keep the admitted selection on retry.",
+                "runtime": {"mode": "omnigent", "authored": False},
+            },
+        },
+    }
+    first = await context.client.post("/api/executions", json=body)
+    original = await stored_parameters(context, first)
+    assert original["targetRuntime"] == "claude_code"
+    await context.catalog.apply_overrides(
+        scope="workspace", changes={"workflow.default_runtime": "omnigent"}
+    )
+    saved = await context.session.get(ManagedAgentProviderProfile, "saved-claude_code")
+    await context.session.delete(saved)
+    await context.session.commit()
+    context.settings_reads.clear()
+    repeated = await context.client.post("/api/executions", json=body)
+    stored = await stored_parameters(context, repeated)
+    assert repeated.json()["workflowId"] == first.json()["workflowId"]
+    assert stored == original
+    assert not context.settings_reads
+    context.service._client_adapter.start_workflow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preview", ["codex_cli", "omnigent"])
+@pytest.mark.parametrize(
+    "selection", ["saved-runtime", "saved-profile", "agent-profile"]
+)
+async def test_raw_preview_cannot_bypass_effective_omnigent_boundary(
+    saved_profile_submission, preview, selection
+):
+    context = saved_profile_submission
+    await context.catalog.apply_overrides(
+        scope="workspace",
+        changes={
+            "workflow.default_runtime": (
+                "omnigent" if selection == "saved-runtime" else "codex_cli"
+            ),
+            "workflow.default_provider_profile_ref": (
+                "saved-codex_cli" if selection == "saved-profile" else ""
+            ),
+        },
+    )
+    runtime = {"mode": preview, "authored": False}
+    if selection == "saved-profile":
+        provider = await context.session.get(
+            ManagedAgentProviderProfile, "saved-codex_cli"
+        )
+        # A pinned configuration keeps its Omnigent route even when unavailable.
+        provider.execution_configuration = {
+            "profileId": "pinned-configuration",
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
+        }
+        await context.session.commit()
+    elif selection == "agent-profile":
+        runtime["agentProfile"] = {"profileId": "selected-agent", "version": 1}
+    response = await context.client.post(
+        "/api/executions",
+        json={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "workflow": {
+                    "instructions": "Use the effective Omnigent selection.",
+                    "runtime": runtime,
+                },
+            },
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
+    context.service._client_adapter.start_workflow.assert_not_awaited()

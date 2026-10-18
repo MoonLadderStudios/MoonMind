@@ -15887,7 +15887,7 @@ async def create_execution(
                 validate_workflow_runtime_targets(initial_parameters)
             except ValueError as exc:
                 raise _invalid_workflow_request(str(exc)) from exc
-            _, task_payload = _recurring_workflow_payload(initial_parameters)
+            task_key, task_payload = _recurring_workflow_payload(initial_parameters)
             runtime_payload = task_payload.get("runtime")
             if not isinstance(runtime_payload, Mapping):
                 runtime_payload = _coerce_mapping(initial_parameters.get("runtime"))
@@ -15933,11 +15933,12 @@ async def create_execution(
                 )
             if creation_defaults.provider_profile_ref:
                 initial_parameters["profileId"] = creation_defaults.provider_profile_ref
-            authored_runtime = (
-                authored_selection.runtime_ids[0]
-                if authored_selection.runtime_ids
-                else None
+            runtime_was_authored = runtime_payload.get("authored") is not False
+            authored_runtimes = (
+                authored_selection.runtime_ids if runtime_was_authored else ()
             )
+            authored_runtime = authored_runtimes[0] if authored_runtimes else None
+            selects_omnigent = "omnigent" in authored_runtimes
             profile_runtime = await _profile_route_runtime(
                 session=session,
                 user=user,
@@ -15954,6 +15955,21 @@ async def create_execution(
                 )
             except ValueError as exc:
                 raise _invalid_workflow_request(str(exc)) from exc
+            if not runtime_was_authored:
+                # The untouched control's aliases are previews of one selection,
+                # just as on workflow and recurring authoring. Replace them at
+                # the owning layer before persistence and worker dispatch.
+                for source in (initial_parameters, task_payload):
+                    for alias in ("targetRuntime", "target_runtime"):
+                        if alias in source:
+                            source[alias] = selection.runtime_id
+                resolved_runtime = {**runtime_payload, "mode": selection.runtime_id}
+                if isinstance(task_payload.get("runtime"), Mapping):
+                    task_payload["runtime"] = resolved_runtime
+                else:
+                    initial_parameters["runtime"] = resolved_runtime
+                if task_key is not None:
+                    initial_parameters[task_key] = task_payload
             selects_omnigent = selects_omnigent or _raw_request_selects_omnigent(
                 workflow_type=request.workflow_type,
                 parameters={
@@ -15963,7 +15979,7 @@ async def create_execution(
             )
             if provider_profile is not None and not selects_omnigent:
                 for runtime_id in (
-                    *authored_selection.runtime_ids,
+                    *authored_runtimes,
                     selection.runtime_id,
                 ):
                     _require_provider_profile_runtime(
