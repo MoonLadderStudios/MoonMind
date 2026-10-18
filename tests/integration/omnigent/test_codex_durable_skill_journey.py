@@ -745,6 +745,9 @@ def _request(
         ("codex-on-demand@1", False, "busy"),
         ("codex-on-demand@1", False, "idle_static"),
         ("codex-on-demand@1", False, "busy_static"),
+        ("codex-on-demand@1", False, "busy_drained"),
+        ("codex-on-demand@1", False, "busy_static_drained"),
+        ("codex-on-demand@1", False, "busy_static_changed"),
         ("codex-on-demand@1", False, "valid"),
         ("codex-static@1", False, "valid"),
     ],
@@ -865,7 +868,7 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
                 static_host_id=(
                     host_id
                     if (retained_binding == "valid" and "static" in launch_policy)
-                    or retained_binding.endswith("_static")
+                    or "static" in retained_binding
                     else None
                 ),
                 host_launch_profile_ref=(
@@ -880,27 +883,85 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             if retained_binding.startswith("busy"):
                 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 
-                await hosts.create_or_get_host_lease(
+                prior_lease = await hosts.create_or_get_host_lease(
                     binding=retained,
                     provider_lease_id="prior-provider-lease",
                     holder_workflow_id="mm:prior-workflow",
                     agent_run_id="prior-agent",
                     idempotency_key="prior-host-attempt",
                 )
-                with pytest.raises(OmnigentOAuthHostError) as blocked:
-                    await realizer.execute(
-                        _request(
-                            plan,
-                            workflow_id=workflow_id,
-                            skillset_ref=skillset_ref,
-                            repository=_seeded_remote(tmp_path),
-                        ),
-                        plan,
+                monkeypatch.setattr(
+                    profile_bound_execution, "HOST_PROFILE_BUSY_POLL_SECONDS", 0.0
+                )
+                if retained_binding.endswith(("_drained", "_changed")):
+                    update_binding = OmnigentOAuthHostRepository.create_or_update_static_binding
+                    repair_conflicts = []
+
+                    async def observe_cleanup_after_conflict(repository, **kwargs):
+                        try:
+                            return await update_binding(repository, **kwargs)
+                        except OmnigentOAuthHostError as exc:
+                            if exc.code != "OMNIGENT_HOST_BINDING_LEASED":
+                                raise
+                            repair_conflicts.append(exc.code)
+                            # A concurrent cleanup owner finishes only after the
+                            # locked repair refused the still-active consumer.
+                            assert await hosts.get_binding_for_profile(PROFILE_ID) == retained
+                            assert not docker.commands and not server.create_payloads
+                            await hosts.mark_host_lease_stopped(prior_lease.lease_id)
+                            if retained_binding.endswith("_changed"):
+                                await update_binding(
+                                    hosts,
+                                    profile_id=PROFILE_ID,
+                                    endpoint_ref="default",
+                                    static_host_id="newly-enrolled-static-host",
+                                    execution_profile_ref="omnigent-codex@1",
+                                    launch_policy_ref="codex-static@1",
+                                    effective_launch_snapshot={},
+                                )
+                            raise
+
+                    monkeypatch.setattr(
+                        OmnigentOAuthHostRepository,
+                        "create_or_update_static_binding",
+                        observe_cleanup_after_conflict,
                     )
-                assert blocked.value.code == "OMNIGENT_HOST_BINDING_LEASED"
-                assert await hosts.get_binding_for_profile(PROFILE_ID) == retained
-                assert not docker.commands and not server.create_payloads
-                return
+                else:
+                    monkeypatch.setattr(
+                        profile_bound_execution, "HOST_PROFILE_BUSY_WAIT_SECONDS", 0.0
+                    )
+                    with pytest.raises(OmnigentOAuthHostError) as blocked:
+                        await realizer.execute(
+                            _request(
+                                plan,
+                                workflow_id=workflow_id,
+                                skillset_ref=skillset_ref,
+                                repository=_seeded_remote(tmp_path),
+                            ),
+                            plan,
+                        )
+                    assert blocked.value.code == "OMNIGENT_HOST_BINDING_LEASED"
+                    assert await hosts.get_binding_for_profile(PROFILE_ID) == retained
+                    assert not docker.commands and not server.create_payloads
+                    return
+        if retained_binding and retained_binding.endswith("_changed"):
+            with pytest.raises(OmnigentOAuthHostError) as changed:
+                await realizer.execute(
+                    _request(
+                        plan,
+                        workflow_id=workflow_id,
+                        skillset_ref=skillset_ref,
+                        repository=_seeded_remote(tmp_path),
+                    ),
+                    plan,
+                )
+            assert changed.value.code == "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT"
+            current = await hosts.get_binding_for_profile(PROFILE_ID)
+            assert current.launch_policy_ref == "codex-static@1"
+            assert current.static_host_id == "newly-enrolled-static-host"
+            assert current.host_launch_profile_ref is None
+            assert not docker.commands and not server.create_payloads
+            return
         result = await realizer.execute(
             _request(
                 plan,
@@ -912,6 +973,8 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             plan,
         )
         if retained_binding:
+            if retained_binding.endswith("_drained"):
+                assert repair_conflicts == ["OMNIGENT_HOST_BINDING_LEASED"]
             current = await hosts.get_binding_for_profile(PROFILE_ID)
             if retained_binding == "valid":
                 assert current.host_launch_profile_ref == retained.host_launch_profile_ref
