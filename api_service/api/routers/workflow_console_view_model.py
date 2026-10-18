@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any, Mapping
 from urllib.parse import quote, urlparse
-from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1696,17 +1695,6 @@ def build_runtime_config(
     }
 
 
-def _coerce_uuid(value: Any) -> UUID | None:
-    if isinstance(value, UUID):
-        return value
-    if value is None:
-        return None
-    try:
-        return UUID(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
 async def resolve_dashboard_runtime_config(
     initial_path: str,
     *,
@@ -1733,10 +1721,13 @@ async def resolve_dashboard_runtime_config(
 
     # Local imports keep the view-model importable without DB models loaded
     # for tests that exercise build_runtime_config directly.
-    from api_service.services.settings_catalog import SettingsCatalogService
+    from api_service.services.settings_catalog import (
+        SettingsCatalogService,
+        coerce_settings_subject_id,
+    )
 
-    workspace_id = _coerce_uuid(getattr(user, "workspace_id", None))
-    user_id = _coerce_uuid(getattr(user, "id", None))
+    workspace_id = coerce_settings_subject_id(getattr(user, "workspace_id", None))
+    user_id = coerce_settings_subject_id(getattr(user, "id", None))
 
     runtime_override: str | None = None
     profile_ref: str | None = None
