@@ -13,7 +13,7 @@ Ordinary certificate-independent admission is implemented at the existing settin
 
 ## Existing owners and current baseline
 
-The settings owner (`moonmind/omnigent/settings.py`), `evidence_resolver.py`, and the harness-platform planner/execution-plan loader distinguish ordinary admission from explicitly selected strict certification. Ordinary plans can truthfully record an uncertified tier. The shared-host conformance module retains inventory/validation logic and pending live rows; the remediation matrix separates optional runtime observations from strict v1 certification. Action delivery remains distinct from repair and autonomous mutation stays closed. These are source-level implemented boundaries, not a claim that every live journey or deployed migration has passed.
+The settings owner (`moonmind/omnigent/settings.py`), `evidence_resolver.py`, and the harness-platform planner/execution-plan loader distinguish ordinary admission from explicitly selected strict certification. Ordinary plans can truthfully record an uncertified tier. The shared-host conformance module retains inventory/validation logic and pending live rows. These are source-level implemented boundaries, not a claim that every live journey or deployed migration has passed.
 
 | Responsibility | Existing owner to reuse |
 | --- | --- |
@@ -22,7 +22,7 @@ The settings owner (`moonmind/omnigent/settings.py`), `evidence_resolver.py`, an
 | Provider-controlled live observations | `tools/run_omnigent_live_conformance.py` and the protected workflow/action-adapter boundary. |
 | Existing aggregate report format | `tools/build_omnigent_conformance_report.py` and the owning schema/validator. |
 | Useful generic runtime verification | The actual providing feature tests. |
-| Recovery/action verification | Existing remediation action/verification owners. |
+| Recovery verification | Existing retry-from-step and Checkpoint Branch verification owners. |
 | Shared-provider accounting and release | Existing ProviderProfileManager/lease owners. |
 | Save, restore, and publication | Existing artifact/workspace/publisher owners. |
 
@@ -78,11 +78,9 @@ Cleanup is bounded and limited to positively owned test resources. Preserve Prof
 
 ### Remediation and shared capacity
 
-Operator-initiated remediation is an authority mode, not a requirement for a human to execute the tests. Automated browser/API tests can drive the supported normal flow. Reuse the existing action, approval, exact-result verification, and saved-work owners. Pending verification survives browser closure and does not resend the original action.
+A remediation is an ordinary Omnigent workflow, so automated browser/API tests drive the normal Remediate → Create flow and the context's delivery into the remediation run. A remediation never acts on its target, so conformance has no remediation action, approval, or verification scenario.
 
-The runtime catalog treats `operator-remediation-support-matrix/v1` as optional live observations: no required-row inventory or rollback instruction gates ordinary recovery. Missing or malformed reports remain unverified warnings. Autonomous admission is separately closed in the existing service owner and never derives authority from a report. Strict v1 readers and explicitly requested live certification retain their original evidence, browser, and integrity requirements; see [the providing contract](CodexSupportAndCutover.md#optional-remediation-observations-and-strict-v1-certification). Keep accepted delivery, confirmed effect, and verified objective separate. Existing current-candidate source/action/verification/preservation tests own their distinct safety claims, without a duplicate browser lifecycle for each low-level denial.
-
-Read-only diagnosis and existing historical evidence should remain usable under normal admission even when unrelated live certification is unavailable. Mutating operations require their actual execution, verification, approval, and security prerequisites. Unsupported actions remain unavailable. Autonomous mutation stays separately closed unless explicitly authorized and implemented through its providing policy. Passing operator-initiated evidence never grants `admin_auto`.
+Read-only diagnosis and existing historical evidence should remain usable under normal admission even when unrelated live certification is unavailable.
 
 Shared-capacity scenarios use the existing manager and durable lease accounting. Verify the actual admitted scope, purpose, duplicate throttle effects, and release boundaries. Do not create a provider-health service or a second concurrency ledger inside conformance. A cooldown expiry permits only the configured bounded retry policy, not a claim that the provider has fully recovered.
 

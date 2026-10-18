@@ -452,7 +452,7 @@ the wire decision `checkpointRecovery.recoveryAction = branch_required`. The
 Omnigent Activity maps that decision to the coordinator's
 `branch_from_checkpoint` method, which then owns fresh binding, lease, host,
 session, first-message, harvest, cleanup, and release-last evidence. Public APIs
-and remediation actions do not reconstruct or bypass this lifecycle.
+do not reconstruct or bypass this lifecycle.
 
 Cold restore checks out the pinned baseline in a clean authorized workspace,
 applies the validated checkpoint/diff/head artifact, restores immutable

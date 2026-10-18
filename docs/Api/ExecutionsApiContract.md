@@ -22,8 +22,9 @@ In scope: authenticated create/describe/list/update/signal/cancel, identifiers, 
 `workflowId` is the durable handle. Remediation uses ordinary `POST /api/executions` with canonical `task.remediation`, not a privileged one-click path. Related remediation routes:
 
 - `GET /api/executions/remediations` returns the Remediation page inventory: one compact row per link whose remediation and source executions are both visible. A link that cannot be loaded does not fail the response: `unavailableCount` counts such links, and `unavailableItems` names up to 25 of them by remediation and source workflow ID with a code and client-safe message. The raw error goes to the API log.
-- `GET /api/executions/{workflowId}/remediations?direction=inbound|outbound` returns bidirectional lineage and bounded remediation projections (authored intent, selected evidence, context availability, approvals, locks, operator controls, action results, verification, lifecycle artifacts, and Checkpoint Branch state).
-- `POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}` accepts an authenticated `decision` and optional `comment`. Takeover, pause, resume, and cancel remain normal workflow controls. Create admission independently validates target/run visibility, selected Step Executions, checkpoints, Agent Runs, profile and configuration snapshots, action and launch policy, and repository/branch/publication intent.
+- `GET /api/executions/{workflowId}/remediations?direction=inbound|outbound` returns bidirectional lineage and bounded remediation projections (authored intent, current target state, selected evidence, context availability, retained remediation artifacts, and Checkpoint Branch state).
+
+A remediation is paused, resumed, or canceled with the normal workflow controls on its own execution. Create admission independently validates target/run visibility, selected Step Executions, checkpoints, Agent Runs, profile and configuration snapshots, launch policy, and repository/branch/publication intent, and refuses remediation inputs that would act on the target.
 
 `TemporalExecutionService` and its `TemporalExecutionRecord` projection implement the API, but they are not a public storage abstraction; public semantics would hold over Visibility-backed or mixed reads.
 
@@ -246,7 +247,7 @@ The single authored context and publication rules apply to UpdateInputs and Requ
 | Pause | signal-specific | Sets a paused overlay and waiting metadata while keeping the underlying state. |
 | Resume | signal-specific | Clears the pause overlay and returns to the underlying gate. |
 
-Remediation approval uses its durable pending approval record and the endpoint in section 2; expired, terminal, self-approved, or ineligible decisions fail with bounded validation errors. Success is 202 with the execution. Signals to terminal executions and invalid signal/payload combinations are rejected, normally 409 `signal_rejected`, and absent targets return 404. A signal or approval cannot replace authored publication intent, broaden repository authority, or authorize duplicate effects.
+Success is 202 with the execution. Signals to terminal executions and invalid signal/payload combinations are rejected, normally 409 `signal_rejected`, and absent targets return 404. A signal or approval cannot replace authored publication intent, broaden repository authority, or authorize duplicate effects.
 
 ## 14. Cancel execution
 
