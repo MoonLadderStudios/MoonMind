@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BrowserRouter, Link } from 'react-router-dom';
 
 import { BootPayload } from '../boot/parseBootPayload';
@@ -13,6 +13,34 @@ import {
 import { WorkflowListPage } from './workflow-list';
 import { VisibleCollectionItemsContext } from '../lib/visibleCollectionItems';
 
+// The list mounts only the layout for the current viewport (desktop table or
+// mobile cards). jsdom has no matchMedia, so tests choose the viewport and can
+// cross the breakpoint through the returned controller.
+function stubViewport(desktop: boolean) {
+  let matches = desktop;
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    get matches() {
+      return matches;
+    },
+    media: query,
+    onchange: null,
+    addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
+      listeners.add(listener),
+    removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
+      listeners.delete(listener),
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+  return {
+    setDesktop(next: boolean) {
+      matches = next;
+      listeners.forEach((listener) => listener({ matches: next } as MediaQueryListEvent));
+    },
+  };
+}
+
 describe('Workflows Entrypoint', () => {
   const mockPayload: BootPayload = {
     page: 'workflow-list',
@@ -22,6 +50,8 @@ describe('Workflows Entrypoint', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    vi.unstubAllGlobals();
+    stubViewport(true);
     window.localStorage.clear();
     window.history.pushState({}, 'Test', '/workflows');
     fetchSpy = vi.spyOn(window, 'fetch').mockReset().mockResolvedValue({
@@ -1337,16 +1367,16 @@ describe('Workflows Entrypoint', () => {
         document.querySelectorAll(
           '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
         ),
-      ).toHaveLength(6);
+      ).toHaveLength(3);
     });
 
     const activePills = document.querySelectorAll<HTMLElement>(
       '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
     );
-    expect(activePills).toHaveLength(6);
-    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'executing')).toHaveLength(2);
-    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'planning')).toHaveLength(2);
-    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'finalizing')).toHaveLength(2);
+    expect(activePills).toHaveLength(3);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'executing')).toHaveLength(1);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'planning')).toHaveLength(1);
+    expect(Array.from(activePills).filter((pill) => pill.dataset.state === 'finalizing')).toHaveLength(1);
     for (const pill of activePills) {
       const label = pill.dataset.state;
       if (label !== 'executing' && label !== 'planning' && label !== 'finalizing') {
@@ -1424,22 +1454,21 @@ describe('Workflows Entrypoint', () => {
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    // Both the desktop table cell and the mobile card render each row, so two
-    // rows produce four shimmer pills: the `running` alias canonicalizes to
-    // executing, and the unrecognized rawState must not mask the canonical
-    // `executing` state that follows it.
+    // Only the desktop table is mounted, so two rows produce two shimmer pills:
+    // the `running` alias canonicalizes to executing, and the unrecognized
+    // rawState must not mask the canonical `executing` state that follows it.
     await waitFor(() => {
       expect(
         document.querySelectorAll(
           '.queue-table-cell-status [data-effect="shimmer-sweep"][data-state="executing"], .queue-card-status [data-effect="shimmer-sweep"][data-state="executing"]',
         ),
-      ).toHaveLength(4);
+      ).toHaveLength(2);
     });
 
     const pills = document.querySelectorAll<HTMLElement>(
       '.queue-table-cell-status [data-effect="shimmer-sweep"], .queue-card-status [data-effect="shimmer-sweep"]',
     );
-    expect(pills).toHaveLength(4);
+    expect(pills).toHaveLength(2);
     for (const pill of pills) {
       expect(pill.className).toContain('status-running');
       expect(pill.className).toContain('is-executing');
@@ -2298,6 +2327,7 @@ describe('Workflows Entrypoint', () => {
   });
 
   it('marks mobile card details links as the only full-width card action', async () => {
+    stubViewport(false);
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     const detailsLink = await screen.findByRole('button', { name: 'View details' });
@@ -2307,6 +2337,7 @@ describe('Workflows Entrypoint', () => {
   });
 
   it('MM-1001 keeps mobile workflow cards, filters, and detail navigation available', async () => {
+    stubViewport(false);
     renderWithClient(
       <WorkflowListPage
         payload={{
@@ -2348,6 +2379,7 @@ describe('Workflows Entrypoint', () => {
   });
 
   it('MM-1010 keeps desktop workspace sidebar controls out of mobile workflow list accessibility', async () => {
+    stubViewport(false);
     renderWithClient(
       <WorkflowListPage
         payload={{
@@ -2560,14 +2592,18 @@ describe('Workflows Entrypoint', () => {
       },
     };
 
+    const viewport = stubViewport(true);
     const { container } = renderWithClient(<WorkflowListPage payload={actionsPayload} />);
 
     await screen.findAllByText('Example task');
     expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeTruthy();
-    const triggers = screen.getAllByRole('button', { name: 'More actions' });
-    expect(triggers.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: 'More actions' })).toHaveLength(1);
 
-    for (const selector of ['.queue-table-cell-actions', '.queue-card-actions']) {
+    for (const [desktop, selector] of [
+      [true, '.queue-table-cell-actions'],
+      [false, '.queue-card-actions'],
+    ] as const) {
+      act(() => viewport.setDesktop(desktop));
       const actions = container.querySelector(`${selector} .workflow-row-actions`) as HTMLElement;
       expect(within(actions).getAllByRole('button')).toHaveLength(1);
       expect(within(actions).getByRole('button', { name: 'More actions' })).toBeTruthy();
@@ -2579,6 +2615,53 @@ describe('Workflows Entrypoint', () => {
       /\/executions\/task-123(?:\?|$)/.test(String(url)),
     );
     expect(detailCallsBefore).toHaveLength(0);
+  });
+
+  it('MoonLadderStudios/MoonMind#4870 mounts only the layout for the current viewport and keeps list state across the breakpoint', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+        },
+      },
+    };
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: Array.from({ length: 3 }, (_, index) => ({
+          taskId: `task-${index}`,
+          source: 'temporal',
+          title: `Example task ${index}`,
+          status: 'completed',
+          state: 'succeeded',
+          rawState: 'succeeded',
+          createdAt: `2026-03-28T00:00:0${index}Z`,
+        })),
+      }),
+    } as Response);
+    const viewport = stubViewport(true);
+    renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+    await screen.findByText('Example task 0');
+
+    expect(document.querySelectorAll('[data-layout="table"]')).toHaveLength(1);
+    expect(document.querySelector('[data-layout="card"]')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'More actions' })).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+
+    act(() => viewport.setDesktop(false));
+    expect(document.querySelector('[data-layout="table"]')).toBeNull();
+    expect(document.querySelectorAll('[data-layout="card"]')).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'More actions' })).toHaveLength(3);
+
+    act(() => viewport.setDesktop(true));
+    expect(document.querySelector('[data-layout="card"]')).toBeNull();
+    expect(document.querySelector('[data-layout="table"]')?.getAttribute('data-density')).toBe(
+      'compact',
+    );
   });
 
   it('promotes "View options" into the Actions header and drops the Filters row on desktop', async () => {
@@ -3040,6 +3123,7 @@ describe('Workflows Entrypoint', () => {
         profileRow('wf-unavailable', 'Unavailable projection', undefined),
       ]);
       const baselineCalls = fetchSpy.mock.calls.length;
+      const viewport = stubViewport(true);
 
       renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
@@ -3059,6 +3143,7 @@ describe('Workflows Entrypoint', () => {
         within(screen.getByRole('row', { name: /Unavailable projection/ })).getByText('Unavailable'),
       ).toBeTruthy();
 
+      act(() => viewport.setDesktop(false));
       const cards = document.querySelectorAll('.queue-card');
       const singleCard = Array.from(cards).find((card) => card.textContent?.includes('Single profile'));
       const terms = Array.from(singleCard?.querySelectorAll('dt') || []).map((term) => term.textContent);
@@ -3110,11 +3195,14 @@ describe('Workflows Entrypoint', () => {
       { selectionState: 'recorded', profiles: [], profileCount: 0 },
     ])('shows unusable Provider Profile summaries as Unavailable on desktop and mobile: %j', async (summary) => {
       mockListAndFacets([profileRow('wf-broken', 'Broken projection', summary)]);
+      const viewport = stubViewport(true);
 
       renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
       const row = await screen.findByRole('row', { name: /Broken projection/ });
       expect(within(row).getByText('Unavailable')).toBeTruthy();
+      expect(screen.queryByText('Not recorded')).toBeNull();
+      act(() => viewport.setDesktop(false));
       const card = Array.from(document.querySelectorAll('.queue-card')).find((item) => item.textContent?.includes('Broken projection'));
       expect(card?.textContent).toContain('Unavailable');
       expect(screen.queryByText('Not recorded')).toBeNull();
@@ -3283,6 +3371,7 @@ describe('Workflows Entrypoint', () => {
     });
 
     it('refreshes only the first facet page after changing and returning to an earlier filter context', async () => {
+      stubViewport(false);
       const profileUrls: string[] = [];
       mockListAndFacets([], (url) => {
         if (!url.includes('facet=providerProfile')) return Promise.resolve({ ok: false } as Response);
@@ -3314,6 +3403,7 @@ describe('Workflows Entrypoint', () => {
     });
 
     it('ignores a canceled continuation after a newer filter context opens', async () => {
+      stubViewport(false);
       let resolveOldPage: ((response: Response) => void) | undefined;
       mockListAndFacets([], (url) => {
         if (!url.includes('facet=providerProfile')) return Promise.resolve({ ok: false } as Response);
@@ -3553,6 +3643,8 @@ describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
   };
 
   beforeEach(() => {
+    vi.unstubAllGlobals();
+    stubViewport(true);
     window.localStorage.clear();
     window.history.pushState({}, 'Test', '/workflows');
     vi.spyOn(window, 'fetch').mockResolvedValue({
@@ -3668,6 +3760,36 @@ describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
     window.dispatchEvent(new Event('visibilitychange'));
     window.dispatchEvent(new Event('focus'));
     expect(executionListCalls()).toHaveLength(afterInitialLoad);
+  });
+
+  it('MoonLadderStudios/MoonMind#4870 stops list polling for at least two intervals while paused, but still refreshes after an action', async () => {
+    const executionListCalls = () =>
+      vi.mocked(window.fetch).mock.calls.filter(([url]) =>
+        String(url).startsWith('/api/executions?'),
+      );
+    const pollPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { pollIntervalsMs: { list: 25 } } },
+    };
+    const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const { queryClient } = renderWithClient(<WorkflowListPage payload={pollPayload} />);
+    await screen.findAllByText('Example task');
+
+    // Polling owns refresh while enabled.
+    const beforePolling = executionListCalls().length;
+    await waitFor(() => expect(executionListCalls().length).toBeGreaterThan(beforePolling + 1));
+
+    openViewOptions();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Poll for live updates' }));
+    await waitMs(30);
+    const afterPausing = executionListCalls().length;
+    await waitMs(25 * 4);
+    expect(executionListCalls()).toHaveLength(afterPausing);
+
+    // An action's invalidation still refreshes the paused list.
+    await queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
+    expect(executionListCalls()).toHaveLength(afterPausing + 1);
   });
 
   it('does not refetch on focus when live updates are disabled', async () => {

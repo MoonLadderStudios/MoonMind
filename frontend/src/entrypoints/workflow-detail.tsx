@@ -26,7 +26,6 @@ import { WORKFLOW_OBJECTIVE_OUTCOMES, formatWorkflowSummary, resolveWorkflowDisp
 import { AttachmentImagePreview } from '../components/AttachmentImagePreview';
 import { DashboardActionDialog, useActionConfirmation } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
-import { CollectionWorkspace } from '../components/CollectionWorkspace';
 import {
   DashboardToastProvider,
   useDashboardToast,
@@ -41,7 +40,7 @@ import { ApiErrorState } from '../components/DashboardErrorState';
 import { responseError } from '../lib/api/client';
 import { isTransientError } from '../boot/queryClient';
 import { useLiveClock } from '../lib/liveClock';
-import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
+import { formatBytes, formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   readDashboardPreferences,
   updateDashboardPreferences,
@@ -53,16 +52,11 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import { navigateTo as navigateToDashboardRoute } from '../lib/navigation';
-import {
-  readWorkflowListDisplayMode,
-  type CollectionListDisplayMode,
-} from '../lib/collectionListDisplayMode';
+import { readWorkflowListDisplayMode } from '../lib/collectionListDisplayMode';
 import {
   WORKFLOW_SIDEBAR_ANIMATED_RESTART_MS,
   WORKFLOW_SIDEBAR_ROUTE_ICON_ANIMATION_MS,
-  WorkflowWorkspaceSidebarPanel,
 } from '../components/workflows/WorkflowWorkspaceSidebar';
-import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import { IssueLifecyclePanel, issueLifecycleEvidenceFromExecution } from '../components/IssueLifecyclePanel';
 import { WorkflowChatNative } from './WorkflowChatNative';
@@ -90,9 +84,11 @@ import {
 import {
   type WorkflowDetailSubroute,
   decodeWorkflowIdFromPath,
+  workflowDetailQueryKey,
   workflowDetailSubrouteFromPath,
   workflowDetailSubrouteHref,
 } from '../lib/workflowDetailRoutes';
+import { WorkflowWorkspaceShell } from '../components/workflows/WorkflowWorkspaceShell';
 import {
   governanceReportExplanation,
   governanceReportHref,
@@ -250,60 +246,6 @@ function useWorkflowDetailSubroute(
   return [subroute, navigate];
 }
 
-export function WorkflowWorkspaceShell({
-  payload,
-  workflowId,
-  search,
-  displayMode,
-}: {
-  payload: BootPayload;
-  workflowId: string;
-  search: URLSearchParams;
-  displayMode?: CollectionListDisplayMode | undefined;
-}) {
-  const cfg = readDashboardConfig(payload);
-  const effectiveDisplayMode = displayMode ?? (
-    readDashboardPreferences().workflowListDisplayMode
-  );
-  const sourceTemporal = search.get('source') === 'temporal';
-  const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
-  const selectedWorkflowQuery = useQuery(
-    workflowDetailQueryOptions({
-      apiBase: payload.apiBase,
-      workflowId,
-      sourceTemporal,
-      detailPoll,
-    }),
-  );
-  const pinnedCurrentRow = selectedWorkflowQuery.data
-    ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
-    : null;
-
-  return (
-    <CollectionWorkspace
-      collection="workflow"
-      mode={effectiveDisplayMode === 'sidebar' ? 'sidebar' : 'detail'}
-      sidebar={effectiveDisplayMode === 'sidebar' ? (
-        <WorkflowWorkspaceSidebarPanel
-          payload={payload}
-          activeWorkflowId={workflowId}
-          pinnedCurrentRow={pinnedCurrentRow}
-          search={search}
-        />
-      ) : null}
-      className="workflow-workspace-shell"
-      primaryClassName="workflow-workspace-detail"
-      primaryLabel="Workflow detail"
-      data-sidebar-collapsed={effectiveDisplayMode === 'sidebar' ? 'false' : 'true'}
-      data-workflow-list-display-mode={effectiveDisplayMode}
-      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008 MM-1138"
-      data-source-issue="MM-975"
-    >
-      <WorkflowDetailPage payload={payload} />
-    </CollectionWorkspace>
-  );
-}
-
 function detailObjectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -428,6 +370,47 @@ function RuntimeCommandDetail({
       )}
     </div>
   );
+}
+
+const RESOURCE_EVIDENCE_MAX_POLL_MS = 60_000;
+
+type ResourceEvidenceQuery = {
+  state: {
+    data?: unknown;
+    status: string;
+    dataUpdatedAt: number;
+    errorUpdatedAt: number;
+  };
+};
+
+/**
+ * Refetch policy for bridge resource evidence. A running workflow polls at the
+ * base rate and a terminal one stops once evidence is complete. Failing
+ * requests, and evidence still pending after the workflow ended, keep polling
+ * so late evidence is still collected, but back off per consecutive result:
+ * 5s, 10s, 20s, 40s, then every 60s.
+ */
+export function createResourceEvidencePoller() {
+  let stuckStreak = 0;
+  let lastSettledAt = -1;
+  return (query: ResourceEvidenceQuery, isTerminal: boolean): number | false => {
+    const { state } = query;
+    const completeness = (state.data as { completeness?: string } | null | undefined)?.completeness;
+    const stuck = state.status === 'error' || (isTerminal && (!completeness || completeness === 'pending'));
+    const settledAt = Math.max(state.dataUpdatedAt, state.errorUpdatedAt);
+    // Count each settled fetch once; the callback also runs between fetches.
+    if (settledAt > 0 && settledAt !== lastSettledAt) {
+      lastSettledAt = settledAt;
+      stuckStreak = stuck ? stuckStreak + 1 : 0;
+    }
+    if (!stuck) {
+      return isTerminal ? false : SESSION_PROJECTION_POLL_MS;
+    }
+    return Math.min(
+      SESSION_PROJECTION_POLL_MS * 2 ** Math.max(0, stuckStreak - 1),
+      RESOURCE_EVIDENCE_MAX_POLL_MS,
+    );
+  };
 }
 
 export function getSessionProjectionRefetchInterval(
@@ -3192,7 +3175,7 @@ export function workflowDetailQueryOptions({
 }) {
   const encodedWorkflowId = workflowId ? encodeURIComponent(workflowId) : null;
   return {
-    queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal] as const,
+    queryKey: workflowDetailQueryKey(workflowId, sourceTemporal),
     enabled: Boolean(encodedWorkflowId),
     queryFn: async () => {
       if (!encodedWorkflowId) {
@@ -3474,6 +3457,8 @@ function optimisticMessagesToChatSeeds(
   }));
 }
 
+const NO_CHAT_BLOCKS: ProjectedChatBlock[] = [];
+
 export function reduceTimelineRowsToChatBlocks(
   rows: TimelineRow[],
   agentRunId = '',
@@ -3516,11 +3501,12 @@ function renderAnsiFragments(text: string): ReactNode {
     const style: Record<string, string> = {};
     const foreground = fragment.fg_truecolor || fragment.fg;
     const background = fragment.bg_truecolor || fragment.bg;
+    // Anser reports colors as "r, g, b" component lists.
     if (foreground) {
-      style.color = foreground;
+      style.color = `rgb(${foreground})`;
     }
     if (background) {
-      style.backgroundColor = background;
+      style.backgroundColor = `rgb(${background})`;
     }
     if (fragment.decorations.includes('bold')) {
       style.fontWeight = '700';
@@ -3545,10 +3531,9 @@ function renderAnsiFragments(text: string): ReactNode {
   });
 }
 
-function renderTimelineRowText(row: TimelineRow, timelineViewerEnabled: boolean): ReactNode {
-  if (!timelineViewerEnabled) {
-    return row.text;
-  }
+// Both log viewers convert ANSI escapes into styled React text nodes; raw
+// escapes never reach the page and no HTML is injected.
+function renderTimelineRowText(row: TimelineRow): ReactNode {
   if (row.stream === 'stdout' || row.stream === 'stderr') {
     return renderAnsiFragments(row.text);
   }
@@ -3822,7 +3807,7 @@ function InputImagesSection({
                     <span>
                       <strong>{filename}</strong>{' '}
                       <span className="small">
-                        {`${artifact.contentType || 'image'}, ${artifact.sizeBytes ?? '—'} bytes`}
+                        {`${artifact.contentType || 'image'}, ${formatBytes(artifact.sizeBytes)}`}
                       </span>
                     </span>
                     {!failed ? (
@@ -3831,7 +3816,7 @@ function InputImagesSection({
                         contentType={artifact.contentType}
                         href={href}
                         download={filename}
-                        detail={`${group.label} · ${artifact.contentType || 'image'}, ${artifact.sizeBytes ?? '—'} bytes`}
+                        detail={`${group.label} · ${artifact.contentType || 'image'}, ${formatBytes(artifact.sizeBytes)}`}
                         onPreviewError={() =>
                           setFailedPreviewIds((current) => ({
                             ...current,
@@ -4042,7 +4027,7 @@ function renderTimelineRow(
         data-kind={row.kind ?? undefined}
         data-row-type={row.rowType}
       >
-        {renderTimelineRowText(row, timelineViewerEnabled)}
+        {renderTimelineRowText(row)}
       </div>
       <TimelineArtifactLinks links={artifactLinks} />
     </div>
@@ -6127,9 +6112,15 @@ function LiveLogsPanel({
   const isTerminalRef = useRef(isTerminal);
   const [sessionSnapshot, setSessionSnapshot] = useState<SessionSnapshot | null>(null);
   const [rawTimelineExpanded, setRawTimelineExpanded] = useState(false);
+  // Only the session timeline renders chat blocks; the default line viewer
+  // skips re-projecting the whole log on every streamed event.
   const chatBlocks = useMemo(
-    () => reduceTimelineRowsToChatBlocks(logContent, agentRunId, optimisticMessages),
-    [agentRunId, logContent, optimisticMessages],
+    () => (
+      sessionTimelineEnabled
+        ? reduceTimelineRowsToChatBlocks(logContent, agentRunId, optimisticMessages)
+        : NO_CHAT_BLOCKS
+    ),
+    [agentRunId, logContent, optimisticMessages, sessionTimelineEnabled],
   );
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
@@ -6450,7 +6441,12 @@ function LiveLogsPanel({
           </div>
         ) : (
           <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
-            {logContent.map((line) => renderTimelineRow(line, wrapLines, false, apiBase))}
+            <Virtuoso
+              style={{ height: 400 }}
+              data={logContent}
+              computeItemKey={(_, row) => row.id}
+              itemContent={(_, row) => renderTimelineRow(row, wrapLines, false, apiBase)}
+            />
           </div>
         )}
       </div>
@@ -6521,16 +6517,12 @@ function BridgeSessionLogsPanel({
     staleTime: Infinity,
     retry: false,
   });
+  const [resourcesPoller] = useState(createResourceEvidencePoller);
   const resourcesQuery = useQuery({
     queryKey: ['omnigent-bridge-session-resources', bridgeSessionId],
     queryFn: () => fetchBridgeSessionResources(apiBase, bridgeSessionId),
     enabled: Boolean(bridgeSessionId),
-    refetchInterval: (query) => {
-      const completeness = (query.state.data as BridgeResourceProjection | undefined)?.completeness;
-      return isTerminal && completeness && completeness !== 'pending'
-        ? false
-        : SESSION_PROJECTION_POLL_MS;
-    },
+    refetchInterval: (query) => resourcesPoller(query, isTerminal),
     retry: false,
   });
   const historyRows = useMemo(() => {
@@ -8571,41 +8563,175 @@ function artifactBrowserCategory(artifact: z.infer<typeof ArtifactSummarySchema>
   return 'other';
 }
 
+const ARTIFACT_BROWSER_PAGE_SIZE = 50;
+
+// Content types the download endpoint will render inline (`?inline=true`);
+// anything else is served as an attachment even when previewing.
+const INLINE_PREVIEW_CONTENT_TYPES = new Set([
+  'application/json',
+  'text/plain',
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+]);
+
+type ArtifactSummary = z.infer<typeof ArtifactSummarySchema>;
+
+type ArtifactBrowserRow =
+  | { kind: 'artifact'; key: string; category: ArtifactCategory; artifact: ArtifactSummary; nested?: boolean }
+  | { kind: 'chunks'; key: string; category: ArtifactCategory; artifacts: ArtifactSummary[] };
+
+function isDeletedArtifact(artifact: ArtifactSummary): boolean {
+  return String(artifact.status || '').trim().toLowerCase() === 'deleted';
+}
+
+function artifactDisplayName(artifact: ArtifactSummary): string {
+  return (
+    metadataString(artifact.metadata, 'filename', 'name', 'label')
+    || artifact.links.find((link) => link.label?.trim())?.label?.trim()
+    || artifact.artifactId
+  );
+}
+
+// Omnigent journals its event stream as many rolling chunk files; they are
+// one logical record, so the browser shows them as one expandable entry.
+function isOmnigentSseChunk(artifact: ArtifactSummary): boolean {
+  return (
+    artifact.links.some((link) => link.linkType.startsWith('runtime.omnigent.sse.'))
+    || artifactDisplayName(artifact).startsWith('runtime.omnigent.sse.')
+  );
+}
+
+/** Inline preview through the artifact's default read (preview/redacted)
+ * artifact, or the raw artifact when raw access is allowed and its content
+ * type is inert. Null when there is nothing safe to open. */
+function artifactPreviewHref(apiBase: string, artifact: ArtifactSummary): string | null {
+  const readArtifactId = artifact.defaultReadRef?.artifactId;
+  if (readArtifactId && readArtifactId !== artifact.artifactId) {
+    return `${buildArtifactDownloadHref(apiBase, readArtifactId)}?inline=true`;
+  }
+  if (artifact.rawAccessAllowed === false) {
+    return null;
+  }
+  const contentType = String(artifact.contentType || '').split(';', 1)[0]!.trim().toLowerCase();
+  if (!INLINE_PREVIEW_CONTENT_TYPES.has(contentType)) {
+    return null;
+  }
+  return `${buildArtifactDownloadHref(apiBase, artifact.artifactId)}?inline=true`;
+}
+
+function ArtifactBrowserActions({ apiBase, artifact }: { apiBase: string; artifact: ArtifactSummary }) {
+  if (isDeletedArtifact(artifact)) {
+    return <span className="small">Not readable</span>;
+  }
+  const name = artifactDisplayName(artifact);
+  const previewHref = artifactPreviewHref(apiBase, artifact);
+  return (
+    <div className="actions">
+      <a
+        className="button secondary"
+        href={artifactDownloadHref(apiBase, artifact)}
+        download={name}
+        title="Download artifact"
+      >
+        Download
+      </a>
+      {previewHref ? (
+        <a
+          className="button secondary"
+          href={previewHref}
+          target="_blank"
+          rel="noreferrer"
+          title="Preview artifact content"
+        >
+          Open
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
 function ArtifactBrowserPanel({
   artifacts,
   apiBase,
   isLoading,
   error,
 }: {
-  artifacts: z.infer<typeof ArtifactSummarySchema>[];
+  artifacts: ArtifactSummary[];
   apiBase: string;
   isLoading: boolean;
   error: Error | null;
 }) {
-  const grouped = artifacts.reduce<Record<ArtifactCategory, z.infer<typeof ArtifactSummarySchema>[]>>(
-    (acc, artifact) => {
-      acc[artifactBrowserCategory(artifact)].push(artifact);
-      return acc;
-    },
-    { files: [], logs: [], patches: [], reports: [], other: [] },
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [chunksExpanded, setChunksExpanded] = useState(false);
+  const [page, setPage] = useState(0);
+  const deletedCount = useMemo(() => artifacts.filter(isDeletedArtifact).length, [artifacts]);
+  const rows = useMemo(() => {
+    const shown = showDeleted ? artifacts : artifacts.filter((artifact) => !isDeletedArtifact(artifact));
+    const grouped: Record<ArtifactCategory, ArtifactSummary[]> = {
+      files: [], logs: [], patches: [], reports: [], other: [],
+    };
+    const chunks: ArtifactSummary[] = [];
+    for (const artifact of shown) {
+      if (isOmnigentSseChunk(artifact)) {
+        chunks.push(artifact);
+      } else {
+        grouped[artifactBrowserCategory(artifact)].push(artifact);
+      }
+    }
+    const result: ArtifactBrowserRow[] = [];
+    for (const category of Object.keys(grouped) as ArtifactCategory[]) {
+      if (category === 'logs' && chunks.length > 0) {
+        result.push({ kind: 'chunks', key: 'omnigent-sse-chunks', category, artifacts: chunks });
+        if (chunksExpanded) {
+          result.push(...chunks.map((artifact) => ({
+            kind: 'artifact' as const, key: `chunk-${artifact.artifactId}`, category, artifact, nested: true,
+          })));
+        }
+      }
+      result.push(...grouped[category].map((artifact) => ({
+        kind: 'artifact' as const, key: `${category}-${artifact.artifactId}`, category, artifact,
+      })));
+    }
+    return result;
+  }, [artifacts, chunksExpanded, showDeleted]);
+  const pageCount = Math.max(1, Math.ceil(rows.length / ARTIFACT_BROWSER_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageRows = rows.slice(
+    currentPage * ARTIFACT_BROWSER_PAGE_SIZE,
+    (currentPage + 1) * ARTIFACT_BROWSER_PAGE_SIZE,
   );
-  const categoryRows = (Object.keys(grouped) as ArtifactCategory[]).filter(
-    (category) => grouped[category].length > 0,
-  );
+  const shownCount = artifacts.length - (showDeleted ? 0 : deletedCount);
 
   return (
     <section className="stack td-artifacts-region td-evidence-region">
       <div className="step-tl-section-header">
         <h3>Workflow Artifacts</h3>
         <span className="step-tl-count">
-          Artifact Browser | {artifacts.length} artifact{artifacts.length === 1 ? '' : 's'}
+          Artifact Browser | {shownCount} artifact{shownCount === 1 ? '' : 's'}
         </span>
+        {deletedCount > 0 ? (
+          <button
+            type="button"
+            className="button secondary"
+            aria-pressed={showDeleted}
+            onClick={() => {
+              setShowDeleted((current) => !current);
+              setPage(0);
+            }}
+          >
+            {showDeleted ? 'Hide' : 'Show'} deleted ({deletedCount})
+          </button>
+        ) : null}
       </div>
       {isLoading ? (
         <p className="loading">Loading artifacts...</p>
       ) : error ? (
         <div className="notice error">{error.message}</div>
-      ) : artifacts.length === 0 ? (
+      ) : rows.length === 0 ? (
         <p className="small">No artifacts.</p>
       ) : (
         <div className="queue-table-wrapper td-evidence-slab" data-layout="table">
@@ -8620,39 +8746,65 @@ function ArtifactBrowserPanel({
               </tr>
             </thead>
             <tbody>
-              {categoryRows.flatMap((category) =>
-                grouped[category].map((artifact) => (
-                  <tr key={`${category}-${artifact.artifactId}`}>
-                    <td>{formatStatusLabel(category)}</td>
-                    <td>
-                      <code>{metadataString(artifact.metadata, 'filename', 'name', 'label') || artifact.artifactId}</code>
-                      {artifact.contentType ? <div className="small">{artifact.contentType}</div> : null}
-                    </td>
-                    <td>{artifact.sizeBytes ?? '—'}</td>
-                    <td>{formatStatusLabel(artifact.status)}</td>
-                    <td>
-                      <div className="actions">
-                        <a
-                          className="button secondary"
-                          href={artifactDownloadHref(apiBase, artifact)}
-                          title="Download artifact"
-                        >
-                          Download
-                        </a>
-                        <a
-                          className="button secondary"
-                          href={reportOpenHref(apiBase, artifact)}
-                          title="Open readable artifact content"
-                        >
-                          Open
-                        </a>
-                      </div>
-                    </td>
-                  </tr>
-                )),
-              )}
+              {pageRows.map((row) => row.kind === 'chunks' ? (
+                <tr key={row.key} data-artifact-group="omnigent-sse">
+                  <td>{formatStatusLabel(row.category)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      aria-expanded={chunksExpanded}
+                      onClick={() => setChunksExpanded((current) => !current)}
+                    >
+                      Omnigent event stream chunks ({row.artifacts.length})
+                    </button>
+                  </td>
+                  <td>
+                    {formatBytes(row.artifacts.reduce((total, artifact) => total + (artifact.sizeBytes ?? 0), 0))}
+                  </td>
+                  <td>—</td>
+                  <td>—</td>
+                </tr>
+              ) : (
+                <tr key={row.key} data-artifact-deleted={isDeletedArtifact(row.artifact) || undefined}>
+                  <td>{row.nested ? '' : formatStatusLabel(row.category)}</td>
+                  <td>
+                    <code>{artifactDisplayName(row.artifact)}</code>
+                    {row.artifact.contentType ? <div className="small">{row.artifact.contentType}</div> : null}
+                  </td>
+                  <td>{row.artifact.sizeBytes == null ? '—' : formatBytes(row.artifact.sizeBytes)}</td>
+                  <td>{formatStatusLabel(row.artifact.status)}</td>
+                  <td>
+                    <ArtifactBrowserActions apiBase={apiBase} artifact={row.artifact} />
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
+          {pageCount > 1 ? (
+            <div className="actions td-artifacts-pagination">
+              <span className="small">
+                {currentPage * ARTIFACT_BROWSER_PAGE_SIZE + 1}–
+                {Math.min(rows.length, (currentPage + 1) * ARTIFACT_BROWSER_PAGE_SIZE)} of {rows.length}
+              </span>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={currentPage === 0}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={currentPage >= pageCount - 1}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
         </div>
       )}
     </section>
@@ -9527,6 +9679,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const branchesByStep = useMemo(() => buildBranchGroups(branches), [branches]);
 
   const invalidate = () => {
+    // Actions are the only cross-query refresh trigger; the list otherwise
+    // refreshes through its own (pausable) polling.
+    void queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail', encodedTaskId] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-steps', workflowId] });
     void queryClient.invalidateQueries({ queryKey: ['workflow-detail-artifacts', namespace, workflowId, artifactRunId] });
@@ -11557,7 +11712,9 @@ export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) 
         workflowId={workflowId}
         search={search}
         displayMode={displayMode}
-      />
+      >
+        <WorkflowDetailPage payload={payload} />
+      </WorkflowWorkspaceShell>
     );
   }
 

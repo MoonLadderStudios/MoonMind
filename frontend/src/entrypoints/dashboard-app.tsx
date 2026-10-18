@@ -24,7 +24,7 @@ import {
   useNavigate,
   useNavigationType,
 } from 'react-router-dom';
-import { QueryErrorResetBoundary, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QueryErrorResetBoundary, useQuery } from '@tanstack/react-query';
 import { PanelLeft, Plus, Rows3, ScrollText, Square } from 'lucide-react';
 import {
   RocketIcon,
@@ -424,175 +424,6 @@ function useDashboardUiInfo() {
   });
 }
 
-function DashboardLiveUpdateProvider({
-  uiInfo,
-  children,
-}: {
-  uiInfo: DashboardUiInfo | null;
-  children: ReactNode;
-}) {
-  const queryClient = useQueryClient();
-  const streamEndpoint =
-    typeof uiInfo?.endpoints?.workflowUpdatesStream === 'string'
-      ? uiInfo.endpoints.workflowUpdatesStream
-      : null;
-  const pollMs =
-    typeof (uiInfo?.dashboardConfig as { pollIntervalsMs?: { list?: unknown } } | undefined)
-      ?.pollIntervalsMs?.list === 'number'
-      ? ((uiInfo?.dashboardConfig as { pollIntervalsMs: { list: number } }).pollIntervalsMs.list)
-      : 5000;
-
-  useEffect(() => {
-    let eventSource: EventSource | null = null;
-    let intervalId: number | null = null;
-
-    const workflowIdFromUpdate = (event: MessageEvent | null): string | null => {
-      if (!event?.data || typeof event.data !== 'string') {
-        return null;
-      }
-      try {
-        const payload = JSON.parse(event.data);
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-          return null;
-        }
-        const payloadRecord = payload as Record<string, unknown>;
-        const row = payloadRecord.row && typeof payloadRecord.row === 'object' && !Array.isArray(payloadRecord.row)
-          ? (payloadRecord.row as Record<string, unknown>)
-          : null;
-        return String(
-          payloadRecord.workflowId ||
-            payloadRecord.workflow_id ||
-            payloadRecord.taskId ||
-            payloadRecord.task_id ||
-            row?.workflowId ||
-            row?.workflow_id ||
-            row?.taskId ||
-            row?.task_id ||
-            '',
-        ).trim() || null;
-      } catch {
-        return null;
-      }
-    };
-
-    const rowFromUpdate = (event: MessageEvent | null): Record<string, unknown> | null => {
-      if (!event?.data || typeof event.data !== 'string') {
-        return null;
-      }
-      try {
-        const payload = JSON.parse(event.data);
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-          return null;
-        }
-        const payloadRecord = payload as Record<string, unknown>;
-        const row = payloadRecord.row && typeof payloadRecord.row === 'object' && !Array.isArray(payloadRecord.row)
-          ? (payloadRecord.row as Record<string, unknown>)
-          : payloadRecord;
-        const workflowId = String(row.workflowId || row.workflow_id || row.taskId || row.task_id || '').trim();
-        return workflowId ? row : null;
-      } catch {
-        return null;
-      }
-    };
-
-    const patchWorkflowListRows = (row: Record<string, unknown>) => {
-      const workflowId = String(row.workflowId || row.workflow_id || row.taskId || row.task_id || '').trim();
-      if (!workflowId) {
-        return;
-      }
-      queryClient.setQueriesData({ queryKey: ['workflow-list'] }, (old: unknown) => {
-        if (!old || typeof old !== 'object' || !Array.isArray((old as { items?: unknown }).items)) {
-          return old;
-        }
-        let changed = false;
-        const current = old as { items: unknown[] };
-        const items = current.items.map((item) => {
-          if (!item || typeof item !== 'object') {
-            return item;
-          }
-          const itemRecord = item as Record<string, unknown>;
-          const itemWorkflowId = String(
-            itemRecord.workflowId ||
-              itemRecord.workflow_id ||
-              itemRecord.taskId ||
-              itemRecord.task_id ||
-              '',
-          ).trim();
-          if (itemWorkflowId !== workflowId) {
-            return item;
-          }
-          changed = true;
-          return { ...itemRecord, ...row };
-        });
-        return changed ? { ...current, items } : old;
-      });
-    };
-
-    const invalidateWorkflowSnapshots = (event: MessageEvent | null = null) => {
-      const workflowId = workflowIdFromUpdate(event);
-      const row = rowFromUpdate(event);
-      if (row) {
-        patchWorkflowListRows(row);
-      }
-      void queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      void queryClient.invalidateQueries({ queryKey: ['workflow-list'] });
-      if (workflowId) {
-        const encodedWorkflowId = encodeURIComponent(workflowId);
-        void queryClient.invalidateQueries({
-          predicate: (query) => (
-            query.queryKey[0] === 'workflow-detail' &&
-            query.queryKey.includes(encodedWorkflowId)
-          ),
-        });
-      } else {
-        void queryClient.invalidateQueries({ queryKey: ['workflow-detail'] });
-      }
-    };
-
-    const start = () => {
-      if (document.visibilityState === 'hidden') {
-        return;
-      }
-      if (streamEndpoint && typeof EventSource !== 'undefined') {
-        eventSource = new EventSource(streamEndpoint, { withCredentials: true });
-        eventSource.onmessage = invalidateWorkflowSnapshots;
-        eventSource.onerror = () => {
-          eventSource?.close();
-          eventSource = null;
-          if (intervalId === null) {
-            intervalId = window.setInterval(invalidateWorkflowSnapshots, pollMs);
-          }
-        };
-        return;
-      }
-      intervalId = window.setInterval(invalidateWorkflowSnapshots, pollMs);
-    };
-
-    const stop = () => {
-      eventSource?.close();
-      eventSource = null;
-      if (intervalId !== null) {
-        window.clearInterval(intervalId);
-        intervalId = null;
-      }
-    };
-
-    const handleVisibility = () => {
-      stop();
-      start();
-    };
-
-    start();
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      stop();
-    };
-  }, [pollMs, queryClient, streamEndpoint]);
-
-  return <>{children}</>;
-}
-
 function CollectionListDisplayModeControl({
   accessibleName = 'List display',
   effectiveMode,
@@ -985,52 +816,50 @@ function AppShell({
   const panelRef = useRef<HTMLElement>(null);
   useCollectionWorkspaceBlockSize(rootRef, panelRef);
   return (
-    <DashboardLiveUpdateProvider uiInfo={uiInfo}>
-      <main className="dashboard-root" ref={rootRef}>
-        {registrySkew ? (
-          <section className="ui-version-skew-banner" role="alert" data-ui-version-skew>
-            <p>
-              <strong>Dashboard build mismatch.</strong> The UI assets in this browser do not
-              match the server
-              {typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim()
-                ? ` (server build ${uiInfo.buildId})`
-                : ''}
-              . Hard-refresh this page; if the mismatch persists, the deployment is serving stale
-              or partially patched static assets and needs a clean redeploy.
-            </p>
-          </section>
-        ) : null}
-        <div className="dashboard-shell-full">
-          <DashboardNavigation
-            uiInfo={uiInfo}
-            listDisplayAccessibleName={listDisplayAccessibleName}
-            listDisplayMode={listDisplayMode}
-            listDisplayTableLabel={listDisplayTableLabel}
-            listDisplayStatus={listDisplayStatus}
-            onListDisplayModeSelect={onListDisplayModeSelect}
-          />
-        </div>
+    <main className="dashboard-root" ref={rootRef}>
+      {registrySkew ? (
+        <section className="ui-version-skew-banner" role="alert" data-ui-version-skew>
+          <p>
+            <strong>Dashboard build mismatch.</strong> The UI assets in this browser do not
+            match the server
+            {typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim()
+              ? ` (server build ${uiInfo.buildId})`
+              : ''}
+            . Hard-refresh this page; if the mismatch persists, the deployment is serving stale
+            or partially patched static assets and needs a clean redeploy.
+          </p>
+        </section>
+      ) : null}
+      <div className="dashboard-shell-full">
+        <DashboardNavigation
+          uiInfo={uiInfo}
+          listDisplayAccessibleName={listDisplayAccessibleName}
+          listDisplayMode={listDisplayMode}
+          listDisplayTableLabel={listDisplayTableLabel}
+          listDisplayStatus={listDisplayStatus}
+          onListDisplayModeSelect={onListDisplayModeSelect}
+        />
+      </div>
 
-        <div className="dashboard-content">
-          <div className="dashboard-state-strip">
-            <div
-              className={`dashboard-state-strip__inner${dataWidePanel ? ' dashboard-state-strip__inner--data-wide' : ''}`}
-            >
-              <div className="dashboard-alerts-region">
-                <DashboardAlerts />
-              </div>
+      <div className="dashboard-content">
+        <div className="dashboard-state-strip">
+          <div
+            className={`dashboard-state-strip__inner${dataWidePanel ? ' dashboard-state-strip__inner--data-wide' : ''}`}
+          >
+            <div className="dashboard-alerts-region">
+              <DashboardAlerts />
             </div>
           </div>
-          <section
-            ref={panelRef}
-            className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
-            aria-live="polite"
-          >
-            {children}
-          </section>
         </div>
-      </main>
-    </DashboardLiveUpdateProvider>
+        <section
+          ref={panelRef}
+          className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
+          aria-live="polite"
+        >
+          {children}
+        </section>
+      </div>
+    </main>
   );
 }
 

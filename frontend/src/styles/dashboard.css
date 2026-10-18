@@ -5607,8 +5607,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .live-logs-legacy-viewer {
-  max-height: 400px;
-  overflow-y: auto;
   padding: 0.6rem;
 }
 
