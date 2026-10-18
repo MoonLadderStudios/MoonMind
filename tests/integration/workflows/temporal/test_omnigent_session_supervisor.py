@@ -30,7 +30,7 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
 from api_service.db import base as db_base
-from api_service.db.models import ProviderProfileSlotLease
+from api_service.db.models import ProviderProfileSlotLease, SettingsOverride
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
     DesiredLifecycle,
@@ -819,8 +819,16 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
     provider_profile = SimpleNamespace(
         profile_id="opencode-go-default", provider_id="opencode-go"
     )
+
+    async def execute(statement):
+        # This fixture has no saved Settings overrides or other query results.
+        entities = [column.get("entity") for column in statement.column_descriptions]
+        assert entities == [SettingsOverride]
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+
     db_session = SimpleNamespace(
         get=AsyncMock(side_effect=[provider_profile, None]),
+        execute=execute,
         commit=AsyncMock(),
         refresh=AsyncMock(),
     )
