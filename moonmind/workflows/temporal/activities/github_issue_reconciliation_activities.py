@@ -477,12 +477,13 @@ async def _reconcile_one_issue(
     }
 
     def _spend(n: int = 1) -> bool:
+        if budget["requests"] + n > recon.MAX_SCAN_API_REQUESTS:
+            return False
         budget["requests"] += n
         outcome["apiRequests"] += n
-        return budget["requests"] <= recon.MAX_SCAN_API_REQUESTS
+        return True
 
     # Re-read current issue before acting (Req 2).
-    fetched = await _fetch_issue(service=service, repository=repository, issue_number=issue_number)
     if not _spend():
         outcome.update(
             action=recon.ACTION_DEFERRED_UNKNOWN,
@@ -490,6 +491,9 @@ async def _reconcile_one_issue(
             summary="API request budget exhausted; deferred with pending evidence.",
         )
         return outcome
+    fetched = await _fetch_issue(
+        service=service, repository=repository, issue_number=issue_number
+    )
     if not fetched.get("ok"):
         if _is_rate_limit(fetched) or fetched.get("reasonCode") == "outcome_unknown":
             outcome.update(
@@ -514,10 +518,12 @@ async def _reconcile_one_issue(
         return outcome
 
     # Re-read attempt comments (bounded; unreadable != absent) (Req 6).
-    listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
     if not _spend():
         outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted after issue read; deferred.")
         return outcome
+    listed = await service.list_issue_comments(
+        repo=repository, issue_number=issue_number
+    )
     comments_ok = isinstance(listed, Mapping) and bool(listed.get("ok"))
     comments: list[Mapping[str, Any]] = []
     if comments_ok and isinstance(listed.get("comments"), list):
@@ -630,10 +636,14 @@ async def _reconcile_one_issue(
     pr_url = _string(preserved.get("prUrl"))
     pr_state: dict[str, Any] = {}
     if pr_url:
-        pr_state = await _fetch_pr_state(service=service, pr_url=pr_url)
         if not _spend():
-            outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted on PR read; deferred.")
+            outcome.update(
+                action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode="request_budget_exhausted",
+                summary="Budget exhausted before PR read; deferred.",
+            )
             return outcome
+        pr_state = await _fetch_pr_state(service=service, pr_url=pr_url)
         if not pr_state.get("known"):
             pr_state = {**pr_state, "mergeRequested": True}
     writer_evidence = {
@@ -716,10 +726,12 @@ async def _reconcile_one_issue(
             mutation = planned["mutation"]
             # Re-read before the retry/mutation (Req 2): abandon when a
             # successor, hold, or contradiction appeared since deciding.
-            reread = await _fetch_issue(service=service, repository=repository, issue_number=issue_number)
             if not _spend():
                 outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted before repair; deferred.")
                 return outcome
+            reread = await _fetch_issue(
+                service=service, repository=repository, issue_number=issue_number
+            )
             if reread.get("ok"):
                 r_state, r_names = _label_names(reread.get("issue"))
                 r_observed = lifecycle.interpret_issue({"state": r_state, "labels": r_names})
@@ -735,51 +747,58 @@ async def _reconcile_one_issue(
             # would exceed the advertised bound, and never continue to the
             # next stage after an unconfirmed or budget-exhausting write.
             for label in mutation.get("labelsToAdd") or []:
-                if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
+                if not _spend():
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted before repair add-label; deferred with pending evidence.")
                     state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair add-label budget exhausted", attempt_id=newest_attempt_id))
                     return outcome
                 added = await service.add_issue_labels(repo=repository, issue_number=issue_number, labels=[label])
-                if not _spend():
-                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted on repair add-label; outcome retained as pending, next stages skipped.")
-                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair add-label budget exhausted", attempt_id=newest_attempt_id))
-                    return outcome
                 if not (isinstance(added, Mapping) and added.get("ok")):
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="repair_write_unknown", summary=f"Repair add-label outcome unknown: {added.get('summary') if isinstance(added, Mapping) else 'transport'}. Pending evidence retained.")
                     state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair add-label unknown", attempt_id=newest_attempt_id))
                     return outcome
             for label in mutation.get("labelsToRemove") or []:
-                if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
+                if not _spend():
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted before repair remove-label; deferred with pending evidence.")
                     state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair remove-label budget exhausted", attempt_id=newest_attempt_id))
                     return outcome
                 removed = await service.remove_issue_label(repo=repository, issue_number=issue_number, label=label)
-                if not _spend():
-                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted on repair remove-label; deferred with pending evidence.")
-                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair remove-label budget exhausted", attempt_id=newest_attempt_id))
-                    return outcome
                 if not (isinstance(removed, Mapping) and removed.get("ok")):
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="repair_write_unknown", summary="Repair remove-label outcome unknown. Pending evidence retained.")
                     state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair remove-label unknown", attempt_id=newest_attempt_id))
                     return outcome
             if mutation.get("closeIssue"):
-                if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
+                if not _spend():
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted before repair close; deferred with pending evidence.")
                     state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair close budget exhausted", attempt_id=newest_attempt_id))
                     return outcome
                 closed = await service.close_issue(repo=repository, issue_number=issue_number)
-                if not _spend():
-                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted on repair close; deferred with pending evidence.")
-                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair close budget exhausted", attempt_id=newest_attempt_id))
-                    return outcome
                 if not (isinstance(closed, Mapping) and closed.get("ok")):
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="repair_write_unknown", summary="Repair close outcome unknown. Pending evidence retained.")
                     state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair close unknown", attempt_id=newest_attempt_id))
                     return outcome
             # Read-back classification: only observed outcomes complete.
-            verify = await _fetch_issue(service=service, repository=repository, issue_number=issue_number)
             if not _spend():
-                pass
+                state.update(
+                    recon.record_pending_effect(
+                        state,
+                        repository=repository,
+                        issue_number=issue_number,
+                        intended_from_settled=decision.from_settled,
+                        intended_to_target=decision.to_target,
+                        proposed_disposition=proposed_disposition,
+                        reason="repair read-back budget exhausted",
+                        attempt_id=newest_attempt_id,
+                    )
+                )
+                outcome.update(
+                    action=recon.ACTION_DEFERRED_UNKNOWN,
+                    reasonCode="request_budget_exhausted",
+                    summary="Repair writes sent but read-back budget exhausted; pending evidence retained.",
+                )
+                return outcome
+            verify = await _fetch_issue(
+                service=service, repository=repository, issue_number=issue_number
+            )
             if verify.get("ok"):
                 v_state, v_names = _label_names(verify.get("issue"))
                 classified = recon.classify_repair_readback(
@@ -802,17 +821,40 @@ async def _reconcile_one_issue(
         # Escalation changes admission just as a repair does. Do not leave a
         # hold from an obsolete observation after an operator or owner moves
         # the issue forward. Missing MoonMind metadata is not itself a fault.
-        if budget["requests"] + 2 > recon.MAX_SCAN_API_REQUESTS:
+        ops = recon.targeted_attention_ops(
+            current_labels=names,
+            attention_already_present="status: needs-attention"
+            in {n.lower() for n in names},
+        )
+        bodies = [str(c.get("body") or "") for c in comments]
+        comment_body = recon.render_reconciler_comment(
+            repository=repository,
+            issue_number=issue_number,
+            reason_code=decision.reason_code,
+            summary=decision.summary,
+            observed_attempt_id=_string(newest.get("attemptId")),
+            next_action="obtain-operator-attention",
+        )
+        gate = recon.should_post_reconciler_comment(
+            existing_bodies=bodies,
+            reason_code=decision.reason_code,
+            new_body=comment_body,
+        )
+        # Fit both revalidation reads and the actual publication plan before
+        # starting. Revalidation must confirm the same labels and comments,
+        # so an existing label or coalesced observation needs no write budget.
+        required_requests = 2 + len(ops["labelsToAdd"]) + int(gate["post"])
+        if budget["requests"] + required_requests > recon.MAX_SCAN_API_REQUESTS:
             outcome.update(
                 action=recon.ACTION_DEFERRED_UNKNOWN,
                 reasonCode="request_budget_exhausted",
-                summary="Budget exhausted before attention revalidation; deferred without writes.",
+                summary="Budget insufficient for attention revalidation and publication; deferred without writes.",
             )
             return outcome
+        _spend()
         current = await _fetch_issue(
             service=service, repository=repository, issue_number=issue_number
         )
-        _spend()
         if not current.get("ok"):
             outcome.update(
                 action=recon.ACTION_DEFERRED_UNKNOWN,
@@ -821,10 +863,10 @@ async def _reconcile_one_issue(
             )
             return outcome
         current_state, current_names = _label_names(current.get("issue"))
+        _spend()
         current_comments = await service.list_issue_comments(
             repo=repository, issue_number=issue_number
         )
-        _spend()
         if (
             not isinstance(current_comments, Mapping)
             or not current_comments.get("ok")
@@ -850,31 +892,18 @@ async def _reconcile_one_issue(
             return outcome
         # Targeted attention escalation (retain old status) + one coalesced
         # observation comment per incident (Req 3 + Req 5).
-        ops = recon.targeted_attention_ops(current_labels=names, attention_already_present="status: needs-attention" in {n.lower() for n in names})
         for label in ops["labelsToAdd"]:
+            _spend()
             added = await service.add_issue_labels(repo=repository, issue_number=issue_number, labels=[label])
-            if not _spend():
-                break
             if not (isinstance(added, Mapping) and added.get("ok")):
                 outcome["summary"] += " Attention label write unknown; deferred."
                 outcome["action"] = recon.ACTION_DEFERRED_UNKNOWN
                 outcome["reasonCode"] = "attention_write_unknown"
                 return outcome
-        bodies = [str(c.get("body") or "") for c in comments]
-        comment_body = recon.render_reconciler_comment(
-            repository=repository,
-            issue_number=issue_number,
-            reason_code=decision.reason_code,
-            summary=decision.summary,
-            observed_attempt_id=_string(newest.get("attemptId")),
-            next_action="obtain-operator-attention",
-        )
-        gate = recon.should_post_reconciler_comment(existing_bodies=bodies, reason_code=decision.reason_code, new_body=comment_body)
         outcome["commentCoalesced"] = not gate["post"]
         if gate["post"]:
+            _spend()
             created = await service.create_issue_comment(repo=repository, issue_number=issue_number, body=comment_body)
-            if not _spend():
-                pass
             if not (isinstance(created, Mapping) and created.get("ok")):
                 outcome["summary"] += f" Observation comment not confirmed ({created.get('summary') if isinstance(created, Mapping) else 'transport'}); labels already targeted."
         else:

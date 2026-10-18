@@ -11946,10 +11946,8 @@ def _normalize_submitted_repository(
         ) from exc
 
     branch = target.branch.name
-    if target.provider == "git" and (
-        re.match(r"^[a-z][a-z0-9+.-]*:", branch, re.IGNORECASE)
-        or branch.startswith("//")
-    ):
+    # Git refs cannot contain colons; this also catches SCP-style clone URLs.
+    if target.provider == "git" and (":" in branch or branch.startswith("//")):
         raise _invalid_workflow_request(
             "payload.repository.branch must be a branch name, not a URL. "
             "Clear it to use the remote default branch, or enter the intended branch."
