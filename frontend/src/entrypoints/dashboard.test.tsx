@@ -192,13 +192,27 @@ vi.mock('./remediations', () => {
   return { default: () => <div>Remediation page recovered</div> };
 });
 
-vi.mock('./skills', () => ({
-  default: ({ payload }: { payload: BootPayload }) => {
+// Rows the mocked Workflows and Skills tables report as visible (after their
+// filters and sort); null means the table has not settled.
+const visibleItemsMock = vi.hoisted(() => ({
+  workflows: null as string[] | null,
+  skills: null as string[] | null,
+}));
+
+vi.mock('./skills', async () => {
+  const { usePublishVisibleCollectionItems } = await vi.importActual<
+    typeof import('../lib/visibleCollectionItems')
+  >('../lib/visibleCollectionItems');
+  return { default: ({ payload }: { payload: BootPayload }) => {
     const initialData = payload.initialData as {
       dashboardConfig?: { initialPath?: string };
       skillsListDisplayMode?: unknown;
       skillsListDisplayStatus?: unknown;
     } | undefined;
+    usePublishVisibleCollectionItems(
+      'skill',
+      window.location.pathname === '/skills' ? visibleItemsMock.skills : null,
+    );
     return (
       <div>
         <div>Skills page loaded</div>
@@ -206,25 +220,36 @@ vi.mock('./skills', () => ({
         <div>Skills list display: {String(initialData?.skillsListDisplayMode ?? 'unset')}</div>
       </div>
     );
-  },
-}));
+  } };
+});
 
 vi.mock('./workflow-list', () => ({
   default: () => <div>Workflow list route loaded</div>,
 }));
 
-vi.mock('./workflows-workspace', () => ({
-  default: ({ payload }: { payload: BootPayload }) => {
+vi.mock('./workflows-workspace', async () => {
+  const { usePublishVisibleCollectionItems } = await vi.importActual<
+    typeof import('../lib/visibleCollectionItems')
+  >('../lib/visibleCollectionItems');
+  return { default: ({ payload }: { payload: BootPayload }) => {
     const isDetailRoute =
       window.location.pathname.startsWith('/workflows/') && window.location.pathname !== '/workflows/new';
     const isCreateRoute = window.location.pathname === '/workflows/new';
+    usePublishVisibleCollectionItems(
+      'workflow',
+      window.location.pathname === '/workflows' ? visibleItemsMock.workflows : null,
+    );
     if (window.location.pathname === '/workflows/crash-route') {
       throw new Error('workflow page render failed');
     }
-    const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
+    const initialData = payload.initialData as {
+      dashboardConfig?: Record<string, unknown>;
+      workflowListDisplayStatus?: unknown;
+    } | undefined;
     const repository = initialData?.dashboardConfig?.defaultRepository;
     return (
       <div data-testid="workflows-workspace-route">
+        <div>Workflow page status: {String(initialData?.workflowListDisplayStatus ?? 'unset')}</div>
         <a href="/workflows/mm%3A97d44980-355c-4300-96a7-0ad166440d95?source=temporal">
           Mock workflow title
         </a>
@@ -240,8 +265,8 @@ vi.mock('./workflows-workspace', () => ({
         )}
       </div>
     );
-  },
-}));
+  } };
+});
 
 const workflowDetailMock = vi.hoisted(() => ({
   initialPathByNode: new WeakMap<HTMLElement, string>(),
@@ -381,6 +406,8 @@ describe('Dashboard shared entry', () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
+    visibleItemsMock.workflows = null;
+    visibleItemsMock.skills = null;
     window.WebSocket = originalWebSocket;
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -769,7 +796,7 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByRole('button', { name: 'Close navigation menu' })).toBeNull();
   });
 
-  it('switches the full-screen workflow list to hidden when navigating to Create', async () => {
+  it('restores the saved list choice without rewriting it when leaving the full table for Create', async () => {
     window.history.replaceState({}, '', '/workflows');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
@@ -780,9 +807,27 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('radio', { name: 'Sidebar list' }).getAttribute('aria-checked')).toBe('true');
     });
     expect(window.location.pathname).toBe('/workflows/new');
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('sidebar');
+  });
+
+  it('keeps the saved No list choice when a workflow is opened from the full table', async () => {
+    window.history.replaceState({}, '', '/workflows?source=temporal');
+    updateDashboardPreferences({ workflowListDisplayMode: 'hidden' });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Full screen table' }).getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Mock workflow title' }));
+
+    expect(await screen.findByText(/Workflow detail route loaded:/)).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
+    });
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
   });
 
   it('renders dashboard alerts and lazy-loads the requested page component', async () => {
@@ -854,6 +899,7 @@ describe('Dashboard shared entry', () => {
 
   it('opens a visible workflow when sidebar mode is selected from the workflows table', async () => {
     window.history.replaceState({}, '', '/workflows?source=temporal');
+    visibleItemsMock.workflows = ['mm:97d44980-355c-4300-96a7-0ad166440d95'];
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
@@ -1003,6 +1049,26 @@ describe('Dashboard shared entry', () => {
     });
     expect(await screen.findByRole('heading', { name: 'Daily recurring scan' })).toBeTruthy();
     expect(screen.queryByText('Opening first recurring schedule...')).toBeNull();
+  });
+
+  it('opens the first schedule of the filtered Recurring table', async () => {
+    mockRecurringFetch(
+      [recurringSchedule('other-one', 'Unfiltered first'), recurringSchedule('paused-one', 'Paused scan')],
+      {
+        '/api/recurring-workflows?limit=50&sort=updatedAt&sortDir=desc&state=paused': [
+          recurringSchedule('paused-one', 'Paused scan'),
+        ],
+      },
+    );
+    window.history.replaceState({}, '', '/schedules?state=paused');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('link', { name: /Paused scan/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/schedules/paused-one');
+    });
   });
 
   it('clears Recurring table filters when the Recurring navigation link drops them from the URL', async () => {
@@ -1310,6 +1376,26 @@ describe('Dashboard shared entry', () => {
     expect(prefs.skillsListDisplayMode).toBe('hidden');
   });
 
+  it('opens the first skill of the filtered catalog table and drops a remembered skill it hides', async () => {
+    window.localStorage.setItem('moonmind.dashboard.preferences', JSON.stringify({
+      version: 3,
+      preferences: { skillsListDisplayMode: 'table', lastSelectedSkillId: 'speckit-orchestrate' },
+    }));
+    mockSkillsCatalogFetch(['speckit-orchestrate', 'pr-resolver', 'pr-review']);
+    visibleItemsMock.skills = ['pr-resolver', 'pr-review'];
+
+    window.history.replaceState({}, '', '/skills');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Skills page loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/skills/pr-resolver');
+    });
+    expect(storedDashboardPreferences().lastSelectedSkillId).toBe('pr-resolver');
+  });
+
   it('opens a still-valid remembered skill instead of the first visible row', async () => {
     window.localStorage.setItem('moonmind.dashboard.preferences', JSON.stringify({
       version: 3,
@@ -1610,7 +1696,12 @@ describe('Dashboard shared entry', () => {
         // A different first-visible row proves the remembered ID was preferred.
         return Promise.resolve({
           ok: true,
-          json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
+          json: async () => ({
+            items: [
+              recurringScheduleRow('schedule-one', 'Daily recurring scan'),
+              recurringScheduleRow('remembered-schedule', 'Remembered schedule'),
+            ],
+          }),
         } as Response);
       }
       if (url === '/api/recurring-workflows/remembered-schedule') {
@@ -1635,12 +1726,8 @@ describe('Dashboard shared entry', () => {
     await waitFor(() => {
       expect(window.location.pathname).toBe('/schedules/remembered-schedule');
     });
-    // The persisted remembered definition was reauthorized before use...
-    expect(
-      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/remembered-schedule'),
-    ).toBe(true);
     expect(await screen.findByRole('heading', { name: 'Remembered schedule' })).toBeTruthy();
-    // ...and the mode + remembered definition are persisted for the next reload.
+    // The mode and remembered definition are persisted for the next reload.
     expect(readDashboardPreferences().recurringListDisplayMode).toBe('sidebar');
     expect(readDashboardPreferences().lastSelectedDefinitionId).toBe('remembered-schedule');
   });
@@ -1683,11 +1770,11 @@ describe('Dashboard shared entry', () => {
     await waitFor(() => {
       expect(window.location.pathname).toBe('/schedules/schedule-one');
     });
-    // The stale remembered definition was reauthorized, found unauthorized, and
-    // silently discarded in favor of the first visible schedule.
+    // The stale remembered definition is not in the visible list, so it is
+    // dropped in favor of the first visible schedule without being requested.
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === '/api/recurring-workflows/stale-schedule'),
-    ).toBe(true);
+    ).toBe(false);
     expect(window.location.pathname).not.toBe('/schedules/stale-schedule');
     expect(readDashboardPreferences().lastSelectedDefinitionId).toBe('schedule-one');
   });
@@ -2031,16 +2118,14 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toBe('?source=temporal');
   });
 
-  it('maps a persisted table mode to hidden on the Create route', async () => {
+  it('maps a persisted table mode to hidden on the Create route without rewriting it', async () => {
     window.history.replaceState({}, '', '/workflows/new?source=temporal');
     updateDashboardPreferences({ workflowListDisplayMode: 'table' });
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
     expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
     expect(screen.getByRole('radio', { name: 'No list' }).getAttribute('aria-checked')).toBe('true');
-    await waitFor(() => {
-      expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
-    });
+    expect(readDashboardPreferences().workflowListDisplayMode).toBe('table');
   });
 
   it('preserves the Create hidden mode when preferences change', async () => {
@@ -2141,7 +2226,7 @@ describe('Dashboard shared entry', () => {
     expect(screen.queryByText('Workflow detail route loaded: /workflows/first/debug')).toBeNull();
   });
 
-  it('MM-1113 opens an authorized remembered workflow when leaving the full table', async () => {
+  it('MM-1113 opens the remembered workflow when it is in the visible list', async () => {
     window.history.replaceState({}, '', '/workflows?stateIn=completed&limit=50');
     updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-123' });
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
@@ -2149,8 +2234,11 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url === '/api/executions/remembered-123?source=temporal') {
-        return Promise.resolve({ ok: true, json: async () => ({ workflowId: 'remembered-123' }) } as Response);
+      if (url === '/api/executions?source=temporal&pageSize=50&stateIn=completed') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ workflowId: 'first-completed' }, { workflowId: 'remembered-123' }] }),
+        } as Response);
       }
       return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
     });
@@ -2167,9 +2255,56 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toContain('stateIn=completed');
     expect(window.location.search).toContain('limit=50');
     expect(window.location.search).toContain('source=temporal');
-    expect(fetchSpy).toHaveBeenCalledWith('/api/executions/remembered-123?source=temporal');
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions?'))).toBe(false);
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions?source=temporal&pageSize=50&stateIn=completed');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions/remembered-123'))).toBe(false);
     expect(readDashboardPreferences().workflowListDisplayMode).toBe('hidden');
+  });
+
+  it('drops a remembered workflow that the filtered list does not show and opens its first row', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'remembered-completed' });
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/ui/info') {
+        return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
+      }
+      // The remembered workflow is authorized, just not in the FAILED list.
+      if (url === '/api/executions/remembered-completed?source=temporal') {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: 'remembered-completed' }) } as Response);
+      }
+      if (url === '/api/executions?source=temporal&pageSize=25&stateIn=failed') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ workflowId: 'failed-1' }, { workflowId: 'failed-2' }] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
+    });
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/failed-1');
+    });
+    expect(readDashboardPreferences().lastSelectedWorkflowId).toBe('failed-1');
+  });
+
+  it('opens the first row the workflow table shows, in its sort order, without refetching', async () => {
+    window.history.replaceState({}, '', '/workflows?stateIn=failed');
+    updateDashboardPreferences({ lastSelectedWorkflowId: 'not-on-this-page' });
+    visibleItemsMock.workflows = ['sorted-first', 'sorted-second'];
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Workflow list route loaded')).toBeTruthy();
+    fetchSpy.mockClear();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/sorted-first');
+    });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/executions'))).toBe(false);
   });
 
   it('MM-1113 keeps a route-selected workflow when switching detail-compatible modes', async () => {
@@ -2374,6 +2509,8 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'No list' }));
 
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
+    // The workspace page shows the same resolving state in its detail area.
+    expect(screen.getByText('Workflow page status: Opening first workflow...')).toBeTruthy();
     const completeList = resolveList;
     if (!completeList) {
       throw new Error('Expected workflow list request to be pending.');

@@ -6,6 +6,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { SkillsPage } from './skills';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
+import { VisibleCollectionItemsContext } from '../lib/visibleCollectionItems';
 
 // Computed styling and layout are covered by the production-page browser
 // parity journey. This suite exercises catalog data and interactions.
@@ -224,6 +225,30 @@ describe('Skills Entrypoint', () => {
       fireEvent.change(screen.getByLabelText('Skill sidebar filter value'), { target: { value: 'does-not-exist' } });
       await waitFor(() => {
         expect(screen.getByText('No skills match your filter.')).toBeTruthy();
+      });
+    });
+
+    it('publishes the filtered catalog rows for the shell first-item choice', async () => {
+      const publish = vi.fn();
+      renderWithClient(
+        <VisibleCollectionItemsContext.Provider value={{ publish }}>
+          <MemoryRouter initialEntries={['/skills']}>
+            <Routes>
+              <Route path="/skills" element={<SkillsPage payload={skillsPayload('/skills')} />} />
+            </Routes>
+          </MemoryRouter>
+        </VisibleCollectionItemsContext.Provider>,
+      );
+
+      await waitFor(() => {
+        expect(publish).toHaveBeenLastCalledWith('skill', ['speckit-orchestrate', 'pr-resolver']);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Skill sidebar filter. No filter applied.' }));
+      fireEvent.change(screen.getByLabelText('Skill sidebar filter value'), { target: { value: 'pr-' } });
+
+      await waitFor(() => {
+        expect(publish).toHaveBeenLastCalledWith('skill', ['pr-resolver']);
       });
     });
   });
