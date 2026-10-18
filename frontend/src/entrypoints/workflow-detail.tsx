@@ -34,6 +34,10 @@ import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { QueryStaleNotice } from '../components/dashboard/StaleDataNotice';
+import { ApiErrorState } from '../components/DashboardErrorState';
+import { responseError } from '../lib/api/client';
+import { isTransientError } from '../boot/queryClient';
 import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   readDashboardPreferences,
@@ -2655,7 +2659,7 @@ async function fetchRunSummaryArtifact(
   );
   if (!resp.ok) {
     if (resp.status === 404) return null;
-    throw new Error(`Run summary: ${resp.statusText}`);
+    throw await responseError(resp, 'Run summary');
   }
   const text = await resp.text();
   if (!text.trim()) return null;
@@ -2679,7 +2683,7 @@ async function fetchArtifactSessionProjection(
   );
   if (!resp.ok) {
     if (resp.status === 404) return null;
-    throw new Error(`Session continuity: ${resp.status}`);
+    throw await responseError(resp, 'Session continuity');
   }
   return ArtifactSessionProjectionSchema.parse(await resp.json());
 }
@@ -2701,7 +2705,7 @@ async function fetchSessionResources(
   );
   if (!resp.ok) {
     if (resp.status === 404) return null;
-    throw new Error(`Session resources: ${resp.status}`);
+    throw await responseError(resp, 'Session resources');
   }
   return SessionResourceListSchema.parse(await resp.json());
 }
@@ -2728,16 +2732,7 @@ async function controlArtifactSession(
     },
   );
   if (!resp.ok) {
-    let detail = `Session control: ${resp.status}`;
-    try {
-      const payload = await resp.json();
-      if (typeof payload?.detail === 'string' && payload.detail.trim()) {
-        detail = payload.detail;
-      }
-    } catch {
-      // Keep the status fallback when the response is not JSON.
-    }
-    throw new Error(detail);
+    throw await responseError(resp);
   }
   return ArtifactSessionControlResponseSchema.parse(await resp.json());
 }
@@ -3089,9 +3084,7 @@ async function fetchBridgeSessionEvents(
 async function fetchStepLedger(stepsHref: string): Promise<z.infer<typeof StepLedgerSnapshotSchema>> {
   const resp = await fetch(stepsHref, { credentials: 'include' });
   if (!resp.ok) {
-    const statusText = resp.statusText.trim();
-    const detail = statusText ? ` ${statusText}` : '';
-    throw new Error(`Steps: ${resp.status}${detail} (${stepsHref})`);
+    throw await responseError(resp, `Steps (${stepsHref})`);
   }
   return StepLedgerSnapshotSchema.parse(await resp.json());
 }
@@ -3105,9 +3098,7 @@ async function fetchCheckpointBranches(
     { credentials: 'include' },
   );
   if (!resp.ok) {
-    const statusText = resp.statusText.trim();
-    const detail = statusText ? ` ${statusText}` : '';
-    throw new Error(`Checkpoint branches: ${resp.status}${detail}`);
+    throw await responseError(resp, 'Checkpoint branches');
   }
   return CheckpointBranchListSchema.parse(await resp.json());
 }
@@ -3122,9 +3113,7 @@ async function fetchCheckpointBranchTurns(
     { credentials: 'include' },
   );
   if (!resp.ok) {
-    const statusText = resp.statusText.trim();
-    const detail = statusText ? ` ${statusText}` : '';
-    throw new Error(`Branch turns: ${resp.status}${detail}`);
+    throw await responseError(resp, 'Branch turns');
   }
   return CheckpointBranchTurnListSchema.parse(await resp.json());
 }
@@ -3185,13 +3174,18 @@ export function workflowDetailQueryOptions({
       const suffix = sourceTemporal ? '?source=temporal' : '';
       const response = await fetch(`${apiBase}/executions/${encodedWorkflowId}${suffix}`);
       if (!response.ok) {
-        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch workflow');
       }
       return ExecutionDetailSchema.parse(await response.json());
     },
-    refetchInterval: (query: { state: { data: z.infer<typeof ExecutionDetailSchema> | undefined } }) => (
-      !isExecutionTerminal(query.state.data) ? detailPoll : false
-    ),
+    refetchInterval: (query: {
+      state: { data: z.infer<typeof ExecutionDetailSchema> | undefined; error: unknown };
+    }) => {
+      // A missing or forbidden workflow stays that way, so polling would only
+      // repeat the 4xx. Transient failures keep polling and the page recovers.
+      if (query.state.error && !isTransientError(query.state.error)) return false;
+      return !isExecutionTerminal(query.state.data) ? detailPoll : false;
+    },
     staleTime: detailPoll,
   };
 }
@@ -5155,6 +5149,7 @@ function BranchExplorerPanel({
   isLoading,
   error,
   turnsError,
+  staleNotice,
   actionsEnabled,
   busy,
   latestCompare,
@@ -5171,6 +5166,8 @@ function BranchExplorerPanel({
   isLoading: boolean;
   error: Error | null;
   turnsError: Error | null;
+  /** Shown above known branches when a refresh failed. */
+  staleNotice?: ReactNode;
   actionsEnabled: boolean;
   busy: boolean;
   latestCompare: z.infer<typeof CheckpointBranchCompareSchema> | null;
@@ -5182,7 +5179,7 @@ function BranchExplorerPanel({
     enabled: actionsEnabled,
     queryFn: async (): Promise<Array<{ profile_id: string; account_label?: string; enabled?: boolean; launch_ready?: boolean }>> => {
       const response = await fetch(`${apiBase}/v1/provider-profiles?include_execution=true`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error('Profiles could not be loaded.');
+      if (!response.ok) throw await responseError(response, 'Provider Profiles');
       const value: unknown = await response.json();
       return Array.isArray(value) ? value : [];
     },
@@ -5293,6 +5290,7 @@ function BranchExplorerPanel({
           <span className="step-tl-count">{branches.length} branch{branches.length === 1 ? '' : 'es'}</span>
         </span>
       </div>
+      {staleNotice}
       {isLoading ? (
         <LoadingPlaceholder surface="workflow-detail" region="checkpoint-branches" variant="list" density="compact" preserveContext />
       ) : error ? (
@@ -5821,9 +5819,7 @@ function StepExecutionHistory({
         { credentials: 'include' },
       );
       if (!response.ok) {
-        const statusText = response.statusText.trim();
-        const detail = statusText ? ` ${statusText}` : '';
-        throw new Error(`Step executions: ${response.status}${detail}`);
+        throw await responseError(response, 'Step executions');
       }
       return StepExecutionListSchema.parse(await response.json());
     },
@@ -5844,9 +5840,10 @@ function StepExecutionHistory({
   return (
     <section className="step-tl-detail-section">
       <h4>Step Execution history</h4>
+      <QueryStaleNotice query={historyQuery} />
       {historyQuery.isLoading ? (
         <p className="small">Loading step executions…</p>
-      ) : historyQuery.isError ? (
+      ) : historyQuery.isLoadingError ? (
         <p className="small step-tl-error">{(historyQuery.error as Error).message}</p>
       ) : ordered.length > 0 ? (
         <>
@@ -7323,7 +7320,7 @@ function SessionContinuityPanel({
       </section>
     );
   }
-  if (summaryQuery.isError) {
+  if (summaryQuery.isLoadingError) {
     return null;
   }
   if (!sessionId) {
@@ -7337,7 +7334,7 @@ function SessionContinuityPanel({
       </section>
     );
   }
-  if (projectionQuery.isError) {
+  if (projectionQuery.isLoadingError) {
     return (
       <section className="stack">
         <h3>Session Continuity</h3>
@@ -7525,6 +7522,8 @@ function SessionContinuityPanel({
       </div>
 
       {panelError ? <div className="notice error">{panelError}</div> : null}
+      <QueryStaleNotice query={summaryQuery} />
+      <QueryStaleNotice query={projectionQuery} />
 
       {!compact ? <div className="grid-2">
         <Card label="Session ID">
@@ -9288,9 +9287,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         { credentials: 'include' },
       );
       if (!response.ok) {
-        const statusText = response.statusText.trim();
-        const detail = statusText ? ` ${statusText}` : '';
-        throw new Error(`Step execution: ${response.status}${detail}`);
+        throw await responseError(response, 'Step execution');
       }
       return StepExecutionDetailSchema.parse(await response.json());
     },
@@ -9312,7 +9309,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(artifactRunId || '')}/artifacts`;
       const response = await fetch(path);
       if (!response.ok) {
-        throw new Error(`Artifacts: ${response.statusText}`);
+        throw await responseError(response, 'Artifacts');
       }
       return ArtifactListSchema.parse(await response.json());
     },
@@ -9331,7 +9328,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const path = `${payload.apiBase}/executions/${encodeURIComponent(namespace)}/${encodeURIComponent(workflowId)}/${encodeURIComponent(artifactRunId || '')}/artifacts?link_type=report.primary&latest_only=true`;
       const response = await fetch(path);
       if (!response.ok) {
-        throw new Error(`Report: ${response.statusText}`);
+        throw await responseError(response, 'Report');
       }
       return ArtifactListSchema.parse(await response.json());
     },
@@ -9357,7 +9354,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=inbound`,
       );
-      if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
+      if (!response.ok) throw await responseError(response, 'Remediations');
       return RemediationLinksSchema.parse(await response.json());
     },
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
@@ -9369,7 +9366,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       const response = await fetch(
         `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/remediations?direction=outbound`,
       );
-      if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
+      if (!response.ok) throw await responseError(response, 'Remediations');
       return RemediationLinksSchema.parse(await response.json());
     },
     enabled: artifactsTabActive && shouldFetchRemediationLinks,
@@ -9450,7 +9447,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   );
   const hasStepsEndpoint = Boolean(execution?.stepsHref);
   const showExecutionObservationFallback =
-    !hasStepsEndpoint || (!stepsQuery.isLoading && (stepsQuery.isError || !stepsQuery.data));
+    !hasStepsEndpoint || (!stepsQuery.isLoading && !stepsQuery.data);
   const branchesByStep = useMemo(() => buildBranchGroups(branches), [branches]);
 
   const invalidate = () => {
@@ -9472,8 +9469,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9498,8 +9494,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         }),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9524,8 +9519,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         }),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9559,8 +9553,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9582,8 +9575,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9617,8 +9609,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9658,8 +9649,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9713,8 +9703,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return response.json();
     },
@@ -9755,8 +9744,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         },
       );
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return { action, body: await response.json() };
     },
@@ -9782,8 +9770,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           { credentials: 'include' },
         );
         if (!response.ok) {
-          const text = await response.text();
-          throw new Error(text || response.statusText);
+          throw await responseError(response);
         }
         return { kind: request.kind, body: CheckpointBranchCompareSchema.parse(await response.json()) };
       }
@@ -9890,8 +9877,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         body: JSON.stringify(body),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw await responseError(response);
       }
       return { kind: request.kind, body: await response.json() };
     },
@@ -10286,10 +10272,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           density="detail-heavy"
           preserveContext
         />
-      ) : detailQuery.isError ? (
-        <div className="notice error">{(detailQuery.error as Error).message}</div>
+      ) : !execution && detailQuery.isError ? (
+        <ApiErrorState error={detailQuery.error} subject="workflow" onRetry={() => void detailQuery.refetch()} />
       ) : execution ? (
         <>
+          <QueryStaleNotice query={detailQuery} />
           <div className="td-hero">
             <div className="td-hero-body">
               <div className="td-hero-headline">
@@ -10951,6 +10938,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   ) : null}
                 </span>
               </div>
+              <QueryStaleNotice query={stepsQuery} />
               {stepsQuery.isLoading ? (
                 <LoadingPlaceholder
                   surface="workflow-detail"
@@ -10959,7 +10947,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   density="compact"
                   preserveContext
                 />
-              ) : stepsQuery.isError ? (
+              ) : stepsQuery.isLoadingError ? (
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
                 <>
@@ -10995,8 +10983,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     selectedBranch={selectedBranch}
                     turns={selectedBranchTurnsQuery.data?.items ?? []}
                     isLoading={branchesQuery.isLoading}
-                    error={branchesQuery.isError ? (branchesQuery.error as Error) : null}
-                    turnsError={selectedBranchTurnsQuery.isError ? (selectedBranchTurnsQuery.error as Error) : null}
+                    error={branchesQuery.isLoadingError ? (branchesQuery.error as Error) : null}
+                    turnsError={selectedBranchTurnsQuery.isLoadingError ? (selectedBranchTurnsQuery.error as Error) : null}
+                    staleNotice={
+                      <>
+                        <QueryStaleNotice query={branchesQuery} />
+                        <QueryStaleNotice query={selectedBranchTurnsQuery} />
+                      </>
+                    }
                     actionsEnabled={actionsOn}
                     busy={busy}
                     latestCompare={latestBranchCompare}
@@ -11137,6 +11131,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
           {artifactsTabActive ? (
             <>
+              <QueryStaleNotice query={artifactsQuery} />
               <ReportPresentationSection
                 primaryReport={primaryReport}
                 relatedArtifacts={relatedReports}
@@ -11171,7 +11166,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 artifacts={artifactsQuery.data?.artifacts || []}
                 apiBase={payload.apiBase}
                 isLoading={artifactsQuery.isLoading}
-                error={artifactsQuery.isError ? (artifactsQuery.error as Error) : null}
+                error={artifactsQuery.isLoadingError ? (artifactsQuery.error as Error) : null}
               />
             </>
           ) : null}
