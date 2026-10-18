@@ -23,7 +23,10 @@ from api_service.db.models import (
     OmnigentOAuthHostBindingRecord,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
+    MoonMindWorkflowState,
     RecurringWorkflowRunOutcome,
+    TemporalExecutionRecord,
+    TemporalWorkflowType,
 )
 from api_service.services.provider_profile_runtime import (
     ProviderProfileRuntimeMismatchError,
@@ -1282,15 +1285,65 @@ async def test_refresh_rejects_a_present_but_empty_stored_snapshot(
         assert reloaded.version == 1
 
 
-async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:
-    session = AsyncMock(spec=AsyncSession)
-    session.execute.return_value = SimpleNamespace(all=lambda: [])
-    service = RecurringWorkflowsService(session)
+async def test_run_executions_report_recorded_lifecycle_and_outcome(
+    tmp_path: Path,
+) -> None:
+    """Schedule runs read the execution they dispatched, including executions
+    that have not started real work yet; unknown workflows are omitted."""
 
-    assert await service.started_at_by_workflow_id(["wf-1"]) == {}
+    started_at = datetime(2026, 6, 24, 2, 0, 2, tzinfo=UTC)
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            for workflow_id, state, started, memo in (
+                (
+                    "wf-handed-off",
+                    MoonMindWorkflowState.COMPLETED,
+                    started_at,
+                    {
+                        "objectiveOutcome": "succeeded",
+                        "completionDisposition": "gated_continuation",
+                    },
+                ),
+                (
+                    "wf-blocked",
+                    MoonMindWorkflowState.COMPLETED,
+                    started_at,
+                    {"objectiveOutcome": "verification_blocked"},
+                ),
+                ("wf-waiting", MoonMindWorkflowState.AWAITING_SLOT, None, {}),
+            ):
+                session.add(
+                    TemporalExecutionRecord(
+                        workflow_id=workflow_id,
+                        run_id=f"{workflow_id}-run",
+                        namespace="default",
+                        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                        state=state,
+                        entry="user_workflow",
+                        memo=memo,
+                        started_at=started,
+                    )
+                )
+            await session.commit()
 
-    statement = session.execute.await_args.args[0]
-    assert "ORDER BY temporal_executions.started_at ASC" in str(statement)
+            executions = await RecurringWorkflowsService(
+                session
+            ).run_executions_by_workflow_id(
+                ["wf-handed-off", "wf-blocked", "wf-waiting", "wf-unknown"]
+            )
+
+    assert set(executions) == {"wf-handed-off", "wf-blocked", "wf-waiting"}
+    handed_off = executions["wf-handed-off"]
+    assert handed_off.started_at is not None
+    assert handed_off.started_at.replace(tzinfo=UTC) == started_at
+    assert handed_off.state == "completed"
+    assert handed_off.completion_disposition == "gated_continuation"
+    assert executions["wf-blocked"].objective_outcome == "verification_blocked"
+    assert executions["wf-blocked"].completion_disposition is None
+    waiting = executions["wf-waiting"]
+    assert waiting.state == "awaiting_slot"
+    assert waiting.started_at is None
+    assert waiting.objective_outcome is None
 
 
 async def test_create_definition_normalizes_snake_case_target_aliases(

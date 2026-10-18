@@ -144,8 +144,8 @@ Route and mode behavior:
 | Current route family | Selected mode | Required route result | Primary surface | List surface |
 | --- | --- | --- | --- | --- |
 | `/schedules` | `table` | Stay on `/schedules`. | Full Recurring table. | Table. |
-| `/schedules` | `sidebar` | Navigate to last selected recurring schedule, or first visible recurring schedule when none is selected. | Recurring detail. | Sidebar. |
-| `/schedules` | `hidden` | Navigate to last selected recurring schedule, or first visible recurring schedule when none is selected. | Recurring detail. | None. |
+| `/schedules` | `sidebar` | Navigate to the last selected recurring schedule when the table shows it, otherwise the first visible one. | Recurring detail. | Sidebar. |
+| `/schedules` | `hidden` | Same selection as `sidebar`. | Recurring detail. | None. |
 | `/schedules/{definitionId}` | `table` | Navigate to `/schedules`. | Full Recurring table. | Table. |
 | `/schedules/{definitionId}` | `sidebar` | Stay on current detail route. | Recurring detail. | Sidebar. |
 | `/schedules/{definitionId}` | `hidden` | Stay on current detail route. | Recurring detail. | None. |
@@ -155,7 +155,7 @@ Default behavior:
 1. Direct desktop visits to `/schedules` resolve to `table` mode regardless of persisted preference.
 2. Direct desktop visits to `/schedules/{definitionId}` resolve to `sidebar` mode unless the user has explicitly persisted `hidden` for Recurring detail surfaces.
 3. Switching to `table` from detail unmounts the detail pane and returns to the full table.
-4. Switching to `sidebar` from the table requires a selected schedule. Use route selection first, remembered selection second, and first visible row third.
+4. Switching to `sidebar` from the table requires a selected schedule: route selection, then the remembered selection if the filtered, sorted table shows it, then the first visible row.
 5. Switching to `hidden` from the table follows the same selection fallback as `sidebar`, then hides the list region after detail opens.
 6. If no recurring schedule is selectable, stay on `/schedules`, keep the empty table state visible, and announce that there is no recurring schedule to open.
 7. Mobile does not expose desktop-only sidebar behavior in the first implementation.
@@ -704,8 +704,7 @@ Rules:
 4. Full table mode is naturally represented by `/schedules`.
 5. On direct visits to `/schedules`, effective mode is `table` regardless of persisted preference.
 6. On direct desktop visits to `/schedules/{definitionId}`, default to persisted `hidden` or `sidebar`; otherwise default to `sidebar`.
-7. Remembered schedule IDs must be reauthorized by detail or list APIs before use.
-8. Unauthorized remembered schedules must be discarded silently or with a non-leaking message.
+7. A remembered schedule ID is used only when the visible table (an authorized list) contains it; otherwise it is dropped silently.
 
 ---
 
@@ -720,7 +719,7 @@ Implementation should add or preserve tests for these behaviors:
 5. The shell/workspace utility region renders the list display radio group on Recurring routes with `No list`, `Sidebar list`, and `Full table` options.
 6. The radio group exposes an accessible name such as `Recurring list display`.
 7. Selecting `Full table` from detail navigates to `/schedules` and unmounts the detail pane.
-8. Selecting `Sidebar list` from `/schedules` opens the last selected recurring schedule or first visible recurring schedule.
+8. Selecting `Sidebar list` from `/schedules` opens the last selected recurring schedule when the filtered table shows it, otherwise the table's first visible schedule.
 9. Selecting `No list` on detail keeps the detail route and hides the recurring sidebar.
 10. Selecting a schedule from the table navigates to `/schedules/{definitionId}`.
 11. Direct desktop visits to `/schedules/{definitionId}` render the recurring schedule sidebar by default.

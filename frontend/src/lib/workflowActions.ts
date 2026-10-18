@@ -61,13 +61,89 @@ export const DEFAULT_REMEDIATION_MODE = 'snapshot_then_follow';
 export const DEFAULT_REMEDIATION_AUTHORITY = 'approval_gated';
 export const DEFAULT_REMEDIATION_ACTION_POLICY = 'admin_healer_default';
 
+/**
+ * Menu placement, in display order: safe actions, destructive actions after a
+ * divider, the Troubleshooting group, then ineligible actions collapsed under
+ * "Unavailable (n)". Items without a section are safe.
+ */
+export const WORKFLOW_ACTION_MENU_SECTIONS = [
+  'primary',
+  'destructive',
+  'troubleshooting',
+  'unavailable',
+] as const;
+export type WorkflowActionMenuSection = (typeof WORKFLOW_ACTION_MENU_SECTIONS)[number];
+
+export type WorkflowActionConfirmation = {
+  title: string;
+  /** One line stating what happens. */
+  consequence: string;
+  confirmLabel: string;
+};
+
 export type WorkflowActionMenuItem = {
   id: string;
   label: string;
   href?: string;
   danger?: boolean;
+  section?: WorkflowActionMenuSection;
+  /** One-line explanation shown under the label. */
+  description?: string;
   disabledReason?: string | null;
+  /** When set, the menu asks first and calls onSelect only after confirmation. */
+  confirmation?: WorkflowActionConfirmation;
   onSelect?: () => void;
+};
+
+const DISABLED_REASON_SENTENCES: Record<string, string> = {
+  state_not_eligible: "Not available in the workflow's current state.",
+  already_paused: 'The workflow is already paused.',
+  actions_disabled: 'Workflow actions are turned off on this deployment.',
+  historical_workflow_type: 'Retired workflow history is read-only.',
+  unsupported_workflow_type: 'This workflow type does not support this action.',
+  temporal_workflow_editing_disabled: 'Workflow editing is turned off on this deployment.',
+  original_task_input_snapshot_missing: "The workflow's original inputs were not saved.",
+  temporal_submit_disabled: 'Workflow submission is turned off on this deployment.',
+  remediation_not_admitted: 'No remediation was admitted for this failure.',
+  control_stop_not_available: 'There is no saved stopping point to continue from.',
+  publication_retry_not_applicable: 'This workflow has no publication to retry.',
+  publication_not_failed: 'Publication did not fail, so there is nothing to retry.',
+  publication_retry_not_eligible: 'The failed publication cannot be retried.',
+  child_workflow: 'This run belongs to a parent workflow, which owns its retries.',
+};
+
+/**
+ * Turn an action's disabled reason into a plain sentence. The API reports
+ * snake_case codes; text that is already prose is returned unchanged.
+ */
+export function describeWorkflowActionDisabledReason(
+  reason: string | null | undefined,
+): string | null {
+  const text = String(reason ?? '').trim();
+  if (!text) return null;
+  if (/\s/.test(text)) return text;
+  const known = DISABLED_REASON_SENTENCES[text.toLowerCase()];
+  if (known) return known;
+  const words = text.replace(/[_-]+/g, ' ').trim();
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}.`;
+}
+
+const CANCEL_CONFIRMATION: WorkflowActionConfirmation = {
+  title: 'Cancel workflow?',
+  consequence:
+    'The workflow stops gracefully, runs its cleanup, and ends as canceled. This cannot be undone.',
+  confirmLabel: 'Cancel workflow',
+};
+const REJECT_CONFIRMATION: WorkflowActionConfirmation = {
+  title: 'Reject workflow?',
+  consequence:
+    'The pending approval is rejected and the workflow ends as canceled. This cannot be undone.',
+  confirmLabel: 'Reject workflow',
+};
+const FORCE_CANCEL_CONFIRMATION: WorkflowActionConfirmation = {
+  title: 'Force cancel workflow?',
+  consequence: 'The workflow is terminated immediately, without cleanup. This cannot be undone.',
+  confirmLabel: 'Force cancel',
 };
 
 export type WorkflowActionHandlers = {
@@ -107,9 +183,8 @@ export type WorkflowActionMenuBuilderParams = {
   rerunDisabledReason: string | null;
   canCreateRemediation: boolean;
   /**
-   * Keep Remediate rendered (disabled, with a reason) even when the target
-   * is not eligible. The workflow list promotes it to a row button, where a
-   * button that appears and disappears per row makes the table ragged.
+   * List Remediate as unavailable, with a reason, even when the target is not
+   * eligible, so the row menu explains why remediation is not offered.
    */
   keepRemediationVisible?: boolean;
   handlers: WorkflowActionHandlers;
@@ -120,7 +195,8 @@ export type WorkflowActionMenuBuilderParams = {
  *
  * This is the single source of truth shared by the Workflow Detail "Workflow
  * actions" menu and the Workflows table row "Actions" menu so both surfaces
- * always present the same options, ordering, and disabled semantics.
+ * always present the same options, ordering, confirmations, and disabled
+ * semantics. Items come back sorted by section.
  */
 export function buildWorkflowActionMenuItems(
   params: WorkflowActionMenuBuilderParams,
@@ -151,6 +227,9 @@ export function buildWorkflowActionMenuItems(
     available,
     disabledReason: itemDisabledReason,
     danger,
+    troubleshooting,
+    description,
+    confirmation,
     onSelect,
   }: {
     id: string;
@@ -158,25 +237,30 @@ export function buildWorkflowActionMenuItems(
     available: boolean;
     disabledReason?: string | null;
     danger?: boolean;
+    troubleshooting?: boolean;
+    description?: string;
+    confirmation?: WorkflowActionConfirmation;
     onSelect: () => void;
   }) => {
     const effectiveDisabledReason = available ? pendingActionReason : itemDisabledReason ?? null;
-    if (available) {
-      items.push({
-        id,
-        label,
-        ...(danger ? { danger: true } : {}),
-        onSelect,
-        ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
-      });
-    } else if (effectiveDisabledReason) {
-      items.push({
-        id,
-        label,
-        ...(danger ? { danger: true } : {}),
-        disabledReason: effectiveDisabledReason,
-      });
-    }
+    if (!available && !effectiveDisabledReason) return;
+    const section: WorkflowActionMenuSection = !available
+      ? 'unavailable'
+      : troubleshooting
+        ? 'troubleshooting'
+        : danger
+          ? 'destructive'
+          : 'primary';
+    items.push({
+      id,
+      label,
+      section,
+      ...(danger ? { danger: true } : {}),
+      ...(description ? { description } : {}),
+      ...(available ? { onSelect } : {}),
+      ...(available && confirmation ? { confirmation } : {}),
+      ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+    });
   };
   const addLink = ({
     id,
@@ -199,6 +283,7 @@ export function buildWorkflowActionMenuItems(
         id,
         label,
         href,
+        section: 'primary',
         onSelect,
         ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
       });
@@ -206,13 +291,12 @@ export function buildWorkflowActionMenuItems(
       items.push({
         id,
         label,
+        section: 'unavailable',
         disabledReason: effectiveDisabledReason,
       });
     }
   };
 
-  // Commonly used actions are surfaced at the top of the menu so operators can
-  // reach them without scanning the full list.
   addButton({
     id: 'bypass-dependency-wait',
     label: 'Bypass Dependencies',
@@ -227,14 +311,21 @@ export function buildWorkflowActionMenuItems(
     available: Boolean(actions.canCancel),
     disabledReason: disabledReason('canCancel'),
     danger: true,
+    confirmation: CANCEL_CONFIRMATION,
     onSelect: handlers.onCancel,
   });
+  // The API keeps force cancel enabled even when the projected state is
+  // terminal, because that projection can be stale; never hide it here.
   addButton({
     id: 'force-cancel',
     label: 'Force cancel',
     available: Boolean(actions.canForceCancel),
     disabledReason: disabledReason('canForceCancel'),
     danger: true,
+    troubleshooting: true,
+    description:
+      'Stops the workflow immediately without cleanup. Use it only for stuck workflows or a status that looks wrong.',
+    confirmation: FORCE_CANCEL_CONFIRMATION,
     onSelect: handlers.onForceCancel,
   });
   if (taskEditingOn) {
@@ -287,7 +378,6 @@ export function buildWorkflowActionMenuItems(
       onSelect: handlers.onRerun,
     });
   }
-  // Remaining, less commonly used actions follow.
   addButton({
     id: 'rename',
     label: 'Rename',
@@ -332,6 +422,7 @@ export function buildWorkflowActionMenuItems(
     available: Boolean(actions.canReject),
     disabledReason: disabledReason('canReject'),
     danger: true,
+    confirmation: REJECT_CONFIRMATION,
     onSelect: handlers.onReject,
   });
   addButton({
@@ -341,7 +432,9 @@ export function buildWorkflowActionMenuItems(
     disabledReason: disabledReason('canSendMessage'),
     onSelect: handlers.onSendMessage,
   });
-  return items;
+  const sectionOrder = (item: WorkflowActionMenuItem) =>
+    WORKFLOW_ACTION_MENU_SECTIONS.indexOf(item.section ?? 'primary');
+  return items.sort((left, right) => sectionOrder(left) - sectionOrder(right));
 }
 
 export type RetryFromStepRequest = {

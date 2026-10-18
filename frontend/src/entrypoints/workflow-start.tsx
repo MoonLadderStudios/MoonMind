@@ -2313,6 +2313,46 @@ function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
   );
 }
 
+// Counts the step values that only Advanced mode shows: skill args, execution
+// overrides, and authored non-default schema inputs that guided mode hides.
+function advancedStepOverrideCount(
+  step: StepState,
+  skillDetail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults"> | null,
+): number {
+  let count = [
+    step.stepType === "skill" && step.skillArgs.trim(),
+    (step.runtimeProviderProfile || "").trim(),
+    (step.runtimeMode || "").trim(),
+    hasModelSelection(step.runtimeSelection),
+  ].filter(Boolean).length;
+  const schemaDetail =
+    step.stepType === "preset"
+      ? step.presetDetail
+      : step.stepType === "skill"
+        ? skillDetail
+        : null;
+  if (!schemaDetail) {
+    return count;
+  }
+  const guidedNames = schemaGuidedInputNames(schemaDetail.inputSchema);
+  for (const name of Object.keys(schemaProperties(schemaDetail.inputSchema))) {
+    const hidden =
+      step.stepType === "preset"
+        ? capabilityFieldUiSchema(schemaDetail.uiSchema, name).advanced === true
+        : !guidedNames.has(name);
+    const value = step.presetInputValues[name];
+    if (
+      hidden &&
+      value !== undefined &&
+      value !== "" &&
+      JSON.stringify(value) !== JSON.stringify(schemaDetail.defaults?.[name])
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function stepAttachmentRefFromTemporal(
   attachment: TemporalTaskInputAttachmentRef,
 ): StepAttachmentRef {
@@ -2940,12 +2980,89 @@ function updateToolInputsText(
   return JSON.stringify({ ...base, ...updates }, null, 2);
 }
 
+// The control a failed Create check names: a form control by `name`, or a step
+// field by `data-step-field`. A step target without a field means the step's
+// first invalid input (schema-backed inputs mark themselves).
+type WorkflowStartFieldTarget =
+  | { control: string }
+  | { stepLocalId: string; field?: string };
+
+// A thrown check failure that still names the control to fix.
+class WorkflowStartFieldError extends Error {
+  readonly target: WorkflowStartFieldTarget;
+
+  constructor(
+    message: string,
+    target: WorkflowStartFieldTarget,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.target = target;
+  }
+}
+
+// Advanced mode unmounts these controls, so a check that names one reveals it.
+const ADVANCED_CONTROL_NAMES = new Set([
+  "priority",
+  "maxAttempts",
+  "backend",
+  "omnigentLaunchPolicyRef",
+]);
+const ADVANCED_STEP_FIELDS = new Set([
+  "skillArgs",
+  "runtimeMode",
+  "runtimeProviderProfile",
+]);
+
+function locateWorkflowStartField(
+  form: HTMLFormElement | null,
+  target: WorkflowStartFieldTarget,
+  advancedOpen: boolean,
+): { element: HTMLElement | null; revealAdvanced: boolean } {
+  if (!form) {
+    return { element: null, revealAdvanced: false };
+  }
+  if ("control" in target) {
+    const element = form.querySelector<HTMLElement>(`[name="${target.control}"]`);
+    return {
+      element,
+      revealAdvanced:
+        !element && !advancedOpen && ADVANCED_CONTROL_NAMES.has(target.control),
+    };
+  }
+  const step = Array.from(
+    form.querySelectorAll<HTMLElement>("[data-step-local-id]"),
+  ).find((section) => section.dataset.stepLocalId === target.stepLocalId);
+  if (!step) {
+    return { element: null, revealAdvanced: false };
+  }
+  if (target.field) {
+    const element = step.querySelector<HTMLElement>(
+      `[data-step-field="${target.field}"]`,
+    );
+    return {
+      element,
+      revealAdvanced:
+        !element && !advancedOpen && ADVANCED_STEP_FIELDS.has(target.field),
+    };
+  }
+  const invalid = step.querySelector<HTMLElement>('[aria-invalid="true"]');
+  if (invalid || !advancedOpen) {
+    // Optional schema inputs render only in Advanced mode.
+    return { element: invalid, revealAdvanced: !invalid };
+  }
+  return {
+    element: step.querySelector<HTMLElement>('[data-step-field="instructions"]'),
+    revealAdvanced: false,
+  };
+}
+
 function validatePrimaryStepSubmission(
   primaryStep: StepState | null,
   options: { additionalStepsCount?: number } = {},
 ):
   | { ok: true; value: { instructions: string; skillId: string } }
-  | { ok: false; error: string } {
+  | { ok: false; error: string; field?: string } {
   if (!primaryStep) {
     return { ok: false, error: "Add at least one step before submitting." };
   }
@@ -2965,12 +3082,14 @@ function validatePrimaryStepSubmission(
     return {
       ok: false,
       error: "Select a Tool before submitting a Tool step.",
+      field: "toolId",
     };
   }
   if (primaryStep.stepType === "preset") {
     return {
       ok: false,
       error: "Expand Preset steps before submitting.",
+      field: "presetKey",
     };
   }
   const instructions = primaryStep.instructions.trim();
@@ -2981,6 +3100,7 @@ function validatePrimaryStepSubmission(
       ok: false,
       error:
         "Primary step instructions are required when additional steps are provided.",
+      field: "instructions",
     };
   }
   if (instructions || hasExplicitSkillSelection(skillId)) {
@@ -2989,6 +3109,7 @@ function validatePrimaryStepSubmission(
   return {
     ok: false,
     error: "Primary step must include instructions or an explicit skill.",
+    field: "instructions",
   };
 }
 
@@ -3024,6 +3145,7 @@ function isValidRepositoryInput(value: string): boolean {
 }
 
 const PUBLICATION_OUTCOME_ID = "workflow-publication-outcome";
+const SUBMIT_MESSAGE_ID = "queue-submit-message";
 
 function destinationPublishLabel(selection: string): string {
   const mode = normalizePublishModeSelection(selection);
@@ -5862,12 +5984,20 @@ function StepContextBar({
   );
 }
 
-function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
+function WorkflowStartPageContent({
+  payload,
+  searchString,
+}: {
+  payload: BootPayload;
+  searchString: string;
+}) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
+  // Create, Edit and Compare share one route, so the mode follows the URL
+  // while the editor (and its draft) stays mounted.
   const pageMode = useMemo(
-    () => resolveTaskSubmitPageMode(window.location.search),
-    [],
+    () => resolveTaskSubmitPageMode(searchString),
+    [searchString],
   );
   const [workflowStartHeadingQuote] = useState(() => randomWorkflowStartHeading());
   const temporalTaskEditingEnabled = Boolean(
@@ -6145,7 +6275,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const submitArrowExitHeldRef = useRef(false);
   const submitArrowExitTimeoutRef = useRef<number | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
-  const repositoryInputRef = useRef<HTMLInputElement | null>(null);
   const submitMessageRef = useRef<HTMLParagraphElement | null>(null);
   const focusSubmitErrorRef = useRef(false);
   useEffect(() => {
@@ -6154,6 +6283,66 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       submitMessageRef.current?.focus();
     }
   }, [submitMessageState]);
+  // A failed check's target is located after render because it may first need
+  // Advanced mode to mount it. The fields live across many child components, so
+  // this one owner marks the element (until it is edited or the next submit)
+  // instead of threading an invalid flag through each of them.
+  const submitFormRef = useRef<HTMLFormElement | null>(null);
+  const [invalidFieldTarget, setInvalidFieldTarget] =
+    useState<WorkflowStartFieldTarget | null>(null);
+  const markedInvalidFieldRef = useRef<HTMLElement | null>(null);
+  const clearInvalidFieldMark = useCallback(() => {
+    const element = markedInvalidFieldRef.current;
+    markedInvalidFieldRef.current = null;
+    element?.removeAttribute("aria-invalid");
+    element?.removeAttribute("aria-errormessage");
+  }, []);
+  useEffect(() => {
+    if (!invalidFieldTarget) {
+      return;
+    }
+    const { element, revealAdvanced } = locateWorkflowStartField(
+      submitFormRef.current,
+      invalidFieldTarget,
+      showAdvancedStepOptions,
+    );
+    if (revealAdvanced) {
+      setShowAdvancedStepOptions(true);
+      return;
+    }
+    setInvalidFieldTarget(null);
+    if (!element) {
+      submitMessageRef.current?.focus();
+      return;
+    }
+    clearInvalidFieldMark();
+    // Schema-backed inputs already render their own aria-invalid state.
+    if (element.getAttribute("aria-invalid") !== "true") {
+      element.setAttribute("aria-invalid", "true");
+      element.setAttribute("aria-errormessage", SUBMIT_MESSAGE_ID);
+      markedInvalidFieldRef.current = element;
+    }
+    // A field inside a collapsed <details> cannot take focus until it opens.
+    const disclosure = element.closest("details");
+    if (disclosure && !disclosure.open) {
+      disclosure.open = true;
+    }
+    element.focus();
+  }, [invalidFieldTarget, showAdvancedStepOptions, clearInvalidFieldMark]);
+  useEffect(() => {
+    const clearEditedField = (event: Event) => {
+      const element = markedInvalidFieldRef.current;
+      if (element && event.target instanceof Node && element.contains(event.target)) {
+        clearInvalidFieldMark();
+      }
+    };
+    document.addEventListener("input", clearEditedField);
+    document.addEventListener("change", clearEditedField);
+    return () => {
+      document.removeEventListener("input", clearEditedField);
+      document.removeEventListener("change", clearEditedField);
+    };
+  }, [clearInvalidFieldMark]);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
@@ -6161,6 +6350,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const remediationDraftAppliedRef = useRef<string | null>(null);
   const routeGuardDirtyRef = useRef(false);
   const approvedNavigationHrefRef = useRef<string | null>(null);
+  // The URL this page last rendered. A history traversal has already changed
+  // window.location when its popstate arrives, so this is what to restore.
+  const renderedUrlRef = useRef("");
+  useEffect(() => {
+    renderedUrlRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  });
 
   useEffect(() => {
     const markDraftDirty = (event: Event) => {
@@ -6222,6 +6417,22 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       event.preventDefault();
       event.returnValue = "";
     };
+    // Back/Forward changes the mode or execution the editor follows, or leaves
+    // Create, so it passes the same guard. A declined traversal restores the
+    // rendered URL before the router renders the new one. Synthetic popstates
+    // announce in-app navigation that was already guarded.
+    const handleHistoryTraversal = (event: PopStateEvent) => {
+      const rendered = renderedUrlRef.current;
+      if (!event.isTrusted || !rendered) return;
+      const previous = new URL(rendered, window.location.href);
+      if (
+        previous.pathname === window.location.pathname &&
+        previous.search === window.location.search
+      ) return;
+      if (confirmDraftNavigation()) return;
+      window.history.pushState(window.history.state, "", rendered);
+      window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
+    };
     window.addEventListener(
       WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
       handleRouteChangeRequest,
@@ -6230,6 +6441,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     document.addEventListener("change", markDraftDirty);
     document.addEventListener("click", handleDocumentNavigation);
     window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("popstate", handleHistoryTraversal);
     return () => {
       window.removeEventListener(
         WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
@@ -6239,6 +6451,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       document.removeEventListener("change", markDraftDirty);
       document.removeEventListener("click", handleDocumentNavigation);
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handleHistoryTraversal);
     };
   }, []);
 
@@ -6259,7 +6472,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     queryKey: [
       "workflow-start",
       "temporal-editing-draft",
-      pageMode.mode,
+      pageMode.intent,
       pageMode.executionId,
       temporalDetailEndpoint,
       artifactDownloadEndpoint,
@@ -6703,7 +6916,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (pageMode.mode === "create" || !temporalDraftQuery.data) {
       return;
     }
-    const applyKey = `${pageMode.mode}:${temporalDraftQuery.data.execution.workflowId}`;
+    // Keyed by execution only: switching between Edit, Rerun and Compare of
+    // the same execution keeps the operator's draft instead of reloading it.
+    const applyKey = temporalDraftQuery.data.execution.workflowId;
     if (temporalDraftAppliedRef.current === applyKey) {
       return;
     }
@@ -8418,12 +8633,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     );
   }
 
+  // Step structure changes come from buttons, which the input/change listener
+  // behind the leave-page guard never sees.
+  function markStepsEdited() {
+    routeGuardDirtyRef.current = true;
+  }
+
   function addStep() {
+    markStepsEdited();
     setSteps((current) => [...current, createStepStateEntry(nextStepNumber)]);
     setNextStepNumber((current) => current + 1);
   }
 
   function moveStep(index: number, direction: -1 | 1) {
+    markStepsEdited();
     setSteps((current) => {
       const nextIndex = index + direction;
       if (
@@ -8447,6 +8670,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   }
 
   function removeStep(index: number) {
+    markStepsEdited();
     const removedStep = steps[index];
     if (removedStep) {
       setSelectedStepAttachmentFiles((current) => {
@@ -8806,6 +9030,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setMessage: (message: string) => void;
     replaceLocalId?: string;
   }) {
+    markStepsEdited();
     const expandedSteps = expansion.expandedSteps.map((step, index) =>
       mapExpandedStepToState(nextStepNumber + index, step),
     );
@@ -8957,6 +9182,69 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
   }
 
+  // A Tool step saves as a Tool blueprint with its inputs. Returns null for a
+  // blank step and false after reporting why the step cannot be saved (preset
+  // steps require instructions).
+  function presetToolBlueprint(
+    step: StepState,
+    index: number,
+    instructions: string,
+  ): Record<string, unknown> | null | false {
+    const generatedTool = executableGeneratedToolPayload(step);
+    const toolId = generatedTool ? "" : step.toolId.trim();
+    if (!generatedTool && !toolId) {
+      if (!instructions) {
+        return null;
+      }
+      setTemplateMessage(`Select a Tool before saving Step ${index + 1}.`);
+      return false;
+    }
+    if (!instructions) {
+      setTemplateMessage(
+        `Add Step ${index + 1} Instructions before saving this Tool step in a preset.`,
+      );
+      return false;
+    }
+    let toolPayload: PresetStepSkill | null = generatedTool;
+    if (!toolPayload) {
+      const toolDetail = detailFromTrustedTool(
+        (trustedToolsQuery.data || []).find(
+          (tool) => toolDefinitionId(tool) === toolId,
+        ) || null,
+      );
+      let inputs: Record<string, unknown>;
+      if (toolDetail && schemaContractHasFields(toolDetail)) {
+        const structuredInputs = schemaToolInputs(toolDetail, step.toolInputValues);
+        if (Object.keys(structuredInputs.errors).length > 0) {
+          updateStep(step.localId, { toolInputErrors: structuredInputs.errors });
+          setTemplateMessage(
+            Object.values(structuredInputs.errors)[0] ||
+              `Complete required Tool input fields before saving Step ${index + 1}.`,
+          );
+          return false;
+        }
+        inputs = structuredInputs.values;
+      } else {
+        const parsedToolInputs = parseToolInputsText(step.toolInputs);
+        if (!parsedToolInputs.ok) {
+          setTemplateMessage(
+            `Step ${index + 1} Tool Inputs must be valid JSON object text.`,
+          );
+          return false;
+        }
+        inputs = parsedToolInputs.value;
+      }
+      toolPayload = manualToolPayload(
+        step,
+        inputs,
+        mergeCapabilities(toolDetail?.requiredCapabilities),
+      );
+    }
+    // The blueprint's own type names the step kind.
+    const { type: _type, ...tool } = toolPayload || {};
+    return { type: "tool", instructions, tool };
+  }
+
   async function handleSaveCurrentStepsAsPreset(nameOverride: string): Promise<boolean> {
     if (!presetSaveEnabled || isSavingPreset) {
       return false;
@@ -8974,6 +9262,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         continue;
       }
       const instructions = step.instructions.trim();
+      if (step.stepType === "tool") {
+        const toolBlueprint = presetToolBlueprint(step, index, instructions);
+        if (toolBlueprint === false) {
+          return false;
+        }
+        if (toolBlueprint) {
+          presetSteps.push(toolBlueprint);
+        }
+        continue;
+      }
       if (!instructions) {
         continue;
       }
@@ -8983,7 +9281,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       // MM-936: explicit capabilities are authored through the always-visible
       // chip selector, so they persist into presets regardless of Advanced mode.
       const caps = step.explicitRequiredCapabilities;
-      const skillArgsRaw = showAdvancedStepOptions ? step.skillArgs.trim() : "";
+      const skillArgsRaw = step.skillArgs.trim();
       const skillDetail = skillId
         ? skillsQuery.data?.detailsById[skillId] || null
         : null;
@@ -9303,10 +9601,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : applied === "continue_as_new"
             ? "Changes were accepted and will continue in a refreshed run."
             : "Changes were saved to this execution.";
-      if (isRerun) {
-        setSubmitMessage(statusText, "ok");
-        return;
-      }
+      // Like Create, an accepted edit or rerun opens its result; the caller
+      // keeps the form locked so the same request cannot be sent twice.
       try {
         window.sessionStorage.setItem(
           "moonmind.temporalTaskEditing.notice",
@@ -9380,9 +9676,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             errorMessage: message,
           },
         });
-        throw new Error(message);
+        throw new WorkflowStartFieldError(message, {
+          stepLocalId: step.localId,
+          field: "presetKey",
+        });
       }
 
+      // Input validation failures point at the invalid input; anything else at
+      // the preset choice.
+      let failedField: WorkflowStartFieldTarget = {
+        stepLocalId: step.localId,
+        field: "presetKey",
+      };
       updatePresetSubmitExpansion(step.localId, {
         presetMessage: "Expanding preset...",
         submitExpansion: {
@@ -9433,6 +9738,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 errorMessage: message,
               },
             });
+            failedField = { stepLocalId: step.localId };
             throw new Error(message);
           }
         }
@@ -9510,7 +9816,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             errorMessage: message,
           },
         });
-        throw new Error(message, { cause: error });
+        throw new WorkflowStartFieldError(message, failedField, { cause: error });
       }
     }
 
@@ -9533,6 +9839,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
     setSubmitMessage(null);
+    clearInvalidFieldMark();
 
     let submissionSteps = steps;
     let submissionAppliedTemplates = appliedTemplates;
@@ -9541,6 +9848,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       submitExpansionInFlightRef.current = false;
       setIsSubmitting(false);
       releaseSubmitArrowExit();
+    };
+    // Every failed check before the request reports here: the message shows in
+    // the submit bar and the named control is revealed, focused and marked
+    // invalid; without a target the message itself takes focus.
+    const rejectSubmit = (
+      message: string,
+      target: WorkflowStartFieldTarget | null = null,
+    ) => {
+      setSubmitMessage(message);
+      if (target) {
+        setInvalidFieldTarget(target);
+      } else {
+        focusSubmitErrorRef.current = true;
+      }
+      clearSubmitBusy();
     };
     const normalizedRepository = repository.trim();
     // Read the live branch draft inside submission. The render-time
@@ -9556,50 +9878,62 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? defaultBranch
         : "");
     if (normalizedRepository && !isValidRepositoryInput(normalizedRepository)) {
-      setSubmitMessage(REPOSITORY_INPUT_ERROR);
-      repositoryInputRef.current?.focus();
-      clearSubmitBusy();
+      rejectSubmit(REPOSITORY_INPUT_ERROR, { control: "repository" });
       return;
     }
     if (selectedAttachmentFiles.length > 0 || persistedAttachmentRefs.length > 0) {
       if (!attachmentPolicy.enabled) {
-        setSubmitMessage("Attachments are disabled for this runtime.");
-        clearSubmitBusy();
+        rejectSubmit("Attachments are disabled for this runtime.");
         return;
       }
       if (!attachmentTargetValidation.ok) {
         setAttachmentTargetErrors(attachmentTargetValidation.errors);
-        setSubmitMessage(attachmentTargetValidation.messages.join(" "));
-        clearSubmitBusy();
+        const invalidAttachmentStep = steps.find((step) =>
+          Boolean(attachmentTargetValidation.errors[attachmentTargetKey(step.localId)]),
+        );
+        rejectSubmit(
+          attachmentTargetValidation.messages.join(" "),
+          invalidAttachmentStep
+            ? { stepLocalId: invalidAttachmentStep.localId, field: "attachments" }
+            : null,
+        );
         return;
       }
     }
     setAttachmentTargetErrors({});
 
     const normalizedRuntime = runtime.trim().toLowerCase();
-    const unsupportedSelection = selectedRuntimeUnavailableReason || steps
-      .map((step) => step.runtimeMode ? runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog) : null)
-      .find(Boolean);
+    const unsupportedStep = selectedRuntimeUnavailableReason
+      ? undefined
+      : steps.find((step) =>
+          step.runtimeMode
+            ? runtimeUnavailableReason(step.runtimeMode, runtimeTargetCatalog)
+            : null,
+        );
+    const unsupportedSelection =
+      selectedRuntimeUnavailableReason ||
+      (unsupportedStep
+        ? runtimeUnavailableReason(unsupportedStep.runtimeMode, runtimeTargetCatalog)
+        : null);
     if (unsupportedSelection) {
-      setSubmitMessage(unsupportedSelection);
-      clearSubmitBusy();
+      rejectSubmit(
+        unsupportedSelection,
+        unsupportedStep
+          ? { stepLocalId: unsupportedStep.localId, field: "runtimeMode" }
+          : { control: "harness" },
+      );
       return;
     }
     if (selectedProfileMissing || runtimeProfileMismatch || configurationSelectionError || configurationDetailsUnavailable || selectedConfiguredProfile?.execution_selection_error) {
-      setSubmitMessage(profileSelectionError || "Profile configuration is unavailable.");
-      clearSubmitBusy();
+      rejectSubmit(profileSelectionError || "Profile configuration is unavailable.", {
+        control: "providerProfile",
+      });
       return;
     }
+    // Host-policy authoring lives behind Advanced mode, which only hides it: a
+    // closed section still submits the policy it holds and counts it as an
+    // override.
     let submittedOmnigentLaunchPolicyRef = omnigentLaunchPolicyRef;
-    // Host-policy authoring lives behind Advanced mode. While the controls are
-    // hidden the submission carries the unauthored default so a stale value the
-    // operator can no longer see is never validated or submitted as an
-    // explicit override.
-    const effectiveOmnigentLaunchPolicyAuthored =
-      showAdvancedStepOptions && omnigentLaunchPolicyAuthored;
-    if (!showAdvancedStepOptions) {
-      submittedOmnigentLaunchPolicyRef = "";
-    }
     const effectiveOmnigentAgentProfileVersion =
       submittedOmnigentAgentProfileVersion;
     const effectiveOmnigentAgentProfileDigest = submittedOmnigentAgentProfileDigest;
@@ -9611,15 +9945,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       if (selectedProfileIsGenericV2) {
         const selected = activeProviderProfiles.find((profile) => profile.profile_id === providerProfile);
         if (!selected || selected.enabled === false || selected.launch_ready === false || selected.execution_selection_error) {
-          setSubmitMessage(selected?.execution_selection_error?.message || "Connect and enable this Profile in Settings.");
-          clearSubmitBusy();
+          rejectSubmit(
+            selected?.execution_selection_error?.message || "Connect and enable this Profile in Settings.",
+            { control: "providerProfile" },
+          );
           return;
         }
       } else {
       const refreshed = await omnigentCatalogQuery.refetch();
       if (refreshed.isError) {
-        setSubmitMessage("Omnigent readiness could not be verified.");
-        clearSubmitBusy();
+        rejectSubmit("Omnigent readiness could not be verified.");
         return;
       }
       const catalog = refreshed.data;
@@ -9632,19 +9967,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           profile.runtimeId === selectedOmnigentProviderRuntime,
       );
       if (!catalog?.available || !executionProfile?.available) {
-        setSubmitMessage(
+        rejectSubmit(
           executionProfile?.gateReasons[0]?.message ||
             catalog?.gateReasons[0]?.message ||
             "Omnigent readiness could not be verified.",
         );
-        clearSubmitBusy();
         return;
       }
       if (!eligibleProfile) {
-        setSubmitMessage(
+        rejectSubmit(
           "The selected OAuth Provider Profile is not eligible for this execution target. Choose a compatible profile explicitly.",
+          { control: "providerProfile" },
         );
-        clearSubmitBusy();
         return;
       }
       const {
@@ -9658,7 +9992,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         !refreshedCompatiblePolicies.some(
           (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
         ) &&
-        !effectiveOmnigentLaunchPolicyAuthored
+        !omnigentLaunchPolicyAuthored
       ) {
         if (refreshedPreferredPolicy) {
           submittedOmnigentLaunchPolicyRef = refreshedPreferredPolicy.ref;
@@ -9670,37 +10004,30 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           (policy) => policy.ref === submittedOmnigentLaunchPolicyRef,
         )
       ) {
-        setSubmitMessage(
+        rejectSubmit(
           "The selected Omnigent host policy is no longer compatible. Choose an available policy explicitly.",
+          { control: "omnigentLaunchPolicyRef" },
         );
-        clearSubmitBusy();
         return;
       }
       }
     }
     const formPublishMode = normalizePublishModeForSubmit(sourcePublishMode);
     if (!["auto", "none", "branch", "pr"].includes(formPublishMode)) {
-      setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
-      clearSubmitBusy();
+      rejectSubmit("Publish mode must be one of: auto, none, branch, pr.", {
+        control: "publishMode",
+      });
       return;
     }
 
-    // Priority and Max Attempts live behind the Advanced mode toggle. When that
-    // toggle is off the inputs are unmounted, so fall back to defaults instead
-    // of validating or submitting whatever value the hidden state still holds.
-    const effectivePriority = showAdvancedStepOptions ? priority : DEFAULT_PRIORITY;
-    const effectiveMaxAttempts = showAdvancedStepOptions
-      ? maxAttempts
-      : DEFAULT_MAX_ATTEMPTS;
-
-    if (!Number.isInteger(effectivePriority)) {
-      setSubmitMessage("Priority must be an integer.");
-      clearSubmitBusy();
+    if (!Number.isInteger(priority)) {
+      rejectSubmit("Priority must be an integer.", { control: "priority" });
       return;
     }
-    if (!Number.isInteger(effectiveMaxAttempts) || effectiveMaxAttempts < 1) {
-      setSubmitMessage("Max Attempts must be an integer >= 1.");
-      clearSubmitBusy();
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+      rejectSubmit("Max Attempts must be an integer >= 1.", {
+        control: "maxAttempts",
+      });
       return;
     }
 
@@ -9724,8 +10051,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       } catch (error) {
         const failure =
           error instanceof Error ? error : new Error("Failed to expand preset.");
-        setSubmitMessage(failure.message);
-        clearSubmitBusy();
+        rejectSubmit(
+          failure.message,
+          error instanceof WorkflowStartFieldError ? error.target : null,
+        );
         return;
       }
     }
@@ -9733,8 +10062,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const primaryStep = submissionSteps[0] || null;
     const primaryValidation = validatePrimaryStepSubmission(primaryStep);
     if (!primaryValidation.ok) {
-      setSubmitMessage(primaryValidation.error);
-      clearSubmitBusy();
+      rejectSubmit(
+        primaryValidation.error,
+        primaryStep && primaryValidation.field
+          ? { stepLocalId: primaryStep.localId, field: primaryValidation.field }
+          : null,
+      );
       return;
     }
 
@@ -9790,10 +10123,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       effectivePublishSkillDetailForSubmit,
     );
     if (requestedPublishMode === "auto" && !publishSkillSelfManaged) {
-      setSubmitMessage(
-        "Publish mode Auto requires an auto-publish-capable skill.",
-      );
-      clearSubmitBusy();
+      rejectSubmit("Publish mode Auto requires an auto-publish-capable skill.", {
+        control: "publishMode",
+      });
       return;
     }
     // The Skill's backend publication contract supplies the default only
@@ -9805,10 +10137,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       requestedPublishMode !== "auto" &&
       requestedPublishMode !== "none"
     ) {
-      setSubmitMessage(
+      rejectSubmit(
         `Publish mode ${requestedPublishMode} is not available for skill '${effectivePublishSkillId}', which publishes through its own flow. Choose Auto or None.`,
+        { control: "publishMode" },
       );
-      clearSubmitBusy();
       return;
     }
     if (
@@ -9816,10 +10148,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       publishSkillRepositoryDisabled &&
       requestedPublishMode !== "none"
     ) {
-      setSubmitMessage(
+      rejectSubmit(
         `Skill '${effectivePublishSkillId}' does not publish repository changes. Choose Publish Mode None.`,
+        { control: "publishMode" },
       );
-      clearSubmitBusy();
       return;
     }
     const effectivePublishMode = publishModeTouched
@@ -9850,22 +10182,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       !normalizedRepository &&
       (effectivePublishMode === "branch" || effectivePublishMode === "pr")
     ) {
-      setSubmitMessage(
+      rejectSubmit(
         blankSourcePublishNotice(sourcePublishMode) ||
           blankSourcePublishNotice(effectivePublishMode),
+        { control: "repository" },
       );
-      repositoryInputRef.current?.focus();
-      clearSubmitBusy();
       return;
     }
     if (effectivePublishMode === "branch" && !submissionBranch) {
-      setSubmitMessage(
+      rejectSubmit(
         "Choose a branch before saving or rerunning this publish-mode workflow.",
+        { control: "branch" },
       );
-      clearSubmitBusy();
       return;
     }
-    const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
+    const primarySkillArgsRaw = primaryStepIsSkill
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
     const primarySkillDetail = primaryStepIsSkill
@@ -9884,11 +10215,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       updateStep(primaryStep.localId, {
         presetInputErrors: primarySchemaInputs.errors,
       });
-      setSubmitMessage(
+      rejectSubmit(
         Object.values(primarySchemaInputs.errors)[0] ||
           "Complete required Skill input fields before submitting.",
+        { stepLocalId: primaryStep.localId },
       );
-      clearSubmitBusy();
       return;
     }
 
@@ -9901,10 +10232,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         }
         primarySkillArgs = parsed as Record<string, unknown>;
       } catch {
-        setSubmitMessage(
+        rejectSubmit(
           'Primary step Skill Args must be valid JSON object text (for example: {"featureKey":"..."}).',
+          primaryStep ? { stepLocalId: primaryStep.localId, field: "skillArgs" } : null,
         );
-        clearSubmitBusy();
         return;
       }
     }
@@ -9932,8 +10263,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     let primaryToolInputs: Record<string, unknown> = {};
     if (primaryStepIsTool && !executableGeneratedToolPayload(primaryStep)) {
       if (!primaryStep.toolId.trim()) {
-        setSubmitMessage("Select a Tool before submitting a Tool step.");
-        clearSubmitBusy();
+        rejectSubmit("Select a Tool before submitting a Tool step.", {
+          stepLocalId: primaryStep.localId,
+          field: "toolId",
+        });
         return;
       }
       if (primaryToolDetail && schemaContractHasFields(primaryToolDetail)) {
@@ -9945,19 +10278,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           updateStep(primaryStep.localId, {
             toolInputErrors: structuredInputs.errors,
           });
-          setSubmitMessage(
+          rejectSubmit(
             Object.values(structuredInputs.errors)[0] ||
               "Complete required Tool input fields before submitting.",
+            { stepLocalId: primaryStep.localId },
           );
-          clearSubmitBusy();
           return;
         }
         primaryToolInputs = structuredInputs.values;
       } else {
         const parsedToolInputs = parseToolInputsText(primaryStep.toolInputs);
         if (!parsedToolInputs.ok) {
-          setSubmitMessage("Step 1 Tool Inputs must be valid JSON object text.");
-          clearSubmitBusy();
+          rejectSubmit("Step 1 Tool Inputs must be valid JSON object text.", {
+            stepLocalId: primaryStep.localId,
+            field: "toolInputs",
+          });
           return;
         }
         primaryToolInputs = parsedToolInputs.value;
@@ -10009,8 +10344,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         continue;
       }
       if (step.stepType === "preset") {
-        setSubmitMessage("Expand Preset steps before submitting.");
-        clearSubmitBusy();
+        rejectSubmit("Expand Preset steps before submitting.", {
+          stepLocalId: step.localId,
+          field: "presetKey",
+        });
         return;
       }
       const stepIsSkill = step.stepType === "skill";
@@ -10018,9 +10355,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       const generatedToolPayload = executableGeneratedToolPayload(step);
       const generatedSkillPayload = executableGeneratedSkillPayload(step);
       const stepSkillId = stepIsSkill ? step.skillId.trim() : "";
-      const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
-        ? step.skillArgs.trim()
-        : "";
+      const stepSkillArgsRaw = stepIsSkill ? step.skillArgs.trim() : "";
       const stepSkillDetail = stepIsSkill
         ? skillsQuery.data?.detailsById[stepSkillId] || null
         : null;
@@ -10049,11 +10384,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         updateStep(step.localId, {
           presetInputErrors: stepSchemaInputs.errors,
         });
-        setSubmitMessage(
+        rejectSubmit(
           Object.values(stepSchemaInputs.errors)[0] ||
             `Complete required Skill input fields before submitting Step ${index + 1}.`,
+          { stepLocalId: step.localId },
         );
-        clearSubmitBusy();
         return;
       }
       const hasAuthoredToolInputs =
@@ -10081,8 +10416,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       let stepToolInputs: Record<string, unknown> = {};
       if (stepIsTool && !generatedToolPayload) {
         if (hasStepContent && !step.toolId.trim()) {
-          setSubmitMessage(`Select a Tool before submitting Step ${index + 1}.`);
-          clearSubmitBusy();
+          rejectSubmit(`Select a Tool before submitting Step ${index + 1}.`, {
+            stepLocalId: step.localId,
+            field: "toolId",
+          });
           return;
         }
         if (stepToolDetail && schemaContractHasFields(stepToolDetail)) {
@@ -10094,21 +10431,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             updateStep(step.localId, {
               toolInputErrors: structuredInputs.errors,
             });
-            setSubmitMessage(
+            rejectSubmit(
               Object.values(structuredInputs.errors)[0] ||
                 `Complete required Tool input fields before submitting Step ${index + 1}.`,
+              { stepLocalId: step.localId },
             );
-            clearSubmitBusy();
             return;
           }
           stepToolInputs = structuredInputs.values;
         } else {
           const parsedToolInputs = parseToolInputsText(step.toolInputs);
           if (!parsedToolInputs.ok) {
-            setSubmitMessage(
+            rejectSubmit(
               `Step ${index + 1} Tool Inputs must be valid JSON object text.`,
+              { stepLocalId: step.localId, field: "toolInputs" },
             );
-            clearSubmitBusy();
             return;
           }
           stepToolInputs = parsedToolInputs.value;
@@ -10122,10 +10459,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           }
           stepSkillArgs = parsed as Record<string, unknown>;
         } catch {
-          setSubmitMessage(
+          rejectSubmit(
             `Step ${index + 1} Skill Args must be valid JSON object text.`,
+            { stepLocalId: step.localId, field: "skillArgs" },
           );
-          clearSubmitBusy();
           return;
         }
       }
@@ -10164,22 +10501,28 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       },
     );
     if (!additionalStepValidation.ok) {
-      setSubmitMessage(additionalStepValidation.error);
-      clearSubmitBusy();
+      rejectSubmit(
+        additionalStepValidation.error,
+        primaryStep && additionalStepValidation.field
+          ? { stepLocalId: primaryStep.localId, field: additionalStepValidation.field }
+          : null,
+      );
       return;
     }
 
     let schedulePayload: Record<string, unknown> | null = null;
     if (scheduleMode === "once") {
       if (!scheduledFor.trim()) {
-        setSubmitMessage("Scheduled time is required for deferred scheduling.");
-        clearSubmitBusy();
+        rejectSubmit("Scheduled time is required for deferred scheduling.", {
+          control: "scheduledFor",
+        });
         return;
       }
       const scheduleDate = new Date(scheduledFor);
       if (Number.isNaN(scheduleDate.getTime()) || scheduleDate <= new Date()) {
-        setSubmitMessage("Scheduled time must be a valid future date.");
-        clearSubmitBusy();
+        rejectSubmit("Scheduled time must be a valid future date.", {
+          control: "scheduledFor",
+        });
         return;
       }
       schedulePayload = {
@@ -10193,15 +10536,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         !Number.isInteger(deferredMinutes) ||
         deferredMinutes <= 0
       ) {
-        setSubmitMessage(
+        rejectSubmit(
           "A valid positive whole number of minutes is required for deferred scheduling.",
+          { control: "scheduleDeferredMinutes" },
         );
-        clearSubmitBusy();
         return;
       }
       if (deferredMinutes > 525600) {
-        setSubmitMessage("Deferred minutes cannot exceed 525 600 (one year).");
-        clearSubmitBusy();
+        rejectSubmit("Deferred minutes cannot exceed 525 600 (one year).", {
+          control: "scheduleDeferredMinutes",
+        });
         return;
       }
       schedulePayload = {
@@ -10212,10 +10556,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       };
     } else if (scheduleMode === "recurring") {
       if (!scheduleCron.trim()) {
-        setSubmitMessage(
-          "Cron expression is required for recurring scheduling.",
-        );
-        clearSubmitBusy();
+        rejectSubmit("Cron expression is required for recurring scheduling.", {
+          control: "scheduleCron",
+        });
         return;
       }
       schedulePayload = {
@@ -10228,7 +10571,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
-    let didNavigateAfterCreate = false;
+    let didNavigateAfterSubmit = false;
     holdSubmitArrowExitUntilNavigation();
     try {
       if (selectedAttachmentFiles.length > 0) {
@@ -10316,8 +10659,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         const uploadResults = await Promise.all(uploadPromises);
         const uploadFailure = uploadResults.find((result) => !result.ok);
         if (uploadFailure && !uploadFailure.ok) {
-          setSubmitMessage(uploadFailure.message);
-          clearSubmitBusy();
+          rejectSubmit(uploadFailure.message);
           return;
         }
 
@@ -10349,8 +10691,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         error instanceof Error
           ? error
           : new Error("Failed to upload attachments.");
-      setSubmitMessage(failure.message);
-      clearSubmitBusy();
+      rejectSubmit(failure.message);
       return;
     }
 
@@ -10830,8 +11171,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         : normalizedRepository;
     const requestBody: Record<string, unknown> = {
       type: "task",
-      priority: effectivePriority,
-      maxAttempts: effectiveMaxAttempts,
+      priority,
+      maxAttempts,
       payload: {
         ...(normalizedRepository ? { repository: submittedRepository } : {}),
         // Edit and rerun always state the source so the backend re-admits it
@@ -10870,7 +11211,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   : {}),
               },
             }
-          : normalizedRuntime === "omnigent" && showAdvancedStepOptions && omnigentLaunchPolicyAuthored
+          : normalizedRuntime === "omnigent" && omnigentLaunchPolicyAuthored
             ? { omnigent: { launchPolicyRef: submittedOmnigentLaunchPolicyRef } }
             : {}),
         publishMode: effectivePublishMode,
@@ -11076,6 +11417,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           inputArtifactRef: isExactRerun ? null : inputArtifactRef,
           parametersPatch: isExactRerun ? null : artifactPayload,
         });
+        didNavigateAfterSubmit = true;
         return;
       }
 
@@ -11133,7 +11475,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         writeRecentBranch(normalizedRepository, submissionBranch);
       }
       navigateTo(redirectPath);
-      didNavigateAfterCreate = true;
+      didNavigateAfterSubmit = true;
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error("Failed to start workflow.");
@@ -11172,7 +11514,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         focusSubmitErrorRef.current = true;
       }
     } finally {
-      if (!didNavigateAfterCreate) {
+      if (!didNavigateAfterSubmit) {
         clearSubmitBusy();
       }
     }
@@ -11249,6 +11591,21 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const isSubmitBlocked =
     isTemporalFormBlocked || Boolean(selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ||
     (runtime === "omnigent" && !omnigentSelectionEligible);
+  // Closing Advanced mode hides its controls but keeps and submits their
+  // values, so the collapsed toggle reports how many non-default values it holds.
+  const advancedOverrideCount =
+    (priority !== DEFAULT_PRIORITY ? 1 : 0) +
+    (maxAttempts !== DEFAULT_MAX_ATTEMPTS ? 1 : 0) +
+    (runtime === "omnigent" && omnigentLaunchPolicyAuthored ? 1 : 0) +
+    steps.reduce(
+      (count, step) =>
+        count +
+        advancedStepOverrideCount(
+          step,
+          skillsQuery.data?.detailsById[step.skillId.trim()] || null,
+        ),
+      0,
+    );
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
@@ -11338,6 +11695,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
       <form
         id="queue-submit-form"
+        ref={submitFormRef}
         className="queue-submit-form"
         onSubmit={handleSubmit}
         aria-disabled={isTemporalFormBlocked}
@@ -12052,6 +12410,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     isStepDropTarget ? " is-attachment-drop-target" : ""
                   }`}
                   data-step-index={index}
+                  data-step-local-id={step.localId}
                   {...stepAttachmentDropHandlers(step.localId)}
                 >
                   {isStepDropTarget ? (
@@ -12864,43 +13223,49 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               </button>
             </div>
 
-            {presetCatalogEnabled && presetSaveEnabled ? (
+            {(presetCatalogEnabled && presetSaveEnabled) ||
+            presetReapplyNeeded ||
+            templateMessage ? (
               <div className="stack queue-preset-management-block">
-                <div
-                  className="actions queue-template-actions queue-preset-management-inline"
-                  aria-label="Preset Management"
-                >
-                  <strong>Preset Management</strong>
-                  <button
-                    type="button"
-                    id="queue-template-save-current"
-                    className="queue-step-icon-button"
-                    aria-label="Save preset"
-                    title="Save the current steps as a preset"
-                    aria-busy={isSavingPreset}
-                    disabled={isSavingPreset}
-                    onClick={openPresetSaveDialog}
+                {presetCatalogEnabled && presetSaveEnabled ? (
+                  <div
+                    className="actions queue-template-actions queue-preset-management-inline"
+                    aria-label="Preset Management"
                   >
-                    <SaveIcon />
-                  </button>
-                  <button
-                    type="button"
-                    id="queue-template-delete-current"
-                    className="queue-step-icon-button destructive"
-                    aria-label="Delete preset"
-                    aria-busy={isDeletingPreset}
-                    title="Delete an instance preset by name"
-                    disabled={isDeletingPreset}
-                    onClick={openPresetDeleteDialog}
-                  >
-                    <TrashIcon />
-                  </button>
-                </div>
+                    <strong>Preset Management</strong>
+                    <button
+                      type="button"
+                      id="queue-template-save-current"
+                      className="queue-step-icon-button"
+                      aria-label="Save preset"
+                      title="Save the current steps as a preset"
+                      aria-busy={isSavingPreset}
+                      disabled={isSavingPreset}
+                      onClick={openPresetSaveDialog}
+                    >
+                      <SaveIcon />
+                    </button>
+                    <button
+                      type="button"
+                      id="queue-template-delete-current"
+                      className="queue-step-icon-button destructive"
+                      aria-label="Delete preset"
+                      aria-busy={isDeletingPreset}
+                      title="Delete an instance preset by name"
+                      disabled={isDeletingPreset}
+                      onClick={openPresetDeleteDialog}
+                    >
+                      <TrashIcon />
+                    </button>
+                  </div>
+                ) : null}
+                {/* Expand and reapply results report here even when saving
+                    presets is unavailable. */}
                 {presetReapplyNeeded ? (
                   <p className="small notice" id="queue-template-message">
                     {PRESET_REAPPLY_REQUIRED_MESSAGE}
                   </p>
-                ) : templateMessage ? (
+                ) : templateMessage && !presetDialogMode ? (
                   <p className="small" id="queue-template-message">
                     {templateMessage}
                   </p>
@@ -13176,18 +13541,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               onChange={(event) => {
                 const advancedEnabled = event.target.checked;
                 setShowAdvancedStepOptions(advancedEnabled);
-                if (!advancedEnabled) {
-                  // A hidden host-policy override would be invisible yet still
-                  // submitted, so turning Advanced mode off clears its authored
-                  // flag and restores the default selection.
-                  setOmnigentLaunchPolicyAuthored(false);
-                  const defaultPolicyRef =
-                    selectableOmnigentPolicies.find((policy) => policy.isDefault)?.ref ||
-                    selectableOmnigentPolicies[0]?.ref;
-                  if (defaultPolicyRef) {
-                    setOmnigentLaunchPolicyRef(defaultPolicyRef);
-                  }
-                }
                 updateDashboardPreferences({
                   createExpertMode: advancedEnabled,
                 });
@@ -13195,6 +13548,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             />
             Advanced mode
           </label>
+          {!showAdvancedStepOptions && advancedOverrideCount > 0 ? (
+            <span className="small queue-advanced-override-count">
+              {advancedOverrideCount === 1
+                ? "1 override"
+                : `${advancedOverrideCount} overrides`}
+            </span>
+          ) : null}
           <InfoTooltip
             label="Advanced mode info"
             panelId="queue-advanced-info-panel"
@@ -13413,38 +13773,40 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
-        {submitMessage && submitErrorDetail ? (
-          <DashboardErrorDetails
-            className="queue-submit-message"
-            message={submitMessage}
-            endpoint={submitErrorDetail.endpoint}
-            status={submitErrorDetail.status}
-            requestId={submitErrorDetail.requestId}
-            rawError={submitErrorDetail.rawError}
-          />
-        ) : submitMessage ? (
-          <p
-            id="queue-submit-message"
-            ref={submitMessageRef}
-            tabIndex={-1}
-            role={submitMessageTone === "error" ? "alert" : "status"}
-            aria-live={submitMessageTone === "error" ? "assertive" : "polite"}
-            className={
-              submitMessageTone === "pending"
-                ? "queue-submit-message notice pending"
-                : submitMessageTone === "ok"
-                  ? "queue-submit-message notice ok"
-                  : "queue-submit-message notice error"
-            }
-          >
-            {submitMessage}
-          </p>
-        ) : null}
         <div
           className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
           role="group"
           aria-label="Workflow submission controls"
         >
+          {/* The submit outcome lives in the fixed bar beside Start, so it is
+              visible wherever the form is scrolled. */}
+          {submitMessage && submitErrorDetail ? (
+            <DashboardErrorDetails
+              className="queue-submit-message"
+              message={submitMessage}
+              endpoint={submitErrorDetail.endpoint}
+              status={submitErrorDetail.status}
+              requestId={submitErrorDetail.requestId}
+              rawError={submitErrorDetail.rawError}
+            />
+          ) : submitMessage ? (
+            <p
+              id={SUBMIT_MESSAGE_ID}
+              ref={submitMessageRef}
+              tabIndex={-1}
+              role={submitMessageTone === "error" ? "alert" : "status"}
+              aria-live={submitMessageTone === "error" ? "assertive" : "polite"}
+              className={
+                submitMessageTone === "pending"
+                  ? "queue-submit-message notice pending"
+                  : submitMessageTone === "ok"
+                    ? "queue-submit-message notice ok"
+                    : "queue-submit-message notice error"
+              }
+            >
+              {submitMessage}
+            </p>
+          ) : null}
           {branchStatusMessage ? (
             <p className="queue-authoring-controls-status small">
               {branchStatusMessage}
@@ -13486,7 +13848,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             >
               <RepoIcon />
               <input
-                ref={repositoryInputRef}
                 name="repository"
                 aria-label="Repository"
                 title={repositoryTooltip}
@@ -13695,6 +14056,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 ))}
               </datalist>
             </label>
+            {/* Opening the dialog clears the message, so this is the outcome
+                of this dialog's attempt; the modal would otherwise hide it. */}
+            {templateMessage ? (
+              <p className="small" role="status">
+                {templateMessage}
+              </p>
+            ) : null}
             <div className="actions queue-template-actions">
               <button
                 type="button"
@@ -13766,7 +14134,7 @@ function WorkflowStartPageWithSearch({
     [searchString],
   );
   if (displayMode === "table") {
-    return <WorkflowStartPageContent payload={payload} />;
+    return <WorkflowStartPageContent payload={payload} searchString={searchString} />;
   }
   const cfg = readWorkflowStartDashboardConfig(payload);
   const sidebarVisible = displayMode === "sidebar"
@@ -13784,7 +14152,7 @@ function WorkflowStartPageWithSearch({
         <div className="workflow-workspace-sidebar-slot" hidden aria-hidden="true" />
       )}
       <main className="workflow-start-primary" aria-label="Create workflow">
-        <WorkflowStartPageContent payload={payload} />
+        <WorkflowStartPageContent payload={payload} searchString={searchString} />
       </main>
     </div>
   );

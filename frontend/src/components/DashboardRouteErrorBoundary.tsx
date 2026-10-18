@@ -14,6 +14,12 @@ type Props = {
    * React Query error state (via QueryErrorResetBoundary) before re-rendering.
    */
   onReset?: () => void;
+  /**
+   * Identifies what the boundary is showing, normally the route pathname. A
+   * route error belongs to the page it happened on, so navigating elsewhere
+   * clears it (and runs `onReset`) without the operator pressing Retry.
+   */
+  resetKey?: string;
 };
 
 type State = {
@@ -25,8 +31,9 @@ type State = {
  *
  * Catches render errors from a page module (including lazy import/render
  * failures) and shows a styled, recoverable dashboard error state instead of
- * an unstyled crash. The retry action resets shared React Query error state and
- * clears the boundary so the page re-renders and refetches.
+ * an unstyled crash. The retry action, or a change of `resetKey`, resets shared
+ * React Query error state and clears the boundary so the page re-renders and
+ * refetches.
  */
 export class DashboardRouteErrorBoundary extends Component<Props, State> {
   override state: State = { error: null };
@@ -39,6 +46,14 @@ export class DashboardRouteErrorBoundary extends Component<Props, State> {
     console.error("Dashboard route error:", error, info);
     if (isDynamicImportLoadError(error)) {
       reloadOnceForDynamicImportError(this.props.buildId);
+    }
+  }
+
+  override componentDidUpdate(prevProps: Props, prevState: State): void {
+    // Only an error that already existed before this update is reset: a page
+    // that fails on the new key keeps its error instead of retrying in a loop.
+    if (prevState.error && this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.handleReset();
     }
   }
 

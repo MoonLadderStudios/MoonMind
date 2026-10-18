@@ -18,6 +18,7 @@ import {
 } from 'lucide-animated';
 import { z } from 'zod';
 import type { BootPayload } from '../../boot/parseBootPayload';
+import { responseError } from '../../lib/api/client';
 import { workflowDetailHref } from '../../lib/workflowListContext';
 import { requestWorkflowStartRouteChange } from '../../lib/workflowStartRouteGuard';
 import { updateDashboardPreferences } from '../../utils/dashboardPreferences';
@@ -298,7 +299,7 @@ export function WorkflowWorkspaceSidebarPanel({
     queryFn: async ({ signal }) => {
       const response = await fetch(`${payload.apiBase}/executions?${listQuery}`, { signal });
       if (!response.ok) {
-        throw new Error(`Failed to fetch workflows: ${response.statusText}`);
+        throw await responseError(response, 'Failed to fetch workflows');
       }
       return WorkflowWorkspaceListResponseSchema.parse(await response.json());
     },
@@ -306,18 +307,19 @@ export function WorkflowWorkspaceSidebarPanel({
     refetchInterval: listEnabled ? listPoll : false,
     staleTime: listPoll,
   });
-  if (!listEnabled) {
-    return null;
-  }
-  const rows = workflowsQuery.data?.items || [];
-  const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === activeWorkflowId);
-  const pinnedRow = pinnedCurrentRow && !activeInList ? pinnedCurrentRow : null;
+  const rows = workflowsQuery.data?.items;
   const filteredRows = useMemo(() => (
-    rows.filter((row) => (
+    (rows || []).filter((row) => (
       workflowWorkspaceRowId(row)
       && workflowSidebarMatchesFilter(row, sidebarFilterText)
     ))
   ), [rows, sidebarFilterText]);
+  // Every hook above runs on each render; the flag may flip while mounted.
+  if (!listEnabled) {
+    return null;
+  }
+  const activeInList = (rows || []).some((row) => workflowWorkspaceRowId(row) === activeWorkflowId);
+  const pinnedRow = pinnedCurrentRow && !activeInList ? pinnedCurrentRow : null;
 
   return (
     <WorkflowSidebar

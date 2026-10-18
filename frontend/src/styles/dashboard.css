@@ -4181,6 +4181,9 @@ tbody tr:hover {
   background: rgb(var(--mm-panel));
   color: rgb(var(--mm-ink));
   box-shadow: 0 24px 70px -34px rgb(0 0 0 / 0.72);
+  /* Row-menu dialogs render inside a `nowrap`, centered table cell. */
+  white-space: normal;
+  text-align: left;
 }
 
 .dashboard-dialog form {
@@ -7841,6 +7844,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow: none;
 }
 
+/* The submit outcome sits in the fixed submit bar; long diagnostics scroll
+   inside it instead of covering the form. */
+.queue-floating-bar .queue-submit-message {
+  max-height: 7rem;
+  overflow-y: auto;
+}
+
+.queue-advanced-override-count {
+  color: rgb(var(--mm-muted));
+}
+
 .inline-code {
   font-family: var(--mm-font-mono);
   background: rgb(var(--mm-panel) / 0.72);
@@ -9204,21 +9218,29 @@ button.workflow-workspace-sidebar-row:active {
   top: calc(100% + 0.45rem);
   z-index: 30;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem;
   width: min(22rem, calc(100vw - 2rem));
   max-height: min(70vh, 34rem);
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 0.45rem;
   border: 1px solid rgb(var(--mm-border) / 0.78);
   border-radius: 0.5rem;
   background: rgb(var(--mm-panel) / 0.98);
   box-shadow: var(--mm-elevation-floating);
+  /* The row menu sits in a `nowrap`, centered table cell; long reasons must
+   * wrap inside the menu instead of widening it into a sideways scroll. */
+  white-space: normal;
+  text-align: left;
 }
 
 .td-workflow-actions-item {
   display: grid;
   gap: 0.18rem;
   width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
   min-height: 2.25rem;
   padding: 0.45rem 0.55rem;
   border: 1px solid transparent;
@@ -9282,7 +9304,9 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .td-workflow-actions-disabled-reason,
-.td-workflow-actions-empty {
+.td-workflow-actions-description,
+.td-workflow-actions-empty,
+.td-workflow-actions-group-label {
   color: rgb(var(--mm-muted));
   font-size: 0.78rem;
   font-weight: 500;
@@ -9292,6 +9316,42 @@ button.workflow-workspace-sidebar-row:active {
 .td-workflow-actions-empty {
   margin: 0;
   padding: 0.45rem 0.55rem;
+}
+
+.td-workflow-actions-separator {
+  height: 1px;
+  margin: 0.2rem 0.35rem;
+  background: rgb(var(--mm-border) / 0.7);
+}
+
+.td-workflow-actions-group,
+.td-workflow-actions-unavailable {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+}
+
+.td-workflow-actions-group-label {
+  margin: 0;
+  padding: 0.2rem 0.55rem 0;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.td-workflow-actions-unavailable-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: rgb(var(--mm-muted));
+}
+
+.td-workflow-actions-unavailable-toggle::after {
+  content: '\25B8';
+}
+
+.td-workflow-actions-unavailable-toggle[aria-expanded='true']::after {
+  content: '\25BE';
 }
 
 .queue-table-column-actions {

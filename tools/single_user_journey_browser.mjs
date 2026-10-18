@@ -113,7 +113,19 @@ try {
         await cancel.waitFor({ state: "visible" });
         execution.cancelRequestedAt = new Date().toISOString();
         await cancel.click();
-        await page.getByText("Cancellation requested.").first().waitFor({ state: "visible" });
+        // Current dashboards ask for a one-line confirmation before sending the
+        // cancel; an older one, such as the upgrade journey's source release,
+        // sends it on the menu click.
+        const confirm = page
+          .getByRole("dialog", { name: "Cancel workflow?" })
+          .getByRole("button", { name: "Cancel workflow", exact: true });
+        const requested = page.getByText("Cancellation requested.").first();
+        await confirm.or(requested).first().waitFor({ state: "visible" });
+        if (await confirm.isVisible()) {
+          execution.cancelRequestedAt = new Date().toISOString();
+          await confirm.click();
+        }
+        await requested.waitFor({ state: "visible" });
         // The detail page polls until the workflow is terminal.
         await page
           .locator(".toolbar")

@@ -1039,10 +1039,10 @@ disclosed without hiding the actual source, scope, and preservation result.
 
 ### 15.3 Branch actions
 
-Supported actions include create, continue, fork, compare, promote, admitted
-publication, archive, and evidence/diff/diagnostic views. Availability comes from
-backend capabilities. A Publish action cannot change an active scoped policy;
-independent Publish Saved Work goes through newly authorized admission.
+Actions are create, continue, fork, compare, promote, admitted publication,
+archive, and evidence/diff/diagnostic views, all capability-gated;
+promote, publish, and archive ask first. Publish cannot change an active scoped
+policy; independent Publish Saved Work needs new authorized admission.
 
 ### 15.4 Risk and authority previews
 

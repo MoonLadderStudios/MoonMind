@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
+  describeWorkflowActionDisabledReason,
   isRemediationEligibleTarget,
   type ExecutionActionCapabilities,
   type WorkflowActionHandlers,
@@ -86,21 +87,92 @@ describe('buildWorkflowActionMenuItems', () => {
       }),
     );
     expect(items.map((item) => item.id)).toEqual([
-      'bypass-dependency-wait',
-      'cancel',
-      'force-cancel',
       'create-remediation-task',
       'rename',
       'pause',
       'resume',
       'approve',
-      'reject',
       'send-message',
+      'bypass-dependency-wait',
+      'cancel',
+      'reject',
+      'force-cancel',
     ]);
     expect(items.find((item) => item.id === 'reject')?.danger).toBe(true);
     expect(items.find((item) => item.id === 'cancel')?.danger).toBe(true);
     expect(items.find((item) => item.id === 'force-cancel')?.danger).toBe(true);
     expect(items.find((item) => item.id === 'bypass-dependency-wait')?.danger).toBe(true);
+  });
+
+  it('puts safe actions first, destructive ones after them, and force cancel under troubleshooting', () => {
+    const items = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: {
+          canSetTitle: true,
+          canPause: true,
+          canCancel: true,
+          canForceCancel: true,
+          canReject: true,
+          canApprove: false,
+          disabledReasons: { canApprove: 'state_not_eligible' },
+        },
+        disabledReason: (key) => (key === 'canApprove' ? 'state_not_eligible' : null),
+      }),
+    );
+    expect(items.map((item) => [item.id, item.section])).toEqual([
+      ['rename', 'primary'],
+      ['pause', 'primary'],
+      ['cancel', 'destructive'],
+      ['reject', 'destructive'],
+      ['force-cancel', 'troubleshooting'],
+      ['approve', 'unavailable'],
+    ]);
+    expect(items.find((item) => item.id === 'force-cancel')?.description).toMatch(
+      /without cleanup.*stuck/i,
+    );
+  });
+
+  it('asks for confirmation before Cancel, Reject and Force cancel but not Pause or Resume', () => {
+    const items = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: {
+          canPause: true,
+          canResume: true,
+          canCancel: true,
+          canForceCancel: true,
+          canReject: true,
+        },
+      }),
+    );
+    for (const id of ['cancel', 'reject', 'force-cancel']) {
+      const confirmation = items.find((item) => item.id === id)?.confirmation;
+      expect(confirmation?.consequence).toBeTruthy();
+      expect(confirmation?.confirmLabel).toBeTruthy();
+    }
+    expect(items.find((item) => item.id === 'pause')?.confirmation).toBeUndefined();
+    expect(items.find((item) => item.id === 'resume')?.confirmation).toBeUndefined();
+  });
+
+  it('keeps force cancel enabled on a completed workflow while ineligible actions explain why', () => {
+    const disabledReasons: Record<string, string> = {
+      canCancel: 'state_not_eligible',
+      canPause: 'state_not_eligible',
+      canSetTitle: 'state_not_eligible',
+    };
+    const items = buildWorkflowActionMenuItems(
+      buildParams({
+        actions: { canForceCancel: true, disabledReasons },
+        disabledReason: (key) => describeWorkflowActionDisabledReason(disabledReasons[key]),
+      }),
+    );
+    const forceCancel = items.find((item) => item.id === 'force-cancel');
+    expect(forceCancel).toMatchObject({ section: 'troubleshooting' });
+    expect(forceCancel?.disabledReason).toBeUndefined();
+    const unavailable = items.filter((item) => item.section === 'unavailable');
+    expect(unavailable.map((item) => item.id)).toEqual(['cancel', 'rename', 'pause']);
+    for (const item of unavailable) {
+      expect(item.disabledReason).toBe("Not available in the workflow's current state.");
+    }
   });
 
   it('includes the task-editing options only when task editing is enabled', () => {
@@ -260,6 +332,28 @@ describe('buildWorkflowActionMenuItems', () => {
     expect(items.find((item) => item.id === 'pause')?.disabledReason).toBe(
       'Checking availability…',
     );
+  });
+});
+
+describe('describeWorkflowActionDisabledReason', () => {
+  it('translates backend reason codes into plain sentences', () => {
+    expect(describeWorkflowActionDisabledReason('already_paused')).toBe(
+      'The workflow is already paused.',
+    );
+    expect(describeWorkflowActionDisabledReason('original_task_input_snapshot_missing')).toBe(
+      "The workflow's original inputs were not saved.",
+    );
+  });
+
+  it('falls back to a readable sentence for unknown codes and keeps prose unchanged', () => {
+    expect(describeWorkflowActionDisabledReason('workspace_checkpoint_missing')).toBe(
+      'Workspace checkpoint missing.',
+    );
+    expect(describeWorkflowActionDisabledReason('Workflow cannot be rerun.')).toBe(
+      'Workflow cannot be rerun.',
+    );
+    expect(describeWorkflowActionDisabledReason('')).toBeNull();
+    expect(describeWorkflowActionDisabledReason(null)).toBeNull();
   });
 });
 

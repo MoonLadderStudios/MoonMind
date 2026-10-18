@@ -35,6 +35,15 @@ describe('isTransientError', () => {
     expect(isTransientError(new ApiError(503, 'Unavailable', ''))).toBe(true);
   });
 
+  it('treats request timeouts and rate limits as transient', () => {
+    expect(isTransientError(new ApiError(408, 'Request Timeout', ''))).toBe(true);
+    expect(isTransientError(new ApiError(429, 'Too Many Requests', ''))).toBe(true);
+  });
+
+  it('never retries a missing resource', () => {
+    expect(isTransientError(new ApiError(404, 'Not Found', ''))).toBe(false);
+  });
+
   it('treats permission and validation errors as non-transient', () => {
     expect(isTransientError(new ApiError(401, 'Unauthorized', ''))).toBe(false);
     expect(isTransientError(new ApiError(403, 'Forbidden', ''))).toBe(false);

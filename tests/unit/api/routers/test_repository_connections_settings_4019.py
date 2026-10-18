@@ -264,6 +264,86 @@ async def test_disable_keeps_the_record_and_rejects_other_principals(harness):
     assert detail.json()["lifecycle"] == "disabled"
 
 
+async def test_enable_restores_a_disabled_connection_with_its_records(harness):
+    client = harness.client
+    await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+    )
+    disabled = await client.post(
+        "/api/v1/repository-connections/personal-github/disable",
+        json={"requestId": "req-disable"},
+    )
+    assert disabled.json()["lifecycle"] == "disabled"
+
+    harness.principal["id"] = "principal:stranger"
+    denied = await client.post(
+        "/api/v1/repository-connections/personal-github/enable",
+        json={"requestId": "req-enable-x"},
+    )
+    assert denied.status_code in {403, 404}
+    harness.principal["id"] = "principal:operator"
+
+    enabled = await client.post(
+        "/api/v1/repository-connections/personal-github/enable",
+        json={"requestId": "req-enable"},
+    )
+    assert enabled.status_code == 200, enabled.text
+    _assert_no_secret_material(enabled.text)
+    body = enabled.json()
+    assert body["lifecycle"] == "active"
+    assert body["policyRevision"] == disabled.json()["policyRevision"] + 1
+    assert body["credentialRevision"] == 1
+
+    # A lost acknowledgment replays the recorded outcome without another change.
+    replay = await client.post(
+        "/api/v1/repository-connections/personal-github/enable",
+        json={"requestId": "req-enable"},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == body
+    assert await _count(harness.maker, RepositoryConnectionRecord) == 1
+    assert await _count(harness.maker, ManagedSecret) == 1
+
+    missing = await client.post(
+        "/api/v1/repository-connections/missing/enable",
+        json={"requestId": "req-enable-missing"},
+    )
+    assert missing.status_code == 404
+
+
+async def test_lifecycle_replay_reports_a_superseded_outcome(harness):
+    client = harness.client
+    await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+    )
+    await client.post(
+        "/api/v1/repository-connections/personal-github/disable",
+        json={"requestId": "req-disable"},
+    )
+    enabled = await client.post(
+        "/api/v1/repository-connections/personal-github/enable",
+        json={"requestId": "req-enable"},
+    )
+    assert enabled.json()["lifecycle"] == "active"
+    disabled_again = await client.post(
+        "/api/v1/repository-connections/personal-github/disable",
+        json={"requestId": "req-disable-again"},
+    )
+    assert disabled_again.json()["lifecycle"] == "disabled"
+
+    # Retrying the earlier enable must not answer 200 with a disabled record.
+    retried = await client.post(
+        "/api/v1/repository-connections/personal-github/enable",
+        json={"requestId": "req-enable"},
+    )
+    assert retried.status_code == 409, retried.text
+    assert "superseded" in retried.json()["detail"]
+    detail = await client.get("/api/v1/repository-connections/personal-github")
+    assert detail.json()["lifecycle"] == "disabled"
+
+
 async def test_browser_supplied_identity_fields_are_rejected(harness):
     response = await harness.client.post(
         "/api/v1/repository-connections/pat",

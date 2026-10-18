@@ -18,6 +18,12 @@ import {
   isIntegrationStatus,
 } from '../status/integrationStatus';
 import type { WorkflowStatusPillOptions } from '../status/workflowStatus';
+import {
+  CHECKPOINT_BRANCH_STATUS,
+  CHECKPOINT_BRANCH_TURN_STATUS,
+  DEPENDENCY_OUTCOME_STATUS,
+  type StatusVocabulary,
+} from '../status/statusVocabulary';
 
 type GlyphStyle = CSSProperties & {
   '--mm-letter-count'?: number;
@@ -181,4 +187,28 @@ export function IntegrationProviderStatusPill({ status }: DomainStatusPillProps)
       pillProps={integrationStatusPillProps(status)}
     />
   );
+}
+
+function VocabularyStatusPill({ vocabulary, status }: { vocabulary: StatusVocabulary; status: string | null | undefined }) {
+  return <StatusPill label={vocabulary.label(status)} pillProps={vocabulary.pillProps(status)} />;
+}
+
+export function CheckpointBranchStatusPill({ status }: { status: string | null | undefined }) {
+  return <VocabularyStatusPill vocabulary={CHECKPOINT_BRANCH_STATUS} status={status} />;
+}
+
+export function CheckpointBranchTurnStatusPill({ status }: { status: string | null | undefined }) {
+  return <VocabularyStatusPill vocabulary={CHECKPOINT_BRANCH_TURN_STATUS} status={status} />;
+}
+
+/**
+ * A prerequisite or dependent row: the other workflow's lifecycle state, or the
+ * dependency gate's outcome for it (terminated, timed out, bypassed, waiting
+ * for a successful rerun).
+ */
+export function DependencyStatusPill({ status }: { status: string | null | undefined }) {
+  if (isWorkflowLifecycleStatus(status)) {
+    return <WorkflowLifecycleStatusPill status={status} />;
+  }
+  return <VocabularyStatusPill vocabulary={DEPENDENCY_OUTCOME_STATUS} status={status} />;
 }

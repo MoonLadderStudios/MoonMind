@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DataTable, type Column } from '../components/tables/DataTable';
+import { responseError } from '../lib/api/client';
 import { useUrlSearchText } from '../lib/urlSearchText';
 
 type InventoryKind = 'agents' | 'policies';
@@ -191,7 +192,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: async () => {
       const response = await fetch(endpoint!, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`${label} request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `${label} request failed (${response.status})`);
       return compactRows(await response.json());
     },
   });
@@ -200,7 +201,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     enabled: enabled && kind === 'agents',
     queryFn: async (): Promise<AgentProfile[]> => {
       const response = await fetch('/api/omnigent/agent-profiles', { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Execution configurations request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Execution configurations request failed (${response.status})`);
       const data: unknown = await response.json();
       return Array.isArray(data) ? data as AgentProfile[] : [];
     },
@@ -223,7 +224,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             : {}),
         },
       );
-      if (!response.ok) throw new Error(`${action} failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `${action} failed (${response.status})`);
     },
     onSuccess: () => void profiles.refetch(),
   });
@@ -267,7 +268,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         body = { profileId: draft.id, displayName: draft.name, version: draft.source!.activeVersion || draft.source!.versions[0]?.version };
       }
       const response = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (!response.ok) throw new Error(`Execution configuration save failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Execution configuration save failed (${response.status})`);
       return response.json();
     },
     onSuccess: async () => { setAgentEditor(null); await profiles.refetch(); },
@@ -277,7 +278,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     enabled: Boolean(selectedProfile),
     queryFn: async (): Promise<Array<Record<string, unknown>>> => {
       const response = await fetch(`/api/omnigent/agent-profiles/${encodeURIComponent(selectedProfile!.profileId)}/audit`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Audit request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Audit request failed (${response.status})`);
       return response.json();
     },
   });
@@ -286,7 +287,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     enabled: Boolean(selectedProfile),
     queryFn: async (): Promise<Array<Record<string, unknown>>> => {
       const response = await fetch(`/api/omnigent/agent-profiles/${encodeURIComponent(selectedProfile!.profileId)}/usage`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Usage request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Usage request failed (${response.status})`);
       return response.json();
     },
   });
@@ -295,7 +296,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     enabled: kind === 'policies' && Boolean(endpoint && selected),
     queryFn: async () => {
       const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/versions`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Version history request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Version history request failed (${response.status})`);
       return (await response.json() as { items: PolicyVersion[] }).items;
     },
   });
@@ -304,7 +305,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     enabled: kind === 'policies' && Boolean(endpoint && selected),
     queryFn: async () => {
       const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/audit`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Audit history request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Audit history request failed (${response.status})`);
       return (await response.json() as { items: AuditEvent[] }).items;
     },
   });
@@ -314,7 +315,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     enabled: Boolean(endpoint && selected && visibleVersion),
     queryFn: async (): Promise<PolicyUsage> => {
       const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/versions/${visibleVersion!.version}/usage`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Policy usage request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Policy usage request failed (${response.status})`);
       return response.json() as Promise<PolicyUsage>;
     },
   });
@@ -323,7 +324,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     enabled: Boolean(endpoint && selected && visibleVersion && selected.version && visibleVersion.version !== selected.version),
     queryFn: async () => {
       const response = await fetch(`${endpoint}/${encodeURIComponent(selected!.id)}/diff?from_version=${visibleVersion!.version}&to_version=${selected!.version}`, { credentials: 'same-origin' });
-      if (!response.ok) throw new Error(`Version diff request failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Version diff request failed (${response.status})`);
       return response.json() as Promise<{ diff: string }>;
     },
   });
@@ -336,7 +337,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state, makeDefault }),
       });
-      if (!response.ok) throw new Error(`Policy action failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Policy action failed (${response.status})`);
       return response.json();
     },
     onSuccess: async (_, variables) => {
@@ -351,7 +352,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       const response = await fetch(`${endpoint}/${encodeURIComponent(version.policyId)}/versions/${version.version}/validate`, {
         method: 'POST', credentials: 'same-origin',
       });
-      if (!response.ok) throw new Error(`Policy validation failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Policy validation failed (${response.status})`);
       return response.json() as Promise<PolicyVersion>;
     },
     onSuccess: async (version) => {
@@ -371,7 +372,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             document: JSON.parse(draft.document) };
       const response = await fetch(url, { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (!response.ok) throw new Error(`Policy save failed (${response.status})`);
+      if (!response.ok) throw await responseError(response, `Policy save failed (${response.status})`);
       return response.json();
     },
     onSuccess: async () => {

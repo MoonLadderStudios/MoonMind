@@ -16,6 +16,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { responseError } from '../lib/api/client';
+
 export type IssueLifecycleEvidence = {
   repository?: string | undefined;
   issueNumber?: number | undefined;
@@ -152,7 +154,7 @@ export function IssueLifecyclePanel({
   const [loading, setLoading] = useState(false);
   const [continueVariant, setContinueVariant] = useState<string>('');
   const [writerStoppedConfirmed, setWriterStoppedConfirmed] = useState(false);
-  const [actionResult, setActionResult] = useState<string | null>(null);
+  const [actionResult, setActionResult] = useState<{ message: string; failed: boolean } | null>(null);
   const [submitting, setSubmitting] = useState<string | null>(null);
 
   const requestBody = useMemo(
@@ -194,7 +196,7 @@ export function IssueLifecyclePanel({
       body: requestBody,
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`Lifecycle projection request failed (${response.status}).`);
+        if (!response.ok) throw await responseError(response, 'Lifecycle projection request failed');
         return (await response.json()) as LifecycleResponse;
       })
       .then((payload) => {
@@ -263,6 +265,10 @@ export function IssueLifecyclePanel({
           continue_variant: action === 'continue_work' ? continueVariant || undefined : undefined,
         }),
       });
+      // A failed request is an error, not a verdict: only a 2xx body carries `allowed`.
+      if (!response.ok) {
+        throw await responseError(response);
+      }
       const payload = (await response.json()) as {
         allowed: boolean;
         verdict?: { message?: string };
@@ -270,7 +276,10 @@ export function IssueLifecyclePanel({
         publication?: { status?: string; detail?: string; commentId?: unknown } | null;
       };
       if (!payload.allowed) {
-        setActionResult(`Blocked by the server: ${asString(payload.verdict?.message) || action}.`);
+        setActionResult({
+          message: `Blocked by the server: ${asString(payload.verdict?.message) || action}.`,
+          failed: false,
+        });
         return;
       }
       const publication = payload.publication;
@@ -279,11 +288,15 @@ export function IssueLifecyclePanel({
           ? ` Published as GitHub comment ${asString(publication.commentId) || 'created'}.`
           : ` Publication ${asString(publication.status) || 'unknown'}: ${asString(publication.detail) || asString(publication.status) || 'see server detail'}.`
         : '';
-      setActionResult(
-        `Accepted and recorded: ${asString(payload.verdict?.message) || action}.${publicationNote}`,
-      );
+      setActionResult({
+        message: `Accepted and recorded: ${asString(payload.verdict?.message) || action}.${publicationNote}`,
+        failed: false,
+      });
     } catch (submitError) {
-      setActionResult(`Submission failed: ${submitError instanceof Error ? submitError.message : String(submitError)}.`);
+      setActionResult({
+        message: `Submission failed: ${submitError instanceof Error ? submitError.message : String(submitError)}.`,
+        failed: true,
+      });
     } finally {
       setSubmitting(null);
     }
@@ -410,8 +423,8 @@ export function IssueLifecyclePanel({
             })}
           </div>
           {actionResult ? (
-            <div className="notice" role="status" aria-live="polite">
-              {actionResult}
+            <div className={`notice${actionResult.failed ? ' error' : ''}`} role="status" aria-live="polite">
+              {actionResult.message}
             </div>
           ) : null}
           <details>

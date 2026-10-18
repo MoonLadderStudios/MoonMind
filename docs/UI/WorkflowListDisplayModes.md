@@ -123,8 +123,8 @@ Rules:
 4. `sidebar` always means the workflow list is visible in a left rail and the current page's primary surface remains visible to the right.
 5. `hidden` always means no workflow list region is rendered.
 6. Route-derived selection is stronger than remembered selection.
-7. Remembered selection is stronger than first-row fallback.
-8. First-row fallback is used only when a mode requires a Workflow Detail surface and there is no selected workflow yet.
+7. Remembered selection is stronger than first-row fallback, but only while the visible list contains it.
+8. First-row fallback is used only when a mode requires a Workflow Detail surface and there is no usable selected workflow.
 
 ---
 
@@ -163,18 +163,18 @@ The first-workflow fallback makes the **No list** mode safe when the user has no
 Resolution order:
 
 1. Use the workflow ID in the current route when the route already identifies a workflow.
-2. Otherwise use the last workflow explicitly selected during the current dashboard session when that workflow is still authorized.
-3. Otherwise fetch or reuse the current Workflows list query and choose the first selectable row after the active filters, sort, source, page size, and cursor rules have been applied.
-4. If no row exists, show the Workflows empty state and keep the table available.
+2. Otherwise use the last explicitly selected workflow when the visible list contains it.
+3. Otherwise choose the first visible row, after the table's filters, sort, source, page size, and cursor.
+4. If no row exists, show the Workflows empty state and return the control to the table.
 
 Rules:
 
 1. "First item" means the first visible workflow row in the same list the user was looking at, not an arbitrary newest workflow from a different query.
-2. The fallback may use cached list data if it exactly matches the current effective list query.
-3. If the list query is loading, the control may enter a resolving state with accessible text such as `Opening first workflow...`.
+2. The table publishes the row IDs it shows, in display order, and the shell uses them directly. Only while the table has no settled rows does the shell fetch the same list query from the URL (without the current-page sort).
+3. If the list query is loading, the control may enter a resolving state with accessible text such as `Opening first workflow...`. Changing the list query (the Workflows nav link clears the filters) or leaving `/workflows` cancels it, so a late answer for the old list never navigates.
 4. If the list query fails, show a recoverable list error and do not navigate to a guessed workflow.
-5. The fallback must never expose workflows outside the current user's authorization scope.
-6. A selected workflow that is absent from the current filtered list may still be opened from remembered selection only if the detail API authorizes it; the sidebar should label it as the current workflow rather than implying it matches active filters.
+5. The fallback must never expose workflows outside the current user's authorization scope; list membership is that check.
+6. A remembered workflow that the visible list does not contain is dropped rather than opened, so a filtered table never opens a workflow outside its filters.
 
 ---
 
@@ -370,14 +370,14 @@ type DashboardWorkflowListPreferences = {
 
 Rules:
 
-1. Persist the last explicit list display mode in dashboard preferences.
+1. Persist the last explicit list display mode in dashboard preferences. Navigation never rewrites it: opening a workflow from the table or going to Create shows the saved choice.
 2. Persist the last explicitly selected workflow ID for first-row fallback avoidance.
 3. Do not put `hidden` or `sidebar` mode in the workflow detail path; detail URLs remain canonical workflow URLs.
 4. Full table mode is naturally represented by `/workflows`.
 5. Query parameters preserve list filters, page size, cursor, and safe return context according to the Workflows list contract. Current-page sort is retained in the existing dashboard preferences across display changes; it is never written to the URL or list API and remains labelled as current-page-only.
 6. Query parameters must not include raw prompts, full Create drafts, secrets, presigned URLs, logs, artifacts, or large detail payloads.
-7. On direct desktop visits to `/workflows/{workflowId}`, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `sidebar` so navigation context is visible.
-8. On direct desktop visits to `/workflows/new`, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `hidden` so authoring remains focused.
+7. On desktop visits to `/workflows/{workflowId}`, direct or from the table, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `sidebar` so navigation context is visible.
+8. On desktop visits to `/workflows/new`, direct or from the table, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `hidden` so authoring remains focused.
 9. On direct visits to `/workflows`, effective mode is `table` regardless of persisted preference until the user selects another mode.
 
 ---
