@@ -322,12 +322,6 @@ class _RepositoryBase:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def _queue_terminal_notification(self, workflow_id: str) -> None:
-        if workflow_id:
-            self._session.info.setdefault("omnigent_terminal_workflows", set()).add(
-                workflow_id
-            )
-
     async def _insert(
         self, obj: Any, *, on_conflict: Callable[[IntegrityError], Exception]
     ):
@@ -1240,7 +1234,6 @@ class SessionRepository(_RepositoryBase):
             )
         if row.terminal_state is not None:
             if row.terminal_state == terminal_state:
-                self._queue_terminal_notification(row.moonmind_workflow_id)
                 return _session_record(row)
             raise TerminalSessionOverwriteError(
                 f"Session {session_id!r} already terminal "
@@ -1294,7 +1287,6 @@ class SessionRepository(_RepositoryBase):
                 )
             except Exception:
                 pass  # Telemetry failures must not affect lifecycle authority
-        self._queue_terminal_notification(row.moonmind_workflow_id)
         return _session_record(row)
 
     async def attach_terminal_evidence(
@@ -1322,7 +1314,6 @@ class SessionRepository(_RepositoryBase):
             )
         if row.terminal_evidence_ref is not None:
             if row.terminal_evidence_ref == terminal_evidence_ref:
-                self._queue_terminal_notification(row.moonmind_workflow_id)
                 return _session_record(row)
             raise TerminalSessionOverwriteError(
                 f"Session {session_id!r} already owns different terminal evidence"
@@ -1348,7 +1339,6 @@ class SessionRepository(_RepositoryBase):
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)
-        self._queue_terminal_notification(row.moonmind_workflow_id)
         return _session_record(row)
 
 
@@ -1534,8 +1524,6 @@ class TurnAttemptRepository(_RepositoryBase):
         wants_terminal = terminal_state is not _UNSET
         if row.terminal_state is not None:
             if wants_terminal and terminal_state == row.terminal_state:
-                if session_row is not None:
-                    self._queue_terminal_notification(session_row.moonmind_workflow_id)
                 return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _turn_record(row))
             raise TurnIdempotencyConflictError(
                 f"Turn attempt {turn_attempt_id!r} already terminal "
@@ -1583,8 +1571,6 @@ class TurnAttemptRepository(_RepositoryBase):
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)
-        if wants_terminal and session_row is not None:
-            self._queue_terminal_notification(session_row.moonmind_workflow_id)
         return CasResult(ControlPlaneOutcome.APPLIED, _turn_record(row))
 
     async def advance_state(
@@ -2932,17 +2918,7 @@ class OmnigentControlPlaneStore:
                 await session.rollback()
                 raise
             else:
-                workflow_ids = session.info.pop("omnigent_terminal_workflows", set())
                 await session.commit()
-                if workflow_ids:
-                    from moonmind.workflows.temporal.remediation_tools import (
-                        resume_pending_action_verifications,
-                    )
-
-                    for workflow_id in sorted(workflow_ids):
-                        await resume_pending_action_verifications(
-                            session, workflow_id=workflow_id
-                        )
 
     async def establish_session(
         self,

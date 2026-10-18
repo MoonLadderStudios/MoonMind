@@ -1125,35 +1125,10 @@ def resolved_shared_bootstrap_image_ref(
 # exercise the same production Docker path.
 
 
-# Every production remediation adapter registered by
-# ``moonmind.workflows.temporal.remediation_actions.build_remediation_action_executor``
-# dispatches by its canonical action identity, and ``resolve_action`` performs an
-# exact-match lookup against ``approvals.actions``. The bootstrap policy must
-# therefore carry an explicit rule for each identity or the default deployment
-# authorizes none of them. Non-mutating evidence actions are allowed; every
-# state-mutating remediation action stays approval-gated, matching this
-# bootstrap's ``remediation.autonomous: False`` posture. The identities are
-# listed explicitly (not imported) to keep the seed reviewable and to avoid a
-# circular import with the temporal remediation package; a unit test guards
-# against catalog drift.
-_BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS: tuple[str, ...] = ()
-_BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS: tuple[str, ...] = (
-    "execution.pause",
-    "execution.resume",
-    "execution.request_rerun_same_workflow",
-    "execution.start_fresh_rerun",
-    "execution.cancel",
-    "execution.force_terminate",
-    "session.interrupt_turn",
-    "session.cancel",
-    "checkpoint_branch.create_from_remediation_context",
-)
-
-
 def _bootstrap_approval_actions() -> dict[str, dict[str, str]]:
-    """Seed exact approval rules for every canonical remediation action identity."""
+    """Seed the approval rules of a freshly created bootstrap policy."""
 
-    actions: dict[str, dict[str, str]] = {
+    return {
         "read": {"decision": "allow"},
         "publish": {
             "decision": "approval_required",
@@ -1161,19 +1136,6 @@ def _bootstrap_approval_actions() -> dict[str, dict[str, str]]:
             "reviewerRule": "workflow-owner",
         },
     }
-    for action in _BOOTSTRAP_ALLOWED_REMEDIATION_ACTIONS:
-        actions[action] = {
-            "decision": "allow",
-            "reason": "non-mutating remediation evidence",
-        }
-    for action in _BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS:
-        actions[action] = {
-            "decision": "approval_required",
-            "approvalClass": "remediation",
-            "reviewerRule": "workflow-owner",
-            "reason": "state-mutating remediation requires approval",
-        }
-    return actions
 
 
 def bootstrap_document(
