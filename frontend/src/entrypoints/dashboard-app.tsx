@@ -345,12 +345,16 @@ function LazyPageView({
 }) {
   const [reloadKey, setReloadKey] = useState(0);
   const LazyPage = useMemo(() => lazy(PAGE_IMPORTS[page]), [page, reloadKey]);
+  // Workflows and Skills keep one page instance across paths, so the boundary
+  // resets on pathname instead of relying on a remount.
+  const { pathname } = useLocation();
 
   return (
     <QueryErrorResetBoundary>
       {({ reset }) => (
         <DashboardRouteErrorBoundary
           key={reloadKey}
+          resetKey={pathname}
           buildId={buildId ?? null}
           onReset={() => {
             reset();

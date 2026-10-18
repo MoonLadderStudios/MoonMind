@@ -218,6 +218,9 @@ vi.mock('./workflows-workspace', () => ({
     const isDetailRoute =
       window.location.pathname.startsWith('/workflows/') && window.location.pathname !== '/workflows/new';
     const isCreateRoute = window.location.pathname === '/workflows/new';
+    if (window.location.pathname === '/workflows/crash-route') {
+      throw new Error('workflow page render failed');
+    }
     const initialData = payload.initialData as { dashboardConfig?: Record<string, unknown> } | undefined;
     const repository = initialData?.dashboardConfig?.defaultRepository;
     return (
@@ -1750,6 +1753,23 @@ describe('Dashboard shared entry', () => {
       expect(await screen.findByText('Remediation page recovered')).toBeTruthy();
       expect(screen.queryByText('This page failed to load')).toBeNull();
       expect(remediationsImport.attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('clears a route error when the operator navigates to another workflow', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      window.history.replaceState({}, '', '/workflows/crash-route');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+      expect(await screen.findByText('This page failed to load')).toBeTruthy();
+
+      navigateTo('/workflows/healthy-route');
+
+      expect(await screen.findByText('Workflow detail route loaded: /workflows/healthy-route')).toBeTruthy();
+      expect(screen.queryByText('This page failed to load')).toBeNull();
     } finally {
       consoleErrorSpy.mockRestore();
     }
