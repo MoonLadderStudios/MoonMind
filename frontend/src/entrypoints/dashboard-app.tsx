@@ -36,6 +36,7 @@ import { validatePageBoot } from '../boot/pageBootSchemas';
 import { DashboardErrorState } from '../components/DashboardErrorState';
 import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBoundary';
 import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import {
   isDashboardInternalUrl,
   payloadForDashboardRoute,
@@ -101,11 +102,7 @@ const PAGE_IMPORTS = {
     default: (await import('./settings')).InstanceSettingsPage,
   }),
   skills: () => import('./skills'),
-  'workflow-start': () => import('./workflow-start'),
   'workflows-workspace': () => import('./workflows-workspace'),
-  'workflow-detail': () => import('./workflow-detail'),
-  'workflows-home': () => import('./workflows-home'),
-  'workflow-list': () => import('./workflow-list'),
 } satisfies Record<DashboardPage, PageImport>;
 
 for (const destination of DASHBOARD_DESTINATIONS) {
@@ -308,9 +305,9 @@ function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
 function LoadingPage() {
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 shadow-sm dark:text-slate-400">
+      <h1 className="m-0 rounded-3xl border border-mm-border/80 bg-transparent p-6 font-sans text-sm font-normal leading-normal text-slate-500 shadow-sm dark:text-slate-400">
         Loading MoonMind...
-      </div>
+      </h1>
     </div>
   );
 }
@@ -318,6 +315,7 @@ function LoadingPage() {
 function UnknownPage({ page }: { page: string }) {
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+      <PageHeader title="Page not found" />
       <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400">
         Unknown dashboard page: <code>{page}</code>
       </div>
@@ -531,6 +529,8 @@ function DashboardNavigation({
   const normalizedPath = location.pathname.replace(/\/$/, '');
   const isSkillsRoute = normalizedPath === '/skills' || normalizedPath.startsWith('/skills/');
   const visiblePrimaryKeys = new Set(visiblePrimaryDestinations(uiInfo).map(({ key }) => key));
+  // Shares the shell's cached query; only its error state is read here.
+  const uiInfoFailed = useDashboardUiInfo().isError;
   const buildId = typeof uiInfo?.buildId === 'string' && uiInfo.buildId.trim() ? uiInfo.buildId : null;
 
   useEffect(() => {
@@ -603,10 +603,10 @@ function DashboardNavigation({
             width="256"
             height="199"
           />
-          <h1>
+          <span className="masthead-wordmark">
             <span className="masthead-brand-moon">Moon</span>
             <span className="masthead-brand-mind">Mind</span>
-          </h1>
+          </span>
         </Link>
         {listDisplayMode ? (
           <CollectionListDisplayModeControl
@@ -672,7 +672,11 @@ function DashboardNavigation({
               </AnimatedRouteNavLink>
             ) : null}
           </div>
-          <DashboardSystemMenu uiInfo={uiInfo} mobileDrawerOpen={open} />
+          <DashboardSystemMenu
+            uiInfo={uiInfo}
+            availabilityUnknown={uiInfoFailed}
+            mobileDrawerOpen={open}
+          />
           {isSkillsRoute && uiInfo?.features?.skills === true ? (
             <button
               type="button"
@@ -1337,11 +1341,7 @@ function RoutedDashboardPage({
 
   if (
     isUiInfoPending &&
-    (
-      route.page === 'workflow-start' ||
-      route.currentPath === '/workflows/new' ||
-      route.page.startsWith('settings-')
-    )
+    (route.currentPath === '/workflows/new' || route.page.startsWith('settings-'))
   ) {
     return (
       <AppShell

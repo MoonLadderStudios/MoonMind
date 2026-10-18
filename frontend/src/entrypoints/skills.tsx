@@ -14,6 +14,7 @@ import { marked } from 'marked';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { PageHeader, useDocumentTitle } from '../components/dashboard/PageHeader';
 import {
   CollectionColumnFilter,
   CollectionSidebar,
@@ -292,8 +293,9 @@ function renderInlineTokens(tokens: MarkdownToken[] | undefined, fallback: strin
 function renderBlockToken(token: MarkdownToken, key: string): ReactNode {
   switch (token.type) {
     case 'heading': {
-      const depth = Math.min(Math.max(token.depth || 2, 1), 6) as 1 | 2 | 3 | 4 | 5 | 6;
-      const HeadingTag = `h${depth}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+      // Skill markdown sits under the page h1, so its headings start at h2.
+      const depth = Math.min(Math.max((token.depth || 2) + 1, 2), 6) as 2 | 3 | 4 | 5 | 6;
+      const HeadingTag = `h${depth}` as 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
       return (
         <HeadingTag key={key} className="mt-5 font-semibold text-slate-950 first:mt-0 dark:text-white">
           {renderInlineTokens(token.tokens, token.text, key)}
@@ -562,17 +564,19 @@ function SkillDetail({
   setPreviewTab: (tab: PreviewTab) => void;
   detailHeadingRef: React.RefObject<HTMLHeadingElement | null>;
 }) {
+  useDocumentTitle(selectedSkill ? selectedSkill.label ?? selectedSkill.id : 'Skills');
   return (
     <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm sm:p-6">
+      {selectedSkill ? null : <PageHeader title="Skills" />}
       {selectedSkill ? (
         <div className="space-y-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
               Skill Details
             </p>
-            <h3 ref={detailHeadingRef} tabIndex={-1} className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
+            <h1 ref={detailHeadingRef} tabIndex={-1} className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">
               {selectedSkill.label ?? selectedSkill.id}
-            </h3>
+            </h1>
             {selectedSkill.description ? (
               <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-400">
                 {selectedSkill.description}
@@ -805,7 +809,7 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
       return;
     }
     const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])',
     ) ?? []).filter((element) => {
       const isVisible = element.offsetWidth > 0 || element.offsetHeight > 0;
       const isNotAriaHidden = element.getAttribute('aria-hidden') !== 'true';
@@ -1001,8 +1005,10 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
           ) : null}
         </form>
 
-        <div className="mt-6 border-t border-mm-border/80 pt-5">
-          <h4 className="text-base font-semibold text-slate-900 dark:text-white">Upload Skill Zip</h4>
+        <details className="mt-6 border-t border-mm-border/80 pt-5">
+          <summary className="cursor-pointer text-base font-semibold text-slate-900 dark:text-white">
+            Upload a skill zip instead
+          </summary>
           <label>
             Skill Zip
             <input
@@ -1042,7 +1048,7 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
               {uploadMutation.isPending ? 'Uploading...' : 'Upload Zip'}
             </button>
           </div>
-        </div>
+        </details>
 
         <p className={`queue-submit-message${message ? ' notice error' : ''}`}>{message || ''}</p>
       </div>
@@ -1060,6 +1066,10 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
         primaryLabel="Skills catalog"
         data-skills-list-display-mode="table"
       >
+        <PageHeader
+          title="Skills"
+          description="Reusable instructions that agents load during a workflow."
+        />
         <SkillsCatalogTable
           skills={filteredSkills}
           filterText={filterText}

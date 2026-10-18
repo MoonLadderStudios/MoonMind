@@ -126,7 +126,7 @@ def test_cli_writes_json_under_artifact_path_without_mutating_docs(
     assert after == before
 
 
-def test_default_cli_is_advisory_only_even_with_warnings(tmp_path: Path, monkeypatch) -> None:
+def test_default_cli_indexes_plain_markdown_without_policy_warnings(tmp_path: Path, monkeypatch) -> None:
     _write(tmp_path / "docs" / "Unclassified.md", "# Unclassified\n\nSome prose.\n")
     monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
 
@@ -134,10 +134,8 @@ def test_default_cli_is_advisory_only_even_with_warnings(tmp_path: Path, monkeyp
 
     assert rc == 0
     payload = json.loads((tmp_path / "artifacts" / "index.json").read_text(encoding="utf-8"))
-    warning_rules = {warning["rule"] for warning in payload["warnings"]}
-    assert "missing-index-document-class" in warning_rules
-    assert "missing-index-authority" in warning_rules
-    assert "missing-stable-claim-id" in warning_rules
+    assert payload["warnings"] == []
+    assert all(claim["identityKind"] == "generated" for claim in payload["claims"])
 
 
 def test_heading_extraction_skips_fenced_code_and_accepts_indentation(
@@ -228,7 +226,7 @@ def test_stable_claim_prefix_without_class_mapping_falls_back_to_claim(monkeypat
     assert stable_claim == ("TEST-001", "claim", "Future prefix")
 
 
-def test_missing_stable_claims_are_reported_without_inventing_ids(
+def test_missing_explicit_ids_use_generated_heading_references(
     tmp_path: Path,
 ) -> None:
     _write(
@@ -242,40 +240,9 @@ def test_missing_stable_claims_are_reported_without_inventing_ids(
 
     payload = mod.build_index(root=tmp_path)
 
-    assert payload["missingStableClaimPolicy"] == "report"
-    assert payload["missingStableClaimDocuments"] == ["docs/NeedsClaims.md"]
-    warning_rules = {warning["rule"] for warning in payload["warnings"]}
-    assert "missing-stable-claim-id" in warning_rules
+    assert payload["warnings"] == []
     assert all(claim["identityKind"] == "generated" for claim in payload["claims"])
     assert all(claim["id"].startswith("claim:") for claim in payload["claims"])
-
-
-def test_missing_stable_claim_fail_policy_returns_nonzero_after_writing_artifact(
-    tmp_path: Path, monkeypatch
-) -> None:
-    _write(
-        tmp_path / "docs" / "NeedsClaims.md",
-        "# Needs Claims\n\n"
-        "**Document Class:** Feature Design View\n"
-        "**Authority:** Claim behavior\n"
-        "**Owning Surface:** docs/index\n",
-    )
-    output = tmp_path / "artifacts" / "index.json"
-    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
-
-    rc = mod.main(
-        [
-            "--missing-stable-claim-policy",
-            "fail",
-            "--output",
-            str(output),
-        ]
-    )
-
-    assert rc == 1
-    payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["missingStableClaimPolicy"] == "fail"
-    assert payload["missingStableClaimDocuments"] == ["docs/NeedsClaims.md"]
 
 
 def test_non_file_sources_are_reported_and_do_not_receive_claim_ids(
@@ -307,3 +274,18 @@ def test_explicit_paths_are_normalized_relative_to_repo_root(tmp_path: Path) -> 
 
     assert payload["documentCount"] == 1
     assert payload["documents"][0]["path"] == "docs/Explicit.md"
+
+
+def test_duplicate_supplied_claim_ids_report_ambiguous_references(tmp_path: Path) -> None:
+    for name in ("One", "Two"):
+        _write(
+            tmp_path / "docs" / f"{name}.md",
+            f"# {name}\n\n## CONTRACT-001 Payload\n\nBody.\n",
+        )
+
+    payload = mod.build_index(root=tmp_path)
+
+    duplicates = [w for w in payload["warnings"] if w["rule"] == "duplicate-claim-id"]
+    assert {w["path"] for w in duplicates} == {"docs/One.md", "docs/Two.md"}
+    assert all("CONTRACT-001" in w["message"] for w in duplicates)
+    assert len([c for c in payload["claims"] if c["id"] == "CONTRACT-001"]) == 2

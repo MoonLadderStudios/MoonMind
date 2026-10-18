@@ -223,6 +223,15 @@ a removed integration.
   - digests/fix patterns are retained long (small, high-value)
   - curated memories are versioned; deprecated entries remain discoverable but not injected
 
+## Context selection rationale
+
+Longer context windows do not make every retained detail useful. Exact references,
+compact summaries, and a task-specific budget keep relevant evidence visible
+without turning raw logs or whole repositories into default prompt content.
+Summaries remain derived evidence: keep their source references so a reader can
+check a claim against the original artifact. Retrieved material supplies context,
+not permission to expand a task or access another repository's data.
+
 ## 10) References
 
 - Beads: https://github.com/steveyegge/beads

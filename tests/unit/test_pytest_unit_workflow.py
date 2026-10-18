@@ -724,8 +724,7 @@ def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
     assert "submodules" not in checkout.get("with", {})
 
     scripts = "\n".join(step.get("run", "") for step in job["steps"])
-    assert "./tools/check_terminology.sh" in scripts
-    assert "tools/verify_workflow_terminology.py --mode all" in scripts
+    assert "tools/verify_workflow_terminology.py --mode runtime" in scripts
     assert "tools/check_removed_capability_semantics.py" in scripts
     assert "tools/status_domain_audit.py" in scripts
     assert "tools/audit_status_tokens.py --fail-on-unknown" in scripts
@@ -744,7 +743,6 @@ def test_unit_fast_no_longer_duplicates_policy_checks() -> None:
     assert "submodules" not in checkout.get("with", {})
 
     scripts = "\n".join(step.get("run", "") for step in job["steps"])
-    assert "check_terminology.sh" not in scripts
     assert "verify_workflow_terminology.py" not in scripts
     assert "validate_agent_session_deployment_safety.py" not in scripts
 
@@ -815,7 +813,6 @@ def test_moonspec_projection_initializes_only_moonspec_submodule() -> None:
         if "git submodule update --init --depth 1 -- moonspec" in run
     )
     for tree_walker in (
-        "./tools/check_terminology.sh",
         "tools/verify_workflow_terminology.py",
         "tools/check_removed_capability_semantics.py",
         "tools/status_domain_audit.py",

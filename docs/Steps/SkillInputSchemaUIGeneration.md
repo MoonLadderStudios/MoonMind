@@ -162,17 +162,9 @@ Schema-generated branch fields share the workflow-level text-first branch behavi
 
 ## Authoritative Context Binding
 
-[Input Schema Guidance](InputSchemaGuidance.md) owns the binding-key semantics. The renderer/validator recognizes `x-moonmind-context-binding`, including `repository.name`, `repository.branch`, and `publication.policy` where the consumer supports the required projection.
+[Input Schema Guidance](InputSchemaGuidance.md#authoritative-context-bindings) owns the allowlisted keys, projection compatibility, binding versus defaulting, semantic roles, provenance, and historical-copy rules. The renderer consumes that normalized contract; it does not reinterpret authority from field names.
 
-Bound values are computed from admitted workflow/target context. They are not editable in guided, Advanced, or raw-JSON forms, and they are not serialized as authored duplicates. A compact read-only source explanation is permitted. Compiler-owned runtime projections remain valid execution arguments.
-
-Binding is not defaulting. The old `x-moonmind-context-default` behavior applies only to genuine defaultable task inputs or historical decoding. It must not preserve a stale Skill repository when the visible workflow repository changes.
-
-A required bound input is resolved before schema validation. If missing, its error identifies the editable workflow control or target selector and the affected Skill. An unknown key, incompatible projected type, conflicting caller value, or forged compiler provenance fails before execution.
-
-Existing PR targets resolve their own head and base. A PR locator is task input; a resolved head used to prepare the workspace is target evidence. PR-batch children can therefore have different heads without independent authored branch overrides or different batch policies.
-
-A publication binding projects the frozen scope intent to the supported consumer contract. It never copies local coordinator `none`, sends unresolved `default` to a worker, drops merge/finish settings, or performs a helper-local default lookup.
+Bound fields have no editor in guided, Advanced, or raw JSON and are omitted from authored values. Show a compact source explanation. Resolve required bindings before schema validation and route missing-source errors to the visible workflow control or target selector, naming the affected Skill. Backend rejection of unknown bindings, incompatible projections, duplicate caller values, or forged provenance cannot degrade to an editable fallback.
 
 ## Create Page Flow
 
@@ -215,11 +207,7 @@ Optional authorized runtime specialization remains under its existing owner. Sel
 
 For **unbound task inputs**, use explicit user input, retained authored draft values, supported semantic task defaults/context defaults, declared `defaults[field]`, schema default, then empty value. Explicit values are validated rather than silently overwritten. A field's origin is preserved so a displayed default does not accidentally become an explicit override on round trip.
 
-For **bound inputs**, resolve authoritative context first and reject caller-owned duplicates. The unbound precedence chain does not apply.
-
-Do not use examples such as `defaults.branch: main` for workflow branch selection. An omitted repository branch is resolved through the canonical repository contract, and an explicit base is retained. Changing the workflow context rebinds all consumers.
-
-Publication defaulting belongs to the workflow compiler. New authoring Auto is `default` or omission. Runtime `auto` is the distinct Skill-owned execution protocol using the unified repository-publication evidence contract. Adding a Skill with such a requirement updates the shared compatibility preview, not an explicit None. The retired workspace publish fallback cannot supply a hidden bound/defaulted value; its operator-intent migration follows Settings System section 10.6.
+For **bound inputs**, use the [binding contract](InputSchemaGuidance.md#binding-and-defaulting-are-different), not this precedence chain. Workflow branch and publication defaults belong to their canonical owners. Authoring Auto (`default` or omission) is distinct from Skill-owned runtime `auto`; compatibility preview may update a recommendation but cannot overwrite an explicit None. See [Workflow Publishing](../Workflows/WorkflowPublishing.md) and the [retired-setting treatment](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting).
 
 ## Backend Validation
 
@@ -279,19 +267,6 @@ Historical redundant copies can collapse only when proven equivalent. Conflictin
 
 ## Conformance
 
-The actual parser/catalog/form/compiler/runtime boundaries must prove:
+Exercise the parser/catalog/form/compiler/runtime journey with schema-less Skills, equivalent Skill/Preset schemas, required alternatives, all supported field types, integration widgets, and unsafe schema/default rejection. Verify pinned runtime handoff and staleness across draft reload, Apply/Reapply, unexpanded Submit, API/MCP, schedules, rerun, and remediation.
 
-- Instruction-only third-party Skills remain importable, selectable, and usable.
-- Equivalent Skill/Preset contracts render equivalent task inputs without name-based page logic.
-- Required alternatives, text/numeric/boolean/enum/array/formatted/object fields, and registered integration widgets remain usable.
-- Bound repository/branch/publication fields do not create duplicate editors in guided, Advanced, or raw authoring.
-- Required bound values validate from current context; missing source errors focus the correct visible control.
-- Workflow repository/base/PR/Run/policy changes invalidate stale async responses, expansions, and bound inputs.
-- Duplicate caller values, forged resolved provenance, unknown authority-bearing hints, and incompatible projection types fail before mutation.
-- Existing-PR target identity and genuine comparison/source/destination roles are not collapsed by naming heuristics.
-- A batch coordinator's local None cannot replace inherited child policy, and unresolved authoring Auto never reaches a portable helper.
-- Historical reconstruction preserves original meaning or requires explicit review without rehashing old evidence.
-- Runtime execution uses the pinned Skill and bound context, not freshly parsed metadata or ambient defaults.
-- Secret-like defaults, unsafe schemas, and remote component/ref loading remain blocked.
-
-A UI-only test or correct parser return value is not proof that backend admission, fan-out, or the runtime honors the same bindings.
+Binding cases follow [Input Schema Guidance](InputSchemaGuidance.md#authoritative-context-bindings): test actual backend admission and runtime projections as well as the absence of duplicate editors. A UI-only test or parser return value does not prove fan-out or execution honors authority.

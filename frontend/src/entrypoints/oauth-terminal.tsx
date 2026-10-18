@@ -4,6 +4,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { useDocumentTitle } from '../components/dashboard/PageHeader';
 import { formatStatusLabel } from '../utils/formatters';
 
 type OAuthTerminalInitialData = {
@@ -234,6 +235,7 @@ function notifyProviderProfileRefresh(session: OAuthSessionResponse): void {
 }
 
 export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
+  useDocumentTitle('Provider Login Terminal');
   const sessionId = useMemo(() => readSessionId(payload), [payload]);
   const [status, setStatus] = useState('Preparing terminal');
   const [session, setSession] = useState<OAuthSessionResponse | null>(null);

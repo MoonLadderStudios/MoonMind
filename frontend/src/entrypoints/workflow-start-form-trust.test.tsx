@@ -325,7 +325,7 @@ describe("Workflow Create form trust", () => {
     );
   });
 
-  it("keeps every Advanced value after closing it and shows the override count", async () => {
+  it("keeps every Advanced value after closing it and names each override", async () => {
     renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
@@ -341,7 +341,9 @@ describe("Workflow Create form trust", () => {
     fireEvent.click(advanced);
 
     expect(screen.queryByLabelText("Priority")).toBeNull();
-    expect(screen.getByText("3 overrides")).toBeTruthy();
+    expect(
+      screen.getByText("Overrides: priority 7, max attempts 5, 1 step override"),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -366,7 +368,7 @@ describe("Workflow Create form trust", () => {
     fireEvent.click(advanced);
     fireEvent.change(screen.getByLabelText("Max Attempts"), { target: { value: "0" } });
     fireEvent.click(advanced);
-    expect(screen.getByText("1 override")).toBeTruthy();
+    expect(screen.getByText("Overrides: max attempts 0")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 

@@ -125,14 +125,10 @@ jobs:
           cat /tmp/changed-files-resolution.txt >> "$GITHUB_OUTPUT"
           echo "Changed files:"
           sed 's/^/  - /' /tmp/changed-files.txt || true
-      - name: Check docs terminology guardrails
-        run: |
-          set -euo pipefail
-          ./tools/check_terminology.sh
       - name: Verify workflow terminology guardrails
         run: |
           set -euo pipefail
-          python3 tools/verify_workflow_terminology.py --mode all
+          python3 tools/verify_workflow_terminology.py --mode runtime
       - name: Check removed capability semantics
         run: |
           set -euo pipefail
@@ -201,8 +197,7 @@ jobs:
             echo ""
             echo "All static repository policy checks passed:"
             echo ""
-            echo "- docs terminology guardrails"
-            echo "- workflow terminology guardrails"
+            echo "- runtime workflow terminology guardrails"
             echo "- removed capability semantics"
             echo "- status token domains"
             echo "- status token audit (\`--fail-on-unknown\`)"

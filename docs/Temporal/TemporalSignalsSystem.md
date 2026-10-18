@@ -7,7 +7,6 @@ Last Updated: 2026-03-27
 > [!NOTE]
 > This document defines the desired-state Temporal Signals System for MoonMind.
 > It describes which interactions should use Temporal Signals, how those signals are shaped, and how workflows must react to them.
-> Migration sequencing, rollout work, and implementation tasks belong in .
 
 ---
 

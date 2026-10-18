@@ -1,37 +1,19 @@
-# \<System Name\> — System Architecture View
+# <System name> architecture
 
-**Status:** Draft
-**Document Class:** Canonical declarative
-**Viewpoint:** System Architecture View
-**Updated:** \<YYYY-MM-DD\>
-**Audience:** \<primary readers\>
-**Authority:** \<system-wide architecture claims this document owns\>
-**Owning Surface:** \<system, product, or repository surface\>
-**Related Docs:** \<links to adjacent canonical docs\>
-**Related Implementation:** \<code modules, entrypoints, or tracking issues\>
+Optional outline from the [documentation guide](../DocumentationArchitecture.md). Keep only the sections that help explain this system, then remove this note.
 
-> Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
+## Purpose
 
-## 1. Purpose
+What the system does and the user or operational outcome it supports.
 
-What system this describes and why it exists, in two or three sentences.
+## Components and interactions
 
-## 2. Components
+The major responsibilities, how they communicate, and the important data flows.
 
-The major components and what each is responsible for.
+## Boundaries and failure behavior
 
-## 3. Interactions
+External dependencies, trust boundaries, and how failures or interruptions affect supported journeys.
 
-How components communicate (calls, queues, events) and the key data that flows between them.
+## Design reasons
 
-## 4. Boundaries & dependencies
-
-External systems, trust boundaries, and runtime/deployment boundaries.
-
-## 5. Constraints & decisions
-
-Non-negotiable constraints and the architecture decisions that shape this system.
-
-### DOC-REQ-001 <concise stable requirement heading>
-
-The durable system-level requirement this document owns.
+Non-obvious tradeoffs and constraints, near the behavior they explain. Link to detailed interfaces rather than duplicating them.

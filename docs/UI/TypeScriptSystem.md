@@ -202,11 +202,12 @@ frontend/
  mountPage.tsx
  entrypoints/
  dashboard.tsx
- workflows-home.tsx
+ dashboard-app.tsx
+ workflows-workspace.tsx
  workflow-list.tsx
  workflow-detail.tsx
- schedules-list.tsx
- schedule-create.tsx
+ workflow-start.tsx
+ schedules.tsx
  settings.tsx
  components/
  layout/
@@ -371,13 +372,13 @@ Each server-rendered page should provide:
 Example:
 
 ```html
-<div id="dashboard-app-root" data-page="workflow-list"></div>
+<div id="dashboard-app-root" data-page="workflows-workspace"></div>
 <script id="moonmind-ui-boot" type="application/json">
- {"page":"workflow-list","apiBase":"/api","features":{"oauth":true}}
+ {"page":"workflows-workspace","apiBase":"/api","features":{"oauth":true}}
 </script>
 ```
 
-The HTML shell does not need one script tag per page. FastAPI serves the shared dashboard bundle once, and the bundle reads `page` from the boot payload to choose the page module.
+The HTML shell does not need one script tag per page. FastAPI serves the shared dashboard bundle once, and the bundle chooses the page module from the URL path through the destination registry in `frontend/src/lib/dashboardRoutes.ts`, so client-side navigation and direct loads resolve the same page.
 
 ## 9.2 Boot Payload Rules
 

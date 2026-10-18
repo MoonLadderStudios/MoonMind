@@ -11,6 +11,7 @@ import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import {
   WorkflowColumnFilterButton,
@@ -1117,6 +1118,140 @@ function facetForFilterField(field: FilterField | null): FacetField | null {
   return null;
 }
 
+// Repository names wrap at the owner/name separator instead of mid-word.
+function RepositoryName({ value }: { value: string | null | undefined }) {
+  if (!value) return <>—</>;
+  const [owner, ...rest] = value.split('/');
+  if (rest.length === 0) return <>{value}</>;
+  return (
+    <>
+      {owner}/<wbr />
+      {rest.join('/')}
+    </>
+  );
+}
+
+const SORT_DIRECTION_LABELS: Record<string, { asc: string; desc: string }> = {
+  title: { asc: 'Workflow A–Z', desc: 'Workflow Z–A' },
+  status: { asc: 'Status A–Z', desc: 'Status Z–A' },
+  progress: { asc: 'Least complete first', desc: 'Most complete first' },
+  repository: { asc: 'Repo A–Z', desc: 'Repo Z–A' },
+  providerProfile: { asc: 'Provider Profile A–Z', desc: 'Provider Profile Z–A' },
+  updatedAt: { asc: 'Oldest update first', desc: 'Newest update first' },
+};
+
+function sortOptionLabel(field: string, direction: 'asc' | 'desc'): string {
+  return SORT_DIRECTION_LABELS[field]?.[direction] ?? `${field} (${direction === 'asc' ? 'ascending' : 'descending'})`;
+}
+
+type FacetMoreValuesProps = {
+  apiBase: string;
+  facet: 'targetSkill' | 'repository';
+  label: string;
+  /** Applied list filters, serialized, so found values match the current scope. */
+  filterParams: string;
+  selected: string[];
+  disabled?: boolean;
+  onSelect: (value: string) => void;
+};
+
+// The first facet page is capped. "More values…" searches the same facet
+// endpoint and pages through it on request, so values past the cap stay reachable.
+function FacetMoreValues({ apiBase, facet, label, filterParams, selected, disabled, onSelect }: FacetMoreValuesProps) {
+  const [open, setOpen] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const [search, setSearch] = useState('');
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchText.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [searchText]);
+  const query = useInfiniteQuery({
+    queryKey: ['workflow-list-facet-more', facet, filterParams, search] as const,
+    enabled: open && !disabled,
+    initialPageParam: null as string | null,
+    queryFn: async ({ signal, pageParam }) => {
+      const params = new URLSearchParams(filterParams);
+      params.set('source', 'temporal');
+      params.set('facet', facet);
+      params.set('pageSize', '50');
+      if (search) params.set('search', search);
+      if (pageParam) params.set('nextPageToken', pageParam);
+      const response = await fetch(`${apiBase}/executions/facets?${params}`, { signal });
+      if (!response.ok) {
+        throw await responseError(response, `Failed to fetch ${label} values`);
+      }
+      return ExecutionFacetResponseSchema.parse(await response.json());
+    },
+    getNextPageParam: (lastPage) => lastPage.nextPageToken || undefined,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="secondary workflow-list-facet-more"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
+        More values…
+      </button>
+    );
+  }
+  const values = uniqueValues((query.data?.pages || []).flatMap((page) => page.items.map((item) => item.value)))
+    .filter((value) => !selected.includes(value));
+  return (
+    <div className="workflow-list-facet-more-panel">
+      <label>
+        Search {label} values
+        <input
+          type="search"
+          value={searchText}
+          disabled={disabled}
+          placeholder="contains text…"
+          onChange={(event) => setSearchText(event.target.value)}
+        />
+      </label>
+      {query.isError ? (
+        <p className="small workflow-list-facet-notice" role="status">
+          More {label} values are unavailable right now.
+        </p>
+      ) : query.isPending ? (
+        <p className="small workflow-list-facet-notice">Loading values…</p>
+      ) : values.length === 0 ? (
+        <p className="small workflow-list-facet-notice">No other matching values.</p>
+      ) : (
+        <ul className="workflow-list-facet-more-list" aria-label={`More ${label} values`}>
+          {values.map((value) => (
+            <li key={value}>
+              <button
+                type="button"
+                className="secondary"
+                disabled={disabled}
+                aria-label={`Add ${value}`}
+                onClick={() => onSelect(value)}
+              >
+                {value}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {query.hasNextPage ? (
+        <button
+          type="button"
+          className="secondary"
+          disabled={disabled || query.isFetchingNextPage}
+          onClick={() => void query.fetchNextPage({ cancelRefetch: false })}
+        >
+          Load more values
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 type PillMultiSelectProps = {
   id?: string;
   values: string[];
@@ -1290,6 +1425,12 @@ function filterSummary(
   return parts.join(', ');
 }
 
+function facetScopeParams(filters: ColumnFilters): string {
+  const params = new URLSearchParams();
+  appendFilterParams(params, filters);
+  return params.toString();
+}
+
 function clearFilterField(filters: ColumnFilters, field: FilterField): ColumnFilters {
   const next = { ...filters };
   if (field === 'workflowId' || field === 'title') next[field] = {};
@@ -1347,6 +1488,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const filterTriggerRef = useRef<HTMLElement | null>(null);
   // Field whose first control should receive focus when the drawer opens.
   const pendingDrawerFocusRef = useRef<FilterField | null>(null);
+  // Drawer sections start collapsed unless they hold an active filter or were
+  // opened from a chip, so the drawer leads with what is already applied.
+  const [expandedDrawerSections, setExpandedDrawerSections] = useState<ReadonlySet<FilterField>>(
+    () => new Set(),
+  );
   // MM-964: local-first dashboard preferences. Read once on mount; mutations are
   // mirrored back to localStorage so they survive reload. An explicit `limit`,
   // or API-style `pageSize` from workflow context, still wins over the stored
@@ -1677,6 +1823,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       filterTriggerRef.current = trigger;
       pendingDrawerFocusRef.current = field;
       setDraftFilters(filters);
+      setExpandedDrawerSections(
+        new Set(
+          DRAWER_FILTER_FIELDS.map(([drawerField]) => drawerField).filter(
+            (drawerField) => drawerField === field || Boolean(filterSummary(drawerField, filters)),
+          ),
+        ),
+      );
       setDrawerOpen(true);
     },
     [filters],
@@ -1806,7 +1959,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       const focusTarget = scope.querySelector<HTMLElement>(
         'input:not([disabled]), select:not([disabled]), button:not([disabled])',
       );
-      focusTarget?.focus();
+      // A control inside a collapsed section cannot take focus; use its summary.
+      const collapsed = focusTarget?.closest('details:not([open])');
+      (collapsed?.querySelector<HTMLElement>('summary') ?? focusTarget)?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
   }, [drawerOpen]);
@@ -2107,8 +2262,30 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     if (facetQuery.isFetching) {
       return <p className="small workflow-list-facet-notice">Loading facet values...</p>;
     }
-    if (facetQuery.data?.truncated) {
-      return <p className="small workflow-list-facet-notice">Facet values truncated by the server.</p>;
+    // Status values are a fixed list and Provider Profiles page with their own
+    // "Load more" action; Skill and Repo search past the first page here.
+    if ((field === 'targetSkill' || field === 'repository') && facetQuery.data?.truncated) {
+      const selected = field === 'targetSkill' ? draftFilters.targetSkill.values : draftFilters.repository.values;
+      return (
+        <FacetMoreValues
+          apiBase={payload.apiBase}
+          facet={field}
+          label={field === 'targetSkill' ? 'Skill' : 'Repo'}
+          filterParams={facetScopeParams(clearFilterField(filters, field))}
+          selected={selected}
+          disabled={!listEnabled}
+          onSelect={(value) => {
+            if (field === 'targetSkill') {
+              updateDraftValues('targetSkill', [...draftFilters.targetSkill.values, value]);
+              return;
+            }
+            setDraftFilters((current) => ({
+              ...current,
+              repository: { ...current.repository, mode: 'include', values: [value], exactText: '' },
+            }));
+          }}
+        />
+      );
     }
     return null;
   };
@@ -2176,14 +2353,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       const draft = draftFilters.progress;
       return (
         <div className="queue-inline-filter workflow-list-filter-control">
-          <div className="workflow-list-filter-sort-actions">
-            <button type="button" className="secondary" onClick={() => { setSortField('progress'); setSortDir('asc'); }}>
-              Sort least complete first
-            </button>
-            <button type="button" className="secondary" onClick={() => { setSortField('progress'); setSortDir('desc'); }}>
-              Sort most complete first
-            </button>
-          </div>
           <div className="workflow-list-progress-range">
             <label>
               Completion from percent
@@ -2646,6 +2815,42 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 
+  // Cards have no column headers, so narrow layouts sort from this toolbar
+  // control instead of the filter drawer.
+  const renderSortControl = () => {
+    const current = `${sortField}:${sortDir}`;
+    const options = TABLE_COLUMNS.filter((column) => column.sortable).flatMap((column) =>
+      (['desc', 'asc'] as const).map((direction) => ({
+        value: `${column.field}:${direction}`,
+        label: sortOptionLabel(column.field, direction),
+      })),
+    );
+    if (!options.some((option) => option.value === current)) {
+      options.unshift({ value: current, label: sortOptionLabel(sortField, sortDir) });
+    }
+    return (
+      <label className="workflow-list-sort-control">
+        <span className="sr-only">Sort workflows</span>
+        <select
+          value={current}
+          title={CURRENT_PAGE_SORT_NOTICE}
+          onChange={(event) => {
+            const [field, direction] = event.target.value.split(':');
+            if (!field || (direction !== 'asc' && direction !== 'desc')) return;
+            setSortField(field);
+            setSortDir(direction);
+          }}
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  };
+
   // Desktop entry point to the full advanced-filters drawer. When the results
   // header row is dropped on desktop, the per-column buttons only cover
   // TABLE_COLUMN_FILTER_FIELDS, so this keeps every drawer-only field (ID, Skill,
@@ -2687,6 +2892,16 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // options" icon when that header is available. Keep the labelled header
   // controls as a fallback for active-filter empty/loading states and for
   // desktop tables without the Actions column.
+  const visibleDrawerFields = DRAWER_FILTER_FIELDS.filter(
+    ([field]) =>
+      field !== 'targetRuntime' ||
+      filters.targetRuntime.values.length > 0 ||
+      draftFilters.targetRuntime.values.length > 0,
+  );
+  const activeDrawerSectionCount = visibleDrawerFields.filter(([field]) =>
+    Boolean(filterSummary(field, draftFilters, formatProviderProfileId)),
+  ).length;
+
   const tableHasRows = !isLoading && !isError && sortedItems.length > 0;
   const showViewOptionsIcon = isDesktop && actionsEnabled && tableHasRows;
   const showResultsHeader =
@@ -2694,6 +2909,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
+      <PageHeader title="Workflows" className="workflow-list-page-header" />
       <RouterSearchListener onSearchChange={adoptUrlSearch} />
       {hasWorkflowListNotices ? (
         <section className="workflow-list-notices-deck" aria-label="Workflow list notices">
@@ -2753,8 +2969,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 if (!root) return;
                 const focusable = Array.from(
                   root.querySelectorAll<HTMLElement>(
-                    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
                   ),
+                ).filter(
+                  (element) => element.tagName === 'SUMMARY' || !element.closest('details:not([open])'),
                 );
                 const first = focusable[0];
                 const last = focusable[focusable.length - 1];
@@ -2785,7 +3003,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             }}
           >
             <header className="workflow-list-filter-drawer-header">
-              <h2 className="workflow-list-filter-drawer-title">Advanced filters</h2>
+              <div>
+                <h2 className="workflow-list-filter-drawer-title">Advanced filters</h2>
+                {activeDrawerSectionCount > 0 ? (
+                  <p className="small workflow-list-filter-drawer-count">
+                    {activeDrawerSectionCount === 1 ? '1 section active' : `${activeDrawerSectionCount} sections active`}
+                  </p>
+                ) : null}
+              </div>
               <button
                 type="button"
                 className="secondary workflow-list-filter-drawer-close"
@@ -2796,21 +3021,42 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </button>
             </header>
             <div className="workflow-list-filter-drawer-body">
-              {DRAWER_FILTER_FIELDS.filter(
-                ([field]) =>
-                  field !== 'targetRuntime' ||
-                  filters.targetRuntime.values.length > 0 ||
-                  draftFilters.targetRuntime.values.length > 0,
-              ).map(([field, label]) => (
-                <section
-                  key={field}
-                  className="workflow-list-filter-section"
-                  data-filter-section={field}
-                  aria-label={`${label} filter`}
-                >
-                  {renderFilterControl(field)}
-                </section>
-              ))}
+              {visibleDrawerFields.map(([field, label]) => {
+                const summary = filterSummary(field, draftFilters, formatProviderProfileId);
+                return (
+                  <section
+                    key={field}
+                    className="workflow-list-filter-section"
+                    data-filter-section={field}
+                    aria-label={`${label} filter`}
+                  >
+                    <details
+                      className="workflow-list-filter-section-disclosure"
+                      open={expandedDrawerSections.has(field)}
+                      onToggle={(event) => {
+                        const isOpen = event.currentTarget.open;
+                        setExpandedDrawerSections((current) => {
+                          if (current.has(field) === isOpen) return current;
+                          const next = new Set(current);
+                          if (isOpen) next.add(field);
+                          else next.delete(field);
+                          return next;
+                        });
+                      }}
+                    >
+                      <summary className="workflow-list-filter-section-summary">
+                        <span className="workflow-list-filter-section-label">{label}</span>
+                        <span
+                          className={`workflow-list-filter-section-value${summary ? ' is-active' : ''}`}
+                        >
+                          {summary || 'Any'}
+                        </span>
+                      </summary>
+                      {renderFilterControl(field)}
+                    </details>
+                  </section>
+                );
+              })}
             </div>
             <footer className="workflow-list-filter-drawer-actions workflow-list-filter-actions">
               <button
@@ -2902,6 +3148,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
             ) : null}
           </div>
+          {!isDesktop ? renderSortControl() : null}
           {renderViewOptions('text')}
         </header>
         ) : null}
@@ -2928,7 +3175,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 <table>
                   <colgroup>
                     {visibleColumns.map((column) => (
-                      <col key={column.field} className={column.colClassName} />
+                      <col key={column.field} className={column.colClassName} data-column={column.field} />
                     ))}
                     {actionsEnabled ? <col className="queue-table-column-actions" /> : null}
                   </colgroup>
@@ -2946,6 +3193,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             key={field}
                             aria-sort={sortable ? ariaSort : undefined}
                             className="workflow-list-header-cell"
+                            data-column={field}
                           >
                             {filterField ? (
                               <WorkflowColumnHeader
@@ -3098,7 +3346,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             </td>
                           ) : null}
                           {isColumnVisible('repository') ? (
-                            <td className="queue-table-cell-compact">{row.repository || '—'}</td>
+                            <td className="queue-table-cell-compact" data-column="repository">
+                              <RepositoryName value={row.repository} />
+                            </td>
                           ) : null}
                           {isColumnVisible('providerProfile') ? (
                             <td className="queue-table-cell-compact queue-table-cell-provider-profile">
@@ -3138,7 +3388,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       const progress = formatProgress(row);
                       const updatedAt = rowUpdatedAt(row);
                       return (
-                  <li key={rowWorkflowId(row)} className="queue-card">
+                  <li
+                    key={rowWorkflowId(row)}
+                    className={`queue-card${actionsEnabled ? ' queue-card--with-actions' : ''}`}
+                  >
                     <div className="queue-card-header">
                       <div>
                         <a
@@ -3166,6 +3419,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </dd>
                       </div>
                       <div>
+                        <dt>Updated</dt>
+                        <dd title={formatWhen(updatedAt)}>{formatRelative(updatedAt)}</dd>
+                      </div>
+                      <div>
                         <dt>Provider Profile</dt>
                         <dd>
                           <ProviderProfileValue
@@ -3178,31 +3435,23 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div>
                         <dt>Repo</dt>
-                        <dd>{row.repository || '—'}</dd>
-                      </div>
-                      <div>
-                        <dt>Updated</dt>
-                        <dd title={formatWhen(updatedAt)}>{formatRelative(updatedAt)}</dd>
+                        <dd>
+                          <RepositoryName value={row.repository} />
+                        </dd>
                       </div>
                     </dl>
-                    <div className="queue-card-actions">
-                      <a
-                        href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
-                        className="button secondary queue-card-details-action"
-                        role="button"
-                        onClick={() => rememberExplicitWorkflowSelection(rowWorkflowId(row))}
-                      >
-                        View details
-                      </a>
-                      {actionsEnabled ? (
+                    {actionsEnabled ? (
+                      // The title is the detail link; the menu is a sibling target,
+                      // never nested inside it.
+                      <div className="queue-card-actions">
                         <WorkflowRowActionsMenu
                           workflowId={rowWorkflowId(row)}
                           apiBase={payload.apiBase}
                           actionsEnabled={actionsEnabled}
                           taskEditingEnabled={taskEditingEnabled}
                         />
-                      ) : null}
-                    </div>
+                      </div>
+                    ) : null}
                   </li>
                       );
                     })}
