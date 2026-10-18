@@ -1,59 +1,36 @@
 # MoonSpec Document Model
 
-This document defines the document classes MoonSpec workflows operate on, the precedence rules between them, and how canonical documentation stays accurate as the code changes. MoonSpec skills and presets reference this document instead of restating its rules.
+MoonSpec turns an outcome or design into bounded implementation work. Its documents preserve the requested behavior through breakdown, specification, planning, and execution. They do not establish a separate instruction hierarchy: the operator's current request and applicable root or scoped `AGENTS.md` files set requirements.
 
-## Document Classes
+## Durable documentation and run artifacts
 
-### Canonical declarative documents
+Durable documentation under `docs/` explains architecture, interfaces, behavior, operating procedures, and useful design rationale. It may describe current implementation or an explicitly proposed design; make that distinction clear when it matters. “Canonical” means the maintained explanation of a topic, not an independent source of task authority.
 
-- **Location**: long-lived files under `docs/`.
-- **Content**: desired state — architecture, contracts, operator-visible behavior, and target semantics.
-- **Lifecycle**: version-controlled and durable. These are the primary source of truth for what the system is and how it should behave.
-- **Constraints**: canonical documents must stay declarative. Migration narratives, phased rollout sequencing, status checklists, and implementation backlogs must not become their primary framing.
+Run-scoped `spec.md`, `plan.md`, `tasks.md`, `research.md`, `contracts/`, story breakdowns, and handoffs live under gitignored `specs/` or `artifacts/` paths. They help execute a particular task and do not silently supersede its requested outcome or constraints. Preserve saved work needed to resume an active run even though it is not durable repository documentation.
 
-### Temporary execution artifacts
+One-time migration plans, rollout checklists, and progress trackers belong in issues, PRs, or gitignored run artifacts. Repeatable operating instructions can remain in `docs/`; using steps does not make an operating guide a temporary plan.
 
-- **Location**: `specs/`, `artifacts/`, and `artifacts/story-breakdowns/` (all gitignored).
-- **Content**: derived, run-scoped working material — `spec.md`, `plan.md`, `tasks.md`, `research.md`, `contracts/`, story breakdown JSON/markdown, and tool handoffs.
-- **Lifecycle**: disposable. They exist to execute one run of work and are never cited as authority for desired state. A spec is a temporary derived view of its canonical source, not a replacement for it.
+## Source packet labels
 
-### Imperative working documents
+Existing specification and breakdown packets use these descriptive labels:
 
-- **Location**: `docs/tmp/` or gitignored handoff paths.
-- **Content**: checklists, status trackers, migration and rollout plans, cleanup sequences — anything whose primary framing is steps, phases, checkboxes, or status.
-- **Lifecycle**: time-bound. Delete or archive them when the work completes.
+- **Canonical declarative document:** a maintained explanation or design describing behavior and constraints.
+- **Temporary execution artifact:** a run-scoped spec, plan, or other derived working material.
+- **Imperative working document:** input primarily organized as delivery steps, phases, or a progress checklist.
+- **Original request:** the operator's request when there is no source document.
 
-## Classification And Fallback Rule
+Classify mixed input by its primary framing. These labels describe the input for existing workflow consumers; they do not rank its authority or require a metadata header in the source document.
 
-A document is **declarative** when it describes what the system is or should be. A document is **imperative** when its primary framing is steps, phases, checkboxes, or status. Mixed documents are classified by their primary framing.
+## Design input and checklist fallback
 
-MoonSpec breakdown workflows prefer declarative input and must select a declarative source when one is provided or can be resolved. When no declarative design is available, breakdown workflows may use imperative input as a resilience fallback: extract the underlying desired system behavior, constraints, and operator outcomes from the steps instead of requiring explicit user confirmation. The output must record that source as imperative input and must not treat checklist steps, phases, or status rows as story boundaries unless they are independently valuable and testable user or operational outcomes.
+For breakdown, prefer input describing desired behavior and constraints when it is available. If only a checklist or implementation plan is available, extract the underlying user or operational outcomes rather than blocking solely because of the input's form. Record that the source was procedural input. Do not make checklist steps, phases, or status rows into story boundaries unless they independently deliver valuable, testable outcomes.
 
-MoonSpec specification workflows still produce declarative, single-story specs. If a spec starts from imperative input, it must translate that input into desired-state requirements and preserve assumptions or unresolved choices explicitly.
+Specification produces a declarative, single-story spec: what the story should accomplish, its constraints, and how success can be checked. When input is procedural, translate it into desired-state requirements and retain assumptions and unresolved choices explicitly. Planning and task artifacts can then describe how to implement that story.
 
-## Precedence Rule
+## Reconcile changes without losing intent
 
-When a derived artifact (`spec.md`, `stories.json`, `plan.md`, `tasks.md`) conflicts with its canonical source document:
+Compare a derived artifact with the source requirements actually adopted by the task. A spec, plan, or story breakdown cannot resolve a conflict merely by restating a different requirement. Use the current request, applicable `AGENTS.md` files, and evidence to correct stale documentation or derived artifacts; raise a genuine unresolved scope decision rather than silently changing acceptance criteria.
 
-1. The canonical document wins by default.
-2. If the change legitimately alters documented behavior, or evidence shows the canonical document itself is wrong, the change updates the owning document rather than silently overriding it in the derived artifact.
-3. Derived artifacts never resolve such conflicts on their own authority.
+Keep affected documentation accurate in the implementation change. Code establishes what currently exists, not whether a regression is acceptable. Preserve authorized desired behavior when implementation is incomplete, and report the gap without presenting an unimplemented proposal as shipped behavior.
 
-## Documentation Maintenance
-
-Documentation maintenance is part of ordinary change work. Review the documentation relevant to the change, rewrite affected explanations in place, remove superseded or duplicated material, and leave accurate documentation unchanged. Describe supported behavior without recording an unintended regression as intended design: code establishes what exists, and the task and standing repository policy establish whether it is acceptable.
-
-## Documentation Architecture Standard
-
-The [Documentation Architecture Standard](../DocumentationArchitecture.md) defines the documentation viewpoints (architecture, design, and contract viewpoints) that organize canonical declarative documents. Its viewpoint rules **refine** canonical declarative documents; they do **not** replace this model's lifecycle, classification, fallback, or precedence rules. The document classes, classification and fallback rule, and precedence rule defined above remain authoritative, and the standard is read as a refinement layered on top of them rather than a substitute. See the standard for the rules themselves; they are not restated here.
-
-### Read order
-
-Read MoonSpec documentation in this order:
-
-1. **MoonSpec Document Model** (this document) — document classes, classification and fallback, precedence, and documentation maintenance.
-2. **[Documentation Architecture Standard](../DocumentationArchitecture.md)** — viewpoint rules that refine the canonical declarative documents.
-3. **Project-local architecture / design / contract docs** — the canonical declarative documents for the project at hand.
-4. **Optional project-local implementation scratch** — temporary execution artifacts and imperative working documents, when present.
-
-Downstream projects may adapt this read order with minor local additions, such as repo-level AGENTS.md guidance or engineering and owner matrices, without changing the relative ordering above.
+Read only the source and references needed for the task. Repository-specific organization and authoring advice belongs in the consumer repository; MoonSpec adds no mandatory documentation read order or taxonomy.

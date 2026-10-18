@@ -2,13 +2,13 @@
 
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
-**Status:** Proposed (legacy cutover §12 implemented; remainder desired behavior)  
+**Status:** Proposed; legacy cutover has a separate implementation and qualification contract
 **Owners:** MoonMind Platform + Workflow Runtime + GitHub Integration  
 **Updated:** 2026-09-27\
 **Audience:** Workflow, preset, GitHub adapter, recovery, and dashboard contributors and operators  
 **Authority:** GitHub issue lifecycle labels, selection eligibility, attempt handoffs, and cross-deployment recovery behavior. Existing execution, checkpoint, publishing, and merge contracts retain their respective authority.  
 **Owning Surface:** Trusted GitHub issue operations and workflow terminal/reconciliation boundaries  
-**Related Implementation:** `moonmind/workflows/temporal/github_issue_lifecycle.py`, `moonmind/workflows/temporal/github_issue_legacy_cutover.py`, `moonmind/workflows/temporal/activities/github_issue_legacy_cutover_activities.py`, `moonmind/workflows/temporal/github_issue_search.py`, `moonmind/workflows/temporal/github_issue_attempts.py`, `moonmind/workflows/temporal/github_issue_claim_recovery.py`, `moonmind/workflows/temporal/github_issue_retry_reset.py`, `moonmind/workflows/temporal/story_output_tools.py`, `moonmind/workflows/adapters/github_service.py`, `tools/reset_issue_retry_allowance.py`, and `api_service/data/presets/github-issue-*.yaml`. Legacy reconciliation behavior is specified in [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md).
+**Implementation owners:** [Lifecycle](../../moonmind/workflows/temporal/github_issue_lifecycle.py), [attempt protocol/accounting](../../moonmind/workflows/temporal/github_issue_attempts.py), [selection](../../moonmind/workflows/temporal/github_issue_search.py), [lease guard](../../moonmind/workflows/temporal/github_issue_claim_lease.py), and [claim recovery](../../moonmind/workflows/temporal/github_issue_claim_recovery.py).
 
 **Related Docs:** [Workflow Presets System](WorkflowPresetsSystem.md), [Workflow Publishing](WorkflowPublishing.md), [Checkpoint Branch System](CheckpointBranchSystem.md), [Workflow Remediation](WorkflowRemediation.md), [Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md), and [PR Merge Automation](PrMergeAutomation.md).
 
@@ -16,30 +16,18 @@ This document defines desired behavior, not implemented or deployment-tested cap
 
 ## 1. Purpose and design decision
 
-A GitHub issue represents an objective that can outlive several workflow attempts. A failed attempt must not leave that objective permanently in progress, discard a useful partial PR, or disappear without a visible next action.
+An issue's objective can outlive workflow attempts. Labels describe lifecycle; one comment per attempt records ownership and recovery; ordinary PRs/branches hold portable code. Three independent deployments can coordinate through GitHub without sharing Temporal, databases, artifacts, or sessions.
 
-MoonMind uses a small label-based state machine, one identifiable comment per attempt, and ordinary GitHub PR/branch references. There is no coordination branch, coordination JSON file, distributed lease service, or shared deployment database requirement.
+Coordination is advisory, not an exclusive lock or fence. Participants renew bounded leases or lose shared-write authority. Expiry permits reassessment, not a claim that writers stopped, work vanished, or implementation completed. Stale labels and cleanup obligations cannot create permanent ownership. Ordinary worker disappearance alone does not require attention.
 
-The supported topology includes three independent MoonMind deployments on different devices. GitHub is their only shared coordination surface. No deployment assumes access to another deployment's Temporal service, PostgreSQL database, artifacts, filesystem, or live agent sessions.
-
-**Available work has no MoonMind status label. There is no required `status: todo` or `status: ready`.** Availability means eligible for assessment, not approved for unrestricted execution and not proof that no previous work exists.
-
-**Coordination is explicitly best-effort.** Labels and comments support discoverable ownership announcements, failure handoffs, conflict detection, and finite claim leases. They do not provide an exclusive distributed lock or fence an obsolete writer. Simultaneous duplicate starts remain possible. A participating owner must renew its GitHub-visible lease or lose permission to perform shared writes; another consumer can reassess the issue after expiry using GitHub alone. Strict single-writer enforcement would require an additional coordination capability and is not an implicit promise of this state machine.
-
-**Reservations are expiring and advisory.**
-
-> An issue reservation suppresses duplicate work only while its owner maintains a valid, bounded lease. Historical comments, stale labels, and incomplete cleanup never independently create permanent ownership. Losing ownership does not authorize discarding work or overwriting another contributor's changes.
-
-The objective is therefore not "never risk a duplicate attempt". It is: avoid duplicates where practical, preserve work, and guarantee that an abandoned reservation stops blocking progress. Four concerns stay separate, and each has exactly one authority:
-
-| Concern | What determines it |
+| Concern | Authority |
 | --- | --- |
-| What stage is the issue in? | Issue lifecycle, requirements, and PR evidence |
-| Is another MoonMind attempt currently reserving it? | A valid, unexpired reservation |
-| Does an old attempt still owe cleanup or preservation? | Its outstanding cleanup record |
-| Has someone intentionally stopped automatic work? | An explicit, attributable hold |
+| Lifecycle stage | Requirements and PR evidence |
+| Current reservation | Valid unexpired lease |
+| Outstanding preservation/cleanup | Attempt cleanup record |
+| Intentional automatic-work stop | Explicit attributable hold |
 
-A stale `status: in-progress` label prompts reassessment; it never rejects an issue on its own. An expired reservation never erases a saved branch, asserts that a process stopped, or declares implementation complete: it means only that the old attempt no longer holds a current reservation. Ordinary worker disappearance is not routed to `status: needs-attention`; attention is reserved for a concrete unresolved decision or safety problem.
+Available work needs no `status: todo`/`status: ready` label. Availability permits assessment, not unrestricted execution or disregard of prior work.
 
 ## 2. State vocabulary
 
@@ -56,38 +44,17 @@ The four canonical open-issue status labels are:
 
 Ordinary labels such as bug, feature, priority, or component are independent of this state machine. Existing dependency and blocker rules continue to apply. An issue without a status label can still be blocked by its prerequisites or outside the user's requested scope. The `manual-only` label is such a start blocker: people, not automation, must finish the issue (section 5.4).
 
-Search results distinguish an empty candidate set from candidates excluded by lifecycle,
-dependencies, author scope, or unresolved attempt ownership. `searchEvidence` retains
-aggregate rejection counts and at most 20 candidate examples, prioritizing ownership
-conflicts. Each conflict includes up to 10 recorded attempt/comment identities or its
-local claim owner; truncation is explicit. These identities are diagnostic references,
-not proof of current writer status. A scan blocked by attempt ownership reports
-`unresolved_issue_attempts` and explains the stop/preservation evidence needed before
-retrying. Removing a status label alone never releases an attempt. `selectedIssueAuthor`
-is present only after the candidate reservation succeeds.
+Search distinguishes empty backlog from lifecycle, dependency, author-scope, ownership, budget, and cooldown exclusions. `searchEvidence` reports counts and bounded samples (20 candidates, up to 10 attempt/comment identities per ownership conflict), with explicit truncation. Ownership blocks report `unresolved_issue_attempts`; IDs are diagnostics, not writer proof. `selectedIssueAuthor` appears only after reservation succeeds.
 
-An idle search reports that it completed without selecting an issue, followed by
-how many matching candidates each cause blocked, largest first -- for example,
-"65 matching issues were blocked by historical attempt limits, 7 by lifecycle
-status, 1 by a prerequisite, and 1 by cooldown." Retry-history exclusions
-(`budget_exhausted`, `cooling_down`) keep their samples ahead of bare label
-rejections, and each sample carries the retry explanation: the allowance, every
-charged attempt with its recorded outcome, and how many of those never recorded
-a terminal outcome. `unfinishedAttemptAccounting` counts the budget exclusions
-that rest on such records. Author scope is validated before these checks, so
-including other authors never changes a budget exclusion, and an
-authenticated-author search whose candidates were blocked by retry history
-reports `retry_history_exclusions` rather than `no_eligible_self_authored_issue`.
+Idle summaries rank blocker counts. Budget/cooldown samples precede bare label exclusions and explain allowance, charged outcomes, and unfinished accounting. Author filtering happens first: retry-history exclusion is not `no_eligible_self_authored_issue`. See [selection diagnostics](../../moonmind/workflows/temporal/github_issue_search.py) for the bounded projection.
 
 The existing configured `status: done` label may accompany verified completed closure. It is terminal presentation, not another open-work admission state. A closed issue with a not-planned disposition is not reported as successfully implemented. An open issue carrying `status: done` is inconsistent and is not silently treated as available.
 
 ### 2.1 State interpretation
 
-A settled open issue has either no canonical status label or one canonical status label, with one declared exception below. Label mutations are not transactional, so intermediate combinations can occur. Every other combination of multiple canonical status labels blocks new automatic admission until reconciled from evidence.
+A settled open issue has zero or one canonical status. Other combinations block admission until evidence reconciles them, except intentional `needs-attention` + `in-progress` while stop is unknown. That pair settles as Needs attention; authorized hold resolution clears both labels so the retained in-progress label cannot re-block it.
 
-`status: needs-attention` always blocks admission. It may deliberately coexist with `status: in-progress` while the old writer's stop status is unknown. This means attention is required, not that another deployment may take over. That pair is the declared result of the attention escalation, not an interrupted mutation, so it settles as Needs attention: it is reported as needing attention rather than as contradictory evidence, and it is left by the authorized resolution in section 3, not by reconciliation. The resolution clears the retained `status: in-progress` along with `status: needs-attention`, because leaving it behind would re-block the issue the moment the hold was released.
-
-An unrecognized workflow-status value is not equivalent to no status. It requires classification rather than silent admission. Superseded labels are not newly emitted, and historical or manually applied labels are not bulk-cleared without evidence. Unknown ownership remains unknown even when the label looks familiar.
+Unknown status/format requires classification. Superseded labels are not newly emitted or bulk-cleared. A manually applied in-progress label without trusted attempt evidence must be distinguished from confirmed stale managed bookkeeping; it is not age-cleared.
 
 ## 3. Transition contract
 
@@ -113,13 +80,9 @@ Transitions require authenticated GitHub reads, validated attempt evidence, and 
 
 All other transitions require an explicit decision under the existing authority contracts. Only an explicitly declared claim lease can expire. Workflow timeouts, old progress timestamps, and missing local records do not create that authority. Expiry never proves completion, safe workspace deletion, or an exact resume checkpoint.
 
-The retry allowance bounds work attempts on one issue, so only attempts that could have produced work consume it. When the full controlling history proves that no agent child ever started -- the deployment could not launch a runtime -- the attempt is recorded with the `runtime_unavailable` outcome. It stays in lineage and remains visible, but it is not charged to the allowance and it does not escalate the issue: a fault that affects every candidate equally is a deployment problem, not evidence about any issue. Such an attempt carries a portable cooldown instead, so a deployment that cannot launch rotates past the candidate rather than re-announcing on it, and the issue becomes admissible again once the window elapses without any operator act.
+Only attempts capable of producing work consume retry allowance. Complete controlling history proving no agent child started permits `runtime_unavailable`: retained lineage, no charge or attention escalation, portable cooldown from termination rather than later sweep time. The [recovery owner](../../moonmind/workflows/temporal/github_issue_claim_recovery.py) recognizes bounded pre-launch admission/capacity histories, including legacy lease expiry; failed admission or another underlying cause is not proof. Required provider-slot cleanup must finish first.
 
-A version-2 attempt still reading `in_progress` after its lease expired lost its owner before it recorded anything: an update recreated its worker, its device slept, or its finalizer never ran. Nothing reliably finishes that record -- reservation reclamation retires the advisory label without terminal authority over the attempt, a successor only ends the old owner's reservation, and the bounded reconciliation scan is scoped by lifecycle state. Such a lapsed attempt is therefore read the way `runtime_unavailable` is read: retained in lineage, not charged to the allowance, and carrying a portable back-off from the instant its lease lapsed. Its recorded PR, branch, or revision still routes the successor to continuation (section 7); only the charge is dropped.
-
-The back-off bounds a crash loop in time instead of by a permanent block that needs an operator. A lapse before dispatch (still `preparing`) is a deployment fault and carries the single `runtime_unavailable` window. Each lapse after dispatch (`active` or later) doubles the window, capped at one day, so an issue whose attempts keep dying is retried at a decaying rate while the rest of the backlog stays selectable. Where the local claim sweep records the `runtime_unavailable` outcome from the full controlling history, its back-off likewise runs from when the attempt ended, not from when the sweep reached it, so recording a long-dead attempt never defers the issue again. That history proves no runtime started when a closed AgentRun's complete initial-run history contains only known admission/capacity operations (including starting its provider manager) and claim renewal, with no child starts, no failed admission Activity, and either an acknowledged capacity request without a recorded slot grant ending in a recognized terminal capacity timeout or the exact legacy lease-expiry failure, or no capacity request ending in the lease owner's pre-launch unavailability failure; none may carry another underlying cause. Once any provider slot cleanup is complete, the capacity-wait evidence permits recovery without a runtime binding or checkpoint.
-
-Version-1 handoffs, whose writers never agreed to an expiry, and every recorded terminal outcome still cost an attempt. A version-1 `in_progress` record is reported as unfinished accounting rather than as a proven failure: retry decisions name the allowance, each charged attempt and its outcome, and how many charged attempts never recorded a terminal outcome. An operator who decides recorded outcomes deserve another try records an audited retry reset (section 5.3).
+A version-2 `in_progress` attempt whose lease lapses also remains in lineage without a charge. Before dispatch (`preparing`) it carries the single unavailable-runtime window; dispatched lapses double backoff, capped at one day. Preserved work still routes to continuation. Version-1 unfinished records and recorded terminal outcomes remain charged; diagnostics identify unfinished accounting separately from proven failure. Only an audited reset changes that accounting (section 5.3).
 
 A workflow whose admitted finish target is a completed PR handoff may end successfully in Code review without an active implementation owner. A PR-and-merge parent can remain awaiting review under its existing contract. Lack of new code during that wait is not by itself a stalled attempt.
 
@@ -133,7 +96,7 @@ Each attempt has a globally unique attempt ID, a stable installation-specific de
 
 The trusted integration creates one human-readable, machine-identifiable issue comment for that attempt. It updates its own comment during execution and leaves it as a terminal handoff afterward. Separate attempts do not overwrite one shared summary comment or rewrite each other's history.
 
-Sparse lifecycle updates retain the controlling claim's identity, lineage, candidate references, remaining requirements, and retry evidence unless newer evidence is supplied. Explicit empty requirements clear that list; an explicit zero retry allowance or remainder stays zero. Terminal finalization persists its canonical machine-readable handoff and original completion route with the existing finalization plan, so retries and lost acknowledgments cannot combine a committed candidate with later caller data. The confirmed label outcome is recorded before release publication and reused when recovering a missing final result. Older plans without completion-route evidence do not gain merge authority from retry inputs. Preserved PR/branch references, retry history, the concrete remaining gap, and the selected next action agree between the readable handoff and its portable metadata. Generic revisions belong only to the declared save method's reference. Additional retry evidence is deduplicated after retained lineage; the existing bounded history never evicts admitted predecessor IDs to make room for new entries, and readable handoffs explicitly report omitted additions.
+Sparse updates preserve identity, lineage, candidate, requirements, and retry evidence unless replaced explicitly; empty requirements and zero allowance remain meaningful. Persist the canonical handoff and original completion route in the finalization plan. Lost acknowledgments reuse confirmed labels and committed candidate data, never later caller inputs or invented merge authority. Readable and machine handoffs agree on saved references, remaining work, and next action. Bounded additions are deduplicated without evicting predecessor lineage; omissions are explicit.
 
 The comment carries only the information required to interpret and continue the work:
 
@@ -154,7 +117,7 @@ This is an attempt handoff, not another workflow database. Large logs, prompts, 
 
 A marker and body do not authenticate themselves. The integration validates comment provenance, issue identity, schema, and relevant GitHub objects. Issue text and arbitrary comments remain untrusted input. Shared credentials do not establish an adversarial security boundary between deployments.
 
-The trusted-poster set is derived, not declared. MoonMind posts every attempt handoff as the GitHub account behind the credential resolved at the trusted Activity boundary, so that account is always trusted for its own markers; no operator setting is required for a single deployment to read back its own evidence. `MOONMIND_TRUSTED_POSTERS` only adds further accounts, such as a second deployment that shares the repository. An unresolvable identity is reported as untrusted provenance rather than assumed.
+The account resolved from the Activity's posting credential is trusted for its own markers. `MOONMIND_TRUSTED_POSTERS` adds other accounts; unresolved identity remains untrusted.
 
 ### 4.2 Write and release behavior
 
@@ -167,50 +130,29 @@ Progress updates are coalesced and rate-bounded rather than emitted on every run
 | Waiting for unavailable local capacity | not renewed | the owner raises `ISSUE_CLAIM_CAPACITY_BLOCKED` on the renewal cadence; the parent records a deferral (`issue_claim_capacity_deferred`, no agent launched) and the issue returns to assessment |
 | Execution ends | renewal stops | the reservation is relinquished promptly |
 
-These are policy choices, not measured optima. The announcement deadline is one sixth of the running lease, so shortening one shortens both and the two phases cannot drift apart. The short announcement deadline exists because the gap between selection and dispatch is where a deployment most often dies while holding an issue; five minutes bounds that cost.
+The preparing deadline is one sixth of the running lease, bounding failures between selection and dispatch. Selection probes the selected/default profile (otherwise enabled profiles) before claiming. Observable saturation/cooldown returns `local_capacity_unavailable`; unobservable capacity is not saturation. Omnigent uses its Profile's owning harness manager, not a separate capacity manager.
 
-Selection checks capacity before it claims. The selected profile, or the configured default profile when one resolves, determines capacity; otherwise the runtime's enabled profiles are checked. When that selection observably has no free slot or is cooling down, the native tool returns `local_capacity_unavailable` without selecting or claiming an issue.
+New UserWorkflow histories keep this search unclaimed in `awaiting_slot`, rechecking every 30 seconds for 30 minutes with the original owner/profile/step/inputs and deterministic keys. A final bounded probe may finish after the deadline. Persistent saturation fails with `RESOURCE_EXHAUSTED`, retains capacity evidence, and skips dependents even under CONTINUE; it is not idle success or verified no-commit. Empty backlog remains idle. `run-issue-search-capacity-retry-v1` preserves retained histories' immediate-idle behavior. Existing schedule overlap applies; same-owner persisted receipts are recovered before selecting another issue.
 
-New `MoonMind.UserWorkflow` histories retain the same unclaimed search in `awaiting_slot` and recheck every 30 seconds through durable Temporal timers within a 30-minute capacity waiting budget. The search holds no place in the ProviderProfileManager queue, so it can start only in the gap between one holder's release and the next request; when other workflows keep re-requesting a busy slot those gaps last about a minute, and a steady recheck observes them where a backed-off one would sleep through them. Each recheck uses the original execution owner, runtime/profile selection, logical step, and inputs, with a deterministic recheck idempotency key. A final bounded tool probe can finish after the waiting deadline. Recovery continues that same run; an empty eligible backlog remains a legitimate idle outcome. Persistent saturation fails the objective with typed `RESOURCE_EXHAUSTED` (an execution failure, rather than invalid input), retains the initial and latest capacity evidence, and skips dependent work even under a CONTINUE plan policy. It never becomes verified `no_commit` or a successful objective. The replay marker `run-issue-search-capacity-retry-v1` preserves the original immediate-idle behavior and commands for retained histories.
+If capacity disappears after claiming but before the first slot grant, `ISSUE_CLAIM_CAPACITY_BLOCKED` triggers unavailable-runtime cooldown without charging allowance. After work has started, retries/later steps keep renewing while requeued (`workStarted`); they do not discard progress.
 
-An Omnigent selection queries the capacity manager for the selected Provider Profile's owning harness (`runtime_id`), as AgentRun admission does; the Omnigent Backend has no separate provider capacity manager. Existing Schedule overlap policy is unchanged: the default SKIP policy suppresses overlapping occurrences while this parent is open; explicitly configured overlap policies still apply, and the existing active-claim receipt prevents competing owners from claiming the same issue. Rechecks recover a persisted receipt for the same owner before considering another issue. Unobservable capacity is not saturation; selection proceeds.
+The trusted `issueClaimLease` brief binds owner, attempt, repository, issue, and comment. AgentRun verifies its durable receipt and GitHub before launch and owns renewal for managed/external runtimes. Parent integrations use the same guard; PR merge-child waits and post-merge completion retain parent renewal. The parent awaits child cancellation on lease loss.
 
-A deployment that still ends up queued behind unavailable capacity before its first slot grant, such as when a slot is taken after that check, does not renew: holding the backlog behind a queue it cannot drain is worse than releasing the issue and backing off. The owner raises the typed `ISSUE_CLAIM_CAPACITY_BLOCKED` error on the renewal cadence (replay-versioned for retained histories), which recovery records as `runtime_unavailable` with a portable cooldown instead of spending the issue retry allowance. The backoff covers only the claim's first slot grant: once the parent observes an AgentRun under the claim past capacity admission, it marks later AgentRun leases for that claim `workStarted`, so a step retry or later step that re-queues behind a Provider Profile another workflow took in the meantime keeps renewing and waits for the slot instead of discarding the claim's progress. The renewal is maintained in the same attempt comment. Participants maintain synchronized UTC clocks; the owner begins cancellation one minute before its last confirmed expiry to allow for bounded request latency and clock skew. This margin is cooperative protection, not a fence against delayed or nonparticipating writers.
+Participants use synchronized UTC clocks and start cancellation one minute before last confirmed expiry. Transient renewal failures retry every 30 seconds, before launch within one renewal interval and during execution within that stop margin. Each observation is deadline-bounded; identity mismatch, loss, or invalid deadline stops immediately through existing cancel/preserve/cleanup owners. Merge-wait renewal has a 30-second total timeout. Historical requests without leases and replay-versioned guards retain recorded behavior.
 
-The trusted brief carries the exact owner, attempt, repository, issue, and comment identity into `AgentExecutionRequest.parameters.issueClaimLease`. The canonical `MoonMind.AgentRun` entrypoint confirms this identity against its own durable receipt and GitHub before launch, then owns renewal across managed and external runtimes. A `retry` result or Activity failure is transient and retried every 30 seconds: before launch only within one renew interval, during execution only until the last confirmed deadline's stop margin; each observation starts inside, and is bounded by, that limit. Loss, identity mismatch, and an invalid deadline stop at once; loss of authority invokes the runtime's existing cancellation, preservation, and cleanup owner. Parent integration execution uses the same guard. The parent also maintains the claim while awaiting its PR merge-automation child, including external review/check waits and post-merge issue completion; this wait remains part of the admitted work after AgentRun ends. It uses the existing renewal Activity with a 30-second total timeout and awaits child cancellation on lease loss before closing the parent. Requests recorded without a lease retain their historical execution path; the merge-wait guard is replay-versioned for retained histories.
-
-A renewal persists its exact PATCH intent, rereads GitHub after an uncertain response, and extends authority only after confirmation. An expired attempt cannot revive its old lease, even if no successor is visible; it requires a new admission and attempt identity. Expired comments remain intact for prior-work assessment and retry reconstruction. A lease is never a substitute for stop/preservation evidence in a terminal `released` handoff.
-
-Agent completion cancels the auxiliary renewal loop. Wrapped Activity cancellation remains cancellation rather than a renewal retry, so an in-flight renewal cannot trap an already-completed primary result or keep extending its claim.
+Persist exact PATCH intent and reconcile uncertain responses before extending authority. An expired lease cannot revive: further work needs fresh admission/identity. Completion cancels the auxiliary renewer; wrapped Activity cancellation remains cancellation. Lease expiry never substitutes for terminal stop/preservation proof.
 
 ### 4.3 Relinquishing a reservation
 
-Two decisions are separate and must not be entangled:
+Shared writes require current uncontested ownership. Retiring one's own reservation requires authentic ownership of that record only, even with competitors. Withdrawal and its readback cannot be blocked by the contention they resolve; they cannot clear a successor's labels or invent stopped-writer evidence.
 
-* **Permission to continue shared work** requires current ownership and no winning competing claim.
-* **Permission to retire your own reservation** requires authentic ownership of that attempt record only. It does not require the absence of competitors.
+Once stopped, settled, and preserved, an attempt's ownership ends even if label/readback/comment bookkeeping fails. Record `ownershipEnded` separately from fully confirmed `released`; pending bookkeeping stays retryable. Expiry backs up withdrawal during outages.
 
-An attempt can therefore record its withdrawal even when another contributor has already claimed the issue: the operation that resolves contention is never blocked by contention. A withdrawing attempt still may not clear the successor's labels, overwrite their PR, or report stopped writers it did not observe. Reading back its own pending comment update is likewise never gated on contenders. When GitHub is unavailable, immediate withdrawal can fail; expiry is the backstop, so a cleanup failure cannot make a reservation permanent.
+Serialize comment writes per attempt locally. Before announcement validate live evidence under the PostgreSQL connection-scoped claim lock, held across durable POST intent, remote write, and receipt readback. Rejected reads can abandon a fresh reservation, never clear an existing uncertain intent. Retried creation reconciles the attempt marker; duplicate identical comments are one attempt, conflicting copies require reconciliation. Local serialization cannot fence other deployments.
 
-Ownership and bookkeeping are also separate facts. Once an attempt is proven stopped, settled, and preserved, its reservation ends even if the terminal label change is denied, the read-back is unknown, or the released comment is unconfirmed. Finalization reports `released` (bookkeeping complete) and `ownershipEnded` (this attempt no longer reserves the issue) independently; the pending bookkeeping stays recorded and retryable. A delayed finalizer that observes a successor retires its own attempt instead of remaining an unresolved contender forever.
+A terminal proposal precedes label release. Fully `released` requires stopped writers, verified or explicitly absent preservation, settled shared mutations, and observed labels. Another deployment may finish interrupted bookkeeping only from conclusive terminal evidence. Released/expired/superseded/held/conflicting attempts perform no new shared writes; resumed processes reread before effects.
 
-Comment creation and updates are serialized per attempt within the owning deployment. A retried create first checks for the same attempt marker. A lost HTTP response is an unknown result, not proof that the operation failed. Duplicate comments with the same attempt identity are one logical attempt, not extra retry allowance. Conflicting copies require reconciliation, not choosing whichever timestamp is newest.
-
-Before announcement, the owning deployment validates live comment evidence
-under its claim lock. PostgreSQL connection-scoped serialization remains held
-across the durable POST-intent commit, remote write, and receipt readback.
-A rejected read before intent leaves a fresh reservation abandonable; an
-existing intent is never cleared by this path because a prior write may be
-unknown. Selection can skip a conflicting remote candidate before reservation.
-This local serialization does not fence a writer in another deployment.
-
-A terminal handoff records a proposed disposition before removing blocking labels. It becomes released only after the writer is stopped, preservation is verified or explicitly absent, pending shared mutations are settled, and the intended label transition has been observed.
-
-Attempt comments are append-only. Deployments and operators do not delete attempt comments. When redaction is unavoidable, the redacting party first posts a GitHub-visible tombstone retaining the attempt ID, deployment ID, format version, retry/no-progress disposition, and successor lineage pointer, so admission can still detect prior history and request attention rather than infer a clean slate. Deletion without such a tombstone is detectable only through a lineage gap (a successor referencing a missing predecessor), a status label without its required handoff, or another observable marker; deletion of the sole history on an issue that has already returned to Available leaves no such marker and is indistinguishable from an issue that was never attempted (see §§5.3 and 10).
-
-An interrupted release is recoverable from the comment and GitHub evidence. Another deployment may finish that bookkeeping only when the recorded terminal stop and mutation outcomes are conclusive. Otherwise it requests attention.
-
-A released or expired attempt performs no further issue-state or PR writes. A resumed old process rereads GitHub before effects and stops when its attempt is released, expired, superseded, held, or in conflict. This rejects observable stale work, but it is not a fence against every delayed external request.
+Keep attempt history: update each attempt's own comment, never delete it. Unavoidable redaction first posts a visible tombstone preserving attempt/deployment/version, retry disposition, and successor lineage. Missing predecessors or labels without handoffs expose deletion; sole-history deletion on an Available issue is indistinguishable from never-attempted work. No strict retry guarantee follows from absent comments.
 
 ## 5. GitHub Issue Search and Implement
 
@@ -222,57 +164,33 @@ When a fresh GitHub read proves that a cached attempt's reservation has ended, o
 
 ### 5.1 Candidate eligibility
 
-An issue is eligible only when it is open, within the authorized repository/query scope, free of applicable start-blocking prerequisites, in Available or Recovery needed state, and not contradicted by a live reservation, a legacy reservation awaiting migration, an operator hold, unreadable attempt evidence, unknown prior work, or exhausted retry restrictions. Search and explicit issue loading reconcile advisory in-progress labels using fresh GitHub reads before applying this policy. Lease expiry permits assessment; the successor must inspect the retained attempt history and linked PRs before editing.
+An eligible issue is open, in authorized repository/query/author scope, unblocked by prerequisites, Available or Recovery needed, and free of live/legacy reservations, holds, unreadable evidence, unknown prior work, or exhausted restrictions. Expiry permits assessment only: inspect retained attempts and PRs before editing.
 
-Selection does not begin by skipping every in-progress label. An advisory label is reassessed against current attempt evidence, and the protocol always announces its attempt comment before applying the label, so a label with no attempt evidence behind it is left-over bookkeeping rather than ownership. Other settled statuses (`status: code-review`, `status: recovery-needed`, `status: needs-attention`) still decide eligibility on their own and are never age-cleared.
+Search, explicit loading, continuation, publication checks, and maintenance use one ownership interpreter. Reassess advisory in-progress labels through fresh reads rather than skipping all of them. A confirmed managed label with no supporting attempt can be reconciled as leftover bookkeeping; manual labels are not age-cleared. Review/recovery/attention statuses are never age-cleared.
 
-Search, explicit issue loading, continuation, publication checks, and maintenance all resolve effective ownership through one interpreter, so one path cannot reclaim an issue while another keeps treating its historical comment as a lock. Maintenance sweeps remain useful, but ordinary selection recovers an expired reservation without waiting for one.
-
-Exclusions are reported as actionable distinctions rather than one undifferentiated conflict — live reservation (with its deadline), expired reservation eligible for reassessment, legacy reservation awaiting migration, explicit operator hold, blocked from starting by another issue, existing PR requires continuation, and GitHub evidence temporarily unavailable. These are diagnostics in `searchEvidence`, not new GitHub labels.
-
-Recovery candidates remain within the user's requested search and priority scope. Eligible continuations receive bounded preference without allowing one repeatedly failing issue to monopolize every run. Code-review issues are routed to the existing PR follow-up journey when explicitly requested, not rediscovered as untouched implementation work.
-
-A bounded reconciliation scan also examines managed in-progress and attention issues. It is not limited to the selector's currently eligible results, so stranded labels remain visible. Exhausted pagination or read budgets produce an explicit incomplete-evidence result. They do not mean no competing attempt exists.
+Report live deadline, expired/legacy reservation, hold, prerequisite blocker, continuation-required PR, and unavailable evidence distinctly. Recovery stays within requested scope and receives bounded preference. Code review enters PR follow-up only when requested. Reconciliation also scans managed in-progress/attention issues, not just eligible search results; incomplete pagination/read budgets never mean no competitor.
 
 ### 5.2 Advisory claim
 
-Before expensive assessment or editing, an admitted candidate receives an attempt announcement and `status: in-progress`. Admission rereads the issue and attempt comments before launching work. It preserves the chosen issue identity so recovery cannot rerun the original search and silently switch to a different issue.
+Persist the durable claim receipt, announce one attempt comment, then apply in-progress before expensive assessment/editing. Re-read issue/comments before launch, retaining the exact selected issue through recovery. A later start resolves the receipt from its execution owner and authenticates the live comment; a bare attempt ID, trusted-looking brief, or label is insufficient.
 
-The admission Activity persists a claim receipt before publishing its attempt comment and applying the in-progress label. A later start step resolves that receipt from its durable execution owner and verifies the authenticated live comment before treating the existing in-progress label as already applied. The trusted brief carries the admitted issue and attempt identity through intermediate steps; those fields alone do not grant ownership. A bare attempt ID or a historical label-only claim is insufficient ownership evidence; missing, conflicting, stopped, or unreadable attempt evidence blocks continuation.
-
-A detected competing preparing or active attempt with an unexpired lease, or a legacy attempt without a lease, blocks shared mutations. Simultaneous announcements are ordered by GitHub's comment IDs: once an attempt has confirmed its own announcement, a contender that is still preparing and was announced later does not block it, so the earliest announcement continues and the later ones quiesce. Without this ordering, deployments whose schedules select the same candidate in the same instant would all stand down. An active contender still blocks regardless of order. Contenders stop or quiesce their own writers, preserve independent output where authorized, and surface the conflict. A deployment never clears the shared in-progress label merely because its own contender stopped. Automatic selection can move on to another candidate once its abandoned attempt is conclusively settled.
-
-There is no `status: claiming` label or per-device status-label family. Extra labels, fixed settling delays, and rereads are not represented as exclusive claim primitives.
+Live active contenders and legacy reservations block shared effects. Simultaneously preparing contenders use GitHub comment-ID order: the earliest confirmed announcement proceeds; later preparing attempts quiesce. Active contenders block regardless of order. Losers stop their writers and preserve independent output where authorized, without clearing another owner's status. Only conclusively settled abandonment permits moving to another candidate. Extra labels or settling delays do not create exclusive locks.
 
 ### 5.3 Shared retry history
 
-Fresh workflow IDs, device changes, and label removal do not reset the issue's automatic retry allowance. Admission evaluates linked attempt history and the applicable bounded policy. A continuation retains prior failures and no-progress evidence. Internal step retries are not separate issue attempts.
+New workflow IDs, deployments, and label removal do not reset allowance, cooldown, or no-progress history. Internal step retries are not new issue attempts. Lapsed version-2 records retain work without a charge; version-1 unfinished accounting remains visible.
 
-An operator-authorized retry reset is recorded explicitly, as one released attempt record with the `retry_reset` outcome, posted by the authenticated operator account. It names who authorized it, when, why, and the attempts it supersedes. Trusted provenance is not reset authority: admission and the claim sweep honor a reset only when it was posted by the authenticated account the deployment itself posts as and its authorization names that account; a reset record from any other poster, including a collaborator or configured trusted poster, stays in lineage and resets nothing, and the retry explanation counts it in `unauthorizedResets`. Lineage is read in the order GitHub recorded it: the attempts a reset names that were recorded before it, and their back-offs, stay visible for prior-work assessment but are no longer charged. Every other attempt counts normally, including one recorded after the operator reviewed the history but before the reset was posted. A reset never releases an operator hold, and lifecycle tool inputs cannot mint one. Lapsed version-2 attempts never need one: they are not charged (section 3). `tools/reset_issue_retry_allowance.py` inventories the configured repository by default and writes nothing; it plans a reset only for issues whose exhausted allowance includes unfinished version-1 accounting (recorded outcomes need `--include-recorded-outcomes`), refuses live reservations, holds, and unreadable or conflicting evidence, and with `--apply --reason` re-verifies each plan against fresh GitHub evidence before posting and confirming the record. When the exhausted allowance is what sent the issue to Needs attention -- its latest attempt was finalized there with writers stopped and no allowance remaining -- the same authorized decision first resolves that attention through the `needs_attention -> available` guard and confirms it by read-back; a failed resolution posts no reset, so the command can simply be re-run. Attention that the retry history does not explain is refused as `attention_not_from_retry_budget` and left for its own resolution. The command never deletes or rewrites comments and touches no other labels. It exits 0 when every requested reset was recorded, 1 when `--apply` recorded nothing, and 2 when a reset could not be recorded or confirmed. Conflicting lineage or policy evidence fails to attention rather than inventing a fresh budget. Exact global retry-count enforcement is not claimed under simultaneous duplicate starts. It is likewise not claimed when attempt evidence was deleted without a tombstone: an Available issue with no observable attempt comments is indistinguishable from one that was never attempted, so admission treats it as no observable history and does not claim the shared retry/cooldown budget was verified. Strict-budget operators must rely on tombstones and explicit reset records, not on the absence of comments.
+A reset is a released `retry_reset` attempt naming authorizer, time, reason, and superseded attempts. Only the authenticated posting account may authorize it; configured trusted posters alone cannot reset allowance (`unauthorizedResets`). It applies only to named attempts recorded before the reset in GitHub order, never intervening later attempts, holds, or ownership. Conflicting lineage/policy fails to attention. Concurrent starts and undetectable deletion preclude exact global-count guarantees.
+
+[Reset tool](../../tools/reset_issue_retry_allowance.py) is read-only by default. It plans exhausted allowances containing unfinished version-1 accounting; recorded outcomes require `--include-recorded-outcomes`. `--apply --reason` rechecks fresh evidence before posting and confirming, refusing live reservations, holds, or unreadable/conflicting evidence. If verified exhaustion alone caused the latest stopped attempt's attention, it first resolves `needs_attention -> available` through the lifecycle guard. Failed resolution posts no reset; unrelated attention returns `attention_not_from_retry_budget`. It never rewrites/deletes history or unrelated labels. Exit codes: 0 all requested resets confirmed, 1 apply recorded none, 2 recording/confirmation failed.
 
 ### 5.4 Manual-only issues
 
-MoonMind agents run in Linux containers. Some issues can only be finished elsewhere: they need Windows or macOS, special or physical hardware, physical presence, or another action no agent in a Linux container can perform. Retrying such an issue spends an attempt without progress.
+When no unmet requirement is work the Linux runtime can advance (for example physical hardware/presence or another OS), initial assessment records `manualOnly.reason` and nonempty `manualActions`. The trusted blocker step confirms one explanatory comment, then adds `manual-only` and ends idle without implementation/publication/failure. Uncertain writes reconcile; retries reuse the comment and ordinary released-claim handoff. An incomplete declaration is ignored.
 
-For GitHub issues, the shared initial assessment decides this. When no unmet requirement is work the runtime can advance, it records `manualOnly` (`reason` and `manualActions`) in its assessment artifact. The trusted `github.check_issue_blockers` step then:
+Remaining container work or missing credentials/permission/approval alone is not manual-only. Search skips the label; explicit workflows report it at the blocker step. Only a person removes it after manual work or to retry automation.
 
-* posts one comment explaining why and listing the manual actions;
-* adds the `manual-only` label;
-* ends the run as an idle outcome, with no implementation, publication, or failed status.
-
-The label is applied only after the comment is confirmed on GitHub, including after an uncertain write, so a labelled issue always explains itself. A declaration without both a reason and at least one manual action is ignored, and the issue stays with automation. The released claim follows the ordinary terminal handoff. A retried step reuses its comment. An issue with remaining container work, or one blocked only by a missing credential, permission, or approval, is not manual-only; that work proceeds, and verification records any manual remainder for the next assessment.
-
-`manual-only` is a start-blocking label. Search skips the issue. An explicit issue workflow stops at its blocker step and reports the label as its blocker. MoonMind never removes the label: a person removes it after doing the manual work, or when automation should try again.
-
-A `BLOCKED` assessment without a valid manual-only declaration fails at the
-blocker step, before the later In Progress step or implementation. The failure
-carries the assessment's bounded, redacted summary and artifact reference (or
-redacted local filename); a missing summary is reported as unavailable rather than inferred
-from issue history. A required but unreadable or malformed assessment likewise
-fails with repair guidance. The defensive In Progress gate uses the same failure
-report. Durable assessment verdicts take precedence over stale compact outputs.
-These failures use the ordinary terminal failed-attempt cleanup below; the
-blocker tool does not release the claim or mutate issue status itself.
+`BLOCKED` without valid manual-only evidence fails before In Progress/implementation, retaining bounded redacted assessment summary/ref (or explicit unavailable summary). Required unreadable/malformed assessments fail with repair guidance. Durable verdicts override stale compact outputs; the defensive In Progress gate agrees. Ordinary failed-attempt finalization owns release/status, not the blocker tool.
 
 ## 6. Failure handling and recovery
 
@@ -284,62 +202,11 @@ The owning deployment quiesces all associated writers, evaluates outstanding mut
 
 A failed child or internal remediation iteration does not release an issue while the controlling attempt remains active. A required verification failure does not become code review solely because a PR exists. Conversely, a reporting failure does not invalidate verified implementation evidence.
 
-API startup registers `MoonMind.GitHubIssueReconcile` every five minutes, enabled
-by default. The existing API schedule observer retries a failed registration
-every 30 seconds without depending on the workflow queue it is registering.
-Its empty-input maintenance route discovers repositories from configured scope,
-durable claim receipts, and its persisted repository list, compared
-case-insensitively so each repository is swept once under its configured
-spelling. It rotates through
-at most three repositories per sweep with a 40-second limit per repository and
-at most 25 issues per scan, with ten seconds per issue; persisted issue/page cursors prevent a busy prefix
-from permanently starving later issues. Shared lease decisions use GitHub only.
-The scan classifies each issue from the open-issue listing first: an issue
-outside the scan's lifecycle scope costs no per-issue read. An issue whose last
-outcome was a no-op decided from issue state alone (`settled_status_retained`,
-or `no_interrupted_transition` with no claim, PR, or pending effect) is not
-re-read while its listing `updated_at` is unchanged; any label or comment change
-moves `updated_at`. Issues with pending effects, and every issue the reconciler
-might change, are re-read before acting.
-The same route additionally rotates through at most 25 local claims, including
-claims whose advisory labels are missing. A failed controlling execution and all
-of its descendants must have been closed for at least five minutes before release
-is considered. A completed owner is reconciled the same way when its attempt
-comment still records `in_progress`: with the owner and every descendant closed,
-no finalizer remains to record that outcome. A completed owner that already
-recorded a terminal handoff, such as awaiting review, keeps that journey. When
-Temporal no longer holds the controlling history, the sweep reports
-`execution_history_unavailable`; the lapsed attempt is not charged either way
-(section 3), so no reset is required. For a small backlog with healthy services, verified no-work claims
-therefore become retryable on the next sweep after that grace period (normally
-five to ten minutes after terminal closure and runtime cleanup).
-Each claim has a 30-second observation/finalization budget; the sweep stops
-starting local claims after two minutes and preserves its rotation cursor. Slow owners
-therefore cannot indefinitely starve later claims. Portable comment lineage
-retains the existing retry allowance across fresh workflow IDs; exhaustion
-produces an attention disposition instead of an unlimited retry loop.
+The default five-minute `MoonMind.GitHubIssueReconcile` schedule is registered by API startup; its independent observer retries registration every 30 seconds. [Claim recovery](../../moonmind/workflows/temporal/github_issue_claim_recovery.py) owns bounded local sweeps; [lifecycle](../../moonmind/workflows/temporal/github_issue_lifecycle.py) owns shared decisions. Persisted repository/issue/claim cursors prevent starvation. Unchanged settled/no-effect listings may skip reads, but pending or mutable cases are reread.
 
-The owner reads complete, bounded Temporal histories rather than inferring death
-from comment age or an execution projection. Started agent children must have
-matching, digest-validated runtime bindings with completed fenced cleanup. The
-workspace owner binds a clean-worktree observation, including untracked files,
-to the preserved checkpoint's archive digest and exact revision. The reconciler
-then verifies through GitHub that this revision is still reachable from the
-recorded source branch. Repeat sweeps send that comparison as a conditional
-request with the stored `ETag`; a `304` reuses the stored verdict and does not
-count against the shared GitHub rate limit. The comparison grants no
-branch-write, PR, or completion authority. Remote read failures defer to a subsequent sweep without another agent
-turn. A run that never started an agent can release its unused reservation or
-confirmed announcement after the same terminal checks.
+Local recovery requires complete bounded controlling/descendant histories, all closed for at least five minutes. Completed owners with unfinished in-progress comments qualify; owners already in a terminal review journey retain it. Missing history reports `execution_history_unavailable`, never inferred death. Started agents require matching digest-validated runtime bindings and completed fenced cleanup. The workspace owner proves clean tracked/untracked content against the checkpoint digest/revision; GitHub must verify that revision remains reachable on the recorded branch. Conditional ETag reads may reuse prior observations. This grants no write/PR/completion authority.
 
-Automatic release uses the existing finalizer and per-attempt comment receipt:
-publish the terminal proposal, observe targeted label changes, and confirm the
-released comment before freeing the database reservation. An already-removed
-in-progress label does not bypass the stopped-writer and no-work checks. Lost
-acknowledgements resume the recorded finalization plan. Holds, active descendants,
-unknown mutation outcomes, unique commits, modified workspaces, missing historical
-preservation evidence, and foreign deployment claims remain explicit recovery
-dispositions. They are not converted into fresh issue implementations by age.
+Use the existing finalizer: terminal proposal, targeted label readback, then released comment. Missing labels do not bypass stop/no-work checks. Lost acknowledgments resume the saved plan. Holds, active descendants, uncertain mutations, unique commits, modified workspaces, missing preservation proof, and foreign claims remain distinct recovery dispositions. Unavailable reads defer without another agent run; expiry/accounting still follows section 3.
 
 ### 6.2 Unresponsive deployment
 
@@ -347,15 +214,17 @@ A missing local workflow record on device B says nothing about device A's execut
 
 For version-2 claims, another deployment uses complete authenticated GitHub issue/comment reads to check the declared deadline, scope, provenance, conflicting copies, other owners, and holds. If all leases have expired and no other status blocks admission, it rereads before removing only `status: in-progress`, then verifies the result. An observed successor prevents reclamation and retains its advisory label. Expiry does not rewrite the old owner's comment as `released`, claim that its process stopped, or discard its workspace. Existing PR/branch references and retry history remain authoritative inputs for the next assessment. `status: code-review`, `status: recovery-needed`, `status: needs-attention`, and explicit comment holds are never age-cleared.
 
-Persisted version-1 comments never agreed to a deadline, and an old activity timestamp cannot retroactively become a lease agreement. They are therefore ended by one explicit operator act rather than by an invented expiry or by remaining blockers forever.
+Version-1 writers never agreed to expiry. `MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT` is the operator's declaration that they are stopped/upgraded; until set, report `legacy_reservation_awaiting_migration`. Only comments GitHub timestamps before that instant lose authority. Stop/upgrade old writers first because they cannot honor new supersession rules.
 
-`MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT` records the operator's declaration that every version-1 writer is upgraded or stopped. Until it is set, a version-1 attempt still reserves its issue and is reported as `legacy_reservation_awaiting_migration` — a named, actionable diagnostic, not a silent empty backlog. Once set, a version-1 attempt whose comment GitHub timestamps *before* that instant no longer holds write authority; anything announced at or after it is untouched. The order matters: stop or upgrade the old writers first, because they do not understand that a superseded reservation no longer permits publication.
+Run [legacy-claim recovery](../../tools/recover_legacy_issue_claims.py) from a checkout with `tools/` (the command is absent from production images):
 
-`tools/recover_legacy_issue_claims.py` performs the one-time backlog migration as a reviewed batch rather than dozens of manual edits. It takes an inventory first (owner, protocol version, last known activity, linked PR or branch, explicit holds, proposed action) and only writes with `--apply`. It never deletes a comment, never removes a label, never rewrites a successor's or an untrusted author's comment, and never touches an issue that still has a live reservation or an explicit hold. Retiring a comment stamps the lease it never carried — renewed one lease-duration before the cutover, expired at the cutover — and appends a recovery disposition. Every other field is preserved: the attempt, its lineage, its retry history, its PR and branch references, and its unchanged claim that writers were never confirmed stopped. An attempt with preserved work is retired with `preserve_for_continuation` so the next attempt continues or reconciles it. Mixed deployments therefore drain through an explicit cutover; a missing foreign database or Temporal record is never a prerequisite for, or evidence of, expiry.
+```sh
+python tools/recover_legacy_issue_claims.py --repository owner/name --cutover-at <ISO-8601-instant> --report /tmp/claim-recovery.json
+```
 
-Run the command from a repository checkout where `tools/` is available (production images do not copy `tools/` into `/app`; only `tools/verify_deployed_ui_assets.py` ships in the image). Operators can invoke it with `python tools/recover_legacy_issue_claims.py --repository owner/name --cutover-at <ISO-8601-instant> --report /tmp/claim-recovery.json`, adding `--apply` after reviewing the inventory and confirming that old writers have stopped or upgraded. Application rechecks the complete issue evidence before every comment write, including scope, provenance, conflicting copies, holds, and intervening reservations. A remote readback of the exact intended body proves retirement even if the write acknowledgement was lost. Incomplete reads or unapplied planned writes remain in the report and produce a nonzero exit status. The command does not declare the repository available: ordinary selection still checks lifecycle state, prerequisites, retry history, and retained work.
+Review its inventory before `--apply`. It rechecks scope/provenance, copies, holds, and intervening claims before each write; refuses live claims/holds; never deletes comments/labels or rewrites untrusted/successor records. Retirement stamps an expired lease at cutover and recovery disposition while preserving all lineage, retry/work refs, and the fact writers were not confirmed stopped. Saved work uses `preserve_for_continuation`. Exact body readback reconciles lost acknowledgments; incomplete reads/unapplied writes report nonzero. Ordinary selection still evaluates all other gates.
 
-Reconciliation runs through existing MoonMind/Temporal facilities with bounded work and operational defaults. It adds no permanently running coordination container. It can repair incomplete confirmed handoffs, classify inconsistencies, and expose orphaned attempts without access to another deployment's services.
+See [Legacy Cutover](GitHubIssueLegacyCutover.md) for reconciliation and mixed-deployment compatibility. No foreign database or new coordination container is required.
 
 ### 6.3 GitHub unavailability
 
@@ -365,7 +234,7 @@ Local durable execution retains pending synchronization evidence for retry. Leas
 
 ## 7. Preserved work and PR continuation
 
-The normal continuation target is the existing trusted PR, not a new implementation from the base branch. Saved code and current GitHub state are reassessed against the issue's requirements. A percentage-complete claim or PR existence is not completion evidence.
+Prefer the trusted existing PR, reassessing its current head against requirements. A completion percentage or PR existence is not evidence of completion.
 
 | Evidence | Required routing |
 | --- | --- |
@@ -377,109 +246,47 @@ The normal continuation target is the existing trusted PR, not a new implementat
 | Closed-unmerged PR, multiple competing PRs, unclear ownership, or incompatible source | Require a decision rather than silently reopen, overwrite, or choose one |
 | Work exists only in another device's private storage | Require owner recovery or an authorized portable handoff, not a fresh start that silently discards it |
 
-A continuation records the exact repository, PR, branch, base, and head it adopted. The intended branch identity is preserved before PR creation so a lost create response can be reconciled by exact branch/PR identity. A mention of the issue number alone does not establish a canonical PR.
+Record the adopted repository, PR, branch, base, and head. Persist branch identity before PR creation to reconcile lost responses; an issue-number mention alone does not identify the canonical PR.
 
-Local filesystem and private MinIO checkpoints are not cross-device recovery points. GitHub-accessible code and a sufficient sanitized handoff are required for another device to continue independently. Retry from a step additionally requires the run's retained Temporal history and its live issue claim. Starting a new attempt from preserved code is described as continuation, not falsely reported as exact resume.
+Private filesystem/MinIO checkpoints are not cross-device recovery. Another deployment needs GitHub-accessible code and a sanitized portable handoff; retry from a step additionally needs the run's retained Temporal history and its live issue claim. Continuing saved code is not necessarily exact resume.
 
-The state machine does not widen publication authority. Explicit None does not permit a recovery push, PR creation, or merge. When the admitted save method is local-only, the issue remains visible for owner recovery rather than promising portable recovery. Existing checkpoint and artifact owners remain authoritative.
-
-A partial PR is not merged just to transfer work between devices. Merge and completion follow the existing publishing and review contracts. An intentionally accepted partial increment requires explicit authorization and must not carry misleading issue-closing semantics. Otherwise the default is to finish the existing PR.
+Publication authority is unchanged: None permits no recovery push/PR/merge, and local-only work requires owner recovery. Do not merge a partial PR merely to transfer it. Explicitly accepted partial increments need authorization and no misleading closing semantics.
 
 ## 8. Mutation safety and consistency limits
 
 ### 8.1 Label synchronization
 
-Trusted operations add and remove only labels owned by this lifecycle. They do not replace the entire issue label set or remove unrelated labels. GitHub exposes targeted label operations separately from whole-set replacement [1].
+Mutate only lifecycle-owned labels using targeted operations [1]. Add destination status before removing old blockers; Available has no destination label, so first record trustworthy stopped/no-work evidence and retry disposition. Intermediate combinations block admission.
 
-Transitions add the destination status before removing an old blocking status. Moving to Available has no destination label, so a trustworthy stopped/no-preserved-work handoff and retry disposition precede removal. Intermediate label combinations remain ineligible.
-
-Every retry reads current issue and attempt evidence. It abandons obsolete intended transitions when a newer attempt or operator decision is observable. A delayed old finalizer must not knowingly remove another attempt's active state. Reconciliation derives the next action from current evidence, not a stale local command queue.
-
-This is eventual reconciliation, not a transactional compare-and-swap. GitHub's documented label/comment operations do not provide conditional ownership acquisition, and conditional mutation requests are unsupported unless documented for the specific endpoint [1], [2], [3]. Two devices can both announce work. A delayed label mutation can still race a later read. Selectors therefore honor unresolved attempt evidence even when a label is missing.
+Every retry rereads issue/attempt evidence and abandons obsolete transitions after a successor/operator decision. This is eventual reconciliation, not compare-and-swap: GitHub label/comment APIs offer no documented conditional ownership acquisition [1–3]. Missing labels cannot override unresolved attempts; delayed mutations can still race reads.
 
 ### 8.2 PR and merge effects
 
-Before shared code or PR effects, the attempt rereads current state and stops on an observed competitor, operator hold, unexpected branch head, or ambiguous publication result. Workspaces remain isolated. Non-fast-forward overwrites and automatic force pushes are not an accepted way to reconcile competing work.
+Reread before shared effects and stop on competitors, holds, unexpected heads, or ambiguous results. Isolate workspaces; never reconcile by force push/non-fast-forward overwrite. Reuse portable PR Skills and trusted publishing/merge owners; labels grant no credentials or permission.
 
-PR assessment, repair, verification, and merge decisions reuse the resolved portable Skills and the existing trusted publication boundary. This state machine does not introduce a second PR resolver or merger. Issue labels do not grant credentials or merge permission.
-
-GitHub's merge API can check an expected PR-head SHA [4]. That checks the target revision, not MoonMind ownership. A read immediately before pushing or merging cannot eliminate every pause-between-check-and-write race. An explicitly recorded uncertain push or merge must be reconciled before repeating or replacing that operation; lease expiry does not resolve its outcome. A PR currently appearing unmerged does not prove an earlier request can no longer complete.
-
-No claim of exactly-once execution, perfectly bounded global retries, or fenced publication follows from this design. When strict exclusivity is required for a particular operation, it needs a separately qualified mechanism or operator-controlled serialization rather than being presented as a property of labels.
+GitHub's expected-head merge check protects revision, not MoonMind ownership [4]. Reconcile uncertain push/merge before repeating or replacing it; lease expiry or a currently unmerged PR cannot prove a pending request will never complete. Strict exclusivity needs separately qualified coordination or operator serialization; this design promises neither fencing nor exactly-once execution.
 
 ## 9. Visibility, operator actions, and boundaries
 
-Every terminal unsuccessful attempt leaves a durable next action in its comment, even when the issue returns to Available. Recovery needed identifies preserved progress. Needs attention identifies an unresolved intervention. Neither is silently dismissed by another workflow's launch.
+Every unsuccessful terminal attempt leaves its next action, even after returning to Available. Detail projections show lineage/deployment, state, saved PR/revision, requirements, retry eligibility, and sync errors. An orphaned remote attempt is unresponsive, not locally confirmed failed. Deployment identity survives recreation on `moonmind_secrets`.
 
-Workflow Detail and issue-centric views show the issue, attempt lineage, originating deployment, current state, preserved PR/revision, remaining requirements, retry eligibility, and synchronization errors. An orphaned remote attempt is reported as unresponsive, not inaccurately described as a locally confirmed failure.
+Operators can continue, hold, acknowledge, resolve contention, authorize retry, or explicitly abandon work. Acknowledgment alone never releases ownership or discards progress. Trusted Activities perform GitHub I/O; local Temporal owns local runtime facts, GitHub-visible evidence controls shared admission, and dashboards remain projections.
 
-An operator can continue existing work, hold automatic processing, acknowledge an incident without releasing the hold, resolve a competing-attempt conflict, or authorize retry after the prior writer is stopped. Acknowledgment alone never releases ownership or discards preserved progress. Intentional abandonment of work has an explicit disposition and audit trail.
+All deployments must recognize canonical labels/formats before relying on cross-device continuation. Unknown formats fail closed; nonparticipating old clients cannot be fenced by a version field.
 
-One shared lifecycle policy serves search, explicit implementation, terminal finalization, and reconciliation. GitHub I/O runs at trusted Activity/service boundaries. Local Temporal execution remains authoritative for local runtime facts, while shared admission consumes GitHub-visible evidence. Dashboards are projections, not alternative ownership authorities.
+## 10. Verification boundaries
 
-All participating deployments must recognize the canonical labels and attempt format before automatic cross-device continuation is relied upon. An older selector that ignores recovery/review/attention states can violate this contract. Unknown formats fail closed, but a version field cannot constrain an old client that ignores it. Coexistence with nonparticipating writers is not silently described as coordinated.
+Qualify three isolated deployments without shared storage through actual selector, workflow/Activity, preserved-work, publisher, and terminal-reconciliation paths. [Lifecycle unit coverage](../../tests/unit/workflows/temporal/test_github_issue_lifecycle.py), [lease coverage](../../tests/unit/workflows/temporal/test_github_issue_claim_lease.py), and [retry accounting](../../tests/unit/workflows/temporal/test_github_issue_retry_accounting.py) support focused verification; hermetic success alone is not deployed qualification.
 
-## 10. Conformance requirements
-
-Tests exercise three isolated deployments with no shared database, Temporal service, or artifact store. They assert the stated best-effort contract rather than inventing an exclusive-lock guarantee.
-
-| Scenario | Required evidence |
-| --- | --- |
-| Unlabelled open issue with ordinary classification labels | Eligible only after the usual scope, blocker, and prior-work checks |
-| No status label but unresolved active attempt comment | No fresh implementation starts on the assumption that work is unowned |
-| Recovery-needed issue with partial PR | Another deployment adopts the PR and implements only remaining requirements |
-| Code-review issue | Ordinary Search and Implement does not duplicate implementation |
-| Internal retry or active remediation | Issue remains owned by the controlling attempt |
-| Terminal failure before any edits | Failure history and budget survive the transition to Available |
-| Failure after PR creation but before recording its number | Exact recorded branch identity recovers the existing PR |
-| Failure after verified implementation or merge | Recovery performs missing finalization, not reimplementation |
-| Writer or merge-request outcome is unknown | No terminal stop/completion proof is invented; an uncertain shared write must be reconciled before repeating or replacing it |
-| Version-2 owner disappears or device sleeps | Another deployment reclaims the expired advisory label from GitHub evidence alone, retaining prior work and retry history |
-| Version-1 owner disappears or device sleeps | No retroactive lease; require terminal evidence or authorized operator resolution |
-| Renewal stops while an agent is active | The public AgentRun entrypoint cancels through the existing runtime owner before the last confirmed deadline; reconnection cannot revive the expired attempt |
-| All three announce simultaneously | The earliest announcement (lowest GitHub comment ID) continues; the later preparing attempts quiesce without clearing each other's status |
-| Old attempt resumes after an observed successor | It makes no new shared mutation and does not replay obsolete cleanup, and it can still retire its own reservation |
-| Search runs while the run's provider profile has no free slot | New workflow histories wait and recheck within the same unclaimed run for up to 30 minutes, then fail if capacity remains unavailable; retained histories keep their original idle completion. No issue is announced, labelled, or reserved during the wait |
-| Retry or later step of a claim that already held a slot re-queues behind a busy Provider Profile | The reservation keeps renewing while the AgentRun waits for the slot; no capacity backoff |
-| Reservation announced, then local capacity rejects the launch before any slot is granted | The owner raises `ISSUE_CLAIM_CAPACITY_BLOCKED` on the renewal cadence and backs off instead of claiming the next issue; recovery records it as `runtime_unavailable` without spending the retry allowance, including in the released handoff's recorded remaining count |
-| Withdrawal attempted while a contender is present | The withdrawal succeeds; other lifecycle updates still require uncontested ownership |
-| Label or terminal-comment bookkeeping fails during finalization | Ownership still ends; the bookkeeping stays pending and retryable |
-| Advisory status label with no attempt evidence at all | The issue is reassessed and the stale label reconciled, without summoning an operator |
-| Version-1 backlog is migrated | Old comments remain as history but stop acting as permanent reservations |
-| Completion dependencies remain open | Independently useful implementation can still start; the completion gate still holds closure |
-| Injected delayed mutation after an ownership check | Test exposes the unfenced race rather than claiming the label model prevents it |
-| GitHub accepts a comment/label/PR request but response is lost | Retry reconciles observed results and does not blindly repeat effects |
-| Interrupted terminal label transition | Mixed labels block admission, and conclusive handoff evidence permits reconciliation |
-| Human label or PR-head change | Unrelated labels/history are preserved and unexpected changes trigger reassessment |
-| Multiple competing or closed-unmerged PRs | No silent canonical selection, reopening, merge, or overwrite |
-| Private-only checkpoint | Cross-device continuation is not falsely offered as available |
-| Retry moves across devices | Prior failures, no-progress evidence, cooldown, and holds are retained |
-| Attempts lapsed without recording an outcome | They stay in lineage, spend no allowance, and back off (doubling per dispatched lapse, capped at a day); the issue is readmitted with no operator act |
-| Recorded outcomes exhaust the allowance | The rejection names the allowance and charged attempts; an audited reset readmits the issue without deleting history |
-| Deployment update recreates every container | The deployment keeps its identity (persisted on the `moonmind_secrets` volume), so its sweep still recognizes its own attempts |
-| Intentional cancellation | No automatic replacement is launched |
-| Deleted (detectable, for example lineage gap, label without handoff, or tombstone) or contradictory attempt evidence | Admission requests attention rather than inferring a clean slate. Sole-history deletion on an Available issue without a tombstone is indistinguishable from never-attempted and is an explicit limitation (§§4.2 and 5.3), not a needs-attention trigger |
-| GitHub outage, rate limit, or incomplete comment scan | No local-only claim or unsafe interpretation of missing evidence |
-| Manual in-progress label with no trusted attempt | Label is respected and not age-cleared |
-| Unsupported comment version or noncanonical workflow status | No silent admission or destructive normalization |
-| Required labels/issue permissions unavailable | Actionable local failure, with no claim that GitHub was updated |
-| Multiple failed steps and finalization errors | Original execution outcome remains distinguishable from synchronization/preservation failures |
-
-The changed production journey is exercised through the actual selector, workflow/Activity boundaries, preserved-work resolver, publisher, and terminal reconciler. Hermetic tests model interleavings and ambiguous responses. Authorized provider verification separately establishes real GitHub behavior. A local mocked success is not evidence that all three deployed devices conform.
+Exercise simultaneous announcements, stale writers, missing labels, unknown/deleted evidence, unavailable capacity before versus after work, uncertain comment/label/push/merge responses, interrupted release, expiry, explicit holds/cancel, and preserved-PR continuation. Test the unfenced delayed-write race honestly. Required permissions unavailable must produce an actionable local error, not a claimed GitHub update. Preserve original failure separately from synchronization/preservation errors.
 
 ## 11. Rationale and excluded alternatives
 
-No explicit todo label is needed because this design has no separate ready-for-automation approval gate. Adding one would create another synchronized value without changing the next action. A future readiness gate is a separate product decision, not a hidden reinterpretation of unlabeled issues.
+Recovery needed routes to saved work; Needs attention holds unresolved decisions/safety/budget problems. Comments supply identity and portable handoff that labels cannot hold; PR/checkpoint owners retain code. No separate todo approval gate, coordination branch/database, per-device lock label, silence-based expiry, forced partial merge, or timestamp-based winner is implied. Explicit leases bound abandoned claims while keeping ownership, cleanup, preservation, and completion distinct.
 
-Recovery needed exists because the next attempt must adopt previous work. Needs attention exists because some failures cannot safely authorize a replacement. These states carry distinct behavior rather than merely describing the previous workflow's result.
+## 12. Legacy compatibility
 
-Labels alone do not hold deployment identity or recovery evidence, so attempt comments supply the minimum portable handoff. They do not become a separate coordination branch or database. Existing PRs and checkpoint mechanisms hold the code itself.
-
-Undeclared expiry based on silence, per-device lock labels, forced partial-PR merges, and timestamp-based winner selection are excluded. Explicit comment leases bound failed-owner lockouts while retaining the distinction between claim authority, process cleanup, preservation, and completion. GitHub labels remain an advisory coordination surface.
-
-## 12. Legacy cutover implementation status
-
-The conservative legacy reconciliation cutover for this state machine is implemented (not merely desired): the decision layer lives in `moonmind/workflows/temporal/github_issue_legacy_cutover.py` under the single surviving policy owner (`github_issue_lifecycle`), and is reachable through the existing `github_issue.assess_legacy` / `github_issue.plan_legacy_repair` activity bindings instead of a new coordination service. Bounded read-only assessment, shared-guard repair planning, retained-history drainage, mixed-deployment qualification, and upgrade/rollback fixtures are covered by `test_github_issue_legacy_cutover_4184.py` and `test_github_issue_legacy_cutover_wiring_4184.py`, including an emission-path proof that new executions never write obsolete shapes. Full cutover behavior is specified in [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md). Post-integration provider and three-device qualification remains separately reported; source implementation alone does not claim deployed compliance.
+[GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md) owns the implemented assessment/repair path, retained-history drainage, and qualification limits. Source implementation is not proof of provider or three-device deployment compliance.
 
 ## References
 
