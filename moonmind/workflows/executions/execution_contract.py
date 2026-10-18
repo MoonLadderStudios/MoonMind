@@ -178,14 +178,42 @@ def workflow_has_explicit_steps(raw_steps: Any) -> bool:
 def workflow_requires_agent(
     task: Mapping[str, Any], parameter_payload: Mapping[str, Any] | None = None
 ) -> bool:
-    """Whether the task's executable plan requires an agent account.
+    """Whether the task or its finishing resolver requires an agent account.
 
     This follows planner precedence, including legacy Skill entries and the
-    single-task fallback. Runtime/model settings alone do not classify a tool
-    workflow as agent-backed. Presets must be expanded to classify their steps.
+    single-task fallback, plus the finishing owner's implicit resolver child.
+    Runtime/model settings alone do not classify a tool workflow as agent-backed.
+    Presets must be expanded to classify their steps.
     """
 
     from .preset_expansion import has_unexpanded_task_template
+    from .routing import _coerce_bool, merge_automation_candidates
+
+    parameters = parameter_payload or {}
+    top_publish = parameters.get("publish")
+    task_publish = task.get("publish")
+    publication = (
+        top_publish
+        if isinstance(top_publish, Mapping) and top_publish
+        else task_publish if isinstance(task_publish, Mapping) else {}
+    )
+    for candidate in merge_automation_candidates(
+        parameters, publish_payload=publication, task_payload=task
+    ):
+        if not isinstance(candidate, Mapping):
+            continue
+        try:
+            if not _coerce_bool(candidate.get("enabled"), default=False):
+                continue
+        except ValueError:
+            # Preserve intent for the finishing owner's validation error.
+            return True
+        finish_mode = candidate.get("finishMode") or candidate.get("finish_mode")
+        if not isinstance(finish_mode, str) or finish_mode.strip() != "review_only":
+            return True
+        # Only the first enabled candidate owns finishing. Native review does
+        # not launch the resolver child, but authored steps may still use agents.
+        break
 
     if has_unexpanded_task_template({"workflow": task}) or task.get("includes"):
         return True
