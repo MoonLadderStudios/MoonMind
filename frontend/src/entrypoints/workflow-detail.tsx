@@ -5,7 +5,6 @@ import {
   useState,
   type CSSProperties,
   type Dispatch,
-  type KeyboardEvent,
   type ReactNode,
   type SetStateAction,
 } from 'react';
@@ -7453,7 +7452,9 @@ function SessionContinuityPanel({
     ? unavailableReason(canSendFollowUp, 'Follow-up')
     : (canSendFollowUp ? 'Enter a message to send a follow-up.' : unavailableReason(canSendFollowUp, 'Follow-up'));
   const clearDisabledReason = unavailableReason(canClearSession, 'Clear / Reset');
-  const interruptDisabledReason = unavailableReason(canInterruptTurn, 'Interrupt turn');
+  const interruptDisabledReason =
+    unavailableReason(canInterruptTurn, 'Interrupt turn')
+    ?? (sessionSnapshot?.activeTurnId ? null : 'No turn is running.');
   const cancelDisabledReason = unavailableReason(canCancelSession, 'Cancel session');
 
   const submitFollowUp = () => {
@@ -7515,24 +7516,6 @@ function SessionContinuityPanel({
       expectedSessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
       reason: 'Operator confirmed stop session',
     });
-  };
-
-  const stopActiveTurn = () => {
-    if (busy || isTerminal) return;
-    if (canInterruptTurn) {
-      interruptTurn();
-      return;
-    }
-    if (canCancelSession) {
-      cancelSession();
-    }
-  };
-
-  const handleFollowUpKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Escape') return;
-    if (!canInterruptTurn && !canCancelSession) return;
-    event.preventDefault();
-    stopActiveTurn();
   };
 
   const renderControlButton = ({
@@ -7690,7 +7673,6 @@ function SessionContinuityPanel({
           id="session-follow-up"
           value={followUpMessage}
           onChange={(event) => setFollowUpMessage(event.target.value)}
-          onKeyDown={handleFollowUpKeyDown}
           rows={3}
           placeholder="Send a follow-up turn to the managed Codex session."
           disabled={busy || !canSendFollowUp}
