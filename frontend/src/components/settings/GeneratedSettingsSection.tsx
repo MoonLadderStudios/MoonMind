@@ -161,6 +161,16 @@ function settingFieldClassName(...classNames: string[]): string {
   return [...SETTING_FIELD_CLASS_NAMES, ...classNames].filter(Boolean).join(' ');
 }
 
+// Sources that mean an explicit value is in force rather than the default.
+const OVERRIDE_SOURCES = new Set([
+  'environment',
+  'workspace_override',
+  'user_override',
+  'operator_locked',
+  'provider_profile',
+  'secret_reference',
+]);
+
 function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source.replaceAll('_', ' ');
 }
@@ -825,22 +835,20 @@ export function GeneratedSettingsSection({
               // A pending null ("not set") is shown as such, not as the saved value.
               const currentValue = pendingChange ? pendingChange.value : descriptor.effective_value;
               return (
-                <div key={descriptor.key} className="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
+                <div key={descriptor.key} data-setting-key={descriptor.key} className="grid gap-4 py-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
                   <div className="min-w-0 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <h5 className="text-sm font-semibold text-slate-950 dark:text-white">{descriptor.title}</h5>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                        {sourceLabel(descriptor.source)}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                        {SCOPE_LABELS[scope]}
-                      </span>
-                      <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">
-                        {applyModeLabel(descriptor.apply_mode)}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                        {activationStateLabel(descriptor.activation_state)}
-                      </span>
+                      {OVERRIDE_SOURCES.has(descriptor.source) ? (
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                          {sourceLabel(descriptor.source)}
+                        </span>
+                      ) : null}
+                      {descriptor.activation_state !== 'active' ? (
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                          {activationStateLabel(descriptor.activation_state)}
+                        </span>
+                      ) : null}
                       {reloadBadges(descriptor).map((badge) => (
                         <span key={badge} className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
                           {badge}
@@ -859,7 +867,6 @@ export function GeneratedSettingsSection({
                     {descriptor.description ? (
                       <p className="text-sm text-slate-600 dark:text-slate-400">{descriptor.description}</p>
                     ) : null}
-                    <p className="text-xs text-slate-500 dark:text-slate-500">{descriptor.source_explanation}</p>
                     {descriptor.affected_process_or_worker ? (
                       <p className="text-xs text-slate-500 dark:text-slate-500">
                         Affects {descriptor.affected_process_or_worker}
@@ -881,18 +888,34 @@ export function GeneratedSettingsSection({
                         {diagnostic.message}
                       </p>
                     ))}
-                    <div className="flex flex-wrap gap-2">
-                      {descriptor.applies_to.map((target) => (
-                        <span key={target} className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                          {target}
-                        </span>
-                      ))}
-                    </div>
+                    <details className="setting-details text-xs text-slate-500 dark:text-slate-500">
+                      <summary className="cursor-pointer font-medium">Details</summary>
+                      <dl className="mt-2 grid gap-1">
+                        <div>
+                          <dt className="inline font-medium">Source: </dt>
+                          <dd className="inline">{sourceLabel(descriptor.source)} · {SCOPE_LABELS[scope]}</dd>
+                        </div>
+                        <p>{descriptor.source_explanation}</p>
+                        <div>
+                          <dt className="inline font-medium">Applies: </dt>
+                          <dd className="inline">{applyModeLabel(descriptor.apply_mode)}</dd>
+                        </div>
+                        {descriptor.applies_to.length > 0 ? (
+                          <div>
+                            <dt className="inline font-medium">Used by: </dt>
+                            <dd className="inline">{descriptor.applies_to.join(', ')}</dd>
+                          </div>
+                        ) : null}
+                        <div>
+                          <dt className="inline font-medium">Key: </dt>
+                          <dd className="inline min-w-0 break-all font-mono">{descriptor.key}</dd>
+                        </div>
+                      </dl>
+                    </details>
                   </div>
                   <div className="min-w-0 space-y-3">
                     {renderControl(descriptor, currentValue, updatePending)}
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="min-w-0 break-all font-mono text-xs text-slate-500 dark:text-slate-500">{descriptor.key}</span>
+                    <div className="flex flex-wrap items-center justify-end gap-3">
                       <div className="flex flex-wrap justify-end gap-2">
                         {canReadAudit ? (
                           <button

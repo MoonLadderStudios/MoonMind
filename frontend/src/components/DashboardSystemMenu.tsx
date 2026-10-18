@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Archive, Bot, ChevronDown, Moon, Rows3, Settings, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 
 import {
+  DASHBOARD_DESTINATIONS,
   DASHBOARD_DESTINATION_GROUPS,
   destinationGroupForDestination,
   destinationForPath,
@@ -25,6 +26,8 @@ const ICONS: Partial<Record<DashboardIconKey, typeof Settings>> = {
   wrench: Wrench,
 };
 
+type MenuDestinationState = DashboardDestinationState | 'unknown';
+
 const SECTION_LABELS: Record<string, string> = {
   recurring: 'Workflow resources',
   'omnigent-agents': 'Omnigent',
@@ -33,7 +36,7 @@ const SECTION_LABELS: Record<string, string> = {
 
 function DestinationLink({ destination, state, onSelect, menuItem = true }: {
   destination: DashboardDestination;
-  state: DashboardDestinationState;
+  state: MenuDestinationState;
   onSelect: () => void;
   menuItem?: boolean;
 }) {
@@ -61,6 +64,7 @@ function DestinationLink({ destination, state, onSelect, menuItem = true }: {
     >
       <Icon size={16} className="route-nav-icon" aria-hidden="true" />
       {destination.label}
+      {state === 'unknown' ? <span className="sr-only"> (availability unknown)</span> : null}
     </NavLink>
   );
 }
@@ -85,7 +89,7 @@ function DestinationSection({
         <DestinationLink
           key={destination.key}
           destination={destination}
-          state={destinationState(destination, uiInfo)}
+          state={uiInfo ? destinationState(destination, uiInfo) : 'unknown'}
           onSelect={onSelect}
           menuItem={menuItems}
         />
@@ -137,15 +141,23 @@ function DestinationSections({ destinations, uiInfo, onSelect, menuItems = true 
   });
 }
 
-export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
+const AVAILABILITY_UNKNOWN_NOTE = "Couldn't check which pages are available, so some may not open.";
+
+export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen, availabilityUnknown = false }: {
   uiInfo: DashboardUiInfo | null;
   mobileDrawerOpen: boolean;
+  /** True when `/api/ui/info` failed: list every System destination with an honest note. */
+  availabilityUnknown?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const location = useLocation();
-  const destinations = exposedSystemDestinations(uiInfo);
+  const unknown = availabilityUnknown && !uiInfo;
+  const destinations = unknown
+    ? DASHBOARD_DESTINATIONS.filter(({ navigationGroup }) => navigationGroup !== 'primary')
+    : exposedSystemDestinations(uiInfo);
+  const availabilityNoteId = useId();
   const activeDestination = destinationForPath(location.pathname);
   const activeDestinationGroup = destinationGroupForDestination(activeDestination) ?? (
     location.pathname.replace(/\/$/, '') === '/settings' || location.pathname.startsWith('/settings/')
@@ -229,7 +241,18 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
           <ChevronDown size={14} aria-hidden="true" />
         </button>
         {open ? (
-          <div className="dashboard-system-popover" role="menu" aria-label="System" onKeyDown={handleMenuKeyDown}>
+          <div
+            className="dashboard-system-popover"
+            role="menu"
+            aria-label="System"
+            aria-describedby={unknown ? availabilityNoteId : undefined}
+            onKeyDown={handleMenuKeyDown}
+          >
+            {unknown ? (
+              <p id={availabilityNoteId} className="dashboard-system-menu-note" role="presentation">
+                {AVAILABILITY_UNKNOWN_NOTE}
+              </p>
+            ) : null}
             <DestinationSections destinations={destinations} uiInfo={uiInfo} onSelect={() => setOpen(false)} />
           </div>
         ) : null}
@@ -237,6 +260,9 @@ export function DashboardSystemMenu({ uiInfo, mobileDrawerOpen }: {
       {mobileDrawerOpen ? (
         <div className="dashboard-system-inline" aria-label="System destinations">
           <div className="dashboard-system-inline-heading">System</div>
+          {unknown ? (
+            <p className="dashboard-system-menu-note" role="note">{AVAILABILITY_UNKNOWN_NOTE}</p>
+          ) : null}
           <DestinationSections
             destinations={destinations}
             uiInfo={uiInfo}

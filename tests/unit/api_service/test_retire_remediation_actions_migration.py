@@ -3,8 +3,10 @@ from __future__ import annotations
 import importlib
 
 import sqlalchemy as sa
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 
 RETIRED_COLUMNS = {
     "active_lock_scope",
@@ -30,6 +32,12 @@ def test_retire_remediation_actions_drops_only_typed_action_columns(monkeypatch)
         "api_service.migrations.versions.396_retire_remediation_actions"
     )
     assert migration.down_revision == "395_remediation_link_target"
+    assert len(migration.revision) <= 32
+    config = Config("api_service/migrations/alembic.ini")
+    config.set_main_option("script_location", "api_service/migrations")
+    assert tuple(ScriptDirectory.from_config(config).get_heads()) == (
+        migration.revision,
+    )
 
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as connection:

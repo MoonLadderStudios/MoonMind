@@ -144,7 +144,7 @@ def _admit_issues(db_path):
     return asyncio.run(_run())
 
 
-def test_migration_is_the_single_head(migration):
+def test_migration_chains_off_current_head(migration):
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -152,8 +152,11 @@ def test_migration_is_the_single_head(migration):
     assert len(migration.revision) <= 32
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
-    assert tuple(ScriptDirectory.from_config(config).get_heads()) == (
-        migration.revision,
+    assert (
+        ScriptDirectory.from_config(config)
+        .get_revision("395_remediation_link_target")
+        .down_revision
+        == migration.revision
     )
 
 

@@ -34,6 +34,13 @@ import {
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { CANONICAL_STEP_STATUSES, StatusIcon } from '../utils/statusIcons';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
+import {
+  Fact,
+  FactGroup,
+  FlatFactGrid,
+  TechnicalDetailsDisclosure,
+} from '../components/workflows/WorkflowDetailFacts';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { QueryStaleNotice } from '../components/dashboard/StaleDataNotice';
@@ -2016,28 +2023,6 @@ function MetricStrip({
   );
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{children}</dd>
-    </div>
-  );
-}
-
-function FlatFactGrid({ children }: { children: ReactNode }) {
-  return <dl className="flat-fact-grid">{children}</dl>;
-}
-
-function FactGroup({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="td-group">
-      <h4>{title}</h4>
-      <FlatFactGrid>{children}</FlatFactGrid>
-    </div>
-  );
-}
-
 function SegmentedNav<T extends string>({
   items,
   active,
@@ -2234,18 +2219,20 @@ function recordedProviderSummary(
   if (launchProfileChanged) return null;
   const providerLabel = execution.providerLabel?.trim();
   const providerId = execution.providerId?.trim();
-  const primary = providerLabel || providerId;
-  if (!primary) return null;
-  return (
-    <span className="stack gap-1">
-      <span>{primary}</span>
-      {providerId && providerId !== primary ? (
-        <span className="small">
-          Provider ID: <code className="text-xs break-all">{providerId}</code>
-        </span>
-      ) : null}
-    </span>
-  );
+  // The raw Provider ID lives in Technical details; the label leads here.
+  return providerLabel || providerId || null;
+}
+
+// Operator-facing skill selection; snapshot refs and provenance stay in Technical details.
+function workflowSkillSummary(execution: z.infer<typeof ExecutionDetailSchema>): string | null {
+  const names = [
+    ...(execution.taskSkills ?? []),
+    ...(execution.targetSkill ? [execution.targetSkill] : []),
+  ]
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const unique = Array.from(new Set(names));
+  return unique.length ? unique.join(', ') : null;
 }
 
 function persistedModelTierResolution(
@@ -5191,6 +5178,12 @@ function BranchExplorerPanel({
     selectedMutable,
     action: 'archive',
   });
+  // Policy or a missing checkpoint makes creation impossible, so the form is
+  // replaced by its one-line reason; draft validation keeps the form visible.
+  const createUnavailableReason = firstBranchBlockedReason([
+    !actionsEnabled && 'Branch actions are disabled by workflow policy.',
+    checkpointRows.length === 0 && 'No checkpoint is available to branch from yet.',
+  ]);
   const createDisabled = Boolean(createBlockedReason);
   const promoteDisabled = Boolean(promoteBlockedReason);
   const publishDisabled = Boolean(publishBlockedReason);
@@ -5263,6 +5256,9 @@ function BranchExplorerPanel({
         </div>
       )}
 
+      {createUnavailableReason ? (
+        <p className="notice subtle">Create branch unavailable: {createUnavailableReason}</p>
+      ) : (
       <div className="stack td-branch-preview">
         <h4>Create branch preview</h4>
         <div className="grid-2">
@@ -5367,6 +5363,7 @@ function BranchExplorerPanel({
         </button>
         {createBlockedReason ? <p className="notice subtle">Create branch unavailable: {createBlockedReason}</p> : null}
       </div>
+      )}
 
       {selectedBranch ? (
         <div className="stack td-branch-preview">
@@ -6725,6 +6722,7 @@ function InterventionPanel({
     createdAt: string;
   }>;
 }) {
+  if (audit.length === 0) return null;
   return (
     <section className="stack">
       <div>
@@ -6736,9 +6734,7 @@ function InterventionPanel({
 
       <div className="stack">
         <h4>Intervention History</h4>
-        {audit.length === 0 ? (
-          <p className="small">No intervention actions recorded yet.</p>
-        ) : (
+        {(
           <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {audit.map((entry, index) => (
               <li key={`${entry.createdAt}-${entry.action}-${index}`} className="card">
@@ -8019,25 +8015,15 @@ function RemediationRelationshipsPanel({
 function RemediationEvidencePanel({
   artifacts,
   apiBase,
-  showEmpty,
 }: {
   artifacts: z.infer<typeof ArtifactSummarySchema>[];
   apiBase: string;
-  showEmpty: boolean;
 }) {
   const remediationArtifacts = artifacts
     .map((artifact) => ({ artifact, type: remediationArtifactType(artifact) }))
     .filter((item): item is { artifact: z.infer<typeof ArtifactSummarySchema>; type: string } => Boolean(item.type));
 
-  if (remediationArtifacts.length === 0) {
-    if (!showEmpty) return null;
-    return (
-      <section className="stack td-remediation-region td-evidence-region">
-        <h3>Remediation Evidence</h3>
-        <p className="notice subtle">No remediation evidence artifacts linked yet.</p>
-      </section>
-    );
-  }
+  if (remediationArtifacts.length === 0) return null;
 
   return (
     <section className="stack td-remediation-region td-evidence-region">
@@ -8392,7 +8378,7 @@ function ExecutionHistoryPanel({
   const rows = [
     {
       relationship: 'current',
-      workflowId: execution.workflowId || execution.taskId || '—',
+      workflowId: '',
       runId: currentRunId,
       status: currentStatus,
       href: '',
@@ -8409,9 +8395,6 @@ function ExecutionHistoryPanel({
     <section className="stack td-runs-region td-evidence-region" data-mm-issue="MM-772">
       <h3>Execution History</h3>
       <div className="grid-2">
-        <Card label="Workflow ID">
-          <code className="text-xs break-all">{execution.workflowId || execution.taskId || '—'}</code>
-        </Card>
         <Card label="Current Run ID">
           <code className="text-xs break-all">{currentRunId}</code>
         </Card>
@@ -8433,7 +8416,9 @@ function ExecutionHistoryPanel({
               <tr key={`${row.relationship}-${row.workflowId}-${row.runId}-${index}`}>
                 <td>{formatStatusLabel(row.relationship)}</td>
                 <td>
-                  {row.href ? (
+                  {row.relationship === 'current' ? (
+                    'This workflow'
+                  ) : row.href ? (
                     <a href={row.href}><code>{row.workflowId}</code></a>
                   ) : (
                     <code>{row.workflowId}</code>
@@ -9592,34 +9577,67 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const historicalModel = modelTierResolution?.resolvedModel?.trim() || execution?.model;
   const historicalEffort = modelTierResolution?.resolvedEffort?.trim() || execution?.effort;
   const historicalProfileId = modelTierResolution?.providerProfileId?.trim() || execution?.profileId;
+  // Execution detail records the stable profile ID only; the current profile
+  // list supplies the operator-facing label, falling back to the ID.
+  const providerProfileLabelsQuery = useQuery({
+    queryKey: ['workflow-detail', 'provider-profile-labels'],
+    enabled: overviewTabActive && Boolean(historicalProfileId?.trim()),
+    staleTime: 60_000,
+    queryFn: async (): Promise<Map<string, string>> => {
+      const response = await fetch(`${payload.apiBase}/v1/provider-profiles`, { credentials: 'same-origin' });
+      if (!response.ok) throw await responseError(response, 'Provider Profiles');
+      const value: unknown = await response.json();
+      const labels = new Map<string, string>();
+      if (!Array.isArray(value)) return labels;
+      for (const entry of value) {
+        const record = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+        const id = typeof record?.profile_id === 'string' ? record.profile_id.trim() : '';
+        const label = typeof record?.account_label === 'string' ? record.account_label.trim() : '';
+        if (id && label) labels.set(id, label);
+      }
+      return labels;
+    },
+  });
   const sourceContext = resolveWorkflowSourceContext(execution);
+  const showsSourceContextStrip = sourceContext.hasRepository || Boolean(sourceContext.startingBranch);
+  const pageTitle = execution?.title?.trim() || 'Workflow';
+  const skillWarning =
+    execution?.skillRuntime?.diagnostics?.cause?.trim() ||
+    execution?.skillRuntime?.diagnostics?.remediation?.trim() ||
+    null;
+  const recordedProfileLabel = historicalProfileId
+    ? providerProfileLabelsQuery.data?.get(historicalProfileId.trim()) || null
+    : null;
   return (
     <div className="stack workflow-detail-page">
-      <div className="toolbar">
-        <div>
-          <h2 className="page-title">Workflow Detail</h2>
-          <div className="toolbar-identity-row">
-            <p className="page-meta">Workflow {taskId || '—'}</p>
-            {execution ? (
-              <WorkflowLifecycleStatusPill
-                completionDisposition={execution.completionDisposition}
-                objectiveOutcome={execution.objectiveOutcome}
-                status={workflowDisplayStatus}
-              />
-            ) : null}
-          </div>
-        </div>
-        <div className="toolbar-controls">
-          {taskId ? (
+      <PageHeader
+        title={pageTitle}
+        actions={
+          taskId ? (
             <IconMenuButton
               items={toolbarMenuItems}
               ariaLabel="Workflow actions"
               subject={workflowDialogSubject}
               subjectId={workflowDialogId}
             />
+          ) : null
+        }
+      >
+        <div className="toolbar-identity-row">
+          {execution ? (
+            <WorkflowLifecycleStatusPill
+              completionDisposition={execution.completionDisposition}
+              objectiveOutcome={execution.objectiveOutcome}
+              status={workflowDisplayStatus}
+            />
+          ) : null}
+          {taskId ? (
+            <span className="page-meta td-workflow-id" title="Workflow ID">
+              <code className="text-xs break-all">{taskId}</code>
+            </span>
           ) : null}
         </div>
-      </div>
+      </PageHeader>
 
       {taskId ? (
         <div className="td-subroute-nav-row">
@@ -9706,20 +9724,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           preserveContext
         />
       ) : !execution && detailQuery.isError ? (
-        <ApiErrorState error={detailQuery.error} subject="workflow" onRetry={() => void detailQuery.refetch()} />
+        <ApiErrorState error={detailQuery.error} subject="workflow" onRetry={() => void detailQuery.refetch()} headingLevel={2} />
       ) : execution ? (
         <>
           <QueryStaleNotice query={detailQuery} />
           <div className="td-hero">
             <div className="td-hero-body">
-              <div className="td-hero-headline">
-                <h3 className="td-title-text">{execution.title}</h3>
-                {workflowId ? (
-                  <span className="meta-inline td-hero-workflow-id">
-                    <code className="text-xs break-all">{workflowId}</code>
-                  </span>
-                ) : null}
-              </div>
               <button
                 type="button"
                 className="td-instructions-toggle"
@@ -9730,7 +9740,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 {instructionsExpanded ? 'Hide Workflow Inputs' : 'Show Workflow Inputs'}
               </button>
             </div>
-            {sourceContext.hasRepository || sourceContext.startingBranch ? (
+            {showsSourceContextStrip ? (
               <dl className="td-source-context" aria-label="Workflow source context">
                 {sourceContext.repository ? (
                   <div className="td-source-context-item">
@@ -9773,13 +9783,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 routeWorkflowId={taskId ?? workflowId}
                 search={search}
                 workflowTitle={workflowSubject}
-                statusPill={
-                  <WorkflowLifecycleStatusPill
-                    completionDisposition={execution.completionDisposition}
-                    objectiveOutcome={execution.objectiveOutcome}
-                    status={workflowDisplayStatus}
-                  />
-                }
                 runtimeLabel={
                   execution.targetRuntime ? formatRuntimeLabel(execution.targetRuntime) : null
                 }
@@ -9879,13 +9882,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
           {overviewTabActive ? (
             <div className="td-facts-region">
-              <SkillProvenanceBadge
-                resolvedSkillsetRef={execution.resolvedSkillsetRef}
-                taskSkills={execution.taskSkills}
-                targetSkill={execution.targetSkill}
-                skillRuntime={execution.skillRuntime}
-              />
-
               <FactGroup title="Agent">
                 {recordedHarnessLabel(execution.targetRuntime) ? (
                   <Fact label="Harness">{recordedHarnessLabel(execution.targetRuntime)}</Fact>
@@ -9900,7 +9896,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 ) : null}
                 {historicalProfileId ? (
                   <Fact label="Provider Profile">
-                    <code className="text-xs break-all">{historicalProfileId}</code>
+                    {recordedProfileLabel || (
+                      <code className="text-xs break-all">{historicalProfileId}</code>
+                    )}
                   </Fact>
                 ) : null}
                 {recordedProviderSummary(execution, historicalProfileId) ? (
@@ -9926,77 +9924,20 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     </Fact>
                   </>
                 ) : null}
-                {execution.priority !== null && execution.priority !== undefined ? (
-                  <Fact label="Priority">{execution.priority}</Fact>
+                {workflowSkillSummary(execution) ? (
+                  <Fact label="Skills">{workflowSkillSummary(execution)}</Fact>
                 ) : null}
+                {skillWarning ? <Fact label="Skill Warning">{skillWarning}</Fact> : null}
               </FactGroup>
 
-              {execution.omnigentExecutionPlan ? (
-                <FactGroup title="Omnigent authority">
-                  <Fact label="Execution Plan">
-                    <code className="text-xs break-all">
-                      {execution.omnigentExecutionPlan.planRef}
-                    </code>
-                  </Fact>
-                  <Fact label="Plan Digest">
-                    <code className="text-xs break-all">
-                      {execution.omnigentExecutionPlan.planDigest}
-                    </code>
-                  </Fact>
-                  {execution.omnigentRuntimeProviderTarget ? (
-                    <Fact label="Selected Path">
-                      <span data-runtime-provider-target>
-                        {execution.omnigentRuntimeProviderTarget.targetId} ·{' '}
-                        {formatStatusLabel(
-                          execution.omnigentRuntimeProviderTarget.state,
-                        )}{' '}
-                        · rollout generation{' '}
-                        {execution.omnigentRuntimeProviderTarget.ruleGeneration ??
-                          '—'}
-                      </span>
-                    </Fact>
-                  ) : null}
-                  {execution.omnigentRuntimeBinding ? (
-                    <>
-                      <Fact label="Runtime Binding">
-                        <code className="text-xs break-all">
-                          {execution.omnigentRuntimeBinding.runtimeBindingRef}
-                        </code>
-                      </Fact>
-                      <Fact label="Binding Fence">
-                        revision {execution.omnigentRuntimeBinding.revision ?? '—'} · generation{' '}
-                        {execution.omnigentRuntimeBinding.fencingGeneration ?? '—'} ·{' '}
-                        {formatStatusLabel(execution.omnigentRuntimeBinding.state)}
-                      </Fact>
-                    </>
-                  ) : (
-                    <Fact label="Runtime Binding">Pending post-lease acquisition</Fact>
-                  )}
-                </FactGroup>
-              ) : null}
-
               <FactGroup title="Git & Publish">
-                {sourceContext.repository ? (
-                  <Fact label="Repo">
-                    <RepositoryFact repository={sourceContext.repository} />
-                  </Fact>
-                ) : null}
                 {execution.publishMode ? (
                   <Fact label="Publish Mode">
                     {formatPublishModeLabel(execution.publishMode)}
                   </Fact>
                 ) : null}
-                {sourceContext.startingBranch ? (
-                  <Fact label="Starting Branch">
-                    <code className="text-xs break-all" title={sourceContext.startingBranch}>
-                      {sourceContext.startingBranch}
-                    </code>
-                  </Fact>
-                ) : sourceContext.hasRepository ? (
-                  <Fact label="Starting Branch">
-                    <span className="td-source-context-empty">Not recorded</span>
-                  </Fact>
-                ) : (
+                {/* Repository and starting branch are shown once, in the shared source context. */}
+                {showsSourceContextStrip ? null : (
                   <Fact label="Starting Branch">
                     <span className="td-source-context-empty">Not applicable</span>
                   </Fact>
@@ -10041,6 +9982,78 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
                 {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
               </FactGroup>
+
+              <TechnicalDetailsDisclosure>
+                <FactGroup title="Identifiers">
+                  <Fact label="Workflow ID">
+                    <code className="text-xs break-all">{workflowId || taskId || '—'}</code>
+                  </Fact>
+                  {historicalProfileId ? (
+                    <Fact label="Provider Profile ID">
+                      <code className="text-xs break-all">{historicalProfileId}</code>
+                    </Fact>
+                  ) : null}
+                  {execution.providerId?.trim() ? (
+                    <Fact label="Provider ID">
+                      <code className="text-xs break-all">{execution.providerId.trim()}</code>
+                    </Fact>
+                  ) : null}
+                  {execution.priority !== null && execution.priority !== undefined ? (
+                    <Fact label="Priority">{execution.priority}</Fact>
+                  ) : null}
+                </FactGroup>
+                {execution.omnigentExecutionPlan ? (
+                  <FactGroup title="Omnigent authority">
+                    <Fact label="Execution Plan">
+                      <code className="text-xs break-all">
+                        {execution.omnigentExecutionPlan.planRef}
+                      </code>
+                    </Fact>
+                    <Fact label="Plan Digest">
+                      <code className="text-xs break-all">
+                        {execution.omnigentExecutionPlan.planDigest}
+                      </code>
+                    </Fact>
+                    {execution.omnigentRuntimeProviderTarget ? (
+                      <Fact label="Selected Path">
+                        <span data-runtime-provider-target>
+                          {execution.omnigentRuntimeProviderTarget.targetId} ·{' '}
+                          {formatStatusLabel(
+                            execution.omnigentRuntimeProviderTarget.state,
+                          )}{' '}
+                          · rollout generation{' '}
+                          {execution.omnigentRuntimeProviderTarget.ruleGeneration ??
+                            '—'}
+                        </span>
+                      </Fact>
+                    ) : null}
+                    {execution.omnigentRuntimeBinding ? (
+                      <>
+                        <Fact label="Runtime Binding">
+                          <code className="text-xs break-all">
+                            {execution.omnigentRuntimeBinding.runtimeBindingRef}
+                          </code>
+                        </Fact>
+                        <Fact label="Binding Fence">
+                          revision {execution.omnigentRuntimeBinding.revision ?? '—'} · generation{' '}
+                          {execution.omnigentRuntimeBinding.fencingGeneration ?? '—'} ·{' '}
+                          {formatStatusLabel(execution.omnigentRuntimeBinding.state)}
+                        </Fact>
+                      </>
+                    ) : (
+                      <Fact label="Runtime Binding">
+                        Not bound yet; a runtime is attached when a worker starts this run.
+                      </Fact>
+                    )}
+                  </FactGroup>
+                ) : null}
+                <SkillProvenanceBadge
+                  resolvedSkillsetRef={execution.resolvedSkillsetRef}
+                  taskSkills={execution.taskSkills}
+                  targetSkill={execution.targetSkill}
+                  skillRuntime={execution.skillRuntime}
+                />
+              </TechnicalDetailsDisclosure>
             </div>
           ) : null}
 
@@ -10595,7 +10608,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               <RemediationEvidencePanel
                 artifacts={artifactsQuery.data?.artifacts || []}
                 apiBase={payload.apiBase}
-                showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
               />
 
               <ArtifactBrowserPanel

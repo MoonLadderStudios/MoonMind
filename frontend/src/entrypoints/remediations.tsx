@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardErrorState } from '../components/DashboardErrorState';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import { DataTable, type Column } from '../components/tables/DataTable';
 import { responseError } from '../lib/api/client';
 
@@ -156,11 +157,16 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     { key: 'updatedAt', header: 'Updated', sortable: true, render: (row) => formatDateTime(row.updatedAt) },
   ], []);
   if (endpointConfig.status === 'disabled') {
-    return <main className="data-wide-panel" aria-labelledby="remediations-title"><div role="alert"><h2 id="remediations-title">Remediation</h2><p>Remediation inventory is not enabled for this deployment.</p></div></main>;
+    return <main className="data-wide-panel" aria-labelledby="remediations-title"><PageHeader title="Remediation" headingProps={{ id: 'remediations-title' }} /><p role="alert">Remediation inventory is not enabled for this deployment.</p></main>;
   }
   if (query.isError) return <DashboardErrorState title="Remediation inventory unavailable" description="MoonMind could not load remediations." detail={query.error instanceof Error ? query.error.message : null} onRetry={() => void query.refetch()} />;
   return <main className="data-wide-panel" aria-labelledby="remediations-title">
-    <div className="page-header"><div><h2 id="remediations-title">Remediation</h2><p>Scan remediation workflows and their source Workflow provenance.</p></div><button type="button" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</button></div>
+    <PageHeader
+      title="Remediation"
+      description="Scan remediation workflows and their source Workflow provenance."
+      headingProps={{ id: 'remediations-title' }}
+      actions={<button type="button" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</button>}
+    />
     {unavailableCount > 0 ? <div className="notice error" role="status">
       <p>{unavailableCount === 1 ? '1 remediation could not be loaded.' : `${unavailableCount} remediations could not be loaded.`}</p>
       {unavailableItems.length ? <ul>{unavailableItems.map((item) => <li key={item.remediationWorkflowId}><code>{item.remediationWorkflowId}</code> (source <code>{item.targetWorkflowId}</code>): {item.message}</li>)}</ul> : null}

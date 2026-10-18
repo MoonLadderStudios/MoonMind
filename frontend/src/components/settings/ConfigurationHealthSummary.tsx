@@ -345,33 +345,24 @@ export function ConfigurationHealthSummary({
         </p>
       )}
 
-      <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          Permissions
-        </span>
-        {canWriteProviderProfiles ? (
-          <span className="text-xs text-slate-600 dark:text-slate-400">
-            Provider profile writes enabled
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-            <ReadOnlyBadge reason="Provider profile writes require the provider_profiles.write permission." />
-            Provider profile writes disabled — requires the{' '}
-            <code>provider_profiles.write</code> permission.
-          </span>
-        )}
-        {canRunGithubTokenProbe ? (
-          <span className="text-xs text-slate-600 dark:text-slate-400">
-            GitHub token probe available
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-            <ReadOnlyBadge reason="The GitHub token probe requires the settings.effective.read permission." />
-            GitHub token probe unavailable — requires the{' '}
-            <code>settings.effective.read</code> permission.
-          </span>
-        )}
-      </div>
+      {!canWriteProviderProfiles || !canRunGithubTokenProbe ? (
+        <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+          {canWriteProviderProfiles ? null : (
+            <span className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+              <ReadOnlyBadge reason="Provider profile writes require the provider_profiles.write permission." />
+              Provider profile writes disabled — requires the{' '}
+              <code>provider_profiles.write</code> permission.
+            </span>
+          )}
+          {canRunGithubTokenProbe ? null : (
+            <span className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+              <ReadOnlyBadge reason="The GitHub token probe requires the settings.effective.read permission." />
+              GitHub token probe unavailable — requires the{' '}
+              <code>settings.effective.read</code> permission.
+            </span>
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }

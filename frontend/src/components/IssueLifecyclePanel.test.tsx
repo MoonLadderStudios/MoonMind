@@ -71,9 +71,12 @@ describe('issueLifecycleEvidenceFromExecution', () => {
 });
 
 describe('IssueLifecyclePanel', () => {
-  it('renders an honest empty state when no issue is linked', () => {
-    renderWithClient(<IssueLifecyclePanel apiBase="/api" evidence={{}} />);
-    expect(screen.getByTestId('issue-lifecycle-empty')).not.toBeNull();
+  it('renders nothing and makes no request when no issue is linked', () => {
+    const fetchSpy = vi.spyOn(window, 'fetch');
+    const { container } = renderWithClient(<IssueLifecyclePanel apiBase="/api" evidence={{}} />);
+    expect(container.textContent).toBe('');
+    expect(screen.queryByRole('heading', { name: 'Issue lifecycle' })).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('renders lineage, recovery availability, and actions from the server projection', async () => {
