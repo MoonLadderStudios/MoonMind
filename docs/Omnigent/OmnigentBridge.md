@@ -190,7 +190,7 @@ Effective capabilities are upstream capability ∩ immutable Agent Profile snaps
 
 ## 12. Resource harvesting and artifacts
 
-The harvester copies changed files (`output.omnigent.changed_files*`), workspace files (`output.omnigent.workspace_files*`), diffs (`output.omnigent.workspace_diffs/<path>.diff`), session files (`output.omnigent.session_files*`), and child sessions (`runtime.omnigent.child_sessions*`) into artifacts. Diff capture is capability-probed and publishes `output.omnigent.patch_unavailable.json` rather than failing when unsupported. Live resource browsing in Chat is bound and non-authoritative; artifacts are the durable evidence.
+The harvester copies changed files (`output.omnigent.changed_files*`), workspace files (`output.omnigent.workspace_files*`), diffs (`output.omnigent.workspace_diffs/<path>.diff`), session files (`output.omnigent.session_files*`), and child sessions (`runtime.omnigent.child_sessions*`) into artifacts. Workspace reads request `download=true`; HTTP attachment and content-type metadata distinguish raw bytes from older servers’ JSON previews. Complete previews are decoded; truncated previews remain unavailable. These per-file preview limits do not apply to the independent durable workspace archive. Diff capture publishes `output.omnigent.patch_unavailable.json` when unsupported or when only a lossy before/after comparison is available. Live resource browsing in Chat is bound and non-authoritative; artifacts are the durable evidence.
 
 ## 13. Artifact outputs
 

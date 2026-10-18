@@ -10,6 +10,8 @@ from contextlib import aclosing
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 from moonmind.omnigent.bridge_artifacts import OmnigentContractError
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
@@ -193,7 +195,11 @@ async def test_workspace_file_rejects_incomplete_or_malformed_stock_envelope(upd
     client = OmnigentHttpClient(
         base_url="https://omnigent.test",
         transport=httpx.MockTransport(
-            lambda _: httpx.Response(200, content=json.dumps(payload).encode())
+            lambda _: httpx.Response(
+                200,
+                content=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            )
         ),
     )
     with pytest.raises(OmnigentClientError, match="workspace file") as caught:
@@ -204,12 +210,26 @@ async def test_workspace_file_rejects_incomplete_or_malformed_stock_envelope(upd
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "body", [b"plain file\n", b"{broken json", b'{"content":"ordinary JSON file"}']
+    "body",
+    [
+        b"plain file\n",
+        b"{broken json",
+        b'{"content":"ordinary JSON file"}',
+        (
+            b'{"object":"session.environment.filesystem.file_content","path":"report.txt",'
+            b'"encoding":"utf-8","bytes":6,"truncated":false,"content":"report"}'
+        ),
+        b'{"object":"session.environment.filesystem.unknown"}',
+        b'{"object":"session.environment.filesystem.file_content","content":',
+    ],
 )
-async def test_workspace_file_preserves_raw_bridge_resource_bytes(body):
+@pytest.mark.parametrize("headers", [{}, {"Content-Type": "application/octet-stream"}])
+async def test_workspace_file_preserves_raw_bridge_resource_bytes(body, headers):
     client = OmnigentHttpClient(
         base_url="https://omnigent.test",
-        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=body)),
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, content=body, headers=headers)
+        ),
     )
     assert await client.get_workspace_file("session", "report.txt") == body
 
@@ -334,7 +354,18 @@ async def test_omnigent_client_follows_agent_catalog_cursor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_omnigent_client_structures_and_redacts_non_2xx_diagnostics() -> None:
+@pytest.mark.parametrize(
+    "operation,args",
+    [
+        ("get_session", ("sess_1",)),
+        ("get_workspace_file", ("sess_1", "report.txt")),
+        ("get_workspace_diff", ("sess_1", "report.txt")),
+        ("get_session_file_content", ("sess_1", "file_1")),
+    ],
+)
+async def test_omnigent_client_structures_and_redacts_non_2xx_diagnostics(
+    operation, args
+) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer secret-token"
         return httpx.Response(
@@ -353,7 +384,7 @@ async def test_omnigent_client_structures_and_redacts_non_2xx_diagnostics() -> N
     )
 
     with pytest.raises(OmnigentClientError) as exc:
-        await client.get_session("sess_1")
+        await getattr(client, operation)(*args)
 
     diagnostics = exc.value.diagnostics()
     assert diagnostics["statusCode"] == 503
@@ -965,6 +996,7 @@ async def test_workspace_file_rejects_malformed_reserved_envelope_json():
             lambda _: httpx.Response(
                 200,
                 content=b'{"object":"session.environment.filesystem.file_content","content":',
+                headers={"Content-Type": "application/json"},
             )
         ),
     )
@@ -980,8 +1012,169 @@ async def test_workspace_diff_rejects_malformed_reserved_comparison():
             lambda _: httpx.Response(
                 200,
                 content=b'{"object":"session.environment.filesystem.file_diff","before":',
+                headers={"Content-Type": "application/json"},
             )
         ),
     )
     with pytest.raises(OmnigentClientError, match="comparison"):
         await client.get_workspace_diff("session", "report.txt")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_mode", ["transport", "injected", "shared"])
+@pytest.mark.parametrize(
+    "filename,body",
+    [
+        ("report.txt", b"complete report line\n" * 2500),
+        ("report.bin", b"\x00\xff\x80binary\n"),
+        (
+            "report.json",
+            (
+                b'{"object":"session.environment.filesystem.file_content",'
+                b'"path":"report.json","encoding":"utf-8","bytes":6,'
+                b'"truncated":false,"content":"report"}'
+            ),
+        ),
+    ],
+    ids=["long-text", "binary", "envelope-json"],
+)
+async def test_workspace_file_downloads_complete_attachment(
+    tmp_path, monkeypatch, client_mode, filename, body
+):
+    # New stock routes forward the runner attachment's disposition and MIME.
+    # Older stock routes below instead answer capped JSON for the same query.
+    target = tmp_path / filename
+    target.write_bytes(body)
+    app = FastAPI()
+    downloads = []
+
+    @app.get(
+        "/v1/sessions/session/resources/environments/default/filesystem/{path:path}"
+    )
+    async def read_file(path: str, download: bool = False):
+        assert path == filename
+        downloads.append(download)
+        if download:
+            return FileResponse(target, filename=filename)
+        return {
+            "object": "session.environment.filesystem.file_content",
+            "path": path,
+            "encoding": "utf-8",
+            "bytes": 7,
+            "truncated": True,
+            "content": "preview",
+        }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        if client_mode == "shared":
+            monkeypatch.setattr(
+                "moonmind.workflows.adapters.omnigent_client.shared_pool_client",
+                lambda: http_client,
+            )
+        client = OmnigentHttpClient(
+            base_url="https://omnigent.test",
+            transport=transport if client_mode == "transport" else None,
+            client=http_client if client_mode == "injected" else None,
+        )
+        assert await client.get_workspace_file("session", filename) == body
+    assert downloads == [True]
+
+
+@pytest.mark.asyncio
+async def test_workspace_file_refuses_old_stock_capped_preview():
+    # Pinned server/runner and host WorkspaceReader cap reads at 2,000 lines;
+    # the server ignores download=true instead of providing an attachment.
+    body = b"complete report line\n" * 2500
+    preview = b"".join(body.splitlines(keepends=True)[:2000])
+    assert len(preview) < len(body) < 10 * 1024 * 1024
+    queries = []
+
+    def handler(request):
+        queries.append(request.url.query)
+        return httpx.Response(
+            200,
+            json={
+                "object": "session.environment.filesystem.file_content",
+                "path": "report.txt",
+                "encoding": "utf-8",
+                "bytes": len(preview),
+                "truncated": True,
+                "content": preview.decode(),
+            },
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(OmnigentClientError, match="truncated"):
+        await client.get_workspace_file("session", "report.txt")
+    assert queries == [b"download=true"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [b"[]", b'{"unexpected":"synthetic-secret"}', b'{"content":'],
+)
+async def test_workspace_file_rejects_invalid_json_protocol_response(body):
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                content=body,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+        ),
+    )
+    with pytest.raises(OmnigentClientError, match="workspace file") as caught:
+        await client.get_workspace_file("session", "report.txt")
+    assert "synthetic-secret" not in str(caught.value.diagnostics())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", [None, "text/x-diff"])
+async def test_workspace_diff_preserves_legacy_bytes_without_body_sniffing(
+    content_type,
+):
+    body = b'{"object":"session.environment.filesystem.file_diff","before":'
+    headers = {"Content-Type": content_type} if content_type else {}
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, content=body, headers=headers)
+        ),
+    )
+    assert await client.get_workspace_diff("session", "report.txt") == body
+
+
+@pytest.mark.asyncio
+async def test_workspace_download_retry_preserves_response_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client._CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.0,
+    )
+    body = b'{"object":"session.environment.filesystem.unknown","token":"file-data"}'
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.query)
+        if len(calls) == 1:
+            raise httpx.ConnectError("refused", request=request)
+        return httpx.Response(
+            200,
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Disposition": 'attachment; filename="report.json"',
+            },
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        connect_outage_grace_seconds=30.0,
+    )
+    assert await client.get_workspace_file("session", "report.json") == body
+    assert calls == [b"download=true", b"download=true"]
