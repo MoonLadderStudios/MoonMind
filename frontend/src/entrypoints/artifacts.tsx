@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { useDocumentTitle } from '../components/dashboard/PageHeader';
 import { responseError } from '../lib/api/client';
+import { formatBytes } from '../utils/formatters';
 import { useUrlSearchText } from '../lib/urlSearchText';
 
 type Category = 'artifacts' | 'reports' | 'observability';
@@ -35,13 +36,6 @@ const CATEGORIES: Array<{ value: Category; label: string; description: string }>
   { value: 'reports', label: 'Reports', description: 'Published summaries, findings, and exports.' },
   { value: 'observability', label: 'Observability', description: 'Logs, diagnostics, and trace evidence.' },
 ];
-
-function formatBytes(value?: number | null): string {
-  if (value == null) return 'Unknown size';
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function EvidenceSection({ category, apiBase }: { category: Category; apiBase: string }) {
   const location = useLocation();

@@ -353,3 +353,39 @@ def test_list_execution_artifacts_returns_collection() -> None:
         assert len(payload["artifacts"]) == 1
         assert payload["artifacts"][0]["artifact_id"] == artifact.artifact_id
         assert payload["artifacts"][0]["links"][0]["label"] == "Final output"
+
+
+def test_download_previews_inert_artifacts_inline_only_when_requested(tmp_path) -> None:
+    """MoonLadderStudios/MoonMind#4870: Open previews; Download stays an attachment."""
+
+    for test_client, service in _client_with_service():
+        text_artifact = _build_artifact()
+        text_path = tmp_path / "evidence.txt"
+        text_path.write_text("hello", encoding="utf-8")
+        html_artifact = _build_artifact()
+        html_artifact.content_type = "text/html"
+        html_path = tmp_path / "page.html"
+        html_path.write_text("<script>alert(1)</script>", encoding="utf-8")
+        paths = {
+            text_artifact.artifact_id: (text_artifact, text_path),
+            html_artifact.artifact_id: (html_artifact, html_path),
+        }
+        service.read_path.side_effect = lambda *, artifact_id, principal: paths[
+            artifact_id
+        ]
+        text_url = f"/api/artifacts/{text_artifact.artifact_id}/download"
+        html_url = f"/api/artifacts/{html_artifact.artifact_id}/download"
+
+        download = test_client.get(text_url)
+        preview = test_client.get(text_url, params={"inline": "true"})
+        active = test_client.get(html_url, params={"inline": "true"})
+
+        assert download.headers["content-disposition"].startswith("attachment;")
+        assert preview.status_code == 200
+        assert preview.text == "hello"
+        assert preview.headers["content-disposition"].startswith("inline;")
+        assert preview.headers["x-content-type-options"] == "nosniff"
+        assert preview.headers["content-security-policy"].startswith("sandbox")
+        # Active content never renders on the operator's origin.
+        assert active.headers["content-disposition"].startswith("attachment;")
+        assert active.headers["content-security-policy"].startswith("sandbox")

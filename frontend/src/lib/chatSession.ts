@@ -188,7 +188,7 @@ export function seedOptimisticUserMessages(
       metadata: { optimisticKey: message.key },
     };
     const updated = cloneState(next);
-    updated.blocks = [...updated.blocks, block];
+    updated.blocks.push(block);
     updated.blockIdByOptimisticKey.set(message.key, block.id);
     return updated;
   }, state);
@@ -294,7 +294,15 @@ export function reduceChatSessionEvents(
   state: ChatSessionState,
   events: ChatSessionEvent[],
 ): ChatSessionState {
-  return events.reduce(reduceChatSessionEvent, state);
+  // Copy the state once per batch, not once per event: per-event copies of the
+  // seen-event set and block list made long sessions quadratic.
+  let next: ChatSessionState | null = null;
+  for (const event of events) {
+    if ((next ?? state).seenEventIds.has(event.id)) continue;
+    next ??= cloneState(state);
+    applyChatSessionEvent(next, event);
+  }
+  return next ?? state;
 }
 
 export function projectChatSessionBlocks(
@@ -325,6 +333,12 @@ export function reduceChatSessionEvent(
 ): ChatSessionState {
   if (state.seenEventIds.has(event.id)) return state;
   const next = cloneState(state);
+  applyChatSessionEvent(next, event);
+  return next;
+}
+
+/** Applies one unseen event to a state this reducer owns (mutated in place). */
+function applyChatSessionEvent(next: ChatSessionState, event: ChatSessionEvent): void {
   next.seenEventIds.add(event.id);
 
   switch (event.type) {
@@ -386,8 +400,6 @@ export function reduceChatSessionEvent(
       appendBlock(next, event, 'system', event.text || event.status || 'System event.');
       break;
   }
-
-  return next;
 }
 
 function upsertUserBlock(state: ChatSessionState, event: ChatSessionEvent): void {
@@ -429,7 +441,7 @@ function upsertAssistantBlock(
   }
   const block = blockFromEvent(event, 'assistant', event.text);
   block.status = event.type === 'assistant_message' ? 'completed' : 'streaming';
-  state.blocks = [...state.blocks, block];
+  state.blocks.push(block);
   if (event.type === 'assistant_delta') {
     state.openAssistantBlockIdByScope.set(scope, block.id);
   }
@@ -453,7 +465,7 @@ function upsertToolBlock(state: ChatSessionState, event: ChatSessionEvent, text:
   const block = blockFromEvent(event, 'tool', text);
   block.callId = event.callId;
   block.toolName = event.toolName;
-  state.blocks = [...state.blocks, block];
+  state.blocks.push(block);
   state.toolBlockIdByScope.set(scope, block.id);
 }
 
@@ -463,7 +475,7 @@ function appendBlock(
   kind: ChatBlockKind,
   text: string,
 ): void {
-  state.blocks = [...state.blocks, blockFromEvent(event, kind, text)];
+  state.blocks.push(blockFromEvent(event, kind, text));
 }
 
 function updateBlock(
@@ -471,7 +483,14 @@ function updateBlock(
   blockId: string,
   update: (block: ChatBlock) => ChatBlock,
 ): void {
-  state.blocks = state.blocks.map((block) => (block.id === blockId ? stripUndefined(update(block)) : block));
+  // Blocks without turn or response ids share an id across turns; only the
+  // newest is open. Searching from the end also keeps streaming linear.
+  for (let index = state.blocks.length - 1; index >= 0; index -= 1) {
+    if (state.blocks[index]!.id === blockId) {
+      state.blocks[index] = stripUndefined(update(state.blocks[index]!));
+      return;
+    }
+  }
 }
 
 function blockFromEvent(event: ChatSessionEvent, kind: ChatBlockKind, text: string): ChatBlock {
@@ -655,7 +674,7 @@ function optimisticKeyForText(event: ChatSessionEvent): string | undefined {
 
 function cloneState(state: ChatSessionState): ChatSessionState {
   return {
-    blocks: state.blocks,
+    blocks: [...state.blocks],
     seenEventIds: new Set(state.seenEventIds),
     blockIdByOptimisticKey: new Map(state.blockIdByOptimisticKey),
     openAssistantBlockIdByScope: new Map(state.openAssistantBlockIdByScope),
