@@ -5589,38 +5589,50 @@ async def _load_github_issue_preset_brief(
             },
         )
     own_claim = bool((_context or {}).get("verified_issue_claim"))
-    if not search_evidence and not own_claim and (
-        not is_complete_open_issue(issue_data, repository)
-        or issue_data["number"] != issue_number
-        or has_in_progress_status(issue_data)
-        or not is_lifecycle_selectable_candidate(
-            issue_data, _github_status_attempt_context(inputs, _context)
-        )
-        or not _github_shared_admission_decision(
+    if not search_evidence and not own_claim:
+        admission = _github_shared_admission_decision(
             inputs=inputs,
             context=_context,
             repository=repository,
             issue_number=issue_number,
             issue=issue_data,
-        ).allowed
-    ):
-        # Direct issue loads run the same admission policy as search: an
-        # explicit issue reference is not a bypass around lifecycle state.
-        # Both paths route through the one shared exact-issue admission
-        # boundary (issue #4178) with the full Req-1 evidence bundle; search
-        # selections use ENTRYPOINT_SEARCH instead.
-        return ToolResult(
-            status="FAILED",
-            outputs={
-                "error": (
-                    "Direct GitHub issue load failed lifecycle admission: the issue "
-                    "is not an Available or Recovery-needed candidate."
-                ),
-                "repository": repository,
-                "issueNumber": issue_number,
-                "candidateDisposition": "ineligible",
-            },
         )
+        valid_issue = (
+            is_complete_open_issue(issue_data, repository)
+            and issue_data["number"] == issue_number
+        )
+        selectable = is_lifecycle_selectable_candidate(
+            issue_data, _github_status_attempt_context(inputs, _context)
+        )
+        if not admission.allowed or not valid_issue or not selectable:
+            decision = admission.to_dict()
+            if admission.allowed:
+                decision.update(
+                    allowed=False,
+                    reasonCode=(
+                        "invalid_issue_evidence"
+                        if not valid_issue
+                        else "active_attempt_conflict"
+                    ),
+                    summary=(
+                        "Trusted issue detail is incomplete or does not match the requested identity."
+                        if not valid_issue
+                        else "Unresolved active-attempt evidence blocks admission."
+                    ),
+                )
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "error": "Direct GitHub issue load failed lifecycle admission: "
+                    + decision["summary"],
+                    "repository": repository,
+                    "issueNumber": issue_number,
+                    "candidateDisposition": "ineligible",
+                    "reasonCode": decision["reasonCode"],
+                    "decision": "blocked",
+                    "admissionDecision": decision,
+                },
+            )
     issue = _github_issue_payload(issue_data, repository)
     receipt = (_context or {}).get("issue_claim_receipt")
     if own_claim:

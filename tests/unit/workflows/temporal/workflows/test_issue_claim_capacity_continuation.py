@@ -1,11 +1,4 @@
-"""Capacity waits after an issue claim's work began keep the reservation.
-
-The typed ``ISSUE_CLAIM_CAPACITY_BLOCKED`` backoff releases an issue only
-before the claim's first slot grant. A retry or later step of the same claim
-re-queues for the Provider Profile after earlier work already ran; when another
-workflow takes the freed slot in between, that wait must not fail the run as
-"no work started" and throw away the claim's progress.
-"""
+"""Capacity queueing preserves claim authority; retained histories replay."""
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -131,13 +124,18 @@ def test_started_work_does_not_carry_over_to_a_different_claim(monkeypatch):
     assert _next_request_lease(parent) == other
 
 
-async def _should_renew_for(monkeypatch, lease: dict):
+async def _should_renew_for(monkeypatch, lease: dict, *, durable_wait=False):
     captured = {}
 
     async def capture(**kwargs):
         captured.update(kwargs)
 
-    monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: durable_wait
+        and patch_id == "agent-run-issue-claim-durable-capacity-wait-v1",
+    )
     monkeypatch.setattr(
         github_issue_lease_workflow, "execute_with_issue_lease", capture
     )
@@ -164,7 +162,19 @@ async def test_retry_of_a_started_claim_keeps_renewing_while_queued(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_first_launch_of_a_claim_still_backs_off_while_queued(monkeypatch):
+async def test_retained_first_launch_keeps_its_recorded_capacity_backoff(monkeypatch):
     should_renew = await _should_renew_for(monkeypatch, dict(LEASE))
 
     assert should_renew() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("work_started", [False, True])
+async def test_new_claim_renews_through_capacity_wait_without_a_slot_predicate(
+    monkeypatch, work_started
+):
+    lease = {**LEASE, **({"workStarted": True} if work_started else {})}
+
+    should_renew = await _should_renew_for(monkeypatch, lease, durable_wait=True)
+
+    assert should_renew is None

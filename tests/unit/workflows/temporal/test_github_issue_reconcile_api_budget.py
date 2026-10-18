@@ -209,3 +209,168 @@ async def test_one_repository_is_swept_once_whatever_its_spelling(monkeypatch, t
 
     # The configured spelling wins; the lowercased receipt adds no second scan.
     assert swept == ["MoonLadderStudios/MoonMind", "MoonLadderStudios/MoonMind"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attention_present", [False, True])
+@pytest.mark.parametrize("observation_present", [False, True])
+@pytest.mark.parametrize("enough_budget", [False, True])
+async def test_attention_escalation_fits_reads_and_needed_writes_in_shared_budget(
+    attention_present, observation_present, enough_budget
+) -> None:
+    labels = ["status: unrecognized"]
+    if attention_present:
+        labels.append("status: needs-attention")
+    comments = []
+    if observation_present:
+        comments.append(
+            recon.render_reconciler_comment(
+                repository=REPO,
+                issue_number=11,
+                reason_code="classification_required",
+                summary="Previously observed the same classification incident.",
+            )
+        )
+    service = CountingService(issues={11: _issue(*labels)}, comments={11: comments})
+    required_calls = 4 + int(not attention_present) + int(not observation_present)
+    starting_requests = (
+        recon.MAX_SCAN_API_REQUESTS - required_calls + int(not enough_budget)
+    )
+    budget = {"requests": starting_requests}
+
+    outcome = await acts._reconcile_one_issue(
+        service=service,
+        repository=REPO,
+        issue_number=11,
+        budget=budget,
+        state={},
+        now_iso="2026-10-18T00:00:00Z",
+    )
+
+    actual_calls = (
+        sum(service.reads.values()) + len(service.added) + len(service.created)
+    )
+    assert budget["requests"] <= recon.MAX_SCAN_API_REQUESTS
+    assert budget["requests"] == starting_requests + actual_calls
+    assert outcome["apiRequests"] == actual_calls
+    if enough_budget:
+        assert outcome["action"] == recon.ACTION_ATTENTION, outcome
+        assert budget["requests"] == recon.MAX_SCAN_API_REQUESTS
+        assert len(service.added) == int(not attention_present)
+        assert len(service.created) == int(not observation_present)
+        assert outcome["commentCoalesced"] is observation_present
+    else:
+        assert outcome["action"] == recon.ACTION_DEFERRED_UNKNOWN, outcome
+        assert outcome["reasonCode"] == "request_budget_exhausted"
+        assert service.added == service.created == []
+        assert service.issues[11] == _issue(*labels)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("starting_requests", [99, 100])
+async def test_issue_reads_stop_before_exceeding_the_shared_budget(
+    starting_requests,
+) -> None:
+    service = CountingService(issues={11: _issue("status: unrecognized")})
+    budget = {"requests": starting_requests}
+
+    outcome = await acts._reconcile_one_issue(
+        service=service,
+        repository=REPO,
+        issue_number=11,
+        budget=budget,
+        state={},
+        now_iso="2026-10-18T00:00:00Z",
+    )
+
+    assert outcome["reasonCode"] == "request_budget_exhausted"
+    assert outcome["action"] == recon.ACTION_DEFERRED_UNKNOWN
+    assert budget["requests"] == recon.MAX_SCAN_API_REQUESTS
+    assert (
+        outcome["apiRequests"] == sum(service.reads.values()) == 100 - starting_requests
+    )
+    assert service.reads["comments", 11] == 0
+    assert service.added == service.created == []
+
+
+@pytest.mark.asyncio
+async def test_rejected_lease_reservation_does_not_consume_requests(
+    monkeypatch,
+) -> None:
+    from moonmind.workflows.temporal import github_issue_claim_lease as leases
+
+    async def unexpected_reconciliation(**_kwargs):
+        pytest.fail("Insufficient lease budget must stop before reconciliation")
+
+    monkeypatch.setattr(leases, "reconcile_expired_issue", unexpected_reconciliation)
+    service = CountingService(issues={11: _issue("status: in-progress")})
+    budget = {"requests": 90}
+
+    outcome = await acts._reconcile_one_issue(
+        service=service,
+        repository=REPO,
+        issue_number=11,
+        budget=budget,
+        state={},
+        now_iso="2026-10-18T00:00:00Z",
+    )
+
+    assert outcome["reasonCode"] == "request_budget_exhausted"
+    assert outcome["apiRequests"] == sum(service.reads.values()) == 2
+    assert budget["requests"] == 92
+    assert service.added == service.removed == service.created == []
+
+
+@pytest.mark.asyncio
+async def test_repair_keeps_pending_evidence_when_readback_does_not_fit(
+    monkeypatch,
+) -> None:
+    pr_reads = []
+
+    async def known_pr(**_kwargs):
+        pr_reads.append(1)
+        return {"known": True, "state": "open", "merged": False, "headSha": "b" * 40}
+
+    monkeypatch.setattr(acts, "_fetch_pr_state", known_pr)
+    service = CountingService(
+        issues={11: _issue("status: in-progress")}, comments={11: [_handoff_body()]}
+    )
+    budget = {"requests": 94}
+    state = {}
+
+    outcome = await acts._reconcile_one_issue(
+        service=service,
+        repository=REPO,
+        issue_number=11,
+        budget=budget,
+        state=state,
+        now_iso="2026-10-18T00:00:00Z",
+    )
+
+    actual_calls = (
+        sum(service.reads.values())
+        + len(pr_reads)
+        + len(service.added)
+        + len(service.removed)
+    )
+    assert budget["requests"] == recon.MAX_SCAN_API_REQUESTS
+    assert outcome["apiRequests"] == actual_calls == 6
+    assert outcome["action"] == recon.ACTION_DEFERRED_UNKNOWN
+    assert outcome["reasonCode"] == "request_budget_exhausted"
+    assert service.issues[11] == _issue("status: code-review")
+    assert recon.pending_effects_for_issue(state, repository=REPO, issue_number=11)
+
+    # A later scan observes the settled labels instead of replaying writes.
+    await acts._reconcile_one_issue(
+        service=service,
+        repository=REPO,
+        issue_number=11,
+        budget={"requests": 0},
+        state=state,
+        now_iso="2026-10-18T00:05:00Z",
+    )
+    assert service.added == [(11, ["status: code-review"])]
+    assert service.removed == [(11, "status: in-progress")]
+    assert (
+        recon.pending_effects_for_issue(state, repository=REPO, issue_number=11) == []
+    )
