@@ -13,7 +13,7 @@ STOP_MARGIN_SECONDS = 60
 #: ``retry`` result, so this owner is the one place that retries it.
 RETRY_SECONDS = 30
 
-#: Typed backoff when the run never held runnable capacity. This is a
+#: Retained histories used this typed backoff before runnable capacity. It is a
 #: deployment fault (no slot was ever granted), not evidence about the issue:
 #: recovery records it as ``runtime_unavailable`` with a portable cooldown
 #: instead of spending the issue's retry allowance the way an expired active
@@ -78,12 +78,9 @@ async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
     cadence. Lost ownership, identity mismatch and an invalid deadline are
     confirmed and stop at once.
 
-    ``should_renew`` reports whether this deployment currently holds the local
-    capacity the reservation was acquired for. Waiting for unavailable capacity
-    must not keep an issue reserved: the run backs off promptly with a typed
-    capacity-blocked error, the issue returns to assessment for anyone, and
-    this deployment backs off instead of holding the backlog behind a queue
-    it cannot drain.
+    ``should_renew`` retains the capacity-based backoff for recorded histories.
+    New AgentRuns omit it: capacity queueing belongs to the runtime's durable
+    wait, while this owner protects claim identity and confirmed deadlines.
     """
     patched_fn = getattr(workflow, "patched", None)
     recover = patched_fn(RENEWAL_RECOVERY_PATCH_ID) if callable(patched_fn) else True

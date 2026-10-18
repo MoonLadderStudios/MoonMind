@@ -11237,6 +11237,125 @@ def test_create_execution_accepts_matching_github_issue_repository(
     service.create_execution.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    "connection_ref",
+    ["repository-connection:git-default", "repository-connection:operator-choice"],
+)
+def test_create_execution_keeps_explicit_repository_branch_and_connection(
+    client,
+    connection_ref,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    repository_target = {
+        "provider": "git",
+        "connectionRef": connection_ref,
+        "repository": {"name": "MoonLadderStudios/Tactics"},
+        "branch": {"name": "release/operator-choice"},
+    }
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": repository_target,
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": 2490,
+                        }
+                    },
+                },
+            },
+        },
+    )
+    assert response.status_code == 201, response.json()
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["repository"] == repository_target
+    assert executions_module.authored_repository_access(parameters) == (
+        connection_ref,
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "branch, target_patch, issue_number",
+    [
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2490", {}, 2490),
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2491", {}, 2490),
+        ("https://github.com/other/repo/issues/2490", {}, 2490),
+        ("https://example.com/unrelated", {}, 2490),
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2490?x=1", {}, 2490),
+        ("https://github.com/MoonLadderStudios/Tactics/issues/2490", {}, None),
+        (
+            "https://github.com/MoonLadderStudios/Tactics/issues/2490",
+            {"connectionRef": "repository-connection:explicit"},
+            2490,
+        ),
+        (
+            "https://github.com/MoonLadderStudios/Tactics/issues/2490",
+            {"revision": {"kind": "git_commit", "commitSha": "abcdef012345"}},
+            2490,
+        ),
+    ],
+)
+def test_create_execution_rejects_ambiguous_url_branch(
+    client,
+    branch,
+    target_patch,
+    issue_number,
+):
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": {
+                    "provider": "git",
+                    "repository": {"name": "MoonLadderStudios/Tactics"},
+                    "branch": {"name": branch},
+                    **target_patch,
+                },
+                "targetRuntime": "codex",
+                "workflow": {
+                    "instructions": "Implement the selected issue.",
+                    "inputs": {
+                        "github_issue": {
+                            "repository": "MoonLadderStudios/Tactics",
+                            "number": issue_number,
+                        }
+                    },
+                },
+            },
+        },
+    )
+    assert response.status_code == 422, response.json()
+    assert "branch must be a branch name" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_rerun_workspace_readmission_rejects_issue_url_branch():
+    repository = "MoonLadderStudios/Tactics"
+    with pytest.raises(HTTPException) as raised:
+        executions_module._readmit_edited_workspace_source(
+            {"workspace": None},
+            recorded_parameters={
+                "repository": {
+                    "provider": "git",
+                    "repository": {"name": repository},
+                    "branch": {"name": f"https://github.com/{repository}/issues/2490"},
+                },
+            },
+            workflow_id="mm:readmission",
+        )
+    assert "branch must be a branch name" in raised.value.detail["message"]
+
+
 def test_create_execution_requires_repository_for_github_issue_authority(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

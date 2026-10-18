@@ -150,12 +150,12 @@ async def test_unstarted_reservation_frees_the_issue_after_its_deadline(
         await engine.dispose()
 
 
-# -- Waiting for capacity must not keep a reservation -----------------------
+# -- Retained histories replay their capacity backoff ----------------------
 
 
 @pytest.mark.asyncio
-async def test_lease_is_not_renewed_while_queued_behind_unavailable_capacity():
-    """Reservation released promptly as backoff; the deployment backs off, not the backlog."""
+async def test_retained_capacity_predicate_replays_its_reservation_backoff():
+    """Historical callers retain their recorded pre-capacity exit."""
     from moonmind.workflows.temporal import github_issue_lease_workflow as lease_workflow
 
     clock = {"now": datetime(2026, 9, 14, tzinfo=UTC)}
