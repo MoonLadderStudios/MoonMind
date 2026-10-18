@@ -423,6 +423,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
 
     it('asks only about the secret draft when editing another secret, and discards only it', async () => {
       renderProvidersSecrets();
+      fireEvent.click(await screen.findByRole('button', { name: 'Add profile' }));
       const profileId = await screen.findByLabelText(/Profile ID/) as HTMLInputElement;
       fireEvent.change(profileId, { target: { value: 'draft-profile' } });
 
@@ -457,6 +458,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
 
     it('still discards every draft when leaving the Settings page', async () => {
       renderProvidersSecrets();
+      fireEvent.click(await screen.findByRole('button', { name: 'Add profile' }));
       const profileId = await screen.findByLabelText(/Profile ID/) as HTMLInputElement;
       fireEvent.change(profileId, { target: { value: 'draft-profile' } });
       const slug = screen.getByLabelText('Secret slug') as HTMLInputElement;
@@ -466,7 +468,8 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
       await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
       expect(slug.value).toBe('');
-      expect(profileId.value).toBe('');
+      // Discarding the profile draft also closes the Add profile editor.
+      expect(screen.queryByLabelText(/Profile ID/)).toBeNull();
     });
   });
 });

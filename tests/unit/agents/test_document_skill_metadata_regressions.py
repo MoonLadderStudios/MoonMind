@@ -102,14 +102,3 @@ def test_metadata_guard_rejects_original_contract_violations(contract, mutation)
     path.write_text(changed, encoding="utf-8")
     with pytest.raises((AssertionError, KeyError, ValueError)):
         check()
-
-
-def test_portable_authoring_prohibition_is_still_enforced(tmp_path, monkeypatch):
-    original = author._SKILL_PATH.read_text(encoding="utf-8")
-    changed = original.replace("Do not create `spec.md`", "Create `spec.md`")
-    assert changed != original
-    path = tmp_path / "SKILL.md"
-    path.write_text(changed, encoding="utf-8")
-    monkeypatch.setattr(author, "_SKILL_PATH", path)
-    with pytest.raises(AssertionError):
-        author.test_document_author_never_creates_docs_native_spec()

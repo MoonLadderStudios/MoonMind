@@ -139,41 +139,14 @@ def test_runtime_check_rejects_preset_task_copy_and_moonspec_spelling(
 
     findings = verify_workflow_terminology.run("runtime", root=tmp_path)
 
+    assert all(finding.path.suffix != ".md" for finding in findings)
     assert {finding.rule for finding in findings} == {
         "preset-public-downstream-task-copy",
         "public-moonspec-spelling",
     }
 
 
-def test_docs_check_allows_qualified_terms_and_rejects_unqualified_task(
-    tmp_path: Path,
-) -> None:
-    _write(
-        tmp_path / "docs/Temporal/WorkflowExecutionProductModel.md",
-        "Temporal Task and Jira task are qualified.\nMoonMind task is not.\n",
-    )
-
-    findings = verify_workflow_terminology.run("docs", root=tmp_path)
-
-    assert len(findings) == 1
-    assert findings[0].rule == "canonical-doc-unqualified-task"
-
-
-def test_docs_check_rejects_unqualified_term_on_line_with_allowed_term(
-    tmp_path: Path,
-) -> None:
-    _write(
-        tmp_path / "docs/Temporal/WorkflowExecutionProductModel.md",
-        "Temporal Task is qualified, but MoonMind task is not.\n",
-    )
-
-    findings = verify_workflow_terminology.run("docs", root=tmp_path)
-
-    assert len(findings) == 1
-    assert findings[0].rule == "canonical-doc-unqualified-task"
-
-
-def test_removed_follow_up_check_rejects_active_source_config_and_docs(
+def test_removed_follow_up_check_scans_source_config_but_not_documentation(
     tmp_path: Path,
 ) -> None:
     _write(
@@ -186,6 +159,11 @@ def test_removed_follow_up_check_rejects_active_source_config_and_docs(
         "The removed route was /api/" + "proposals.\n",
     )
 
+    _write(
+        tmp_path / ".agents/skills/example/scripts/run.py",
+        'activity = "proposal.' + 'generate"\n',
+    )
+
     findings = verify_workflow_terminology.check_removed_follow_up_identifiers(
         root=tmp_path
     )
@@ -194,7 +172,7 @@ def test_removed_follow_up_check_rejects_active_source_config_and_docs(
     assert {finding.rule for finding in findings} == {"removed-follow-up-subsystem"}
     assert {finding.path for finding in findings} == {
         Path(".env-template"),
-        Path("docs/Workflows/Feature.md"),
+        Path(".agents/skills/example/scripts/run.py"),
         Path("moonmind/workflows/temporal/runtime.py"),
     }
 

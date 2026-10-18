@@ -299,6 +299,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Profiles' });
+    fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
 
     const harnessSelect = () => screen.getByLabelText('Harness') as HTMLSelectElement;
     await waitFor(() => expect(harnessSelect().disabled).toBe(false));

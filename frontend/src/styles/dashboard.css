@@ -345,8 +345,10 @@ samp {
   object-fit: contain;
 }
 
-.masthead-brand h1 {
+.masthead-wordmark {
+  display: block;
   margin: 0;
+  font-weight: 700;
   font-size: clamp(1.12rem, 1.7vw, 1.52rem);
 }
 
@@ -880,6 +882,14 @@ h1 {
   text-transform: uppercase;
 }
 
+.dashboard-system-menu-note {
+  max-width: 16rem;
+  margin: 0;
+  padding: 0.35rem 0.75rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.8rem;
+}
+
 .dashboard-system-popover a {
   display: flex;
   width: 100%;
@@ -1065,7 +1075,8 @@ h1 {
 .evidence-collection__filter { display: grid; gap: 0.35rem; max-width: 28rem; }
 .evidence-collection__table-wrap { overflow-x: auto; }
 .evidence-collection table { border-collapse: collapse; width: 100%; }
-.evidence-collection th, .evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.evidence-collection th, .evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.evidence-collection th { white-space: nowrap; }
 .evidence-collection td small { display: block; margin-top: 0.25rem; }
 .evidence-collection td a + a { margin-left: 0.75rem; }
 .evidence-collection__pagination > div { display: flex; gap: 0.5rem; }
@@ -1077,6 +1088,48 @@ h1 {
 .page-title {
   margin: 0;
   font-size: 1.1rem;
+}
+
+.page-header {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 0.8rem;
+}
+
+.page-header__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+}
+
+.page-header__text {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.page-header__eyebrow {
+  margin: 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.page-header__description {
+  margin: 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.9rem;
+}
+
+.page-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .page-meta {
@@ -1238,6 +1291,60 @@ h1 {
 .workflow-list-filter-section:last-child {
   border-bottom: 0;
   padding-bottom: 0;
+}
+
+.workflow-list-filter-section-disclosure {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.workflow-list-filter-section-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.workflow-list-filter-section-value {
+  min-width: 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.85rem;
+  font-weight: 500;
+  overflow-wrap: break-word;
+  text-align: right;
+}
+
+.workflow-list-filter-section-value.is-active {
+  color: rgb(var(--mm-ink));
+}
+
+.workflow-list-filter-drawer-count {
+  margin: 0.15rem 0 0;
+  color: rgb(var(--mm-muted));
+}
+
+.workflow-list-facet-more-panel {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.workflow-list-facet-more-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-list-facet-more-list button {
+  overflow-wrap: anywhere;
+}
+
+.workflow-list-sort-control select {
+  max-width: 12rem;
 }
 
 .workflow-list-filter-control {
@@ -2309,6 +2416,16 @@ h1 {
   width: fit-content;
 }
 
+.schedules-detail-panel > details > summary {
+  cursor: pointer;
+  color: rgb(var(--mm-ink));
+  font-weight: 700;
+}
+
+.schedules-detail-panel > details[open] > summary {
+  margin-bottom: 0.65rem;
+}
+
 .schedules-json-block {
   max-height: 22rem;
   margin: 0;
@@ -2738,11 +2855,38 @@ tbody tr:hover {
   height: var(--workflow-list-body-row-height);
 }
 
+/* Cells wrap between words. `break-word` (unlike `anywhere`) keeps each
+ * column's min-content at its longest word, so narrow tables never split
+ * ordinary words mid-word; long IDs opt into `anywhere` selectively. */
 .queue-table-wrapper th,
 .queue-table-wrapper td {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   word-break: normal;
+}
+
+.queue-table-wrapper .table-sort-button,
+.queue-table-wrapper .workflow-list-static-header,
+.queue-table-actions-header-inner > span {
+  white-space: nowrap;
+}
+
+/* Repo is the lowest-value column at tablet widths; it stays in cards,
+ * filters, and the wider desktop table. */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .queue-table-wrapper [data-column="repository"] {
+    display: none;
+  }
+
+  /* Repo's freed width, and a narrower Workflow column, keep Provider
+   * Profile wider than its longest word. */
+  .queue-table-wrapper .queue-table-column-workflow {
+    width: 15rem;
+  }
+
+  .queue-table-wrapper .queue-table-column-provider-profile {
+    width: 18%;
+  }
 }
 
 .workflow-list-data-slab .queue-table-wrapper th:first-child,
@@ -2783,15 +2927,17 @@ tbody tr:hover {
 
 /* Long or equal-name recorded Provider Profiles wrap inside the column. */
 .queue-table-cell-provider-profile {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .queue-table-column-repository {
   width: 14%;
 }
 
+/* A fixed width fits single-word status pills, which never wrap; a
+ * percentage leaves too little room at tablet widths. */
 .queue-table-column-status {
-  width: 12%;
+  width: 8.5rem;
 }
 
 .queue-table-column-date {
@@ -2806,7 +2952,6 @@ tbody tr:hover {
 
 .queue-table-cell-status .status {
   max-width: 100%;
-  white-space: normal;
 }
 
 .queue-table-cell-workflow {
@@ -2980,7 +3125,7 @@ tbody tr:hover {
   color: inherit;
   font-weight: 600;
   line-height: 1.25;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   text-decoration: none;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -3012,7 +3157,7 @@ tbody tr:hover {
 }
 
 .queue-table-cell-progress .workflow-list-progress {
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .data-table-slab {
@@ -3068,8 +3213,12 @@ tbody tr:hover {
  */
 .provider-profiles-table th,
 .provider-profiles-table td {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   vertical-align: top;
+}
+
+.provider-profiles-table th {
+  white-space: nowrap;
 }
 
 .provider-profile-status-details > summary {
@@ -3234,13 +3383,14 @@ tbody tr:hover {
 }
 
 .queue-card {
+  position: relative;
   border: 1px solid rgb(var(--mm-border) / 0.8);
   border-radius: 1rem;
-  padding: 1rem;
+  padding: 0.85rem 1rem;
   background: rgb(var(--mm-panel) / 0.78);
   box-shadow: var(--mm-shadow);
   display: grid;
-  gap: 0.85rem;
+  gap: 0.6rem;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -3269,7 +3419,7 @@ tbody tr:hover {
   text-decoration: none;
   color: inherit;
   display: block;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .queue-card-title:hover {
@@ -3286,7 +3436,7 @@ tbody tr:hover {
 .queue-card-fields {
   margin: 0;
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -3308,14 +3458,17 @@ tbody tr:hover {
   font-size: 0.92rem;
   font-weight: 500;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
-.queue-card code,
-.queue-card .status {
+.queue-card code {
   max-width: 100%;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.queue-card .status {
+  max-width: 100%;
 }
 
 .queue-card-status-field {
@@ -3335,10 +3488,6 @@ tbody tr:hover {
 .queue-card-actions .button {
   flex: 0 0 auto;
   text-align: center;
-}
-
-.queue-card-actions .queue-card-details-action {
-  flex: 1 0 100%;
 }
 
 @media (min-width: 768px) {
@@ -3430,13 +3579,20 @@ tbody tr:hover {
     display: grid;
   }
 
-  .queue-card-fields {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .queue-card-header {
     align-items: stretch;
     flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  /* The kebab sits beside the title as its own target; its menu still opens
+   * in-flow at the bottom of the card (see below). */
+  .queue-card--with-actions .queue-card-header {
+    padding-right: 2.5rem;
+  }
+
+  .queue-card-actions {
+    margin-top: -0.6rem;
   }
 
   .queue-card-header > .queue-card-status {
@@ -3457,11 +3613,13 @@ tbody tr:hover {
    * being clipped.
    */
   .queue-card-actions .workflow-row-actions {
+    position: static;
     width: 100%;
     align-items: stretch;
   }
 
   .queue-card-actions .td-workflow-actions-menu {
+    position: static;
     width: 100%;
     flex-direction: column;
     align-items: stretch;
@@ -3469,7 +3627,9 @@ tbody tr:hover {
   }
 
   .queue-card-actions .td-workflow-actions-trigger-compact {
-    align-self: flex-start;
+    position: absolute;
+    top: 0.65rem;
+    right: 0.75rem;
   }
 
   .queue-card-actions .td-workflow-actions-popover {
@@ -3489,6 +3649,7 @@ tbody tr:hover {
 .status {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
   border-radius: 999px;
   border: 1px solid currentcolor;
   padding: 0.12rem 0.46rem;
@@ -3830,203 +3991,6 @@ tbody tr:hover {
   .status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
   .status-running.is-executing .status-letter-wave__glyph {
     animation: none;
-  }
-}
-
-.masked-conic-border-beam {
-  --beam-border-radius: 16px;
-  --beam-border-width: 1.5px;
-  --beam-inner-inset: var(--beam-border-width);
-  --beam-inner-radius: calc(var(--beam-border-radius) - var(--beam-border-width));
-  --beam-head-arc: 12deg;
-  --beam-tail-arc: 28deg;
-  --beam-head-end: 332deg;
-  --beam-head-start: calc(var(--beam-head-end) - var(--beam-head-arc));
-  --beam-tail-start: calc(var(--beam-head-start) - var(--beam-tail-arc));
-  --beam-tail-end: var(--beam-head-start);
-  --beam-fade-end: 360deg;
-  --beam-speed: 3.6s;
-  --beam-enter-duration: 200ms;
-  --beam-exit-duration: 140ms;
-  --beam-border-base: rgb(var(--mm-border) / 0.74);
-  --beam-head-color: rgb(255 255 255 / 0.95);
-  --beam-tail-color: rgb(255 255 255 / 0.28);
-  --beam-glow-color: rgb(255 255 255 / 0.22);
-  --beam-opacity: 0.9;
-  --beam-glow-opacity: 0.42;
-  position: relative;
-  display: block;
-  border: var(--beam-border-width) solid var(--beam-border-base);
-  border-radius: var(--beam-border-radius);
-  isolation: isolate;
-}
-
-.masked-conic-border-beam[data-theme="brand"] {
-  --beam-head-color: rgb(var(--mm-accent-2) / 0.96);
-  --beam-tail-color: rgb(var(--mm-accent) / 0.32);
-  --beam-glow-color: rgb(var(--mm-accent-2) / 0.28);
-}
-
-.masked-conic-border-beam[data-theme="success"] {
-  --beam-head-color: rgb(var(--mm-ok) / 0.96);
-  --beam-tail-color: rgb(var(--mm-accent-2) / 0.28);
-  --beam-glow-color: rgb(var(--mm-ok) / 0.24);
-}
-
-.masked-conic-border-beam[data-intensity="subtle"] {
-  --beam-opacity: 0.62;
-  --beam-glow-opacity: 0.26;
-}
-
-.masked-conic-border-beam[data-intensity="vivid"] {
-  --beam-opacity: 1;
-  --beam-glow-opacity: 0.58;
-}
-
-.masked-conic-border-beam[data-glow="medium"] {
-  --beam-glow-opacity: 0.52;
-}
-
-.masked-conic-border-beam[data-variant="energized"] {
-  --beam-tail-arc: 36deg;
-  --beam-glow-opacity: 0.56;
-}
-
-.masked-conic-border-beam[data-variant="dualPhase"] {
-  --beam-tail-arc: 30deg;
-}
-
-.masked-conic-border-beam[data-reduced-motion="minimal"] {
-  --beam-glow-opacity: 0;
-}
-
-.masked-conic-border-beam[data-reduced-motion="minimal"][data-active="true"] {
-  --beam-border-base: rgb(var(--mm-border) / 0.9);
-}
-
-.masked-conic-border-beam__layer,
-.masked-conic-border-beam__glow,
-.masked-conic-border-beam__companion {
-  position: absolute;
-  inset: calc(-1 * var(--beam-border-width));
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.masked-conic-border-beam__layer {
-  padding: var(--beam-inner-inset);
-  opacity: var(--beam-opacity);
-  visibility: visible;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg var(--beam-tail-start),
-    var(--beam-tail-color) var(--beam-tail-end),
-    var(--beam-head-color) var(--beam-head-start) var(--beam-head-end),
-    transparent var(--beam-fade-end)
-  );
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
-  animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
-}
-
-.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__layer,
-.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__glow,
-.masked-conic-border-beam[data-active="false"] .masked-conic-border-beam__companion {
-  opacity: 0;
-  visibility: hidden;
-}
-
-.masked-conic-border-beam__glow {
-  padding: var(--beam-inner-inset);
-  opacity: var(--beam-glow-opacity);
-  visibility: visible;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg calc(var(--beam-tail-start) - 8deg),
-    var(--beam-glow-color) calc(var(--beam-tail-end) - 2deg),
-    var(--beam-head-color) var(--beam-head-start) calc(var(--beam-head-end) + 2deg),
-    transparent var(--beam-fade-end)
-  );
-  filter: blur(5px);
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
-  animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
-}
-
-.masked-conic-border-beam__companion {
-  padding: var(--beam-inner-inset);
-  opacity: calc(var(--beam-opacity) * 0.36);
-  background: conic-gradient(
-    from 180deg,
-    transparent 0deg calc(var(--beam-head-start) - 8deg),
-    var(--beam-tail-color) var(--beam-head-start),
-    var(--beam-head-color) var(--beam-head-end),
-    transparent calc(var(--beam-head-end) + 18deg) 360deg
-  );
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  transition: opacity var(--beam-enter-duration) ease-out, visibility var(--beam-exit-duration) ease-in;
-  animation: masked-conic-border-beam-orbit var(--beam-speed) linear infinite;
-}
-
-.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__layer,
-.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__glow,
-.masked-conic-border-beam[data-direction="counterclockwise"] .masked-conic-border-beam__companion {
-  animation-direction: reverse;
-}
-
-.masked-conic-border-beam[data-trail="none"] .masked-conic-border-beam__layer {
-  background: conic-gradient(from 0deg, transparent 0deg var(--beam-head-start), var(--beam-head-color) var(--beam-head-start) var(--beam-head-end), transparent calc(var(--beam-head-end) + var(--beam-head-arc)) 360deg);
-}
-
-.masked-conic-border-beam[data-trail="defined"] .masked-conic-border-beam__layer {
-  background: conic-gradient(from 0deg, transparent 0deg calc(var(--beam-tail-start) - 8deg), var(--beam-tail-color) var(--beam-tail-end), var(--beam-head-color) var(--beam-head-start) calc(var(--beam-head-end) + 2deg), transparent 360deg);
-}
-
-.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__layer,
-.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__glow,
-.masked-conic-border-beam[data-reduced-motion="minimal"] .masked-conic-border-beam__companion {
-  animation: none;
-  transform: rotate(42deg);
-  opacity: 0;
-  visibility: hidden;
-}
-
-.masked-conic-border-beam__content {
-  position: relative;
-  z-index: 1;
-  display: block;
-  border-radius: var(--beam-inner-radius);
-}
-
-@keyframes masked-conic-border-beam-orbit {
-  to {
-    transform: rotate(1turn);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__layer {
-    animation: none;
-    transform: rotate(42deg);
-    opacity: var(--beam-opacity);
-  }
-
-  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__glow,
-  .masked-conic-border-beam[data-reduced-motion="auto"] .masked-conic-border-beam__companion {
-    animation: none;
-    transform: rotate(42deg);
-    opacity: 0;
-    visibility: hidden;
   }
 }
 
@@ -7673,8 +7637,30 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-top: 0.5rem;
 }
 
-.queue-preset-management-inline > strong {
-  margin-right: auto;
+/* Create option groups collapse to a one-line summary of their values. */
+.queue-create-option > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+
+.queue-create-option-summary-text {
+  color: rgb(var(--mm-muted));
+}
+
+.queue-create-option-body {
+  margin-top: 0.6rem;
+}
+
+.workflow-start-heading .page-header {
+  margin: 0;
+}
+
+.workflow-start-heading .page-header__row {
+  flex-direction: column;
+  align-items: center;
 }
 
 .queue-dependencies-heading,
@@ -8452,7 +8438,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .skills-catalog-page .data-table td[data-column-key="description"] {
   max-width: 44rem;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .skills-catalog-title-link {
@@ -8470,7 +8456,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .skills-catalog-title {
   font-weight: 600;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .skills-catalog-id {
@@ -9436,21 +9422,6 @@ button.workflow-workspace-sidebar-row:active {
   gap: 1rem;
 }
 
-.td-hero-headline {
-  display: grid;
-  gap: 0.3rem;
-  min-width: 0;
-}
-
-.td-title-text {
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 1.2;
-  margin: 0;
-  overflow-wrap: anywhere;
-  letter-spacing: 0;
-}
-
 .td-instructions-toggle {
   flex-shrink: 0;
   background: transparent;
@@ -9756,10 +9727,6 @@ button.workflow-workspace-sidebar-row:active {
     gap: 0.6rem;
   }
 
-  .td-title-text {
-    font-size: 1.25rem;
-  }
-
   .td-instructions-panel {
     padding: 0.7rem 0.8rem;
   }
@@ -9771,7 +9738,7 @@ button.workflow-workspace-sidebar-row:active {
 
 /* ===========================================================================
  * MM-959: Shared dashboard primitives
- * DashboardSurface / DashboardNotice / DashboardErrorDetails / LogPanel and
+ * Page surface classes, DashboardErrorDetails, LogPanel and
  * upgraded DataTable. Explicit surface classes let pages declare chrome
  * directly instead of relying on global `.panel:has(...)` exceptions.
  * ======================================================================== */
@@ -9784,97 +9751,6 @@ button.workflow-workspace-sidebar-row:active {
 .dashboard-surface--page {
   max-width: min(72rem, calc(100vw - 2rem));
   margin-inline: auto;
-}
-
-.dashboard-surface--controlDeck,
-.dashboard-surface--formSlab {
-  border-radius: 1rem;
-  background: var(--mm-glass-fill);
-  border: 1px solid var(--mm-glass-border);
-  box-shadow: var(--mm-elevation-panel);
-  padding: 1rem;
-}
-
-.dashboard-surface--dataSlab,
-.dashboard-surface--evidenceSlab {
-  border-radius: 1rem;
-  background: rgb(var(--mm-panel) / 0.92);
-  border: 1px solid rgb(var(--mm-border) / 0.72);
-  box-shadow: 0 16px 36px -30px rgb(var(--mm-ink) / 0.55);
-  padding: 1rem;
-}
-
-.dashboard-surface--floatingRail {
-  border-radius: 1rem;
-  background: var(--mm-glass-fill);
-  border: 1px solid var(--mm-glass-border);
-  box-shadow: var(--mm-elevation-panel);
-  padding: 0.75rem;
-}
-
-.dashboard-surface--debugDrawer {
-  border-radius: 0.75rem;
-  background: rgb(var(--mm-panel) / 0.72);
-  border: 1px dashed rgb(var(--mm-border) / 0.72);
-  padding: 0.75rem;
-}
-
-/* DashboardNotice ---------------------------------------------------------- */
-
-.dashboard-notice {
-  border-radius: 0.65rem;
-  padding: 0.65rem 0.72rem;
-  border: 1px solid rgb(var(--mm-border));
-  background: rgb(var(--mm-panel) / 0.72);
-  color: rgb(var(--mm-ink));
-  font-size: 0.9rem;
-  box-shadow: 0 10px 24px -22px rgb(var(--mm-ink) / 0.4);
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.dashboard-notice__title {
-  margin: 0;
-  font-weight: 600;
-}
-
-.dashboard-notice__body {
-  margin: 0;
-}
-
-.dashboard-notice__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.dashboard-notice__details-summary {
-  cursor: pointer;
-}
-
-.dashboard-notice--info {
-  border-color: rgb(var(--mm-accent) / 0.5);
-  background: rgb(var(--mm-accent) / 0.08);
-}
-
-.dashboard-notice--success {
-  border-color: rgb(var(--mm-ok) / 0.5);
-  background: rgb(var(--mm-ok) / 0.08);
-  color: rgb(var(--mm-ok));
-}
-
-.dashboard-notice--warning,
-.dashboard-notice--pending {
-  border-color: rgb(var(--mm-warn) / 0.5);
-  background: rgb(var(--mm-warn) / 0.1);
-  color: rgb(var(--mm-warn));
-}
-
-.dashboard-notice--error {
-  border-color: rgb(var(--mm-danger) / 0.5);
-  background: rgb(var(--mm-danger) / 0.08);
-  color: rgb(var(--mm-danger));
 }
 
 /* DashboardToast ----------------------------------------------------------- */
@@ -10451,8 +10327,12 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-inventory__identity small {
   min-width: 0;
   max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+/* Machine identifiers under a name may break anywhere. */
+.omnigent-inventory__identity small {
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 .omnigent-inventory__row-actions {
   display: flex;
@@ -10464,11 +10344,14 @@ button.workflow-workspace-sidebar-row:active {
 }
 .omnigent-inventory__row-actions button {
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   min-height: 2.75rem;
   max-width: 100%;
 }
 .omnigent-inventory input[type='search'] { margin-top: .35rem; max-width: 28rem; width: 100%; min-width: 0; }
+.omnigent-inventory__raw-id summary { cursor: pointer; color: rgb(var(--mm-muted)); font-size: 0.75rem; }
+.omnigent-inventory__raw-id code { font-size: 0.75rem; overflow-wrap: anywhere; }
+.omnigent-inventory__readiness-note { color: rgb(var(--mm-muted)); flex-basis: 100%; }
 .omnigent-policy-editor { min-width: 0; max-width: 100%; }
 .omnigent-policy-editor input,
 .omnigent-policy-editor select,
@@ -10478,7 +10361,7 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-inventory__table-wrap .data-table-slab { max-width: 100%; }
 .omnigent-inventory table { border-collapse: collapse; width: 100%; table-layout: fixed; }
 .omnigent-inventory th,
-.omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; min-width: 0; overflow-wrap: anywhere; }
+.omnigent-inventory td { border-bottom: 1px solid rgb(var(--mm-border)); padding: .75rem; text-align: left; vertical-align: top; min-width: 0; overflow-wrap: break-word; }
 /* MoonMind#4559 inventory tables: grid sections must not inherit an automatic
  * minimum width from the table, and inventory cells wrap instead of forcing
  * the grid (or the whole page) wider than the viewport. The shared
@@ -10494,7 +10377,7 @@ button.workflow-workspace-sidebar-row:active {
   white-space: normal;
 }
 .omnigent-inventory .data-table td {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .omnigent-policy-detail,
 .omnigent-policy-editor { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
@@ -10673,14 +10556,6 @@ button.workflow-workspace-sidebar-row:active {
   gap: 0.4rem 0.75rem;
   min-width: 0;
 }
-.wf-native-chat__title {
-  color: rgb(var(--mm-ink));
-  font-weight: 600;
-  max-width: 40ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .wf-native-chat__meta {
   align-items: center;
   color: rgb(var(--mm-muted));
@@ -10847,13 +10722,15 @@ button.workflow-workspace-sidebar-row:active {
   min-inline-size: 0;
 }
 
-/* Long machine identifiers wrap instead of dictating page width; human
- * prose wraps naturally. */
-.omnigent-inventory td strong,
-.omnigent-inventory td small,
-.provider-profile-actions > button,
-.data-table-card__value {
+/* Long machine identifiers wrap instead of dictating page width; names,
+ * prose, and button labels wrap between words. */
+.omnigent-inventory td small {
   overflow-wrap: anywhere;
+}
+
+.omnigent-inventory td strong,
+.provider-profile-actions > button {
+  overflow-wrap: break-word;
 }
 
 /* Provider record actions share a full-width wrapping area so long labels

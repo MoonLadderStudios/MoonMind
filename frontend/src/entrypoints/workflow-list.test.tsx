@@ -1904,10 +1904,12 @@ describe('Workflows Entrypoint', () => {
 
     openFilterDrawer();
 
-    // The drawer focuses its first control so keyboard users land inside it.
-    const idInput = (await screen.findByLabelText('ID filter value')) as HTMLInputElement;
+    // The drawer focuses its first control so keyboard users land inside it;
+    // with no active filters every section is collapsed, so that is the first
+    // section's summary.
+    const idSection = screen.getByRole('region', { name: 'ID filter' });
     await waitFor(() => {
-      expect(document.activeElement).toBe(idInput);
+      expect(document.activeElement).toBe(idSection.querySelector('summary'));
     });
 
     const titleInput = (await screen.findByLabelText('Title filter value')) as HTMLInputElement;
@@ -2326,14 +2328,18 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
-  it('marks mobile card details links as the only full-width card action', async () => {
+  it('uses the mobile card title as its only detail link', async () => {
     stubViewport(false);
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    const detailsLink = await screen.findByRole('button', { name: 'View details' });
+    const title = (await screen.findAllByRole('link', { name: 'Example task' })).find((link) =>
+      link.closest('.queue-card'),
+    ) as HTMLElement;
+    const cardList = title.closest('.queue-card-list') as HTMLElement;
 
-    expect(detailsLink.classList.contains('queue-card-details-action')).toBe(true);
-    expect(detailsLink.closest('.queue-card-actions')).toBeTruthy();
+    expect(title.classList.contains('queue-card-title')).toBe(true);
+    expect(within(title.closest('.queue-card') as HTMLElement).getAllByRole('link')).toHaveLength(1);
+    expect(within(cardList).queryByRole('button', { name: 'View details' })).toBeNull();
   });
 
   it('MM-1001 keeps mobile workflow cards, filters, and detail navigation available', async () => {
@@ -2361,10 +2367,8 @@ describe('Workflows Entrypoint', () => {
     expect(cardList).toBeTruthy();
 
     const cardTitle = await within(cardList).findByRole('link', { name: 'Example task' });
-    const detailsLink = within(cardList).getByRole('button', { name: 'View details' });
 
     expect(cardTitle.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
-    expect(detailsLink.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
     expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
 
     openFilterDrawer();
@@ -3541,7 +3545,12 @@ describe('Workflows Entrypoint', () => {
               source: 'authoritative', countMode: 'exact', truncated: true, nextPageToken: 'more',
             }),
           } as Response);
-          expect(await within(section).findByText('Facet values truncated by the server.')).toBeTruthy();
+          // Provider Profiles page with their own "Load more" action, so the
+          // truncated first page needs no separate notice.
+          expect(
+            await within(section).findByRole('button', { name: 'Load more Provider Profiles' }),
+          ).toBeTruthy();
+          expect(within(section).queryByText(/truncated/i)).toBeNull();
         } else {
           expect(
             await within(section).findByText('Facet values unavailable. Showing current page values only.'),

@@ -90,13 +90,68 @@ describe('dashboard route resolution', () => {
     expect(destination?.navigationGroup).not.toBe('primary');
   });
 
-  it('detects backend destination inventory drift', () => {
+  it('detects backend destination inventory drift in keys, paths and capabilities', () => {
     const serverInventory = DASHBOARD_DESTINATIONS.map(({ page: _page, dataWidePanel: _wide, ...item }) => ({ ...item }));
     expect(matchesDashboardDestinationRegistry(serverInventory)).toBe(true);
     expect(matchesDashboardDestinationRegistry(serverInventory.slice(1))).toBe(false);
     expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
       index === 0 ? { ...item, capabilityKey: 'drifted' } : item
     )))).toBe(false);
+    expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
+      index === 0 ? { ...item, key: 'drifted' } : item
+    )))).toBe(false);
+    expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
+      index === 0 ? { ...item, canonicalPath: '/drifted' } : item
+    )))).toBe(false);
+    expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
+      index === 0 ? { ...item, endpointKey: 'drifted' } : item
+    )))).toBe(false);
+    expect(matchesDashboardDestinationRegistry(serverInventory.map((item, index) => (
+      index === 0 ? { ...item, pathPatterns: ['/drifted'] } : item
+    )))).toBe(false);
+  });
+
+  it('ignores presentation-only differences from the server registry', () => {
+    const serverInventory = DASHBOARD_DESTINATIONS.map(({ page: _page, dataWidePanel: _wide, ...item }) => ({ ...item }));
+    const reworded = serverInventory.map((item) => ({
+      ...item,
+      label: `${item.label} (renamed)`,
+      iconKey: 'wrench' as const,
+      navigationGroup: 'operations' as const,
+      pageClassification: 'utility' as const,
+    }));
+    expect(matchesDashboardDestinationRegistry(reworded)).toBe(true);
+    expect(matchesDashboardDestinationRegistry([...serverInventory].reverse())).toBe(true);
+  });
+
+  it('resolves every registry path from the destination registry itself', () => {
+    for (const destination of DASHBOARD_DESTINATIONS) {
+      expect(resolveDashboardRoute(destination.canonicalPath)).toEqual({
+        page: destination.page,
+        dataWidePanel: destination.dataWidePanel,
+        currentPath: destination.canonicalPath,
+      });
+      expect(destinationForPath(destination.canonicalPath)?.key).toBe(destination.key);
+    }
+    expect(destinationForPath('/workflows/new/')?.key).toBe('create');
+    expect(destinationForPath('/workflows/mm%3A1')?.key).toBe('workflows');
+    expect(destinationForPath('/workflows/mm%3A1/steps')?.key).toBe('workflows');
+    expect(destinationForPath('/omnigent/policies/scope-a')?.key).toBe('omnigent-policies');
+    expect(destinationForPath('/oauth-terminal')).toBeNull();
+    expect(resolveDashboardRoute('/oauth-terminal')?.page).toBe('oauth-terminal');
+    expect(resolveDashboardRoute('/skillset')).toBeNull();
+    expect(resolveDashboardRoute('/schedules/a/b')).toBeNull();
+  });
+
+  it('only exposes page types that a route can resolve to', () => {
+    const resolvablePages = new Set([
+      ...DASHBOARD_DESTINATIONS.map(({ page }) => page),
+      resolveDashboardRoute('/settings')?.page,
+      resolveDashboardRoute('/oauth-terminal')?.page,
+    ]);
+    for (const dead of ['workflow-list', 'workflows-home', 'workflow-detail', 'workflow-start']) {
+      expect(resolvablePages.has(dead as never)).toBe(false);
+    }
   });
 
   it.each(['/artifacts/report/123', '/observability/runs/today', '/remediations/mm%3A123', '/omnigent/agents/coding']) (

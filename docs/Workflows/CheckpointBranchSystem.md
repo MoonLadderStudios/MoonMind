@@ -16,172 +16,33 @@ branch, and publication contract is defined in [Workflow Publishing](WorkflowPub
 This document describes target behavior, not an implementation or permission to
 bypass currently enforced recovery gates.
 
-**Implementation tracking:** Rollout notes, spikes, temporary handoffs, and migration checklists live under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design.
-
 ## Related Docs
 
-- `docs/Steps/StepExecutionsAndCheckpointing.md`
-- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
-- `docs/Workflows/WorkflowRemediation.md`
-- `docs/Workflows/WorkflowPublishing.md`
-- `docs/Workflows/WorkflowFinishSummarySystem.md`
-- `docs/Workflows/WorkflowRunsApi.md`
-- `docs/Api/ExecutionsApiContract.md`
-- `docs/Temporal/StepLedgerAndProgressModel.md`
-- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
-- `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/Temporal/ErrorTaxonomy.md`
-- `docs/Omnigent/OmnigentAdapter.md`
-- `docs/ManagedAgents/ManagedAgentsGit.md`
-- `docs/RepositoryAccessAndWorkspaceDesign.md`
-- `docs/Workflows/LoreVcsIntegrationDesign.md`
-
----
+[Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md), [Recovery](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md), [Workflow Remediation](WorkflowRemediation.md), [Workflow Publishing](WorkflowPublishing.md), [Finish Summary](WorkflowFinishSummarySystem.md), [Repository Access](../RepositoryAccessAndWorkspaceDesign.md), and [Omnigent Adapter](../Omnigent/OmnigentAdapter.md).
 
 ## 1. Purpose
 
-Checkpoint Branches let an operator or an admitted workflow create independent
-continuations from a durable workflow or step checkpoint. A branch is a
-continuation lane backed by checkpoints, Step Executions, artifact refs, and an
-isolated repository workspace when code is involved. Branching a conversation is
-the mental model, not a substitute for those durable identities.
+Checkpoint Branches support independently admitted continuations from durable workflow/step checkpoints, immutable turns, candidate comparison, and explicit promotion. Checkpoints, Step Executions, artifacts, and isolated code workspaces supply the durable identities.
 
-> From an eligible checkpoint, create a named continuation, execute immutable branch turns, compare candidates, and explicitly promote zero or one candidate into the canonical workflow line.
+Instructions and workspace/runtime policies may differ by admitted continuation; publication is not a per-turn override. Automatic/nested branches inherit frozen parent intent. An operator's independent execution from saved content uses fresh normal admission with one policy; children cannot manufacture that escape.
 
-The system is broader than remediation. Instructions, workspace and runtime
-policies may differ in separately admitted continuations. That does not create a
-per-turn publication override. Automatically created branches and nested
-continuations remain inside the parent's frozen publication scope. An operator
-can explicitly author a new independent execution from saved checkpoint content
-with its own single policy through normal admission, but a child capability
-cannot claim this authority to escape its parent.
-
-The same substrate supports terminal checkpoint preservation. A controlled
-failure may preserve authoritative work on an isolated remote branch **only
-when that operation is compatible with the admitted scope and destination
-mutation authority**. Explicit None uses qualified artifact-backed saving, not
-an implicit recovery push. A deployment that cannot honor the required save
-contract rejects the unsupported new execution before work. Saved work does not
-turn a failed objective into success.
-
-Core goals are safe parallel continuations; durable inspectable branch evidence;
-workspace isolation; immutable instructions; repeated turns with lineage;
-evidence-backed comparison and explicit promotion; qualified runtime/session
-continuation; no silent canonical advancement or unauthorized external effects;
-controlled-failure preservation; and a clear distinction between the one
-authored branch context, derived work branch, and verified output.
-
----
+Controlled-failure remote preservation requires compatible scope and destination authority. None uses qualified artifact saving, never a recovery-push exception. Unsupported required save contracts reject new execution before work; saving cannot turn failure into success.
 
 ## 2. Architectural decision summary
 
-### 2.1 Product-level branch graph above Step Executions
+Logical Steps, Step Executions, manifests, and checkpoints remain execution truth. Each Checkpoint Branch turn creates a Step Execution or qualified equivalent evidence. The execution owner allocates runtime/host/lease/session identities; callers supply intent only. Transient retries reuse the operation identity. After an uncertain start, remediation observes the exact persisted claim without redispatching; a lost acknowledgment cannot prove no effect or a successful repair.
 
-Existing Logical Steps, Step Executions, manifests, and checkpoints remain the
-execution-plane truth. Checkpoint Branches add a product-level graph:
+Repository branches are isolation bindings, not product identities; analysis-only branches need none. Provider-aware bindings follow [Lore VCS Integration Design](LoreVcsIntegrationDesign.md), not a new Git-only authoring domain. Provider sessions and URLs are runtime/diagnostic metadata, never durable branch authority.
 
-```text
-Workflow Execution
-  -> Logical Step
-      -> Step Execution
-          -> Checkpoint
-              -> Checkpoint Branch
-                  -> Branch Turn
-                      -> Step Execution
-                      -> Checkpoint
-                          -> Child Checkpoint Branch
-```
+Creating, continuing, or publishing a candidate does not promote it. Promotion is workflow-owned and evidence/side-effect/approval-gated. Execution, repair verification, publication, promotion, and cleanup remain separate facts.
 
-A branch is not a Step Execution. Each semantic turn creates a Step Execution or
-a qualified continuation operation recorded as equivalent Step Execution evidence.
+Verified recovery publication proves remote availability, not objective success, a PR, or promotion. A failed workflow retains FAILED after saving. Artifact-only preservation is durable saved content, not a Saved Work Branch.
 
-### 2.2 Product branches and repository branches
+## 3. Candidate lineage and preservation
 
-A Checkpoint Branch is a product continuation lane. A Git or Lore work branch is
-an isolation binding, not that lane's identity. Analysis-only branches need no
-repository branch. Repository bindings may be restored under admitted policy
-without changing the product branch's durable identity.
+The checkpoint is the fork point; immutable branch-local turns create execution evidence. Several candidates may share a checkpoint, but fan-in promotes at most one. Combining outputs requires a new admitted branch or Step Execution naming both as evidence, not an automatic merge. Historical candidates remain inspectable.
 
-Git-specific persistence examples below illustrate existing internal bindings.
-They do not reintroduce Git-only authoring or a second repository domain. New
-provider-discriminated targets, workspace bindings, checkpoints, and publication
-evidence follow [Lore VCS Integration Design](LoreVcsIntegrationDesign.md).
-
-### 2.3 Branching is not ordinary retry
-
-A semantic branch turn has a new Step Execution identity, branch lineage, exact
-source checkpoint, immutable instruction artifact/digest, declared workspace and
-runtime/session policy, and manifest evidence. Low-level transient retries reuse
-the existing operation identity; they are not new turns.
-
-The execution owner allocates Step Execution, AgentRun, bridge, host, lease, and
-session identities. API callers provide intent only, never runtime results or
-self-attested execution ownership.
-
-### 2.4 Branches are candidates until promoted
-
-Creating, continuing, or publishing a branch does not make it canonical.
-Promotion is an explicit workflow-owned decision gated by structured evidence,
-side-effect classification, workspace validation, and applicable approval.
-
-For remediation, branch creation, turn execution, action delivery, and repair
-verification remain separate facts. Detail projections show source/checkpoint,
-workspace/runtime policies, isolated work branch, current turn/version/head,
-verified output/PR, verdict and remaining-work refs, publication, promotion, and
-archive/cleanup state from their authoritative records.
-
-### 2.5 Provider sessions are runtime bindings
-
-Provider/session/runner/file IDs and URLs are diagnostic or runtime-binding
-metadata. Branch records, Step Execution manifests, checkpoints, artifact refs,
-repository bindings, and promotion records own the durable product state.
-
-### 2.6 Terminal checkpoint publication is recovery evidence, not success
-
-Verified terminal publication proves that work is available at a remote revision.
-It does not prove the objective passed, a PR was created, or a candidate was
-promoted. Workflow outcome, save outcome, recovery publication, promotion, and
-normal PR/merge completion remain separate.
-
-A failed workflow remains failed with a FAILED finish outcome after successful
-preservation. The remote branch is partial-success/recovery evidence. A verified
-artifact save is also durable preservation but is not a Saved Work Branch.
-
----
-
-## 3. Conceptual model
-
-### 3.1 Conversation-style branching mapped to MoonMind
-
-```text
-Checkpoint C1
-  Branch A: try minimal fix
-    Turn A1 -> Step Execution A1 -> Checkpoint A1C
-    Turn A2 -> Step Execution A2 -> Checkpoint A2C
-  Branch B: try rewrite
-    Turn B1 -> Step Execution B1 -> Checkpoint B1C
-  Branch C: continue provider state
-    Turn C1 -> Step Execution C1 -> Checkpoint C1C
-```
-
-The checkpoint is the fork point. Turns are branch-local instruction messages.
-Step Executions are the actual attempts. Their source and admitted policy remain
-explicit even when the UI presents a simple conversational tree.
-
-### 3.2 Mainline versus candidates
-
-The mainline is the accepted workflow path. A candidate can remain exploratory,
-be diagnosis-only, become promotable, publish under its allowed policy without
-promotion, preserve failed work, be archived, or fork into children. Historical
-branches remain inspectable after a different candidate is promoted.
-
-### 3.3 Fan-out and fan-in
-
-Several branches can start from one checkpoint. Fan-in explicitly promotes one
-candidate. Combining multiple outputs requires a new admitted branch or Step
-Execution naming both as evidence; it is not an automatic multi-branch merge.
-
-### 3.4 Controlled failure preservation
+### 3.1 Controlled failure preservation
 
 Preservation uses existing authoritative state, not a speculative new branch
 from arbitrary logs. Candidate source preference is the terminal Step Execution's
@@ -223,33 +84,11 @@ local saved content and workflow promotion do not imply a push or merge.
 
 ---
 
-## 5. Core invariants
+## 5. Admission invariants
 
-1. Branches are explicit records, never inferred solely from logs, Git names, or sessions.
-2. Every branch has validated checkpoint or typed source-state evidence.
-3. Source identity pins workflow/run, applicable step/ordinal, boundary, ref, and digest.
-4. Launched turn instructions, source, workspace/runtime policies, and scope are immutable.
-5. Semantic work creates or references Step Execution manifest evidence.
-6. Evidence is append-only across failure, archive, supersession, and promotion.
-7. Product branch and repository work-branch identities remain distinct.
-8. Repository-mutating candidates have qualified isolated workspaces/work branches.
-9. Provider sessions cannot replace MoonMind's durable state or policy authority.
-10. Promotion is explicit, never inferred from tests, a push, or a PR.
-11. Publication and promotion are independent.
-12. External effects are admitted, isolated/idempotent, compensated, or approval-gated before work.
-13. Comparisons are artifact-backed, not reconstructed from UI projections.
-14. Invalid restore or unsupported continuation fails closed, not by a broader fallback.
-15. Controlled failures preserve required work before disposal through the admitted save contract; remote preservation additionally requires compatible publication authority.
-16. Saving or pushing a recovery branch does not change the failed objective.
-17. An authored maxBudgetUsd remains immutable launch authority. A runtime without a provider-native USD hard stop rejects before capacity, host, session, or billing acquisition; terminal cost observation is not prospective enforcement.
-18. Secondary preservation failures do not overwrite the primary failure diagnostic.
-19. Saved Work Branch requires independently verified remote revision or qualified provider-native evidence.
-20. Infrastructure loss is never described as saved without prior verified artifact/remote evidence; a Saved Work Branch specifically requires remote proof.
-21. Retried preservation reuses operation, candidate, and branch identities without duplicate effects.
-22. One canonical authored repository branch/target context is distinct from derived work state and verified outputBranch. startingBranch, targetBranch, and task.git aliases are historical-only, not active new-input or PR-selector fallbacks.
-23. Automatically scoped branches/turns inherit the frozen publication intent, not a coordinator's local None. A new independent user-authored continuation needs normal fresh admission and cannot be manufactured by a child capability.
+Validate source workflow/run/step/ordinal, boundary, ref, digest, and immutable instruction/policy evidence before effects. Branches, comparisons, and promotion are explicit durable records, never inferred from logs, names, sessions, or UI projections. External effects must be admitted and isolated/idempotent, compensated, or approval-gated before work.
 
----
+An authored `maxBudgetUsd` is immutable launch authority. A runtime without a provider-native USD hard stop rejects before capacity, host, session, or billing acquisition; terminal cost observation is not prospective enforcement.
 
 ## 6. Branch lifecycle
 
@@ -346,131 +185,17 @@ names are not public authoring aliases. Provider-aware target/binding/checkpoint
 interfaces evolve through their existing owners as specified in
 LoreVcsIntegrationDesign, without another parallel repository domain.
 
-### 7.1 workflow_checkpoint_branches
+### 7.1 Persistence owners
 
-```text
-branch_id primary key
-workflow_id
-root_workflow_id
-source_run_id
-logical_step_id null
-source_execution_ordinal null
-source_checkpoint_boundary
-source_checkpoint_ref
-source_checkpoint_digest null
-parent_branch_id null
-parent_turn_id null
-label
-state
-branch_kind
-workspace_policy
-runtime_context_policy
-git_repository null
-git_base_branch null
-git_base_commit null
-git_work_branch null
-current_head_step_execution_id null
-current_head_checkpoint_ref null
-current_head_commit null
-pull_request_url null
-artifact_refs json
-promotion_evidence json null
-diagnostics json
-promoted_at null
-archived_at null
-created_by
-created_at
-updated_at
-```
+Exact columns and relationships live in the [database models](../../api_service/db/models.py) (`WorkflowCheckpointBranch`, `WorkflowCheckpointBranchTurn`, `WorkflowCheckpointBranchGitBinding`, `WorkflowCheckpointBranchArtifact`) and [typed models](../../moonmind/schemas/checkpoint_branch_models.py). The [branch service](../../api_service/services/checkpoint_branch_service.py) owns persistence. These sources describe current serialization, not proof that every target-state migration is complete.
 
-A system-owned recovery branch may be created only from a valid checkpoint or
-typed state. Its label can be Recovered work from failed workflow and created_by
-system:terminal-checkpoint. No source means no fabricated branch record.
+Branches retain source/parent lineage, policies, current accepted head, repository binding, promotion evidence, and diagnostics. Turns retain immutable source/instructions, stable idempotency and execution identities, outcome and artifact refs. Git-specific physical names are internal bindings, not new public authoring aliases.
 
-### 7.2 workflow_checkpoint_branch_turns
+A system recovery branch requires valid checkpoint or typed source evidence. It may be labelled “Recovered work from failed workflow” with `created_by = system:terminal-checkpoint`; missing source never fabricates a branch record.
 
-```text
-branch_turn_id primary key
-branch_id
-parent_turn_id null
-source_checkpoint_ref null
-source_checkpoint_digest null
-source_state_kind null
-source_state_ref null
-source_state_digest null
-instruction_ref
-instruction_digest
-context_bundle_ref null
-step_execution_manifest_ref null
-created_step_execution_id null
-runtime_agent_run_id null
-provider_session_id null
-git_work_branch null
-idempotency_key unique
-status
-diagnostics json
-started_at null
-completed_at null
-created_at
-```
+`binding_metadata.terminalPublication` is only a bounded recovery projection (intent, disposition/reason, source, revision, remote observation, evidence ref). Its `evidenceRef` points to validated `moonmind.publish.repository.v1` under the exact owning attempt. A writable projection or `remoteVerified` boolean is not proof. Add indexes only for a concrete query need.
 
-### 7.3 workflow_checkpoint_branch_git_bindings
-
-```text
-branch_id
-repository
-base_branch
-base_commit
-work_branch
-worktree_ref null
-provider_workspace_ref null
-head_commit null
-patch_ref null
-pull_request_url null
-workspace_policy
-creation_mode
-publish_status
-binding_metadata json
-created_at
-updated_at
-```
-
-Existing binding_metadata.terminalPublication is a bounded recovery-operation
-projection, for example:
-
-```json
-{
-  "intent": "terminal_checkpoint",
-  "status": "pushed",
-  "reasonCode": "graceful_failure_checkpoint_pushed",
-  "source": "live_workspace",
-  "headSha": "abc123",
-  "baseBranch": "main",
-  "remoteVerified": true,
-  "verifiedAt": "2026-07-12T12:00:00Z",
-  "evidenceRef": "artifact://verified-repository-publication"
-}
-```
-
-It is not an independently writable publication proof. New evidenceRef points
-to validated `moonmind.publish.repository.v1` under the exact owning attempt.
-Provider-specific projected fields reflect that evidence and do not establish
-another authored source. Add indexed columns only when a concrete query need
-justifies them.
-
-### 7.4 workflow_checkpoint_branch_artifacts
-
-```text
-branch_id
-branch_turn_id null
-artifact_ref
-artifact_kind
-content_type null
-digest null
-created_at
-```
-
-### 7.5 Step Execution manifest extension
+### 7.2 Step Execution manifest extension
 
 The manifest can include branchId, branchTurnId, rootCheckpointRef,
 parentBranchId, parentTurnId, and the provider work-branch binding. These are
@@ -478,7 +203,7 @@ server-owned lineage/derived state, not replacements for the Step Execution
 tuple or new authoring fields. Historical Git-specific gitWorkBranch projections
 remain readable without becoming caller-controlled branch authority.
 
-### 7.6 Terminal publication evidence
+### 7.3 Terminal publication evidence
 
 Each finalizer attempt records a bounded recovery-operation artifact, including
 failed or skipped attempts. It identifies workflow/run/Step Execution, branch,
@@ -557,39 +282,13 @@ cleanup, or terminal evidence.
 
 ### 8.3 Continue branch
 
-```http
-POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/continue
-```
-
-```json
-{
-  "label": "Add focused regression coverage",
-  "instructions": {"text": "Continue this branch. Add tests without broadening the interface."},
-  "workspacePolicy": "continue_from_previous_execution",
-  "runtimeContextPolicy": "fresh_agent_run",
-  "idempotencyKey": "mm:wf:cbr_01J:turn:add-tests"
-}
-```
+`POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/continue` accepts new immutable instructions, label, qualified workspace/runtime policy, and idempotency key.
 
 ### 8.4 Fork branch
 
-```http
-POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/fork
-```
+`POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/fork` also identifies the exact `parentTurnId`.
 
-```json
-{
-  "parentTurnId": "cbt_01J...",
-  "label": "Alternative: remove adapter abstraction",
-  "instructions": {"text": "Fork after Turn 2 and simplify the adapter boundary."},
-  "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
-  "idempotencyKey": "mm:wf:cbr_01J:fork:remove-adapter-abstraction"
-}
-```
-
-Continue/fork allocate a new semantic Step Execution from the exact accepted
-parent turn output, digest, and Step Execution identity. They do not revert to
-the branch root after progress or re-evaluate another publication default.
+Continue/fork allocate a new semantic Step Execution from the accepted parent turn output, digest, and execution identity. They never revert to the root after progress or re-evaluate publication defaults. [Typed requests](../../moonmind/schemas/checkpoint_branch_models.py) own exact current serialization.
 
 ### 8.5 Launch branch turn
 
@@ -601,55 +300,13 @@ The body accepts stable idempotencyKey and, where required, expectedBranchHeadVe
 Unknown fields are rejected. No runtime identity, workspace, result, publication,
 diagnostics, capture, cleanup, or terminal authority can be supplied by a caller.
 
-One durable owner validates pinned source/lineage/digests, immutable instructions,
-repository binding, scope, stored policies/profiles, current credential generation,
-and expected head before mutation. It claims the turn and persists Step Execution
-and AgentRun identities before dispatch. The canonical profile-bound
-external/omnigent request uses checkpointRecovery.recoveryAction branch_required
-and ordinary AgentRun; the deterministic OmnigentSession child owns bounded
-host/session/turn/evidence/cleanup activities.
+One durable owner validates pinned source/lineage/digests, instructions, bindings, scope, stored policies/profiles, current credentials, and expected head. It claims the turn and persists Step Execution/AgentRun identities before dispatch. Ordinary profile-bound AgentRun uses `checkpointRecovery.recoveryAction = branch_required`; deterministic OmnigentSession owns bounded host/session/evidence/cleanup Activities. Harvest result, workspace, checkpoint, publication, capture, and cleanup evidence before releasing host/Profile authority. Turn outcome remains separate from remediation verification.
 
-Harvest results, workspace/checkpoint/output/publication/capture/cleanup evidence
-before releasing host/Profile authority in the normal release-last order. Persist
-turn state separately from remediation verification.
+`POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/verification` accepts only `verifierArtifactRef` (`artifact://...`). The owner reads immutable JSON and checks publisher, source workflow/run, completed checking turn, Step Execution, exact head version/ref/digest, and canonical verdict. It records through the remediation-head owner; callers cannot provide verdict/head updates. Rejected evidence returns 409 `checkpoint_verification_rejected`; schema-invalid requests return 422. Accepted receipts resume the saved action without repeating compute. Candidate mutation by the verifier records objective failure. Failed/canceled/blocked turns and finalization retries resume the same read-only action verification.
 
-The objective verifier's runtime-published report is admitted through:
+Retries reuse one server-derived workflow/branch/turn launch identity and cannot send a second first message. Fresh session authority never copies the source OAuth lease. The operation ledger claims launch before artifacts; turn-plus-kind ownership reuses and byte-validates committed artifacts after partial failures.
 
-```http
-POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/verification
-```
-
-The authenticated request contains only `verifierArtifactRef` (`artifact://...`).
-The branch owner reads the existing immutable JSON report, verifies its runtime
-publisher, source workflow/run, completed checking turn, Step Execution, exact
-head version/ref/digest, and canonical verdict, then records the receipt through
-the existing remediation-head owner. Callers cannot submit a verdict or head
-update. Missing, unauthorized, mismatched, or malformed reports return 409 with
-`checkpoint_verification_rejected`; schema-invalid requests return 422.
-Accepted receipts resume the saved remediation action without rerunning branch
-compute. A verifier that changes the candidate workspace records the objective
-failure rather than advancing the head. Failed, canceled, and blocked turn
-finalization also resumes the same read-only action verification, including
-idempotent finalization retries.
-
-Retries reuse the stored runtime launch identity and cannot post a second first
-message. Branch execution gets fresh host/session authority, not the source
-session's mutable OAuth lease. Caller operation keys deduplicate their API calls;
-the server derives one launch identity from workflow/branch/turn so another
-recovery operation still reaches the same owner.
-
-The operation ledger claims launch before creating turn artifacts. Each context,
-manifest, request, result, and diagnostics artifact uses turn plus artifact kind
-as stable ownership key. Retry reuses and byte-validates completed artifacts
-instead of allocating replacement refs after partial failure.
-
-Before accepting terminal branch state, resolve retained refs and reject local
-paths, raw credentials, provider grants, and unrestricted runtime authority.
-Persist safe evidence and bounded facts; live host/lease/session/credential
-handles stay with their runtime owners. Link and pin each accepted artifact,
-including copied Omnigent artifacts and nested checkpoints. If retention or
-validation exhausts bounded retries, a sanitized Activity records blocked state
-using only the digest of the unchanged terminal payload.
+Terminal acceptance resolves, validates, links, and pins retained artifacts, including nested checkpoints and copied Omnigent evidence. Reject local paths, raw credentials, provider grants, and unrestricted authority; live handles remain runtime-owned. If bounded retention/validation retries exhaust, record sanitized blocked state with only the unchanged terminal payload's digest.
 
 ### 8.6 Compare branches
 
@@ -657,42 +314,9 @@ using only the digest of the unchanged terminal payload.
 GET /api/executions/{workflowId}/checkpoint-branches/{branchId}/compare?against={otherBranchId}&objective={text}&rubricId={rubric}
 ```
 
-Return artifact-backed comparison, provider diff refs, gate/diagnostic summaries,
-and bounded explanation, not an inferred merge or promotion. The record applies
-the single supported rubric (`checkpoint-branch-gates`; any other `rubricId` is
-rejected) against one explicit objective, preserves both candidate identities,
-and carries source differences, missing-evidence flags, measurement limits,
-observed-versus-estimated costs, input/rubric/cost provenance, an explicit
-winner-or-none outcome, and a no-side-effect attestation (no launched work,
-default change, deployment, promotion, publication, or authorized inference).
-Gate verdicts fall back to the persisted verifier result
-(`latest_verification_verdict`) when promotion gate evidence is absent, and
-budgets fall back to the canonical `diagnostics.runtimeSelection` bound. A
-partial, failed, or evidence-poor sample reports `winner.candidate: none`
-without a universal quality or security claim; incompatible lineage fails
-closed with `incompatible_checkpoint_lineage`. Repeat reads with the same
-objective resume the same ledgered report without rerunning candidates; new
-diagnostics evidence invalidates the cached report.
+Return artifact-backed diffs, gates, and explanation for one explicit objective and the sole supported `checkpoint-branch-gates` rubric; reject other rubrics. Preserve both candidates, source differences, missing-evidence flags, limits, observed/estimated cost and provenance, winner-or-none, and no-side-effect attestation. No work, defaults, deployment, promotion, publication, or inference is authorized. Missing promotion gates fall back to `latest_verification_verdict`; budgets use `diagnostics.runtimeSelection`. Partial/failed/evidence-poor samples have no winner or universal quality/security claim. Incompatible lineage fails with `incompatible_checkpoint_lineage`. Repeated identical requests reuse the ledgered report; changed diagnostics invalidate it.
 
-```http
-POST /api/executions/{workflowId}/checkpoint-branches/comparison-preview
-```
-
-Preview comparison-requested candidate generation without side effects. With
-`allowNewRuns: false` every candidate must name a distinct existing branch that
-already has a completed head result, and the preview authorizes no new
-inference. With `allowNewRuns: true` each requested candidate needs an explicit
-bounded configuration (shared non-blank `sourceIntentRef`, positive finite
-`maxBudgetUsd`, explicit workspace policy, fresh agent run) under the existing
-provider/resource budgets; reuse candidates must not carry new-run settings,
-and creation itself stays on the ordinary create/continue/fork admission path.
-Workspace isolation is attested only when every requested run names an
-isolating policy; otherwise the preview reports the non-isolated policy
-honestly. Candidate sets are small and explicit (2-4); Cartesian expansion
-fields are rejected, not expanded. Only the `checkpoint-branch-gates` rubric
-is supported. The response reports the selected run count plus material
-cost/privacy/authority changes and a stable preview digest, so duplicate or
-interrupted previews cannot duplicate completed compute.
+`POST /api/executions/{workflowId}/checkpoint-branches/comparison-preview` previews 2–4 explicit candidates without effects. With `allowNewRuns: false`, each names a distinct existing branch with completed head. With true, each new candidate supplies shared nonblank `sourceIntentRef`, positive finite `maxBudgetUsd`, explicit workspace policy, and fresh agent run within resource bounds. Reused candidates carry no new-run settings. Reject Cartesian expansion. Attest isolation only when every new run uses an isolating policy; otherwise disclose it. Return run count, material cost/privacy/authority changes, and stable preview digest. Actual creation still uses ordinary admission.
 
 ### 8.7 Promote branch
 
@@ -721,21 +345,6 @@ The optional outputBranch is a read-only projection of verified provider evidenc
 and its checkpoint binding. A historical canonical finish summary is an allowed
 compatibility read source only when it preserves the same verified facts.
 
-Representative Git projection:
-
-```json
-{
-  "outputBranch": {
-    "name": "mm/mm-wf/implement/cp-9f2/recovered-work",
-    "url": "https://github.com/owner/repo/tree/mm/mm-wf/implement/cp-9f2/recovered-work",
-    "headSha": "abc123",
-    "baseBranch": "main",
-    "intent": "terminal_checkpoint",
-    "status": "pushed",
-    "evidenceRef": "artifact://verified-repository-publication"
-  }
-}
-```
 
 Rules:
 
@@ -951,53 +560,21 @@ and checkpoint bindings without manufacturing a full agent context bundle.
 
 ### 12.1 Fresh Omnigent session from checkpoint
 
-The safe current mode is fresh_omnigent_session_from_checkpoint. Validate complete
-source manifest, digests, lineage, exact repository baseline/head, Profile and
-current credential authority. Restore isolated content, create a fresh session,
-pass immutable instructions through parameters.omnigent.prompt.instructionRef,
-retain admitted policy while selecting a qualified host, capture output in
-MoonMind artifacts, and bind it to the new turn.
+Current mode `fresh_omnigent_session_from_checkpoint` validates source manifest/digests/lineage, exact repository baseline/head, Profile, and current credentials; restores isolated content; sends immutable `parameters.omnigent.prompt.instructionRef`; and captures output into the new turn's artifacts under admitted policy. Launch identity includes workflow/branch/turn and differs from the source first message.
 
-The Omnigent launch key includes workflowId/branchId/turnId and is distinct from
-the source attempt because the first-message digest differs. Branch creation
-requires the independent branchCreationAvailable evidence; a live source session
-alone is insufficient. Capacity/readiness waits are distinct from permanent
-source/evidence denials and do not masquerade as resumability.
+Independent `branchCreationAvailable` evidence is required; a live session is insufficient. Capacity waits are distinct from permanent source denials.
 
 ### 12.2 Qualified provider continuation
 
-Future same-session continuation requires typed lifecycle activities such as
-integration.omnigent.send_message and integration.omnigent.harvest_session, a
-validated source-session binding, explicit continuationMode, immutable instruction
-ref, and harvest ownership. Server-owned session refs are runtime metadata, not
-user-chosen product branch identity or evidence of permission to publish.
+Same-session continuation requires its own typed lifecycle, validated source-session binding, explicit `continuationMode`, immutable instructions, and harvest owner. It is not a generic override or publication grant.
 
 ### 12.3 Omnigent terminal publication
 
-A verified provider-native branch/PR can supply outputBranch through the shared
-reader. Artifacts alone may prove saved content but not a remote branch. A
-checkpoint restoration used to publish must preserve exact target/source and
-admitted scope, including the explicit None prohibition.
-
----
+Use the shared publication reader for verified provider-native output. Artifact-only saving cannot prove a remote branch; restored publication still requires exact source/target and compatible authority, including None's prohibition.
 
 ## 13. Branch comparison
 
-Comparison artifacts identify left/right candidates, common source checkpoint,
-provider range/diff refs, gate/verdict summaries, and a bounded narrative ref.
-The comparison record additionally carries the explicit objective and rubric,
-preserved candidate identities, source differences, missing-evidence flags,
-measurement limits, observed-versus-estimated costs with provenance, an explicit
-winner-or-none outcome, and a no-side-effect attestation. Large differences
-remain artifact-backed. A failed source's saved content is a
-valid comparison input; its failed objective and remote/save verification remain
-visible separately, and a partial, incomparable, or failed sample yields no
-winner and no universal claim. Comparison neither merges candidates nor grants
-promotion. Comparison-requested generation is previewed without side effects
-and created only through ordinary admission; comparing saved results never
-authorizes new inference.
-
----
+[Compare branches](#86-compare-branches) defines the request and evidence contract. A failed source's saved content may be compared, but its failed objective and save/remote verification remain separately visible. Large differences remain artifact-backed.
 
 ## 14. Security and isolation
 
@@ -1013,49 +590,21 @@ noninteractive credential path, provider CAS/lease, and exact verification as
 normal publication. Unified evidence and output projection do not bypass those
 checks. Failure to publish preserves the primary failure and required saved work.
 
-Fail-closed diagnostics include checkpoint_missing, checkpoint_invalid,
-checkpoint_unauthorized, checkpoint_digest_mismatch, plan_mismatch,
-workspace_policy_incompatible, git_base_commit_mismatch, git_branch_collision,
-protected_branch_ref, side_effect_policy_blocked,
-provider_continuation_unsupported, approval_required, budget_exhausted,
-outbound_scan_rejected, remote_lease_conflict, and remote_verification_failed.
-Binding conflicts and historical-only aliases are rejected at new admission, not
-silently reconciled by choosing one field.
-
----
+Source, digest, plan, workspace, collision, continuation, approval, budget, scan, lease, and remote-verification failures remain distinguishable diagnostics. New admission rejects conflicting bindings/historical-only aliases instead of choosing a convenient value.
 
 ## 15. UI requirements
 
 ### 15.1 Branch Explorer
 
-Show source step/checkpoint and named candidates with their turn outcomes. Keep
-mainline prominent, expose branch count/status near checkpoints, and retain
-archived/failed candidate evidence for authorized inspection.
+Show mainline, source/checkpoint, named candidates, turn outcomes, and branch counts/status. Retain archived/failed evidence for authorized inspection; progressively disclose runtime plumbing without hiding source/scope/save outcome.
 
-### 15.2 Default detail view
+### 15.2 Branch actions and previews
 
-The ordinary view remains simple. Provider/runtime plumbing is progressively
-disclosed without hiding the actual source, scope, and preservation result.
+Capability-gate create/continue/fork/compare/promote/publication/archive and evidence views. Promote, publish, and archive ask first. Execution previews show source, workspace/derived branch, runtime/session policy, inherited publishing/effective behavior, side-effect risk, budget, and approvals. Inherited values are not override editors. Independent continuation or Publish Saved Work requires normal fresh admission.
 
-### 15.3 Branch actions
+Promotion previews show exact head, gates, revision/PR, downstream invalidation, side effects, approvals, and retained competitors.
 
-Actions are create, continue, fork, compare, promote, admitted publication,
-archive, and evidence/diff/diagnostic views, all capability-gated;
-promote, publish, and archive ask first. Publish cannot change an active scoped
-policy; independent Publish Saved Work needs new authorized admission.
-
-### 15.4 Risk and authority previews
-
-Before branch execution show exact source checkpoint, workspace policy, derived
-work-branch information, runtime/session policy, inherited publication intent and
-effective behavior, side-effect risk, budget, and approvals. Inherited fields are
-not override editors. A separately authored independent continuation uses the
-normal shared Create form with its single context and publication selection.
-
-Before promotion show exact head, verdicts, revision/PR evidence, downstream
-invalidation, side-effect disposition, approvals, and competing branches retained.
-
-### 15.5 Saved Work Branch on workflow detail
+### 15.3 Saved Work Branch on workflow detail
 
 The Git & Publish facts show verified outputBranch before PR Link. Label
 terminal_checkpoint as Saved Work Branch and normal_publish as Published Branch.
@@ -1073,36 +622,9 @@ content, not as a remote branch.
 
 ## 16. Artifact requirements
 
-Minimum branch artifacts:
+Branch and turn artifacts preserve source checkpoints, immutable instructions, context and restore/binding evidence, agent request/result, Step Execution manifest, accepted head, and diagnostics. Their stable ownership is turn plus artifact kind; see the [turn execution owner](../../api_service/services/checkpoint_branch_turn_execution.py) and [branch workflow](../../moonmind/workflows/temporal/workflows/checkpoint_branch_turn.py).
 
-```text
-input.branch.root_checkpoint.json
-input.branch.initial_instructions.md
-runtime.branch.context_bundle.json
-runtime.branch.workspace_restore.json
-runtime.branch.git_binding.json
-output.branch.summary.json
-output.branch.latest_head.json
-```
-
-Minimum turn artifacts:
-
-```text
-input.branch_turn.instructions.md
-runtime.branch_turn.context_bundle.json
-runtime.branch_turn.agent_request.json
-runtime.branch_turn.agent_result.json
-output.branch_turn.step_execution_manifest.json
-output.branch_turn.checkpoint.json
-output.branch_turn.diagnostics.json
-```
-
-Promotion uses output.branch_promotion.record.json and its downstream_invalidation
-artifact. Comparison uses summary, provider range-diff, and metadata artifacts.
-An invoked terminal finalizer writes output.branch.terminal_publication.json as
-its bounded operation summary and links actual unified repository evidence when
-an operation requires it. Provider-discriminated schema evolution does not infer
-authority from these legacy artifact filenames.
+Promotion records accepted evidence and downstream invalidation. Comparison retains summary, provider range-diff, and metadata. An invoked terminal finalizer writes `output.branch.terminal_publication.json` as its operation summary and links actual unified repository evidence where required. Legacy artifact filenames do not confer provider authority.
 
 Record pushed/already_published/no_changes/skipped/failed honestly. Sudden loss
 before finalization does not justify backfilling assumed results. Retention follows
@@ -1138,110 +660,14 @@ names, errors, or other high-cardinality/private data.
 
 ---
 
-## 18. Testing requirements
+## 18. Verification boundaries
 
-### 18.1 Schema tests
+Exercise real create/continue/fork → execution → capture → finalization → detail paths, not only projections. Existing coverage includes [branch workflow behavior](../../tests/unit/workflows/test_checkpoint_branches.py), [API admission](../../tests/unit/api/routers/test_checkpoint_branch_apis.py), [turn execution integration](../../tests/integration/workflows/temporal/test_checkpoint_branch_turn_execution.py), and [Omnigent execution](../../tests/unit/omnigent/test_checkpoint_branch_turn_execution.py).
 
-Require source refs/typed state, instruction refs/digests, immutable launched
-turns, distinct product/work-branch identities, safe bounded records/URLs, and
-secret-free artifacts. New authoring rejects startingBranch, targetBranch,
-task.git, caller-supplied outputBranch, and per-turn publishing overrides.
+Qualification must cover corrupt/unauthorized source rejection, isolated exact-baseline restoration, stable launch/artifact ownership, head-version races, approval-gated promotion, and historical replay. Preservation cases include caught failures versus sudden loss, clean-ahead and dirty candidates, no-content dispositions, already-published adoption, uncertain push/PR acknowledgments, None's artifact-only path, and secondary failure without lost work. Verify accepted evidence across the publisher and detail UI; a boolean, helper test, or form alone is insufficient.
 
-### 18.2 Checkpoint validation tests
+New-authoring rejection of legacy aliases and scoped publication overrides remains a target requirement. Retained-history readers preserve original meaning, and independent continuation requires fresh admission.
 
-Valid source enables qualified creation. Missing/corrupt/unauthorized/wrong-plan
-or wrong-workspace evidence blocks. Terminal fallback uses exact Step Execution
-and digest, not time alone. Ambiguous state remains skipped/unavailable. New
-existing-PR work requires an explicit locator, not a checkout-branch inference.
+## 19. Qualification limits
 
-### 18.3 Repository isolation tests
-
-Start from the expected revision, sanitize generated names, reject protected
-refs/foreign collisions, reuse same-owner bindings idempotently, isolate forks,
-retain original base, and enforce exact conditional writes. No output URL or
-Saved Work Branch without shared-validator remote proof.
-
-### 18.4 Runtime tests
-
-Create/continue/fork allocate appropriate semantic Step Executions and stable
-launch ownership. Retry does not create a duplicate first message. Branch failures
-preserve artifacts and eligible continuations. Qualified controlled failures and
-caught timeouts await admitted preservation; system loss does not invent a push.
-Equivalent remote head is adopted, dirty state yields at most one deterministic
-candidate, clean-ahead state does not make another commit, no-content preservation
-uses its correct operation disposition, and publication failure keeps the primary
-failure. Explicit None saves through the qualified artifact path and never pushes.
-
-### 18.5 Promotion tests
-
-Require exact current head, verdicts, side-effect disposition, and approvals.
-Record downstream invalidation, keep competing branches, and never automatically
-promote a recovery branch because publication succeeded.
-
-### 18.6 Omnigent tests
-
-New branches use fresh qualified session authority and immutable instructionRef;
-source refs remain evidence. Launch keys differ from source attempts. Unsupported
-same-session continuation is rejected. Capture binds to the right turn. Qualified
-provider output is accepted only after verification; session-only output cannot
-produce outputBranch.
-
-### 18.7 Workflow, replay, API, and UI tests
-
-Cover parent checkpoint fallback, child-published reconciliation, lost push/PR
-acknowledgement, coherent binding/finalizer/detail projections, original failure
-preserved after saving, historical cleanup replay, and new qualified save ordering.
-Branch-only, PR-only, combined output, missing/unsafe URLs, slash names, and
-infrastructure loss display accurately.
-
-Also exercise the single-context contract across Create, continuation, fork,
-Edit/Rerun, and remediation; frozen inherited intent through coordinator None;
-independent user admission versus child escape attempts; no generic-branch PR
-fallback; exact old-pair reconstruction or review; and unified managed/agent
-publication evidence. A projection boolean or correct form alone is not proof.
-
----
-
-## 19. Open questions
-
-Remaining product choices include whether a branch always uses a linked execution
-or a subordinate lane, the explicit promotion delivery mechanism, branch-ID
-allocation, archive/remote retention policy, bounded comparison scheduling,
-high-branch-count presentation, qualified automated exploration, and promotion of
-no-code diagnosis. These choices cannot change single-context authority or the
-source/evidence requirements.
-
-Broader graceful-cancellation remote preservation requires an explicit qualified
-policy. Current controlled-failure rules are not open: remote publication requires
-admitted authority and retained exact state; explicit None forbids new remote
-preservation; sudden loss cannot fabricate a save; failure stays failure; and
-Saved Work Branch requires remote verification.
-
----
-
-## 20. Desired end state
-
-```text
-Workflow
-  -> Step
-      -> Checkpoint
-          -> Checkpoint Branch
-              -> Immutable Branch Turn
-                  -> Step Execution
-                  -> Derived repository/runtime binding
-                  -> Saved artifacts and diagnostics
-              -> Next Branch Turn
-          -> Competing Checkpoint Branch
-```
-
-Operators can continue or fork from an exact checkpoint, compare candidates,
-promote one, archive others, and publish saved work through the appropriate
-already-admitted or independently reauthorized publication path. They do not
-juggle starting/target/output fields as competing inputs or silently alter a
-scope by editing one turn.
-
-A controlled failure preserves useful work before destructive cleanup under the
-qualified save contract. An admitted remotely verified recovery branch is shown
-as Saved Work Branch; artifact-only results remain useful saved content. Neither
-changes the failed objective. Infrastructure loss never produces an unsupported
-claim that work was saved.
+Linked-execution versus subordinate-lane delivery, no-code promotion, broader exploration, and graceful-cancellation remote preservation require explicit qualified capabilities. They cannot relax source/evidence requirements, None's remote-write prohibition, or the distinction between failed objectives and verified saved work. Retention and remote deletion remain explicitly policy-owned.

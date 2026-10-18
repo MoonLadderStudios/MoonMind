@@ -157,29 +157,7 @@ Defaults that influence authority or publication must be semantic catalog/compil
 
 ## UI Derivation Policy
 
-The normal path is:
-
-1. Load the selected option and optional schema.
-2. Identify typed task inputs and validated context bindings.
-3. Resolve bound values and expose their read-only source explanations.
-4. Derive controls for the remaining authored fields from schema, semantic hints, deployment policy, and integration availability.
-5. Validate locally for immediate feedback.
-6. Re-resolve and validate through the backend before apply or execution.
-
-| Schema signal | Default interpretation for an authored field |
-| --- | --- |
-| `type: string` | Text input |
-| Long string or markdown semantic format | Textarea or markdown editor |
-| `type: boolean` | Checkbox |
-| `enum` | Select |
-| Array with enum items | Multi-select |
-| URI, date, or date-time format | Corresponding typed input |
-| Jira issue semantics | Jira picker with safe manual reference entry when supported |
-| GitHub repository/PR semantics | Appropriate target picker when supported |
-| Unknown object | Structured object editor fallback |
-| Validated context binding | No duplicate editor; source explanation and workflow-level error routing |
-
-A Skill or Preset does not need to name a React component or concrete widget for the UI to be usable. Guided/Advanced disclosure never turns a context binding into an authored override.
+The [UI generation design](SkillInputSchemaUIGeneration.md#schema-subset-and-widgets) owns schema-to-widget mapping, disclosure, and rendering fallbacks. The shared renderer resolves validated bindings first, explains their sources read-only, and generates controls only for authored inputs. Local validation gives feedback; backend admission re-resolves and validates before apply or execution. Guided/Advanced disclosure never makes a bound field editable.
 
 ## Semantic Hints
 
@@ -218,21 +196,8 @@ A schema-less Skill shows its description and prose guidance, accepts instructio
 
 The Skill remains selectable. An unsupported publishing or target authority contract is handled as an execution-policy incompatibility, not mislabeled as a missing-schema error. Third-party discovery does not become a requirement to adopt MoonMind-specific schema extensions.
 
-## Validation and Conformance
+## Validation boundaries
 
-The shared normalizer, renderer, preset expander, API, and runtime boundary must demonstrate:
-
-- Schema-less third-party Skills remain importable and usable under ordinary admitted policy.
-- Equivalent Skill and Preset schemas receive equivalent generated controls.
-- User inputs retain types, required alternatives, errors, and safe draft values.
-- Context-bound repository/branch/publication fields are absent from editable guided, Advanced, and raw authoring surfaces.
-- A workflow-context change updates every bound consumer and invalidates stale lookups and expansions.
-- Required bound inputs validate successfully when context supplies them, and missing context points to the actual editable source.
-- Conflicting duplicate values, unsupported projections, forged resolved provenance, and malformed binding metadata fail before mutation.
-- Existing-PR targets and genuine source/destination/comparison roles are not collapsed by field-name heuristics.
-- Publication binding forwards frozen scope intent, never a coordinator's local None, retired workspace fallback, or unresolved authoring Auto.
-- Schema, binding, and context digests survive apply/reapply, unexpanded submit, API/MCP, schedules, edit/rerun, and recovery without changing admitted authority.
-- Harmless unknown hints degrade safely; authority-bearing unknowns do not.
-- No secrets enter defaults, input-contract metadata, provenance, or diagnostics.
+The shared normalizer, renderer, expander, API, and runtime enforce these semantics across apply/reapply, unexpanded submit, API/MCP, schedules, edit/rerun, and recovery. The [UI design](SkillInputSchemaUIGeneration.md#backend-validation) defines error routing and handoff; [Workflow Publishing](../Workflows/WorkflowPublishing.md) owns policy admission and reconstruction. Verify the actual producer/consumer boundaries rather than treating a correct form as execution-policy proof.
 
 These are target contracts, not an assertion that the current form or seeds already satisfy them.

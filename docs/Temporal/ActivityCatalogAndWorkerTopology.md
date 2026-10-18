@@ -4,6 +4,8 @@ Scope: Describes MoonMind’s canonical **Activity Types**, **worker fleets**, *
 
 ## Related docs
 
+- [Generated workflow and activity reference](./WorkflowTypeCatalogGenerated.md) — exact registrations, task queues, handler routes, and source owners
+
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](./ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Temporal/WorkflowArtifactSystemDesign.md`](./WorkflowArtifactSystemDesign.md)
@@ -26,7 +28,7 @@ This document standardizes:
 - which worker fleet owns which activity family
 - the routing and timeout/retry model for those activities
 - the contract boundary between workflow code and activity implementations
-- the implemented catalog
+- how to interpret the executable catalog
 
 This document covers the **Temporal-managed worker model** only.
 
@@ -248,7 +250,7 @@ The activity catalog maps activity types onto the following fleets.
 
 | Fleet | Queue(s) | Primary capabilities | Primary privileges |
 |---|---|---|---|
-| `workflow` | `mm.workflow.user.v2`, `mm.workflow` | workflow execution, limited helper activities | Temporal only |
+| `workflow` | [generated workflow queues](./WorkflowTypeCatalogGenerated.md#workflow-task-queues) | workflow execution, limited helper activities | Temporal plus retained compatibility authority; see §5.1 |
 | `artifacts` | `mm.activity.artifacts` | artifact lifecycle, provider-profile support, OAuth session support | artifact storage, DB-backed support services |
 | `llm` | `mm.activity.llm` | planning, validation, review, generic LLM work | model/provider credentials |
 | `sandbox` | `mm.activity.sandbox` | repo and command execution | isolated process execution |
@@ -259,13 +261,7 @@ The activity catalog maps activity types onto the following fleets.
 
 The workflow fleet is primarily for workflow code. It may also host **small helper activities** when needed to preserve deterministic workflow behavior without creating unnecessary routing complexity.
 
-Current registration (`workflow_registry.py::workflow_fleet_activity_handlers`;
-see the generated routing table in
-[`WorkflowTypeCatalogGenerated.md`](./WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing)
-for the current-lane versus historical-only split):
-
-- adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
-- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — registered for replay/in-flight compatibility of older histories; no new calls route there.
+Current and historical-only handler registrations are listed in the [generated workflow-queue routing table](./WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing), sourced from `workflow_registry.py::workflow_fleet_activity_handlers`. Adapter metadata helpers keep mutable registry/settings reads outside deterministic workflow code. Checkpoint persistence handlers remain registered only for replay/in-flight compatibility; new calls route to artifacts.
 
 ### Checkpoint persistence routing
 
@@ -328,17 +324,7 @@ because the workflow side of `MoonMind.AgentRun` (`ManagedAgentAdapter`,
 `/work/agent_jobs/managed_runs`, not for checkpoint compatibility. The
 artifacts worker mounts no agent workspaces.
 
-Capability inventory (workflow fleet, from source inspection):
-
-| Handler | Needs database | Needs provider/Docker/artifact-storage I/O |
-|---|---|---|
-| `integration.resolve_adapter_metadata` | no | no (registry + settings read only) |
-| `integration.get_activity_route` | no | no (catalog read only) |
-| `integration.resolve_external_adapter` | no | no (registry read only) |
-| `integration.external_adapter_execution_style` | no | no (registry read only) |
-| `checkpoint_branch.turn.mark_running` | yes (`mark_turn_running`) | yes (durable turn row) |
-| `checkpoint_branch.turn.persist_terminal` | yes (`lock` + `finalize`) | yes (artifact retention + result/diagnostics writes) |
-| `checkpoint_branch.turn.persist_terminal_rejection` | yes | yes (rejection row terminalization) |
+The adapter metadata helpers read registry/settings/catalog metadata and do not reference checkpoint persistence authority. Retained checkpoint handlers write durable turn state and, for terminal persistence, artifact-retention and result evidence. Those differing handler responsibilities do not isolate permissions within their shared process.
 
 The design intent is a Temporal-only workflow fleet with no artifact,
 provider-mutation, or runtime-supervision I/O; the checkpoint registration is a
@@ -348,38 +334,9 @@ compatibility exception, not a second general-purpose activity plane.
 
 ## 6. Naming conventions
 
-Activity Type names use dotted namespaces.
+Dotted activity names express capability families, not separate deployment units. The [generated catalog](./WorkflowTypeCatalogGenerated.md#activity-catalog-routes) lists the exact types, fleets, and routes from production registries; do not duplicate that inventory here.
 
-### 6.1 Canonical namespaces
-
-- `artifact.*` — artifact lifecycle
-- `plan.*` — planning and plan validation
-- `mm.skill.execute` — default registry-dispatched executable tool path
-- `sandbox.*` — shell, repo, and workspace actions
-- `integration.<provider>.*` — provider-specific external integrations
-- `repo.*` — provider-backed repo operations exposed as general-purpose activities
-- `provider_profile.*` — provider-profile coordination support
-- `oauth_session.*` — OAuth session lifecycle support
-- `agent_runtime.*` — managed runtime launch/supervision/result/cancel operations
-- `step.review` — review gate execution
-
-### 6.2 Implemented skill namespace
-
-- `agent_skill.*` — skill resolution/materialization family, implemented in
-  `workflows/agent_skills/agent_skills_activities.py` (`AgentSkillsActivities`)
-  and registered in the live catalog (`activity_catalog.py`) on the
-  agent-runtime fleet. See §8.11 for the per-operation table.
-
-Portable instruction bundles (agent skill sets: `SKILL.md` plus supporting
-files, resolved into immutable snapshots) and executable tool contracts
-(`tool.type = "skill"` invocations dispatched through the tool router) remain
-different concepts. Native workflow/activity infrastructure provides execution
-substrate only — resolution, materialization, scheduling, artifacts, and
-approvals — and does not reimplement Skill semantics such as data collection,
-classification, or completion rules, so that a skill behaves the same wherever
-it runs.
-
----
+Portable instruction bundles (`SKILL.md` and supporting files resolved into immutable snapshots) differ from executable tool contracts dispatched through the tool router. Workflow/activity infrastructure provides resolution, materialization, scheduling, artifacts, and approvals; it does not reimplement Skill semantics. See [Skill System](../Steps/SkillSystem.md).
 
 ## 7. Contract model
 
@@ -429,216 +386,23 @@ Examples of unacceptable workflow-facing top-level variants:
 
 ---
 
-## 8. Current implemented activity catalog
+## 8. Activity families and contract boundaries
 
-This section describes the current implemented families and their role.
+The [generated activity routes](./WorkflowTypeCatalogGenerated.md#activity-catalog-routes) are the mechanical inventory. Their owners are [activity_catalog.py](../../moonmind/workflows/temporal/activity_catalog.py), [activity_runtime.py](../../moonmind/workflows/temporal/activity_runtime.py), and [workflow_registry.py](../../moonmind/workflows/temporal/workflow_registry.py). Regenerate that reference with `tools/generate_temporal_catalog.py` when registrations change.
 
-## 8.1 Artifact activities (`artifact.*`)
+Family distinctions that matter beyond the table:
 
-Purpose: artifact lifecycle management.
+- Artifacts carry large content and immutable refs; writes must be retry-safe. Plans also produce artifact-backed outputs because generation is nondeterministic. Saved-schedule capability checks return readiness diagnostics without granting capabilities or modifying schedules; see [Required Capabilities](../Workflows/RequiredCapabilities.md).
+- Registry-dispatched tool execution is separate from true agent-runtime execution. The pinned registry snapshot owns tool routing and policy.
+- Sandbox work needs bounded concurrency, isolation, heartbeats for long operations, and side-effect-aware retry. A fleet label alone does not establish OS or network confinement.
+- Provider-profile and OAuth operations support orchestration and credential lifecycle. The retained profile-manager reset activity performs non-destructive ensure/recovery; it does not terminate lease authority.
+- Streaming external-agent calls return canonical `AgentRunResult`. Omnigent execution routes to the agent-runtime fleet because it runs admitted work, whereas remote provider calls use integrations. Generic asynchronous start/status/fetch/cancel contracts remain available for asynchronous provider adapters; registration and actual provider use are distinct. See [External Agent Integration System](../ExternalAgents/ExternalAgentIntegrationSystem.md).
+- Capability labels do not imply activity families. For example, `integration:jira` tool authority does not establish a Jira external-agent monitor.
+- Skill resolution consumes selectors and returns immutable snapshot refs. Other registered on-demand/materialization operations do not by themselves prove a production workflow calls them; inspect the caller and [Skill System](../Steps/SkillSystem.md) before assuming end-to-end support.
 
-Current implemented activities include:
+### Managed-runtime compatibility and recovery
 
-- `artifact.create`
-- `artifact.write_complete`
-- `artifact.read`
-- `artifact.list_for_execution`
-- `artifact.compute_preview`
-- `artifact.link`
-- `artifact.pin`
-- `artifact.unpin`
-- `artifact.lifecycle_sweep`
-
-Worker queue: `mm.activity.artifacts`
-
-Key rules:
-
-- large content stays in artifact storage
-- writes must be retry-safe
-- artifact references are the durable interface used by workflows and other activities
-
-## 8.2 Plan activities (`plan.*`)
-
-Purpose: plan generation and validation.
-
-Current implemented activities:
-
-- `plan.check_preset_capabilities`
-- `plan.generate`
-- `plan.validate`
-
-Worker queue: typically `mm.activity.llm`
-
-Key rules:
-
-- planning is always nondeterministic, therefore always an activity
-- plan outputs are stored as artifacts, not placed directly into workflow history
-- saved-schedule capability checks read scoped preset metadata before planning and
-  return compact readiness diagnostics; they do not modify the schedule or grant
-  capabilities (see [Required Capabilities](../Workflows/RequiredCapabilities.md))
-
-## 8.3 Tool execution (`mm.skill.execute`)
-
-Purpose: execute a registry-defined executable tool through the default dispatcher path.
-
-Current implemented activity:
-
-- `mm.skill.execute`
-
-Routing is determined by registry metadata and capability class.
-
-Key rules:
-
-- tool execution remains separate from true agent-runtime execution
-- the pinned registry snapshot is the source of truth for routing and policies
-
-## 8.4 Sandbox activities (`sandbox.*`)
-
-Purpose: isolated repo and process execution.
-
-Current implemented activities:
-
-- `sandbox.checkout_repo`
-- `sandbox.apply_patch`
-- `sandbox.run_command`
-- `sandbox.run_tests`
-
-Worker queue: `mm.activity.sandbox`
-
-Key rules:
-
-- strong isolation
-- explicit concurrency limits
-- heartbeat support for long-running operations
-- careful retry handling to avoid duplicate side effects
-
-## 8.5 Provider-profile support activities (`provider_profile.*`)
-
-Purpose: support the managed-runtime provider-profile lifecycle.
-
-Current implemented activities:
-
-- `provider_profile.list`
-- `provider_profile.ensure_manager`
-- `provider_profile.reset_manager`
-- `provider_profile.verify_lease_holders`
-- `provider_profile.sync_slot_leases`
-
-Worker queue: `mm.activity.artifacts`
-
-These are support activities used by workflow and manager orchestration. They are not part of the end-user skill or agent contract surface.
-`provider_profile.reset_manager` remains registered for replay compatibility
-and performs non-destructive ensure/recovery; it does not terminate the lease
-authority workflow.
-
-## 8.6 OAuth session activities (`oauth_session.*`)
-
-Purpose: OAuth session preparation, update, verification, and cleanup.
-
-Current implemented activities:
-
-- `oauth_session.ensure_volume`
-- `oauth_session.start_auth_runner`
-- `oauth_session.stop_auth_runner`
-- `oauth_session.update_terminal_session`
-- `oauth_session.update_status`
-- `oauth_session.verify_volume`
-- `oauth_session.verify_cli_fingerprint`
-- `oauth_session.register_profile`
-- `oauth_session.mark_failed`
-- `oauth_session.cleanup_stale`
-
-Worker queue: `mm.activity.artifacts`
-
-## 8.7 Integration activities (`integration.<provider>.*`)
-
-Purpose: external provider interaction and delegated agent execution.
-
-### Current implemented provider families
-
-- `integration.openclaw.execute` on `mm.activity.integrations`
-- `integration.omnigent.execute` and `integration.omnigent.profile_bound_execute` on `mm.activity.agent_runtime`, because Omnigent runs admitted agent work rather than calling a remote provider
-
-Both are streaming-gateway paths: one call returns a canonical `AgentRunResult`. `MoonMind.AgentRun` also retains the generic polling family (`integration.<provider>.start/status/fetch_result/cancel` returning `AgentRunHandle`/`AgentRunStatus`/`AgentRunResult`) for providers that run asynchronously behind an external id; no registered provider uses it today. See [External Agent Integration System](../ExternalAgents/ExternalAgentIntegrationSystem.md).
-
-Capability labels and execution visibility metadata are not provider activity
-families by themselves. For example, Jira is available as the
-`integration:jira` capability through trusted Jira tool surfaces and
-merge-automation activities, but there is no `integration.jira.start` /
-`integration.jira.status` external monitor family.
-
-### Integration helper activity
-
-`integration.resolve_adapter_metadata` validates adapter registration and returns adapter metadata such as execution style, keeping env inspection and dynamic registry reads out of deterministic workflow code. It is not part of the agent-run status/result contract family.
-
-## 8.8 Repo activities (`repo.*`)
-
-Purpose: provider-backed repository operations used by workflow or runtime flows.
-
-Current implemented activities:
-
-- `repo.create_pr`
-
-Worker queue: `mm.activity.integrations`
-
-## 8.9 Managed runtime activities (`agent_runtime.*`)
-
-Purpose: managed runtime launch, supervision support, owner-authorized workspace
-checkpoint capture, result collection, artifact publication, and cancellation.
-
-Current implemented activities:
-
-- `agent_runtime.launch`
-- `agent_runtime.capture_workspace_checkpoint`
-- `agent_runtime.launch_session`
-- `agent_runtime.prepare_turn_instructions`
-- `agent_runtime.publish_artifacts`
-- `agent_runtime.session_status`
-- `agent_runtime.send_turn`
-- `agent_runtime.steer_turn`
-- `agent_runtime.interrupt_turn`
-- `agent_runtime.clear_session`
-- `agent_runtime.terminate_session`
-- `agent_runtime.fetch_session_summary`
-- `agent_runtime.publish_session_artifacts`
-- `agent_runtime.reconcile_managed_sessions`
-- `agent_runtime.status`
-- `agent_runtime.fetch_result`
-- `agent_runtime.restore_workspace_checkpoint`
-- `agent_runtime.evaluate_terminal_evidence`
-- `agent_runtime.cancel`
-
-Worker queues: `mm.activity.agent_runtime` for long-lived execution and
-`mm.activity.agent_runtime.control` for terminal-evidence evaluation. Both are
-polled by the same agent-runtime service with independent bounded concurrency,
-so fan-out work cannot starve the terminal authority handoff and no additional
-always-on container is required.
-
-### Contract expectations
-
-- `agent_runtime.status(...) -> AgentRunStatus`
-- `agent_runtime.capture_workspace_checkpoint(...) -> compact worktree archive and manifest refs`
-- `agent_runtime.fetch_result(...) -> AgentRunResult`
-- `agent_runtime.restore_workspace_checkpoint(...) -> ManagedWorkspaceRestoreResult`
-- `agent_runtime.cancel(...) -> AgentRunStatus`
-- `agent_runtime.launch_session(...) -> ManagedSessionHandle`
-- `agent_runtime.session_status(...) -> ManagedSessionHandle`
-- `agent_runtime.prepare_turn_instructions(...) -> str | prepared-instructions payload`
-- `agent_runtime.send_turn(...) -> ManagedSessionTurnResponse`
-- `agent_runtime.steer_turn(...) -> ManagedSessionTurnResponse`
-- `agent_runtime.interrupt_turn(...) -> ManagedSessionTurnResponse`
-- `agent_runtime.clear_session(...) -> ManagedSessionHandle`
-- `agent_runtime.terminate_session(...) -> ManagedSessionHandle`
-- `agent_runtime.fetch_session_summary(...) -> ManagedSessionSummary`
-- `agent_runtime.publish_session_artifacts(...) -> ManagedSessionArtifactsPublication`
-- `agent_runtime.reconcile_managed_sessions(...) -> reconciliation summary payload`
-- `agent_runtime.evaluate_terminal_evidence(...) -> AgentRunResult`
-
-`agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
-
-Temporal workers also keep `agent_runtime.ensure_docker_sidecar` registered as a
-non-retryable rejection so that older durable histories that scheduled it fail cleanly. It is not a supported
-capability and cannot create a daemon, socket, graph volume, or container.
+`agent_runtime.ensure_docker_sidecar` remains registered for pre-cutover, already-authorized histories. The [managed session controller](../../moonmind/workflows/temporal/runtime/managed_session_controller.py) checks the durable session identity and recorded sidecar capability before completing that work; it can start or create the legacy sidecar for an eligible history. This compatibility path is not authority to grant sidecars to new sessions, and its registration is not evidence that old consumers have drained.
 
 `agent_runtime.capture_workspace_checkpoint` accepts only a typed managed-runtime
 locator, resolves it through the managed run store, and supports Codex CLI
@@ -651,7 +415,7 @@ The session-oriented activities are remote-session contracts. They delegate thro
 
 `agent_runtime.restore_workspace_checkpoint` is the `codex_cli` cold-restore data plane. It runs only on `mm.activity.agent_runtime`, verifies checkpoint, archive, manifest, repository base, path containment, and restored entries before atomically activating a new managed workspace, and persists compact restoration evidence. A launch carrying a restoration requirement is rejected unless the destination is `ready` and its checkpoint and capability digest match.
 
-The session-oriented activity surface is runtime-neutral in shape, but the live activity/controller path admits Codex CLI only. Runtime-specific protocol details stay behind the session adapter/controller boundary; the container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding. Claude Code has no session adapter/controller on this surface, so `runtimeFamily = "claude_code"` is not carried through it.
+Runtime-specific protocol details stay behind the session adapter/controller boundary. Consult the [managed session controller](../../moonmind/workflows/temporal/runtime/managed_session_controller.py) and admitted request models for supported runtime families; a runtime-neutral activity name alone does not prove that every harness supports the operation.
 
 `agent_runtime.prepare_turn_instructions` is replay-visible when scheduled by
 `MoonMind.AgentRun`. Moving it before or after session launch/status activities,
@@ -660,44 +424,6 @@ Such changes are guarded by Temporal patch/version markers so in-flight
 histories keep their recorded order while new histories
 use the current order, because activity retry cannot repair a workflow-task
 nondeterminism caused by an unguarded order change.
-
-## 8.10 Review activities
-
-Current implemented activities:
-
-- `step.review`
-
-Queues:
-
-- `step.review` → `mm.activity.llm`
-
-These are support families, not agent-runtime families.
-
-## 8.11 Skill activities (`agent_skill.*`)
-
-Purpose: resolve portable instruction bundles into immutable snapshots and
-materialize those snapshots for runtime consumption. Workflows consume refs,
-not inline skill content.
-
-Five operations are registered and bound (`agent_skills_activities.py`,
-`activity_catalog.py`, `activity_runtime.py`):
-
-| Activity | Owning contract (`schemas/agent_skill_models.py`) | Production wiring |
-|---|---|---|
-| `agent_skill.resolve` | `SkillSelector` → `ResolvedSkillSet`; persists file-backed content and the resolved manifest via the artifact dependency | Called from `MoonMind.UserWorkflow` (`workflows/run.py` resolves the selector per node); callers pass `allow_repo_skills=False, allow_local_skills=False` |
-| `agent_skill.query_on_demand` | `SkillsOnDemandQueryRequest` → `SkillsOnDemandQueryResult` via `SkillsOnDemandService`, gated on `settings.workflow.skills_on_demand_enabled` | Bound; no production workflow caller |
-| `agent_skill.request_on_demand` | `SkillsOnDemandRequest` → `SkillsOnDemandRequestResult` via the same gate | Bound; no production workflow caller |
-| `agent_skill.build_prompt_index` | `ResolvedSkillSet` → prompt-injectable string (renders refs/metadata, not full prompt bundles) | Bound; no production workflow caller |
-| `agent_skill.materialize` | `(ResolvedSkillSet, runtime_id, mode, workspace_root)` → `RuntimeSkillMaterialization` via `AgentSkillMaterializer` | Bound; no production workflow caller |
-
-Only `resolve` has a production workflow caller; the others are exercised by
-unit tests rather than through a production workflow boundary. Resolution
-semantics stay centralized, materialization may vary by runtime, and
-workflows consume refs, not inline skill content.
-
----
-
-## 10. Routing rules---
 
 ## 10. Routing rules
 
@@ -716,16 +442,9 @@ Representative capability classes include:
 - `agent_runtime`
 - `workflow` (for narrow helper activity exceptions)
 
-## 10.2 Selection examples
+## 10.2 Route selection
 
-- `plan.generate` routes to `mm.activity.llm`
-- `sandbox.run_tests` routes to `mm.activity.sandbox`
-- `integration.openclaw.execute` routes to `mm.activity.integrations`
-- `agent_runtime.fetch_result` routes to `mm.activity.agent_runtime`
-- `agent_runtime.restore_workspace_checkpoint` routes to `mm.activity.agent_runtime`
-- `agent_runtime.evaluate_terminal_evidence` routes to `mm.activity.agent_runtime.control`
-- `provider_profile.list` routes to `mm.activity.artifacts`
-- `integration.resolve_adapter_metadata` routes to `mm.workflow`
+Use the [generated route table](./WorkflowTypeCatalogGenerated.md#activity-catalog-routes) for exact dispatch. In particular, terminal-evidence evaluation uses the independent agent-runtime control queue so long-lived fan-out execution cannot starve the authority handoff. Both queues share a service; this adds bounded scheduling capacity, not another always-on container or a separate credential boundary.
 
 ## 10.3 No workflow-side route probing
 
@@ -787,6 +506,8 @@ Rules:
 ## 12. Security model
 
 ### 12.1 Least privilege per fleet
+
+These are capability design boundaries, not a claim of deployed credential isolation. The actual Compose permission boundary and compatibility exceptions are described in [section 5.1](#51-workflow-fleet-exception-rule).
 
 - sandbox workers do not hold provider API keys by default
 - integration workers do not run arbitrary shell commands
@@ -890,42 +611,3 @@ If using OpenTelemetry:
  - startup validates that catalog routes and runtime handlers match (§1)
 
 ---
-
-## 15. Decided questions
-
-### 15.1 Provider-specific LLM task queues
-
-Deferred. Start with one `mm.activity.llm` queue. Split only when operational isolation or scaling demands it.
-
-### 15.2 Priority lanes
-
-Deferred. Throughput control comes from concurrency and rate limiting, not queue ordering guarantees.
-
-### 15.3 Search Attributes from activities
-
-Disallowed. Workflows own visibility state.
-
-### 15.4 Workflow fleet helper activities
-
-Allowed only as a narrow exception. Current registration: the handlers listed
-in §5.1 (the release probe, four adapter/metadata helpers, and three
-replay-compatibility checkpoint handlers).
-
-### 15.5 Canonical runtime contract enforcement
-
-Decided. The activity boundary, not workflow code, owns normalization into `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`.
-
----
-
-## 16. Summary
-
-MoonMind’s Temporal activity topology is organized around a small number of
-capability-based fleets (workflow, artifacts, llm, sandbox, integrations,
-agent_runtime). The key architectural rules are:
-
-- **Activities own side effects**
-- **The catalog owns routing**
-- **Canonical runtime contracts cross the workflow boundary**
-- **Workflow code does not perform provider-specific coercion**
-
-That keeps MoonMind’s Temporal model easier to reason about, easier to test, and easier to evolve without regressions.

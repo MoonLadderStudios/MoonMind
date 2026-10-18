@@ -200,8 +200,8 @@ describe('Workflows Entrypoint layout', () => {
     }));
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    const detailsLink = await screen.findByRole('button', { name: 'View details' });
-    const card = detailsLink.closest<HTMLElement>('.queue-card');
+    const titleLinks = await screen.findAllByRole('link', { name: 'Example task' });
+    const card = titleLinks.map((link) => link.closest<HTMLElement>('.queue-card')).find(Boolean) ?? null;
     const fields = card?.querySelector<HTMLElement>('.queue-card-fields');
     const fieldValue = fields?.querySelector<HTMLElement>('dd');
 
@@ -214,6 +214,6 @@ describe('Workflows Entrypoint layout', () => {
     expect(getComputedStyle(card as HTMLElement).width).toBe('100%');
     expect(getComputedStyle(fields as HTMLElement).display).toBe('grid');
     expect(getComputedStyle(fieldValue as HTMLElement).minWidth).toMatch(/^0(px)?$/);
-    expect(getComputedStyle(fieldValue as HTMLElement).overflowWrap).toBe('anywhere');
+    expect(getComputedStyle(fieldValue as HTMLElement).overflowWrap).toBe('break-word');
   });
 });

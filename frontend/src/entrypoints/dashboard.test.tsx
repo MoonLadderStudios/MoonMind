@@ -487,6 +487,36 @@ describe('Dashboard shared entry', () => {
     expect(document.querySelector('[data-ui-version-skew]')).toBeNull();
   });
 
+  it('leaves the page h1 to the routed page instead of the masthead wordmark', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const masthead = document.querySelector('.masthead');
+    expect(masthead).not.toBeNull();
+    expect(masthead?.querySelector('h1')).toBeNull();
+    expect(screen.getByRole('link', { name: 'MoonMind workflows' })).toBeTruthy();
+  });
+
+  it('keeps the System menu usable when /api/ui/info fails', async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      text: async () => 'down',
+      json: async () => ({ detail: 'down' }),
+    } as Response));
+
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const trigger = await screen.findByRole('button', { name: 'System' }, { timeout: 10000 });
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menuitem', { name: /Recurring/ })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /Operations/ })).toBeTruthy();
+  });
+
   it('keeps feature-gated navigation and raises a version-skew alert when the server destination registry drifts', async () => {
     // Reproduces the deployed regression where a stale JS bundle met a newer
     // API registry: the old behavior threw the whole uiInfo payload away, so
@@ -495,7 +525,7 @@ describe('Dashboard shared entry', () => {
     // loud, and capability-gated navigation must keep working.
     const driftedDestinations = DASHBOARD_DESTINATIONS
       .map(({ page: _page, dataWidePanel: _wide, ...item }) => ({ ...item }))
-      .map((item) => (item.key === 'recurring' ? { ...item, navigationGroup: 'primary' as const } : item));
+      .map((item) => (item.key === 'recurring' ? { ...item, pathPatterns: ['/recurring'] } : item));
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -1282,7 +1312,7 @@ describe('Dashboard shared entry', () => {
     const cardList = await screen.findByRole('list', { name: 'Recurring schedule cards' });
     expect(cardList.textContent).toContain('Daily recurring scan');
     expect(cardList.textContent).toContain('Needs attention');
-    expect(cardList.textContent).toContain('0 9 * * *');
+    expect(cardList.textContent).toContain('Daily at 09:00');
     expect(cardList.textContent).toContain('UTC');
     expect(cardList.textContent).toContain('Queue Task');
     expect(cardList.textContent).toContain('MoonLadderStudios/MoonMind');
@@ -2020,6 +2050,8 @@ describe('Dashboard shared entry', () => {
 
     expect(await screen.findByText('Unknown dashboard page:')).toBeTruthy();
     expect(screen.getByText('/proposals')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'Page not found' })).toBeTruthy();
+    expect(document.title).toBe('Page not found | MoonMind');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
   });
 
@@ -2212,7 +2244,7 @@ describe('Dashboard shared entry', () => {
 
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Loading MoonMind...')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Loading MoonMind...' })).toBeTruthy();
     expect(screen.queryByText('Workflow start route loaded')).toBeNull();
 
     resolveUiInfo({

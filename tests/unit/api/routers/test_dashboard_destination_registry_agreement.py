@@ -6,7 +6,8 @@ The dashboard resolves destination metadata from the server at runtime and
 falls back to the checked-in client registry, so the two must declare the same
 destinations, in the same order, with the same Configuration group membership.
 ``matchesDashboardDestinationRegistry`` only raises a version-skew alert in the
-browser; this test fails the build when either side drifts.
+browser, and only for keys, paths and capability keys; this test fails the
+build when any field on either side drifts.
 """
 
 from __future__ import annotations
@@ -144,7 +145,7 @@ def test_frontend_and_server_destination_registries_agree_exactly(
         }
         for item in frontend_destinations
     ]
-    # Order matters: the browser compares the two registries index by index.
+    # Order matters: both sides render navigation in registry order.
     assert json.dumps(server, indent=2) == json.dumps(expected, indent=2)
 
 
