@@ -106,7 +106,10 @@ try {
     for (const execution of targets) {
       await visit(workflowPath(execution), async () => {
         await page.getByText(execution.title).first().waitFor({ state: "visible" });
-        await page.locator(".toolbar").getByRole("button", { name: "Workflow actions" }).click();
+        // The detail header is `.page-header` on current dashboards and
+        // `.toolbar` on older ones, such as the upgrade journey's source release.
+        const detailHeader = page.locator(".page-header, .toolbar").first();
+        await detailHeader.getByRole("button", { name: "Workflow actions" }).click();
         const cancel = page
           .getByRole("menu", { name: "Workflow actions" })
           .getByRole("menuitem", { name: "Cancel", exact: true });
@@ -127,8 +130,7 @@ try {
         }
         await requested.waitFor({ state: "visible" });
         // The detail page polls until the workflow is terminal.
-        await page
-          .locator(".toolbar")
+        await detailHeader
           .getByText("Canceled", { exact: true })
           .first()
           .waitFor({ state: "visible", timeout: Math.max(timeout, 180000) });
