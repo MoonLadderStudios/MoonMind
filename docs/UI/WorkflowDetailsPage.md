@@ -351,7 +351,7 @@ Resume behavior:
 
 Resume executes directly from the capability-gated action control without collecting extra operator input.
 
-After a successful Resume request, the user is taken to the resumed Workflow Execution details page or shown a success toast with a link to the resumed run.
+After success, the page opens the resumed run or shows a toast linking to it.
 
 ### Cancel button
 
@@ -361,9 +361,7 @@ The **Cancel** button is present when:
 capabilities.canCancel === true
 ```
 
-The button cancels a pending, scheduled, or running Workflow according to Workflow Execution rules.
-
-The original Workflow page remains available after cancellation.
+It cancels a pending, scheduled, or running Workflow after a one-line confirmation, as do **Reject** and **Force cancel**; reversible **Pause** and **Resume** do not ask.
 
 ### Pause and lifecycle Resume buttons
 
@@ -383,26 +381,9 @@ Only one of **Pause** or lifecycle **Resume** is visible at a time. This lifecyc
 
 ### More menu
 
-The overflow menu contains secondary utility actions that are valid for the Workflow.
-
-Possible menu items:
-
-- Copy workflow link
-- Copy workflow ID
-- Copy run ID
-- View raw input
-- View raw output
-- Download logs
-- Download artifacts
-- Open related run
-- Archive workflow, if supported
-- Delete workflow, if supported
-
-Destructive Workflow lifecycle actions are visually separated, clearly labeled, and capability-gated by the backend.
+The toolbar **Workflow actions** menu holds the debug-details toggle and the capability-gated Workflow actions, built by the same code as the Workflows list row menu. Safe actions come first and take initial focus; destructive ones follow a divider. **Force cancel** stays under Troubleshooting even on terminal Workflows, whose projected state may be stale, and ineligible actions collapse under **Unavailable (n)** with plain-language reasons.
 
 ## Action visibility by status
-
-The page follows this desired action matrix.
 
 | Workflow status | Remediate | Edit Workflow | Rerun | Failed step recovery | Cancel | Pause | Lifecycle resume |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -416,7 +397,7 @@ The page follows this desired action matrix.
 | Timed out | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Optional, if a failed step and checkpoint are available | No | No | No |
 | Terminated | Optional, if failure can be remediated | Yes, as edit-for-rerun | Yes | Optional, if a failed step and checkpoint are available | No | No | No |
 
-The matrix is descriptive. The final source of truth is the capability object returned with the Workflow detail data.
+The matrix is descriptive; the capability object returned with the Workflow detail data decides.
 
 ## Status summary section
 
@@ -429,7 +410,7 @@ It contains:
 - Created time
 - Started time, when available
 - Completed time, when available
-- Duration
+- Duration, ticking from the start time while the Workflow runs
 - Last updated time
 - Owner or creator
 - Trigger type
@@ -660,9 +641,9 @@ blast radius, and artifact evidence. Authorized operators can approve or deny
 with a rationale, which is sent as the durable decision `comment`. Expired or
 stale decisions explain why a new request is required. Operator **Take over and
 pause**, **Resume remediation**, and **Cancel remediation** use ordinary durable
-Workflow signal/cancel endpoints; takeover never exposes credentials or raw
-runtime/session authority. All controls retain labels, keyboard access,
-loading/error states, and responsive layout.
+Workflow signal/cancel endpoints, and only cancel asks first; takeover never
+exposes credentials or raw runtime/session authority. All controls retain labels,
+keyboard access, loading/error states, and responsive layout.
 
 ## Outputs section
 
@@ -836,44 +817,19 @@ Each identifier supports copy-to-clipboard.
 
 ### Loading state
 
-While loading, the page displays a skeleton for:
+While loading, the page shows skeletons for the header, action bar, status summary, and main sections, and no action buttons until capabilities load.
 
-- Header
-- Action bar
-- Status summary
-- Main content sections
+### Load failure states
 
-The page does not display incomplete action buttons before capabilities are loaded.
+With no Workflow data, the page names the failure from the HTTP status and keeps the error as detail. **Workflow not found** (404/410) and **Access denied** (403) are final and never retried or polled; **Sign-in required** (401) and **Workflow unavailable** (5xx or network, after the shared retries) offer **Retry**.
 
-### Not found state
+### Refresh failures
 
-When the Workflow Execution does not exist or the user does not have access, the page displays:
-
-```text
-Workflow not found
-
-This workflow may have been deleted, moved, or you may not have permission to view it.
-```
-
-Primary action:
-
-```text
-Back to workflows
-```
+A failed background refresh never replaces loaded data: the Workflow, steps, checkpoint branches, step history, session continuity, and artifacts keep their last data under a "Stale since <time>" notice with the error and **Retry**, and polling recovers by itself after a transient outage such as a managed update.
 
 ### Data unavailable state
 
-When the Workflow exists but some details cannot be loaded, the page displays the available Workflow summary and an inline warning for the missing section.
-
-Example:
-
-```text
-Workflow configuration unavailable
-
-The original workflow configuration could not be loaded. You can still view status and logs.
-```
-
-If the Workflow configuration is unavailable, the **Edit Workflow** and **Rerun** actions are hidden unless the backend confirms that a valid submission draft or reconstructable workflow input is available.
+When the Workflow exists but a section cannot load, the page keeps the summary and shows an inline warning for that section. Without a loadable configuration, **Edit Workflow** and **Rerun** stay hidden unless the backend confirms a valid submission draft or reconstructable input.
 
 ## Accessibility requirements
 

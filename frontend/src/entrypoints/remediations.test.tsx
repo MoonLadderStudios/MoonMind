@@ -88,16 +88,14 @@ describe('Remediations', () => {
   });
 
   it('includes the server error detail when the inventory request fails', async () => {
-    vi.spyOn(window, 'fetch').mockResolvedValue({
-      ok: false,
-      status: 503,
-      json: async () => ({ detail: { code: 'temporal_unavailable', message: 'Temporal is not reachable.' } }),
-    } as Response);
+    vi.spyOn(window, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ detail: { code: 'temporal_unavailable', message: 'Temporal is not reachable.' } }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } },
+    ));
     renderPage();
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('Remediation inventory request failed: 503');
-    expect(alert.textContent).toContain('Temporal is not reachable.');
+    expect(alert.textContent).toContain('Remediation inventory request failed (503): Temporal is not reachable.');
   });
 
   it('preserves the route shell and offers retry for unauthorized reads', async () => {

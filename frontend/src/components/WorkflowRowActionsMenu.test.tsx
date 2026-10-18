@@ -61,8 +61,44 @@ describe('WorkflowRowActionsMenu', () => {
         ),
       ).not.toHaveLength(0);
       expect(screen.getByRole('menuitem', { name: expectedActionName })).toBeTruthy();
-      expect(screen.getByRole('menuitem', { name: 'Remediate' }).getAttribute('aria-disabled')).toBe('true');
-      expect(screen.queryByText('Checking availability…')).toBeNull();
+      expect(screen.queryByText('Loading actions…')).toBeNull();
+    });
+  };
+
+  const expandUnavailable = () => {
+    const toggle = screen.getByRole('menuitem', { name: /^Unavailable \(\d+\)$/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    return screen.getByRole('group', { name: 'Unavailable actions' });
+  };
+
+  const postCalls = () =>
+    fetchSpy.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST');
+
+  const completedDetailResponse = {
+    ...detailResponse,
+    state: 'completed',
+    actions: {
+      canForceCancel: true,
+      canPause: false,
+      canCancel: false,
+      canSetTitle: false,
+      disabledReasons: {
+        canPause: 'state_not_eligible',
+        canCancel: 'state_not_eligible',
+        canSetTitle: 'state_not_eligible',
+      },
+    },
+  };
+
+  const mockDetail = (detail: Record<string, unknown>) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({ ok: true, json: async () => detail } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
     });
   };
 
@@ -85,6 +121,7 @@ describe('WorkflowRowActionsMenu', () => {
     fireEvent.click(trigger);
     await waitForActionAvailability();
     const menu = screen.getByRole('menu', { name: 'More actions' });
+    expandUnavailable();
     for (const label of ['Cancel', 'Rerun', 'Remediate']) {
       expect(within(menu).getByRole('menuitem', { name: label })).toBeTruthy();
       expect(within(row).queryByRole('button', { name: label })).toBeNull();
@@ -143,7 +180,7 @@ describe('WorkflowRowActionsMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Cancel' }).getAttribute('aria-disabled')).toBeNull();
   });
 
-  it('lists actions immediately while lazily loading capabilities the first time the row is engaged', async () => {
+  it('shows a loading state instead of unavailable actions while capabilities load', async () => {
     let resolveDetail: (response: Response) => void = () => {};
     const detailPromise = new Promise<Response>((resolve) => {
       resolveDetail = resolve;
@@ -159,28 +196,17 @@ describe('WorkflowRowActionsMenu', () => {
     renderMenu(true);
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
-    // While the detail request is in flight, the menu already shows the stable
-    // action names and uses a disabled placeholder for workflow-specific state.
-    expect(screen.getByRole('menuitem', { name: 'Pause' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
-    expect(screen.getByRole('menuitem', { name: 'Force cancel' })).toBeTruthy();
-    expect(screen.getAllByText('Checking availability…').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Loading actions…')).toBeNull();
-    for (const label of ['Cancel', 'Rerun', 'Remediate']) {
-      const item = screen.getByRole('menuitem', { name: label });
-      expect(item.getAttribute('aria-disabled')).toBe('true');
-      fireEvent.click(item);
-    }
-    expect(screen.getByRole('menu', { name: 'More actions' })).toBeTruthy();
-    expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(false);
-    expect(window.location.pathname).toBe('/workflows');
+    const menu = screen.getByRole('menu', { name: 'More actions' });
+    expect(within(menu).getByText('Loading actions…')).toBeTruthy();
+    expect(within(menu).queryAllByRole('menuitem')).toHaveLength(0);
+    expect(within(menu).queryByText(/Unavailable/)).toBeNull();
+    expect(postCalls()).toHaveLength(0);
 
     resolveDetail({
       ok: true,
       json: async () => detailResponse,
     } as Response);
 
-    expect(await screen.findByRole('menuitem', { name: 'Pause' })).toBeTruthy();
     await waitForActionAvailability();
     expect(screen.getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Force cancel' })).toBeTruthy();
@@ -189,6 +215,139 @@ describe('WorkflowRowActionsMenu', () => {
         ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
       ),
     ).toHaveLength(1);
+  });
+
+  it('lists safe actions first and destructive actions last after a separator', async () => {
+    renderMenu(true);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability();
+    const menu = screen.getByRole('menu', { name: 'More actions' });
+
+    const names = within(menu)
+      .getAllByRole('menuitem')
+      .map((item) => item.getAttribute('aria-label'));
+    expect(names.slice(0, 2)).toEqual(['Rerun', 'Pause']);
+    expect(names.indexOf('Cancel')).toBeGreaterThan(names.indexOf('Pause'));
+    expect(names.indexOf('Force cancel')).toBeGreaterThan(names.indexOf('Cancel'));
+    const separator = within(menu).getAllByRole('separator')[0]!;
+    const cancel = within(menu).getByRole('menuitem', { name: 'Cancel' });
+    const pause = within(menu).getByRole('menuitem', { name: 'Pause' });
+    expect(pause.compareDocumentPosition(separator) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(separator.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each([
+    ['click', (trigger: HTMLElement) => fireEvent.click(trigger)],
+    ['Enter', (trigger: HTMLElement) => fireEvent.keyDown(trigger, { key: 'Enter' })],
+    ['Space', (trigger: HTMLElement) => fireEvent.keyDown(trigger, { key: ' ' })],
+    ['ArrowDown', (trigger: HTMLElement) => fireEvent.keyDown(trigger, { key: 'ArrowDown' })],
+  ] as const)('never puts initial focus on a destructive action when opened by %s', async (_how, open) => {
+    // A completed workflow leaves Force cancel as the only enabled action.
+    mockDetail(completedDetailResponse);
+    renderMenu();
+    open(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability('Force cancel');
+
+    const menu = screen.getByRole('menu', { name: 'More actions' });
+    await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+    expect(document.activeElement).not.toBe(screen.getByRole('menuitem', { name: 'Force cancel' }));
+    expect(document.activeElement?.className ?? '').not.toContain('danger');
+    expect(document.activeElement).toBe(
+      screen.getByRole('menuitem', { name: /^Unavailable \(\d+\)$/ }),
+    );
+  });
+
+  it('focuses the first safe action when the menu opens on a running workflow', async () => {
+    renderMenu();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More actions' }), { key: 'Enter' });
+    await waitForActionAvailability();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Pause' })),
+    );
+  });
+
+  it('keeps Force cancel reachable under Troubleshooting on a completed workflow', async () => {
+    mockDetail(completedDetailResponse);
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability('Force cancel');
+
+    const troubleshooting = screen.getByRole('group', { name: 'Troubleshooting' });
+    const forceCancel = within(troubleshooting).getByRole('menuitem', { name: 'Force cancel' });
+    expect(forceCancel.getAttribute('aria-disabled')).toBeNull();
+    expect(within(troubleshooting).getByText(/without cleanup/i)).toBeTruthy();
+
+    fireEvent.click(forceCancel);
+    const dialog = screen.getByRole('dialog', { name: 'Force cancel workflow?' });
+    expect(postCalls()).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Force cancel' }));
+    await waitFor(() => {
+      const cancelCall = postCalls().find(([url]) => String(url) === '/api/executions/wf-123/cancel');
+      expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
+        action: 'cancel',
+        graceful: false,
+      });
+    });
+  });
+
+  it('collapses ineligible actions under Unavailable with plain-language reasons', async () => {
+    mockDetail(completedDetailResponse);
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability('Force cancel');
+
+    expect(screen.queryByRole('menuitem', { name: 'Pause' })).toBeNull();
+    expect(screen.queryByText('state not eligible')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Unavailable (4)' })).toBeTruthy();
+
+    const unavailable = expandUnavailable();
+    for (const label of ['Cancel', 'Rename', 'Pause']) {
+      const item = within(unavailable).getByRole('menuitem', { name: label });
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+      expect(within(item).getByText("Not available in the workflow's current state.")).toBeTruthy();
+    }
+    expect(
+      within(unavailable).getByText('Available for failed, stuck, or intervention-required workflows.'),
+    ).toBeTruthy();
+    fireEvent.click(within(unavailable).getByRole('menuitem', { name: 'Pause' }));
+    expect(postCalls()).toHaveLength(0);
+  });
+
+  it.each([
+    ['Cancel', 'Cancel workflow?', 'Cancel workflow', { action: 'cancel', graceful: true }],
+    ['Reject', 'Reject workflow?', 'Reject workflow', { action: 'reject', graceful: true }],
+    ['Force cancel', 'Force cancel workflow?', 'Force cancel', { action: 'cancel', graceful: false }],
+  ] as const)('asks for confirmation before sending %s', async (label, title, confirmLabel, body) => {
+    mockDetail({
+      ...detailResponse,
+      state: 'awaiting_external',
+      actions: { canCancel: true, canReject: true, canForceCancel: true, canResume: true },
+    });
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability(label);
+    fireEvent.click(screen.getByRole('menuitem', { name: label }));
+
+    const dialog = screen.getByRole('dialog', { name: title });
+    expect(dialog.textContent).toMatch(/cannot be undone/i);
+    expect(postCalls()).toHaveLength(0);
+
+    // Backing out sends nothing.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Go back' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(postCalls()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: label }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: title })).getByRole('button', { name: confirmLabel }),
+    );
+    await waitFor(() => {
+      const cancelCall = postCalls().find(([url]) => String(url) === '/api/executions/wf-123/cancel');
+      expect(cancelCall).toBeTruthy();
+      expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toEqual(body);
+    });
+    expect(postCalls()).toHaveLength(1);
   });
 
   it('shows unavailable actions with reasons in the menu and prevents requests', async () => {
@@ -211,6 +370,7 @@ describe('WorkflowRowActionsMenu', () => {
     renderMenu(true);
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
+    expandUnavailable();
 
     for (const [label, reason] of [
       ['Cancel', 'Workflow cannot be canceled.'],
@@ -504,12 +664,12 @@ describe('WorkflowRowActionsMenu', () => {
     expect(within(toast).getByText('Custom action failure.')).toBeTruthy();
   });
 
-  it('posts a graceful cancel request directly from the row menu', async () => {
+  it('posts a graceful cancel request once the row menu confirmation is accepted', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }));
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(
@@ -559,6 +719,7 @@ describe('WorkflowRowActionsMenu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }));
 
     const viewport = await screen.findByLabelText('Dashboard notifications');
     const toast = within(viewport).getByRole('alert');
@@ -569,7 +730,7 @@ describe('WorkflowRowActionsMenu', () => {
     expect(within(toast).queryByText(/cancel_rejected/)).toBeNull();
   });
 
-  it('posts a forced cancel request directly from the row menu', async () => {
+  it('posts a forced cancel request once the row menu confirmation is accepted', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => Promise.resolve({
       ok: true,
       json: async () => String(input).includes('?source=temporal')
@@ -580,7 +741,10 @@ describe('WorkflowRowActionsMenu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability('Force cancel');
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Force cancel workflow?' }))
+        .getByRole('button', { name: 'Force cancel' }),
+    );
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(([url, init]) => {

@@ -74,6 +74,48 @@ describe('DashboardRouteErrorBoundary', () => {
     expect(screen.queryByText('This page failed to load')).toBeNull();
   });
 
+  it('clears a route error when the reset key (pathname) changes', () => {
+    const reset = vi.fn();
+    function RoutePage({ path }: { path: string }) {
+      if (path === '/workflows/broken') {
+        throw new Error('broken workflow render');
+      }
+      return <div>Rendered {path}</div>;
+    }
+
+    const view = renderWithClient(
+      <DashboardRouteErrorBoundary resetKey="/workflows/broken" onReset={reset}>
+        <RoutePage path="/workflows/broken" />
+      </DashboardRouteErrorBoundary>,
+    );
+    expect(screen.getByText('This page failed to load')).toBeTruthy();
+
+    view.rerender(
+      <DashboardRouteErrorBoundary resetKey="/workflows/healthy" onReset={reset}>
+        <RoutePage path="/workflows/healthy" />
+      </DashboardRouteErrorBoundary>,
+    );
+
+    expect(screen.getByText('Rendered /workflows/healthy')).toBeTruthy();
+    expect(screen.queryByText('This page failed to load')).toBeNull();
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the error when the reset key is unchanged', () => {
+    const view = renderWithClient(
+      <DashboardRouteErrorBoundary resetKey="/workflows/broken">
+        <Boom message="still broken" />
+      </DashboardRouteErrorBoundary>,
+    );
+    view.rerender(
+      <DashboardRouteErrorBoundary resetKey="/workflows/broken">
+        <Boom message="still broken" />
+      </DashboardRouteErrorBoundary>,
+    );
+
+    expect(screen.getByText('This page failed to load')).toBeTruthy();
+  });
+
   it('hard reloads once when a lazy route import has a stale chunk failure', () => {
     renderWithClient(
       <DashboardRouteErrorBoundary buildId="build-123">

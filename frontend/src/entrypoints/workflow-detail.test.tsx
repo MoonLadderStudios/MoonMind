@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { screen, waitFor, act, fireEvent, within, cleanup } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
@@ -2224,6 +2224,11 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Promote branch' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Promote branch?' })).getByRole('button', {
+        name: 'Promote branch',
+      }),
+    );
 
     await waitFor(() => {
       const postCall = fetchSpy.mock.calls.find(([url, init]) => (
@@ -3327,6 +3332,11 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('MM-1034 shows step duration states and keeps the wall-clock timeline behind a secondary toggle', async () => {
+    // Active timing ticks from the server start time, so read it at the server's own clock.
+    vi.useFakeTimers({ now: new Date('2026-04-09T00:05:11Z'), toFake: ['Date', 'setInterval', 'clearInterval'] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     window.history.pushState({}, 'Step Timing Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
@@ -4551,7 +4561,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('step scoped log line')).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Hide details for Apply patch' })).toBeTruthy();
     });
-    expect(screen.getAllByText('approval policy: passed')[0]?.className).toContain('check-passed');
+    expect(screen.getAllByText('approval policy: Passed')[0]?.className).toContain('check-passed');
 
     // MM-920: the embedded step logs drop the redundant left rail and the second
     // "Live Logs" disclosure, so the log content sits directly under the
@@ -4728,14 +4738,14 @@ describe('Workflow Detail Entrypoint', () => {
         '.step-check-badge[data-effect="shimmer-sweep"]',
       );
       expect(activeCheckBadge).toBeTruthy();
-      expect(activeCheckBadge?.textContent).toBe('approval policy: pending');
+      expect(activeCheckBadge?.textContent).toBe('approval policy: Pending');
       expect(activeCheckBadge?.dataset.effect).toBe('shimmer-sweep');
       expect(activeCheckBadge?.dataset.state).toBe('executing');
       expect(activeCheckBadge?.className).toContain('is-executing');
       expect(activeCheckBadge?.className).toContain('check-pending');
-      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: pending');
+      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: Pending');
       expect(activeCheckBadge?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe(
-        'approval policy: pending',
+        'approval policy: Pending',
       );
     });
   });
@@ -4885,7 +4895,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Steps: 403 (/api/executions/test-123/steps)')).toBeTruthy();
+      expect(screen.getByText('Steps (/api/executions/test-123/steps): Request failed with HTTP 403')).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Observation' })).toBeTruthy();
     });
 
@@ -5323,6 +5333,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Cancel');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Cancel' }));
+    confirmWorkflowDialog('Cancel workflow');
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/executions/test-123/cancel',
@@ -5336,6 +5347,11 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Force cancel');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Force cancel' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Force cancel workflow?' })).getByRole('button', {
+        name: 'Force cancel',
+      }),
+    );
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/executions/test-123/cancel',
@@ -5490,10 +5506,9 @@ describe('Workflow Detail Entrypoint', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     });
-    await waitFor(() => {
-      const pauseItem = screen.getByRole('menuitem', { name: /Pause/ });
-      expect(within(pauseItem).getByText('state not eligible')).toBeTruthy();
-    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Unavailable (1)' }));
+    const pauseItem = screen.getByRole('menuitem', { name: /Pause/ });
+    expect(within(pauseItem).getByText("Not available in the workflow's current state.")).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: /Pause/ }));
     expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/signal') && init?.method === 'POST')).toBe(false);
   });
@@ -5805,16 +5820,17 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    const menu = await openWorkflowActionsMenu('Edit');
+    const menu = await openWorkflowActionsMenu();
+    fireEvent.click(await within(menu).findByRole('menuitem', { name: /^Unavailable/ }));
     expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
     const disabledEditItem = within(menu).getByRole('menuitem', { name: 'Edit' });
     expect(
-      within(disabledEditItem).getByText('original task input snapshot missing'),
+      within(disabledEditItem).getByText("The workflow's original inputs were not saved."),
     ).toBeTruthy();
     const disabledRerunItem = within(menu).getByRole('menuitem', { name: 'Rerun' });
     expect(
-      within(disabledRerunItem).getByText('original task input snapshot missing'),
+      within(disabledRerunItem).getByText("The workflow's original inputs were not saved."),
     ).toBeTruthy();
   });
 
@@ -10370,7 +10386,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu('Reject');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Reject' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
+    confirmWorkflowDialog('Reject workflow');
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -10971,6 +10987,11 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Clear session?' })).getByRole('button', {
+        name: 'Clear session',
+      }),
+    );
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -11041,7 +11062,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: false,
           status: 409,
-          json: async () => ({ detail: 'Follow-up is not supported for this session.' }),
+          text: async () => JSON.stringify({ detail: 'Follow-up is not supported for this session.' }),
         } as Response);
       }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
@@ -11200,6 +11221,11 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel session' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Cancel session?' })).getByRole('button', {
+        name: 'Cancel session',
+      }),
+    );
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -12715,6 +12741,11 @@ describe('LiveLogsPanel', () => {
     });
     await waitFor(() => expect(screen.queryByText('Operator message · Sending')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Clear session?' })).getByRole('button', {
+        name: 'Clear session',
+      }),
+    );
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/agent-runs/agent-run-mm-1032/artifact-sessions/sess%3Aagent-run-mm-1032%3Acodex_cli/control',

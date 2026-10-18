@@ -1911,7 +1911,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(request.payload.agentProfile).toBeUndefined();
   });
 
-  it("clears a hidden host-policy override when Advanced mode is turned off", async () => {
+  it("keeps a host-policy override when Advanced mode is turned off", async () => {
     const twoPolicyCatalog = {
       ...readyOmnigentCatalog,
       executionProfiles: [{
@@ -1937,7 +1937,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
         return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
       if (url === "/api/executions" && init?.method === "POST") {
-        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-cleared-policy" }) } as Response);
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:omnigent-kept-policy" }) } as Response);
       }
       if (url.startsWith("/api/github/branches")) {
         return Promise.resolve(defaultBranchOptionsResponse());
@@ -1960,20 +1960,22 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       const advancedToggle = screen.getByLabelText("Advanced mode") as HTMLInputElement;
       fireEvent.click(advancedToggle);
     }
+    // Closing Advanced hides the control but keeps (and counts) the override.
     expect(screen.queryByLabelText("Host policy")).toBeNull();
     expect(screen.queryByLabelText("Execution target")).toBeNull();
+    expect(screen.getByText("1 override")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Instructions"), {
-      target: { value: "Submit without a hidden host override." },
+      target: { value: "Submit with the hidden host override." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
-    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-cleared-policy?source=temporal"));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-kept-policy?source=temporal"));
     const createCall = fetchSpy.mock.calls.find(([url, options]) =>
       String(url) === "/api/executions" && (options as RequestInit | undefined)?.method === "POST",
     );
     const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
-    expect(request.payload.omnigent).toBeUndefined();
+    expect(request.payload.omnigent).toEqual({ launchPolicyRef: "pinned-v1" });
   });
 
   it("keeps a historical profile version compatible for an Omnigent rerun", async () => {
@@ -6026,15 +6028,16 @@ describe.skip("Task Create Entrypoint", () => {
         ([url, init]) => String(url) === "/api/executions" && init?.method === "POST",
       ),
     ).toBe(false);
-    expect(navigateTo).not.toHaveBeenCalled();
-    expect(
-      await screen.findByText("Rerun was requested and the latest execution view is ready."),
-    ).toBeTruthy();
-    expect(screen.getByRole("status").className).toContain("notice");
-    expect(screen.getByRole("status").className).toContain("ok");
+    // Like Create, an accepted rerun opens its result instead of leaving the
+    // submitted form ready to send again.
+    await waitFor(() => {
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/workflows/mm%3Arerun-created?source=temporal",
+      );
+    });
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
-    ).toBeNull();
+    ).toBe("Rerun was requested and the latest execution view is ready.");
   });
 
   it("submits exact terminal rerun without task or input mutation fields when unchanged", async () => {
@@ -13353,7 +13356,7 @@ describe("Task Create MM-641 authoring validation", () => {
     ).toBe(true);
   });
 
-  it("ignores hidden Priority and Max Attempts values when Advanced mode is off", async () => {
+  it("submits Priority and Max Attempts values kept while Advanced mode is off", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const primaryStep = (await screen.findByText("Step 1")).closest("section");
@@ -13375,18 +13378,19 @@ describe("Task Create MM-641 authoring validation", () => {
     ) as HTMLElement;
     expect(controls).not.toBeNull();
 
-    // Reveal the advanced controls, set a non-default Priority and an invalid
-    // Max Attempts, then hide the controls again before submitting.
+    // Reveal the advanced controls, set non-default values, then hide the
+    // controls again before submitting.
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
     fireEvent.change(within(controls).getByLabelText("Priority"), {
       target: { value: "7" },
     });
     fireEvent.change(within(controls).getByLabelText("Max Attempts"), {
-      target: { value: "0" },
+      target: { value: "5" },
     });
     fireEvent.click(within(controls).getByLabelText("Advanced mode"));
     expect(within(controls).queryByLabelText("Priority")).toBeNull();
     expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
+    expect(within(controls).getByText("2 overrides")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
@@ -13397,11 +13401,10 @@ describe("Task Create MM-641 authoring validation", () => {
       );
     });
 
-    // The hidden non-default Priority is dropped and the hidden invalid Max
-    // Attempts neither blocks submission nor leaks through: defaults are sent.
+    // Hiding the controls never drops the values they hold.
     const request = latestCreateRequest();
-    expect(request.priority).toBe(0);
-    expect(request.maxAttempts).toBe(3);
+    expect(request.priority).toBe(7);
+    expect(request.maxAttempts).toBe(5);
   });
 
   it("offers no retired retrieval authoring in Advanced mode and submits no vector fields", async () => {
@@ -13542,13 +13545,17 @@ describe("Task Create MM-641 authoring validation", () => {
       actions: { canUpdateInputs: false, canRerun: true },
     });
     window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aobject-rerun");
+    // An accepted rerun locks its form, so each request starts from a fresh page.
+    const openRerun = async () => {
+      const view = renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+      await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
+      const branch = screen.getByLabelText("Branch") as HTMLInputElement;
+      await waitFor(() => expect(branch.value).toBe("develop"));
+      return { view, branch };
+    };
 
-    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
-
-    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
-    await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
-    const branch = screen.getByLabelText("Branch") as HTMLInputElement;
-    await waitFor(() => expect(branch.value).toBe("develop"));
+    const unchangedRerun = await openRerun();
     expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("branch");
 
     fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
@@ -13556,7 +13563,9 @@ describe("Task Create MM-641 authoring validation", () => {
     // An unchanged rerun resubmits the recorded target as-is (or not at all).
     const unchanged = updates[0]?.parametersPatch as Record<string, unknown> | null;
     expect(unchanged?.repository ?? recordedGitLabTarget).toEqual(recordedGitLabTarget);
+    unchangedRerun.view.unmount();
 
+    const { branch } = await openRerun();
     fireEvent.change(branch, { target: { value: "release" } });
     fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
     await waitFor(() => expect(updates).toHaveLength(2));
@@ -13589,23 +13598,28 @@ describe("Task Create MM-641 authoring validation", () => {
       actions: { canUpdateInputs: false, canRerun: true },
     });
     window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aobject-move");
+    // An accepted rerun locks its form, so each request starts from a fresh page.
+    const openMovedRerun = async () => {
+      const view = renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+      const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+      await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
+      const branch = screen.getByLabelText("Branch") as HTMLInputElement;
+      await waitFor(() => expect(branch.value).toBe("develop"));
+      fireEvent.change(repository, { target: { value: "gitlab.example.com/platform/tools" } });
+      await waitFor(() => expect(branch.value).toBe(""));
+      return { view, branch };
+    };
 
-    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
-
-    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
-    await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
-    const branch = screen.getByLabelText("Branch") as HTMLInputElement;
-    await waitFor(() => expect(branch.value).toBe("develop"));
-
-    fireEvent.change(repository, { target: { value: "gitlab.example.com/platform/tools" } });
-    await waitFor(() => expect(branch.value).toBe(""));
+    const movedRerun = await openMovedRerun();
     fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
     await waitFor(() => expect(updates).toHaveLength(1));
     expect((updates[0]?.parametersPatch as Record<string, unknown>).repository).toBe(
       "gitlab.example.com/platform/tools",
     );
+    movedRerun.view.unmount();
 
     // A branch authored for the new repository is kept.
+    const { branch } = await openMovedRerun();
     fireEvent.change(branch, { target: { value: "release" } });
     fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
     await waitFor(() => expect(updates).toHaveLength(2));

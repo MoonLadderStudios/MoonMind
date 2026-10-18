@@ -3,8 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 
 import type { components } from '../../generated/openapi';
+import { responseError } from '../../lib/api/client';
 import { GithubTokenProbePanel } from './GithubTokenProbePanel';
-import { useSettingsDraftRegistration } from './SettingsDraftGuard';
+import { useSettingsDraftGuard, useSettingsDraftRegistration } from './SettingsDraftGuard';
 
 type Connection = components['schemas']['RepositoryConnectionView'];
 type ConnectionList = components['schemas']['RepositoryConnectionListResponse'];
@@ -32,6 +33,13 @@ const PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request', '
 // Grants recorded before publishing included issues still publish.
 const REQUIRED_PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request'];
 const READ_OPERATIONS = ['read'];
+// Settings drafts owned by the detail pane; switching panes replaces only these.
+const DRAFT_IDS = {
+  pat: 'source-control-pat',
+  app: 'source-control-app',
+  edit: (connectionId: string) => `source-control-edit:${connectionId}`,
+  assignment: (connectionId: string) => `source-control-assignment:${connectionId}`,
+};
 
 export interface SourceControlConnectionsProps {
   canRunProbe: boolean;
@@ -164,6 +172,7 @@ export function SourceControlConnections({
   navigate = (url) => window.location.assign(url),
 }: SourceControlConnectionsProps) {
   const queryClient = useQueryClient();
+  const { requestDeparture } = useSettingsDraftGuard();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState<'pat' | 'app' | null>(null);
@@ -177,7 +186,7 @@ export function SourceControlConnections({
     queryKey: SOURCE_CONTROL_QUERY_KEY,
     queryFn: async () => {
       const response = await fetch(API, { headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(`Failed to load connections (HTTP ${response.status}).`);
+      if (!response.ok) throw await responseError(response, 'Failed to load connections');
       return response.json();
     },
   });
@@ -185,6 +194,32 @@ export function SourceControlConnections({
   const selected =
     connections.find((item) => item.id === selectedId) ??
     (selectedId === null && adding === null ? connections[0] : undefined);
+
+  /**
+   * Replace the detail pane only after its own drafts are clean or discarded;
+   * drafts elsewhere on the page are not affected.
+   */
+  function showPane(next: { adding: 'pat' | 'app' | null; selectedId: string | null }) {
+    const paneDraftIds =
+      adding === 'pat'
+        ? [DRAFT_IDS.pat]
+        : adding === 'app'
+          ? [DRAFT_IDS.app]
+          : selected
+            ? [DRAFT_IDS.edit(selected.id), DRAFT_IDS.assignment(selected.id)]
+            : [];
+    const unchanged =
+      next.adding === adding && (next.adding !== null || next.selectedId === (selected?.id ?? null));
+    if (unchanged) return;
+    requestDeparture(
+      () => {
+        setAdding(next.adding);
+        setSelectedId(next.selectedId);
+      },
+      'Switch connections? Your unsaved Source Control draft will be discarded.',
+      paneDraftIds,
+    );
+  }
 
   function requestIdFor(operation: string): string {
     const existing = requestIds.current.get(operation);
@@ -276,20 +311,14 @@ export function SourceControlConnections({
           <button
             type="button"
             className={secondaryButton}
-            onClick={() => {
-              setAdding('pat');
-              setSelectedId(null);
-            }}
+            onClick={() => showPane({ adding: 'pat', selectedId: null })}
           >
             Add token connection
           </button>
           <button
             type="button"
             className={secondaryButton}
-            onClick={() => {
-              setAdding('app');
-              setSelectedId(null);
-            }}
+            onClick={() => showPane({ adding: 'app', selectedId: null })}
           >
             Connect GitHub App
           </button>
@@ -319,10 +348,7 @@ export function SourceControlConnections({
                     <button
                       type="button"
                       aria-current={isSelected ? 'true' : undefined}
-                      onClick={() => {
-                        setAdding(null);
-                        setSelectedId(connection.id);
-                      }}
+                      onClick={() => showPane({ adding: null, selectedId: connection.id })}
                       className={`w-full rounded-2xl border px-3 py-2 text-left text-sm ${
                         isSelected
                           ? 'border-mm-accent bg-mm-accent/10'
@@ -403,7 +429,7 @@ function PatCreateForm({
     setError(null);
   }
 
-  useSettingsDraftRegistration('source-control-pat', Boolean(name || token || publish || saving), discard);
+  useSettingsDraftRegistration(DRAFT_IDS.pat, Boolean(name || token || publish || saving), discard);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -528,7 +554,7 @@ function AppConnectForm({
   }
 
   useSettingsDraftRegistration(
-    'source-control-app',
+    DRAFT_IDS.app,
     Boolean(name || appSlug || appId || repositories || starting),
     discard,
   );
@@ -680,9 +706,9 @@ function ConnectionDetail({
     setAssignError(null);
   }
 
-  useSettingsDraftRegistration(`source-control-edit:${connection.id}`, changed || saving, discardEdit);
+  useSettingsDraftRegistration(DRAFT_IDS.edit(connection.id), changed || saving, discardEdit);
   useSettingsDraftRegistration(
-    `source-control-assignment:${connection.id}`,
+    DRAFT_IDS.assignment(connection.id),
     assignmentChanged || assigning,
     discardAssignment,
   );
@@ -773,18 +799,27 @@ function ConnectionDetail({
     }
   }
 
-  async function disable() {
-    const operation = `disable:${connection.id}`;
+  /** Disable or re-enable; disabling keeps every record, so it is undone by Enable. */
+  async function setLifecycle(action: 'disable' | 'enable') {
+    const operation = `${action}:${connection.id}`;
     try {
-      const saved = await sendJson<Connection>(`${API}/${encodeURIComponent(connection.id)}/disable`, 'POST', {
+      const saved = await sendJson<Connection>(`${API}/${encodeURIComponent(connection.id)}/${action}`, 'POST', {
         requestId: requestIdFor(operation),
       });
       settle(operation);
       onCommitted(saved);
+      if (isStillSelected(connection.id)) {
+        onNotice?.({
+          level: 'ok',
+          text: action === 'disable'
+            ? `${saved.displayName} disabled. Workflows cannot use it until you choose Enable connection.`
+            : `${saved.displayName} enabled.`,
+        });
+      }
     } catch (err) {
       if (err instanceof RequestError) settle(operation);
       if (isStillSelected(connection.id)) {
-        setSaveError(err instanceof Error ? err.message : 'Could not disable the connection.');
+        setSaveError(err instanceof Error ? err.message : `Could not ${action} the connection.`);
       }
     }
   }
@@ -961,11 +996,13 @@ function ConnectionDetail({
               Cancel changes
             </button>
           ) : null}
-          {isActive ? (
-            <button type="button" className={secondaryButton} onClick={() => void disable()}>
-              Disable connection
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className={secondaryButton}
+            onClick={() => void setLifecycle(isActive ? 'disable' : 'enable')}
+          >
+            {isActive ? 'Disable connection' : 'Enable connection'}
+          </button>
         </div>
       </form>
     </div>

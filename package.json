@@ -50,6 +50,8 @@
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/browser-playwright": "^4.1.11",
     "eslint": "^10.1.0",
+    "eslint-plugin-jsx-a11y-x": "^0.2.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.4.0",
     "jsdom": "^29.0.1",
     "openapi-typescript": "^7.13.0",
