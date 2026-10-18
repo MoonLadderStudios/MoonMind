@@ -64,6 +64,7 @@ import {
   type VisibleCollection,
   type VisibleCollectionItemsRegistry,
 } from '../lib/visibleCollectionItems';
+import { canonicalRecurringListSearch } from '../lib/recurringListQuery';
 import {
   DASHBOARD_PREFERENCES_CHANGED_EVENT,
   readDashboardPreferences,
@@ -227,9 +228,12 @@ function iconForWorkflowListMode(icon: string) {
 type PendingFirstItemRequest = {
   id: symbol;
   pathname: string;
-  search: string;
-  survivesQueryChange: boolean;
+  listQuery: string;
+  /** Reduces a URL search to the list it selects, so equivalent rewrites compare equal. */
+  listQueryOf: (search: string) => string;
 };
+
+const rawListQuery = (search: string) => search;
 
 function workflowModeForPath(
   normalizedPath: string,
@@ -348,15 +352,16 @@ function LazyPageView({
   const [reloadKey, setReloadKey] = useState(0);
   const LazyPage = useMemo(() => lazy(PAGE_IMPORTS[page]), [page, reloadKey]);
   // Workflows and Skills keep one page instance across paths, so the boundary
-  // resets on pathname instead of relying on a remount.
-  const { pathname } = useLocation();
+  // resets on navigation instead of relying on a remount. The query counts:
+  // Create, Edit, Rerun and Compare share /workflows/new.
+  const { pathname, search } = useLocation();
 
   return (
     <QueryErrorResetBoundary>
       {({ reset }) => (
         <DashboardRouteErrorBoundary
           key={reloadKey}
-          resetKey={pathname}
+          resetKey={`${pathname}${search}`}
           buildId={buildId ?? null}
           onReset={() => {
             reset();
@@ -1244,15 +1249,15 @@ function RoutedDashboardPage({
   }, [location.pathname, location.search]);
 
   // A pending first-item request belongs to the list it was made on: leaving
-  // the path or changing the list query (the Workflows nav link clears the
-  // filters) cancels it. Recurring canonicalizes its own query after mount, so
-  // only leaving the path cancels a Recurring request.
+  // the path or selecting another list (the Workflows nav link clears the
+  // filters) cancels it. Recurring rewrites its query to a canonical form after
+  // mount; that rewrite selects the same list and keeps the request.
   useEffect(() => {
     const pending = pendingRequestRef.current;
     if (
       pending
       && (pending.pathname !== location.pathname
-        || (!pending.survivesQueryChange && pending.search !== location.search))
+        || pending.listQueryOf(location.search) !== pending.listQuery)
     ) {
       pendingRequestRef.current = null;
     }
@@ -1268,13 +1273,13 @@ function RoutedDashboardPage({
     const requestIsCurrent = (requestId: symbol) => (
       pendingRequestRef.current?.id === requestId && window.location.pathname === requestPathname
     );
-    const startRequest = (survivesQueryChange: boolean): symbol => {
+    const startRequest = (listQueryOf: (search: string) => string): symbol => {
       const id = Symbol();
       pendingRequestRef.current = {
         id,
         pathname: location.pathname,
-        search: location.search,
-        survivesQueryChange,
+        listQuery: listQueryOf(location.search),
+        listQueryOf,
       };
       return id;
     };
@@ -1283,7 +1288,7 @@ function RoutedDashboardPage({
 
     if (resolvedRecurringDisplay) {
       if (location.pathname.replace(/\/$/, '') === '/schedules' && selectedMode !== 'table') {
-        const requestId = startRequest(true);
+        const requestId = startRequest(canonicalRecurringListSearch);
         setRequestedRecurringMode(selectedMode);
         updateDashboardPreferences({ recurringListDisplayMode: selectedMode });
         setResolutionStatus('Opening first recurring schedule...');
@@ -1344,7 +1349,7 @@ function RoutedDashboardPage({
 
     if (resolvedSkillsDisplay) {
       if (location.pathname.replace(/\/$/, '') === '/skills' && selectedMode !== 'table') {
-        const requestId = startRequest(false);
+        const requestId = startRequest(rawListQuery);
         setRequestedSkillsMode(selectedMode);
         updateDashboardPreferences({ skillsListDisplayMode: selectedMode });
         setResolutionStatus('Opening first skill...');
@@ -1399,7 +1404,7 @@ function RoutedDashboardPage({
     }
 
     if (location.pathname.replace(/\/$/, '') === '/workflows' && selectedMode !== 'table') {
-      const requestId = startRequest(false);
+      const requestId = startRequest(rawListQuery);
       updateDashboardPreferences({ workflowListDisplayMode: selectedMode });
       setRequestedMode(selectedMode);
       setResolutionStatus('Opening first workflow...');
@@ -1591,10 +1596,13 @@ function RoutedDashboardPage({
 }
 
 // About one second of animation frames: long enough for a lazily loaded page
-// to render its sections, short enough not to scroll long after arrival.
+// to render its sections, short enough not to scroll long after arrival. A
+// directly loaded URL also waits for the page chunk and its data, so it gets
+// about five seconds.
 const HASH_TARGET_FRAME_ATTEMPTS = 60;
+const INITIAL_HASH_TARGET_FRAME_ATTEMPTS = 300;
 
-function scrollToHashTarget(hash: string): () => void {
+function scrollToHashTarget(hash: string, maxAttempts = HASH_TARGET_FRAME_ATTEMPTS): () => void {
   let id = hash.slice(1);
   try {
     id = decodeURIComponent(id);
@@ -1612,7 +1620,7 @@ function scrollToHashTarget(hash: string): () => void {
       return;
     }
     attempts += 1;
-    if (attempts < HASH_TARGET_FRAME_ATTEMPTS) {
+    if (attempts < maxAttempts) {
       frame = window.requestAnimationFrame(attempt);
     }
   };
@@ -1631,7 +1639,11 @@ function scrollToHashTarget(hash: string): () => void {
 function useRouteScrollReset(): void {
   const location = useLocation();
   const navigationType = useNavigationType();
-  const previousRef = useRef({ pathname: location.pathname, hash: location.hash });
+  const previousRef = useRef<{ pathname: string; hash: string } | null>(null);
+  // The first scroll outlives query rewrites (Recurring canonicalizes its URL
+  // after mount) and stops only when the path or fragment changes.
+  const cancelInitialHashScrollRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelInitialHashScrollRef.current?.(), []);
   // navigateTo() announces programmatic pushes and replaces with a synthetic
   // popstate, which the router also reports as POP; only a trusted popstate is
   // a real Back/Forward.
@@ -1648,6 +1660,21 @@ function useRouteScrollReset(): void {
   useLayoutEffect(() => {
     const previous = previousRef.current;
     previousRef.current = { pathname: location.pathname, hash: location.hash };
+    if (!previous) {
+      // The browser resolved the fragment of a directly loaded URL before the
+      // lazy page rendered its sections, so scroll once they appear.
+      if (location.hash) {
+        cancelInitialHashScrollRef.current = scrollToHashTarget(
+          location.hash,
+          INITIAL_HASH_TARGET_FRAME_ATTEMPTS,
+        );
+      }
+      return undefined;
+    }
+    if (location.pathname !== previous.pathname || location.hash !== previous.hash) {
+      cancelInitialHashScrollRef.current?.();
+      cancelInitialHashScrollRef.current = null;
+    }
     if (navigationType === NavigationType.Pop && browserTraversalRef.current) {
       return undefined;
     }

@@ -1651,6 +1651,30 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
+  it('clears a URL validation error when navigation keeps the same filters but drops the conflict', async () => {
+    window.history.pushState({}, 'Test', '/workflows?stateIn=running&stateNotIn=failed');
+
+    renderWithClient(
+      <BrowserRouter>
+        <Link to="/workflows?stateNotIn=failed">Valid filters</Link>
+        <WorkflowListPage payload={mockPayload} />
+      </BrowserRouter>,
+    );
+
+    expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
+    const baselineCalls = executionListCalls().length;
+
+    fireEvent.click(screen.getByRole('link', { name: 'Valid filters' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Cannot combine stateIn and stateNotIn.')).toBeNull();
+    });
+    await waitFor(() => {
+      expect(executionListCalls().length).toBeGreaterThan(baselineCalls);
+    });
+    expect(String(lastExecutionListUrl())).toContain('stateNotIn=failed');
+  });
+
   it('reuses the trimmed repository filter for both the request and the query key', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 

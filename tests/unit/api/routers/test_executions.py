@@ -4097,7 +4097,8 @@ def test_execution_status_facet_count_agrees_with_list_state_filter(state: str) 
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[_get_service] = lambda: AsyncMock()
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
     app.dependency_overrides[get_async_session] = _empty_session_override
     _override_user_dependencies(app, is_superuser=False)
 

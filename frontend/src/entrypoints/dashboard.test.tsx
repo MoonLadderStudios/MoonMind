@@ -239,7 +239,10 @@ vi.mock('./workflows-workspace', async () => {
       'workflow',
       window.location.pathname === '/workflows' ? visibleItemsMock.workflows : null,
     );
-    if (window.location.pathname === '/workflows/crash-route') {
+    if (
+      window.location.pathname === '/workflows/crash-route'
+      || new URLSearchParams(window.location.search).get('editExecutionId') === 'crash-mode'
+    ) {
       throw new Error('workflow page render failed');
     }
     const initialData = payload.initialData as {
@@ -1071,6 +1074,58 @@ describe('Dashboard shared entry', () => {
     });
   });
 
+  it('keeps a pending first-schedule lookup through the canonical URL rewrite but not a new query', async () => {
+    mockRecurringFetch([recurringSchedule('schedule-one', 'Daily recurring scan')]);
+    const respond = fetchSpy.getMockImplementation()!;
+    const held: Array<() => void> = [];
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/recurring-workflows?') && url.includes('schedule=nightly')) {
+        return new Promise<Response>((resolve) => {
+          held.push(() => resolve({
+            ok: true,
+            json: async () => ({ items: [recurringSchedule('nightly-one', 'Nightly scan')] }),
+          } as Response));
+        });
+      }
+      return respond(input, init);
+    });
+    window.history.replaceState({}, '', '/schedules?schedule=nightly');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recurring Schedules' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'Sidebar list' }));
+    expect((await screen.findAllByText('Opening first recurring schedule...')).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(window.location.search).toContain('limit=50');
+    });
+    // A canonical rewrite of the same list, as the table makes after mount,
+    // keeps the lookup pending.
+    act(() => {
+      navigateTo('/schedules?schedule=nightly&sortDir=desc&sort=updatedAt&limit=50', { replace: true });
+    });
+    await waitFor(() => {
+      expect(window.location.search).toBe('?schedule=nightly&sortDir=desc&sort=updatedAt&limit=50');
+    });
+    expect(screen.getAllByText('Opening first recurring schedule...').length).toBeGreaterThan(0);
+
+    // The Recurring navigation link selects the unfiltered list.
+    act(() => {
+      navigateTo('/schedules');
+    });
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('schedule=nightly');
+    });
+    await act(async () => {
+      held.splice(0).forEach((release) => release());
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Opening first recurring schedule...')).toBeNull();
+    });
+    expect(window.location.pathname).toBe('/schedules');
+  });
+
   it('clears Recurring table filters when the Recurring navigation link drops them from the URL', async () => {
     mockRecurringFetch([recurringSchedule('schedule-one', 'Daily recurring scan')]);
     window.history.replaceState({}, '', '/schedules?schedule=nightly');
@@ -1093,6 +1148,25 @@ describe('Dashboard shared entry', () => {
     });
     const listCalls = fetchSpy.mock.calls.map(([url]) => String(url)).filter((url) => url.startsWith('/api/recurring-workflows'));
     expect(listCalls.at(-1)).not.toContain('schedule=nightly');
+  });
+
+  it('scrolls to the section named by a directly loaded URL once the lazy page renders it', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      mockRecurringFetch([recurringSchedule('schedule-one', 'Daily recurring scan')]);
+      window.history.replaceState({}, '', '/schedules/schedule-one#schedule-runs');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+      await screen.findByRole('heading', { name: 'Daily recurring scan' });
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalled();
+      });
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('schedule-runs'));
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 
   it('scrolls a recurring schedule section into view without remounting the detail page', async () => {
@@ -1976,6 +2050,23 @@ describe('Dashboard shared entry', () => {
       navigateTo('/workflows/healthy-route');
 
       expect(await screen.findByText('Workflow detail route loaded: /workflows/healthy-route')).toBeTruthy();
+      expect(screen.queryByText('This page failed to load')).toBeNull();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('clears a route error when the Create page switches mode on the same path', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      window.history.replaceState({}, '', '/workflows/new?editExecutionId=crash-mode');
+      renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+
+      expect(await screen.findByText('This page failed to load')).toBeTruthy();
+
+      navigateTo('/workflows/new');
+
+      expect(await screen.findByText('Workflow start route loaded')).toBeTruthy();
       expect(screen.queryByText('This page failed to load')).toBeNull();
     } finally {
       consoleErrorSpy.mockRestore();

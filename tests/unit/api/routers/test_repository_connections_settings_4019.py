@@ -312,6 +312,38 @@ async def test_enable_restores_a_disabled_connection_with_its_records(harness):
     assert missing.status_code == 404
 
 
+async def test_lifecycle_replay_reports_a_superseded_outcome(harness):
+    client = harness.client
+    await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+    )
+    await client.post(
+        "/api/v1/repository-connections/personal-github/disable",
+        json={"requestId": "req-disable"},
+    )
+    enabled = await client.post(
+        "/api/v1/repository-connections/personal-github/enable",
+        json={"requestId": "req-enable"},
+    )
+    assert enabled.json()["lifecycle"] == "active"
+    disabled_again = await client.post(
+        "/api/v1/repository-connections/personal-github/disable",
+        json={"requestId": "req-disable-again"},
+    )
+    assert disabled_again.json()["lifecycle"] == "disabled"
+
+    # Retrying the earlier enable must not answer 200 with a disabled record.
+    retried = await client.post(
+        "/api/v1/repository-connections/personal-github/enable",
+        json={"requestId": "req-enable"},
+    )
+    assert retried.status_code == 409, retried.text
+    assert "superseded" in retried.json()["detail"]
+    detail = await client.get("/api/v1/repository-connections/personal-github")
+    assert detail.json()["lifecycle"] == "disabled"
+
+
 async def test_browser_supplied_identity_fields_are_rejected(harness):
     response = await harness.client.post(
         "/api/v1/repository-connections/pat",

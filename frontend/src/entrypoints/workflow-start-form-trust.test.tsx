@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, useNavigate, type NavigateFunction } from "react-router-dom";
+import { BrowserRouter, MemoryRouter, useNavigate, type NavigateFunction } from "react-router-dom";
 import {
   afterEach,
   beforeEach,
@@ -491,6 +491,56 @@ describe("Workflow Create form trust", () => {
       expect(requestWorkflowStartRouteChange("/workflows")).toBe(true);
       expect(confirmSpy).not.toHaveBeenCalled();
     }
+
+    async function renderEditedSecondOfTwoHistoryEntries() {
+      executions["mm:history-first"] = recordedExecution("mm:history-first");
+      executions["mm:history-second"] = recordedExecution("mm:history-second");
+      window.history.pushState({}, "", "/workflows/new?editExecutionId=mm%3Ahistory-first");
+      window.history.pushState({}, "", "/workflows/new?editExecutionId=mm%3Ahistory-second");
+      renderWithClient(
+        <BrowserRouter>
+          <WorkflowStartPage payload={payloadWith()} />
+        </BrowserRouter>,
+      );
+      const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+      await waitFor(() => expect(instructions.value).toBe("Recorded workflow instructions."));
+      fireEvent.change(instructions, { target: { value: "Edited the second workflow." } });
+    }
+
+    it("keeps an edited draft when the operator declines leaving it through Back", async () => {
+      await renderEditedSecondOfTwoHistoryEntries();
+
+      act(() => {
+        window.history.back();
+      });
+
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(window.location.search).toBe("?editExecutionId=mm%3Ahistory-second"),
+      );
+      expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+        "Edited the second workflow.",
+      );
+    });
+
+    it("follows Back to the other workflow once the operator confirms", async () => {
+      await renderEditedSecondOfTwoHistoryEntries();
+      confirmSpy.mockReturnValue(true);
+
+      act(() => {
+        window.history.back();
+      });
+
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(window.location.search).toBe("?editExecutionId=mm%3Ahistory-first"),
+      );
+      await waitFor(() =>
+        expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(
+          "Recorded workflow instructions.",
+        ),
+      );
+    });
 
     it("asks before leaving after a step is added", async () => {
       renderWithClient(<WorkflowStartPage payload={payloadWith()} />);

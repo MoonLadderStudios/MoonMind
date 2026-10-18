@@ -1431,6 +1431,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       workflowListUrlQuery(nextFilters, nextPageSize, nextCursor)
       === workflowListUrlQuery(filters, pageSize, listCursor)
     ) {
+      // The same filters can arrive with a different validity (a conflicting
+      // include dropped), so adopt the URL as the validation source anyway.
+      if (filterValidationErrors.length > 0 || validateInitialFilterParams(params).length > 0) {
+        setFilterUrlParams(params);
+        setHasEditedFilters(false);
+      }
       return;
     }
     setFilterUrlParams(params);
