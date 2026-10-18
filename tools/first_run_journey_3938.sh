@@ -58,8 +58,8 @@
 # startup coverage is followed by a scratch task on a controlled provider:
 # an actual process generates bytes inside its admitted host, then production
 # save/finalization and owned cleanup run. The saved archive is downloaded
-# before and after workspace removal. External model/native-turn execution is
-# substituted; no live-provider availability claim is made.
+# before and after workspace removal. External model catalog observation and
+# native-turn execution are controlled; no live-provider availability is claimed.
 # The conversion outcome is printed either way. It publishes only when every
 # retained subsystem has a registered transform; until then it refuses
 # without mutation and the journey reports it as not published.
@@ -602,7 +602,7 @@ restart_workflow_worker() {
 # The provider process is controlled using the same session-driver seam as the
 # exact-artifact recovery journey. Admission, host/session transport, compute
 # receipts, save/finalization and cleanup remain production-owned. No live
-# provider turn or free-model availability is claimed.
+# provider catalog/turn or free-model availability is claimed.
 generated_output_journey() {
   local label="$1" override="$STATE_DIR/generated-provider.json"
   python3 - "$override" "$SCRIPT_DIR/single_user_journey_provider.py" "$STATE_DIR" "$PROJECT_NAME" <<'EOF'
