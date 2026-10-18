@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from './api/client';
 import {
   buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
   describeWorkflowActionDisabledReason,
   isRemediationEligibleTarget,
+  requestRetryFromStep,
   type ExecutionActionCapabilities,
   type WorkflowActionHandlers,
 } from './workflowActions';
@@ -405,5 +407,37 @@ describe('MoonLadderStudios/MoonMind#4636 remediation authored selection', () =>
   it.each([{}, { modelTier: 2 }, { model: null, effort: null }, { modelTier: 2, effort: 'max', tierFallback: 'strict' }])('preserves raw selection %j without diagnostic companions', (selection) => {
     const fields = buildRemediationRuntimeRequestFields({ targetRuntime: 'codex_cli', profileId: 'profile', resolvedModel: 'old-model', effort: 'old-effort', inputParameters: { workflow: { runtime: selection } } });
     expect(fields.runtime).toEqual({ mode: 'codex_cli', profileId: 'profile', ...selection });
+  });
+});
+
+describe('requestRetryFromStep', () => {
+  it('reports a refused retry as an API error with its status, code, and message', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: 'retry_from_step_unavailable',
+            reason: 'history_not_replayable',
+            message: 'The run history no longer replays on the installed MoonMind version.',
+          },
+        }),
+        { status: 409, statusText: 'Conflict', headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    try {
+      const error = await requestRetryFromStep({
+        apiBase: '/api',
+        workflowId: 'mm:failed',
+        sourceRunId: 'run-1',
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).status).toBe(409);
+      expect((error as ApiError).code).toBe('retry_from_step_unavailable');
+      expect((error as ApiError).message).toBe(
+        'The run history no longer replays on the installed MoonMind version.',
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

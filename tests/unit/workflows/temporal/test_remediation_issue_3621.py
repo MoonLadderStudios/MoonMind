@@ -10,6 +10,7 @@ import pytest
 
 from api_service.api.routers.executions import _serialize_remediation_link_summary
 from api_service.services.checkpoint_branch_turn_execution import (
+    CheckpointBranchTurnLaunchError,
     checkpoint_branch_turn_owner_operational,
 )
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
@@ -123,6 +124,78 @@ async def test_remediation_action_dispatches_the_shared_server_owner() -> None:
         "providerSessionId",
         "diagnosticsRef",
     }.intersection(graph_payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "missing_or_mismatched",
+    ["source_run", "action_key", "instruction", "turn", "step", "claim", "missing"],
+)
+async def test_uncertain_branch_dispatch_never_accepts_unrelated_or_missing_claim(
+    missing_or_mismatched,
+) -> None:
+    graph_service = AsyncMock()
+    claim = {
+        "workflowId": "target-workflow",
+        "runId": "target-run",
+        "branchId": "remediation-repair-1",
+        "branchTurnId": "remediation-repair-1-turn-1",
+        "actionId": "repair-1",
+        "checkpointRef": "artifact://checkpoint/source",
+        "instructionRef": "artifact://instruction/repair",
+        "instructionDigest": "sha256:" + "b" * 64,
+        "stepExecutionId": "admitted-step",
+        "agentRunId": "admitted-agent-run",
+    }
+    if missing_or_mismatched == "source_run":
+        claim["runId"] = "sibling-run"
+    elif missing_or_mismatched == "action_key":
+        claim["actionId"] = "other-action"
+    elif missing_or_mismatched == "instruction":
+        claim["instructionDigest"] = "sha256:" + "c" * 64
+    elif missing_or_mismatched == "turn":
+        claim["branchTurnId"] = "sibling-turn"
+    elif missing_or_mismatched == "step":
+        claim["stepExecutionId"] = None
+    elif missing_or_mismatched == "claim":
+        claim["agentRunId"] = None
+    elif missing_or_mismatched == "missing":
+        claim = {}
+    owner = AsyncMock()
+    owner.launch.side_effect = CheckpointBranchTurnLaunchError(
+        "execution_owner_start_failed",
+        "branch dispatch unconfirmed",
+        claimed_execution=claim,
+    )
+    plane = TemporalRemediationControlPlane(
+        checkpoint_branch_service=graph_service, checkpoint_branch_turn_owner=owner
+    )
+
+    result = await plane.handlers()[ACTION](_request(), {}, _target())
+
+    assert result["status"] == "delivery_unknown"
+    assert result["verificationRequired"] is True
+    assert "resultingIdentity" not in result
+    assert not result.get("branchTurnLaunched")
+    assert result["afterEvidenceRefs"] == []
+    owner.launch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_branch_precondition_failure_does_not_read_an_accepted_claim() -> None:
+    graph_service = AsyncMock()
+    owner = AsyncMock()
+    owner.launch.side_effect = CheckpointBranchTurnLaunchError(
+        "provider_profile_not_ready", "Provider Profile is not launch ready"
+    )
+    plane = TemporalRemediationControlPlane(
+        checkpoint_branch_service=graph_service, checkpoint_branch_turn_owner=owner
+    )
+
+    result = await plane.handlers()[ACTION](_request(), {}, _target())
+
+    assert result["status"] == "precondition_failed"
+    graph_service.read_branch_graph.assert_not_awaited()
 
 
 @pytest.mark.asyncio

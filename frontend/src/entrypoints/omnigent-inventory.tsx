@@ -3,7 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { PageHeader } from '../components/dashboard/PageHeader';
 import { DataTable, type Column } from '../components/tables/DataTable';
+import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
+import type { WorkflowActionMenuItem } from '../lib/workflowActions';
 import { responseError } from '../lib/api/client';
 import { useUrlSearchText } from '../lib/urlSearchText';
 
@@ -133,6 +136,44 @@ function text(record: Record<string, unknown>, ...keys: string[]): string {
   return '';
 }
 
+function sentenceCase(value: unknown): string {
+  const label = String(value ?? '').replace(/[_-]+/g, ' ').trim();
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : 'Unknown';
+}
+
+function formatTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string' || !value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+const MORE_ICON = (
+  <svg aria-hidden="true" className="td-workflow-actions-trigger-icon" viewBox="0 0 16 16" focusable="false">
+    <circle cx="8" cy="3" r="1.5" />
+    <circle cx="8" cy="8" r="1.5" />
+    <circle cx="8" cy="13" r="1.5" />
+  </svg>
+);
+
+/** Raw identifiers stay one disclosure away from the readable name. */
+function RawIdDisclosure({ value, label = 'ID' }: { value: string; label?: string }) {
+  return (
+    <details className="omnigent-inventory__raw-id">
+      <summary>{label}</summary>
+      <code>{value}</code>
+    </details>
+  );
+}
+
+function RawRecords({ label, records }: { label: string; records: unknown }) {
+  return (
+    <details>
+      <summary>{label}</summary>
+      <pre>{JSON.stringify(records, null, 2)}</pre>
+    </details>
+  );
+}
+
 function compactRows(payload: unknown): InventoryRow[] {
   const items = Array.isArray(payload)
     ? payload
@@ -148,7 +189,7 @@ function compactRows(payload: unknown): InventoryRow[] {
       id,
       name: text(row, 'displayName', 'display_name', 'name', 'label') || id,
       status: text(row, 'status', 'state', 'health') || 'Available',
-      summary: text(row, 'description', 'summary', 'scope') || 'No summary provided.',
+      summary: text(row, 'description', 'summary', 'scope'),
       freshness,
       formattedFreshness: freshness ? new Date(freshness).toLocaleString() : null,
       version: typeof row.defaultVersion === 'number'
@@ -376,17 +417,75 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       return response.json();
     },
     onSuccess: async () => {
-      setNotice('Immutable policy version saved. Validate diagnostics before activation.');
+      setNotice('Policy version saved. Validate it before activating.');
       setEditor(null);
       await queryClient.invalidateQueries({ queryKey: ['omnigent-inventory', kind] });
     },
   });
 
+  const profileMenuItems = (profile: AgentProfile): WorkflowActionMenuItem[] => {
+    const latest = profile.versions[0];
+    const ready = latest?.validationResult?.ready === true;
+    const busyReason = profileAction.isPending ? 'Another action is still running.' : null;
+    const item = (
+      id: string,
+      label: string,
+      onSelect: () => void,
+      options: Partial<WorkflowActionMenuItem> = {},
+    ): WorkflowActionMenuItem => {
+      const disabledReason = options.disabledReason ?? null;
+      return {
+        id, label, onSelect, ...options, disabledReason,
+        section: disabledReason ? 'unavailable' : options.section ?? 'primary',
+      };
+    };
+    const items: WorkflowActionMenuItem[] = [
+      item('clone', 'Clone', () => setAgentEditor({ mode: 'clone', source: profile, id: `${profile.profileId}-clone`, name: `${profile.displayName} clone`, description: profile.description || '', document: '{}' })),
+    ];
+    if (latest?.document) {
+      items.push(item('edit-version', 'Edit as new version', () => setAgentEditor({ mode: 'version', source: profile, id: profile.profileId, name: profile.displayName, description: profile.description || '', document: JSON.stringify(latest.document, null, 2) })));
+    }
+    items.push(item('validate', 'Validate', () => profileAction.mutate({ profile, action: 'validate' }), { disabledReason: busyReason }));
+    items.push(item('smoke', 'Smoke test', () => profileAction.mutate({ profile, action: 'smoke' }), { disabledReason: busyReason ?? (ready ? null : 'Validate this configuration first.') }));
+    if (latest?.document && (latest.document.source as { bundleArtifactRef?: unknown } | undefined)?.bundleArtifactRef) {
+      items.push(item('import-bundle', 'Import bundle', () => profileAction.mutate({ profile, action: 'import-bundle' }), { disabledReason: busyReason }));
+    }
+    if (ready && latest && (profile.state !== 'active' || latest.version !== profile.activeVersion)) {
+      items.push(item('activate', 'Activate', () => profileAction.mutate({ profile, action: 'activate' }), { disabledReason: busyReason }));
+    }
+    const usageNote = 'Usage is not checked here; open View to see dependent workflows.';
+    if (profile.state === 'active') {
+      items.push(item('disable', 'Disable', () => profileAction.mutate({ profile, action: 'disable' }), { disabledReason: busyReason, section: 'destructive', description: usageNote }));
+    }
+    if (profile.state !== 'deprecated') {
+      items.push(item('deprecate', 'Deprecate', () => profileAction.mutate({ profile, action: 'deprecate' }), { disabledReason: busyReason, section: 'destructive', description: usageNote }));
+    }
+    if (profile.state === 'draft') {
+      items.push(item('delete', 'Delete draft', () => profileAction.mutate({ profile, action: 'delete' }), {
+        disabledReason: busyReason,
+        section: 'destructive',
+        danger: true,
+        confirmation: { title: 'Delete unused draft?', consequence: 'The draft is removed permanently. This cannot be undone.', confirmLabel: 'Delete draft' },
+      }));
+    }
+    return items;
+  };
+
   if (!enabled || !endpoint) {
-    return <div className="omnigent-inventory" role="alert"><h1>Omnigent {label}</h1><p>This inventory is not available for this deployment.</p></div>;
+    return <div className="omnigent-inventory">
+      <PageHeader eyebrow="Omnigent" title={label} />
+      <p role="alert">This inventory is not available for this deployment.</p>
+    </div>;
   }
+  const inventoryRows = result.data ?? [];
+  const showSummary = inventoryRows.some((row) => row.summary);
+  const showFreshness = inventoryRows.some((row) => row.freshness);
   return <div className="omnigent-inventory">
-    <header><p className="eyebrow">Omnigent</p><h1>{label}</h1><p>{kind === 'agents' ? 'Available agent identities and runtime status.' : 'Authorized policy scopes and status.'}</p></header>
+    <PageHeader
+      eyebrow="Omnigent"
+      title={label}
+      description={kind === 'agents' ? 'Available agent identities and runtime status.' : 'Authorized policy scopes and status.'}
+    />
     <section aria-labelledby="omnigent-inventory-heading">
       <div className="omnigent-inventory__toolbar"><h2 id="omnigent-inventory-heading">{label} inventory</h2>{kind === 'policies' ? <button type="button" onClick={() => setEditor({ mode: 'create', id: '', name: '', document: '{}' })}>Create policy</button> : null}<button type="button" onClick={() => void result.refetch()} disabled={result.isFetching}>Refresh</button></div>
       <label><span>Filter {label.toLowerCase()}</span><input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
@@ -415,17 +514,17 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
               render: (row) => (
                 <span className="omnigent-inventory__identity">
                   <strong>{row.name}</strong>
-                  <small>{row.id}{row.version ? `@${row.version}` : ''}</small>
+                  {row.id !== row.name ? <RawIdDisclosure value={`${row.id}${row.version ? `@${row.version}` : ''}`} /> : null}
                 </span>
               ),
             },
             { key: 'status', header: 'Status', render: (row) => row.status },
-            { key: 'summary', header: 'Summary', render: (row) => row.summary },
-            {
+            ...(showSummary ? [{ key: 'summary', header: 'Summary', render: (row: InventoryRow) => row.summary || '—' }] : []),
+            ...(showFreshness ? [{
               key: 'freshness',
               header: 'Freshness',
-              render: (row) => (row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : 'Not reported'),
-            },
+              render: (row: InventoryRow) => (row.freshness ? <time dateTime={row.freshness}>{row.formattedFreshness}</time> : '—'),
+            }] : []),
           ] as Column<InventoryRow>[]}
           {...(kind === 'policies'
             ? {
@@ -440,7 +539,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           rowActionsHeader="Actions"
         />
       </div>
-      {kind === 'policies' ? <p>Creating, cloning, and editing always produces an immutable new version through the policy editor API; active historical versions are never changed.</p> : null}
+      {kind === 'policies' ? <p>Saving a policy always creates a new version; versions already in use are never changed.</p> : null}
       {selected ? <section className="omnigent-policy-detail" aria-label="Immutable policy version">
         <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => { setSelected(null); setSelectedVersion(null); }}>Close</button></div>
         {versions.isError || audit.isError ? <p role="alert">{versions.error?.message ?? audit.error?.message}</p> : null}
@@ -449,8 +548,10 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             onClick={() => setSelectedVersion(version)}>{version.ref} · {version.state}</button>)}</div> : <p role="status">Loading immutable history…</p>}
         <p>Validation: {(visibleVersion?.validation ?? selected.validation)?.valid ? 'Valid' : 'Needs attention'}</p>
         {(visibleVersion?.validation ?? selected.validation)?.diagnostics?.map((diagnostic) => <p role="alert" key={`${diagnostic.code}-${diagnostic.path}`}>{diagnostic.path ? `${diagnostic.path}: ` : ''}{diagnostic.code}: {diagnostic.message}</p>)}
-        <h3>Host, resources, workspace, network, capture, controls, checkpoints, remediation, approvals, and retention</h3>
-        <pre>{JSON.stringify(visibleVersion?.document ?? selected.document, null, 2)}</pre>
+        <details>
+          <summary>Policy document (host, resources, workspace, network, capture, controls, checkpoints, remediation, approvals, retention)</summary>
+          <pre>{JSON.stringify(visibleVersion?.document ?? selected.document, null, 2)}</pre>
+        </details>
         {visibleVersion ? <button type="button" onClick={() => validate.mutate(visibleVersion)}>Validate against deployment</button> : null}
         {usage.isError ? <p role="alert">{usage.error.message}</p> : null}
         {usage.data ? <section aria-label="Policy usage and activation impact">
@@ -542,7 +643,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
               render: (profile) => (
                 <span className="omnigent-inventory__identity">
                   <strong>{profile.displayName}</strong>
-                  <small>{profile.profileId}</small>
                   {profile.description ? <small>{profile.description}</small> : null}
                 </span>
               ),
@@ -561,8 +661,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
                 return (
                   <span className="omnigent-inventory__identity">
                     <span>Version {latest.version}</span>
-                    <small title={latest.digest}>{latest.digest.slice(0, 18)}…</small>
-                    <small>{profile.versions.length} immutable version{profile.versions.length === 1 ? '' : 's'}</small>
+                    <small>{profile.versions.length} version{profile.versions.length === 1 ? '' : 's'}</small>
                   </span>
                 );
               },
@@ -578,16 +677,17 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             const ready = latest?.validationResult?.ready === true;
             return (
               <span className="omnigent-inventory__row-actions">
-                <button type="button" onClick={() => setSelectedProfile(profile)}>View details, history, diff, audit, and usage</button>
-                <button type="button" onClick={() => setAgentEditor({ mode: 'clone', source: profile, id: `${profile.profileId}-clone`, name: `${profile.displayName} clone`, description: profile.description || '', document: '{}' })}>Clone {profile.displayName}</button>
-                {latest?.document ? <button type="button" onClick={() => setAgentEditor({ mode: 'version', source: profile, id: profile.profileId, name: profile.displayName, description: profile.description || '', document: JSON.stringify(latest.document, null, 2) })}>Edit {profile.displayName} as new version</button> : null}
-                <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'validate' })}>Validate {profile.displayName}</button>
-                <button type="button" disabled={profileAction.isPending || !ready} onClick={() => profileAction.mutate({ profile, action: 'smoke' })}>Smoke test {profile.displayName}</button>
-                {latest?.document && (latest.document.source as { bundleArtifactRef?: unknown } | undefined)?.bundleArtifactRef ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'import-bundle' })}>Import bundle for {profile.displayName}</button> : null}
-                {ready && (profile.state !== 'active' || latest.version !== profile.activeVersion) ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'activate' })}>Activate {profile.displayName}</button> : null}
-                {profile.state === 'active' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'disable' })}>Disable {profile.displayName}</button> : null}
-                {profile.state !== 'deprecated' ? <button type="button" disabled={profileAction.isPending} onClick={() => profileAction.mutate({ profile, action: 'deprecate' })}>Deprecate {profile.displayName}</button> : null}
-                {profile.state === 'draft' ? <button type="button" className="destructive" disabled={profileAction.isPending} onClick={() => { if (window.confirm(`Delete unused draft ${profile.displayName}? This cannot be undone.`)) profileAction.mutate({ profile, action: 'delete' }); }}>Delete unused draft {profile.displayName}</button> : null}
+                <button type="button" aria-label={`View ${profile.displayName}`} onClick={() => setSelectedProfile(profile)}>View</button>
+                <WorkflowActionsMenu
+                  items={profileMenuItems(profile)}
+                  triggerContent={MORE_ICON}
+                  triggerClassName="secondary td-workflow-actions-trigger-compact"
+                  triggerAriaLabel={`More actions for ${profile.displayName}`}
+                  menuAriaLabel={`${profile.displayName} actions`}
+                  emptyMessage="No actions are available."
+                  subject={profile.displayName}
+                />
+                {!ready ? <small className="omnigent-inventory__readiness-note">Validate before smoke test or activation.</small> : null}
               </span>
             );
           }}
@@ -596,11 +696,20 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       </div>
       {selectedProfile ? <section className="card" aria-labelledby="agent-profile-detail-heading">
         <div className="actions"><h3 id="agent-profile-detail-heading">{selectedProfile.displayName} details</h3><button type="button" onClick={() => setSelectedProfile(null)}>Close details</button></div>
-        <p><code>{selectedProfile.profileId}</code> · {selectedProfile.state} · {selectedProfile.versions.length} immutable version{selectedProfile.versions.length === 1 ? '' : 's'}</p>
+        <p>{sentenceCase(selectedProfile.state)} · {selectedProfile.versions.length} version{selectedProfile.versions.length === 1 ? '' : 's'}</p>
+        <RawIdDisclosure label="Profile ID" value={selectedProfile.profileId} />
         <h4>Version history and normalized diff</h4>
         {selectedProfile.versions.map((version, index) => <details key={version.version}><summary>Version {version.version} · {version.digest}</summary><pre>{JSON.stringify(version.document, null, 2)}</pre>{index < selectedProfile.versions.length - 1 && version.document && selectedProfile.versions[index + 1]!.document ? <pre aria-label={`Normalized diff version ${selectedProfile.versions[index + 1]!.version} to ${version.version}`}>{normalizedDocumentDiff(selectedProfile.versions[index + 1]!.document!, version.document)}</pre> : null}</details>)}
-        <h4>Dependent workflows and schedules</h4>{profileUsage.isPending ? <p role="status">Loading usage…</p> : <pre>{JSON.stringify(profileUsage.data || [], null, 2)}</pre>}
-        <h4>Audit history</h4>{profileAudit.isPending ? <p role="status">Loading audit…</p> : <pre>{JSON.stringify(profileAudit.data || [], null, 2)}</pre>}
+        <h4>Dependent workflows and schedules</h4>
+        {profileUsage.isPending ? <p role="status">Loading usage…</p> : profileUsage.isError ? <p role="alert">{profileUsage.error.message}</p> : profileUsage.data?.length ? <>
+          <ul>{profileUsage.data.map((record, index) => <li key={`${String(record.consumerType)}-${String(record.consumerId)}-${index}`}>{sentenceCase(record.consumerType)} · version {String(record.version ?? '—')}</li>)}</ul>
+          <RawRecords label="Raw usage records" records={profileUsage.data} />
+        </> : <p>Not used by any workflow or schedule.</p>}
+        <h4>Audit history</h4>
+        {profileAudit.isPending ? <p role="status">Loading audit…</p> : profileAudit.isError ? <p role="alert">{profileAudit.error.message}</p> : profileAudit.data?.length ? <>
+          <ol>{profileAudit.data.map((event, index) => <li key={`${String(event.action)}-${index}`}>{[sentenceCase(event.action), event.version != null ? `version ${String(event.version)}` : null, formatTimestamp(event.createdAt)].filter(Boolean).join(' · ')}</li>)}</ol>
+          <RawRecords label="Raw audit records" records={profileAudit.data} />
+        </> : <p>No lifecycle events recorded.</p>}
       </section> : null}
     </section> : null}
   </div>;

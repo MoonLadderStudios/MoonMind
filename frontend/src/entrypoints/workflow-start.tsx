@@ -3,6 +3,14 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { ModelSelectionFields } from "../components/workflows/ModelSelectionFields";
+import { CreateOptionDisclosure } from "../components/workflows/CreateOptionDisclosure";
+import {
+  summarizeDependencies,
+  summarizeOverrides,
+  summarizeReport,
+  summarizeSchedule,
+} from "../components/workflows/createDisclosureSummaries";
+import { PageHeader } from "../components/dashboard/PageHeader";
 import { readModelSelection, inheritModelSelection, hasModelSelection } from "../lib/modelSelection";
 import type { ModelSelection } from "../lib/modelSelection";
 import { useQuery } from "@tanstack/react-query";
@@ -11592,12 +11600,16 @@ function WorkflowStartPageContent({
     isTemporalFormBlocked || Boolean(selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ||
     (runtime === "omnigent" && !omnigentSelectionEligible);
   // Closing Advanced mode hides its controls but keeps and submits their
-  // values, so the collapsed toggle reports how many non-default values it holds.
-  const advancedOverrideCount =
-    (priority !== DEFAULT_PRIORITY ? 1 : 0) +
-    (maxAttempts !== DEFAULT_MAX_ATTEMPTS ? 1 : 0) +
-    (runtime === "omnigent" && omnigentLaunchPolicyAuthored ? 1 : 0) +
-    steps.reduce(
+  // values, so the collapsed toggle names each non-default value it holds.
+  const advancedOverridesSummary = summarizeOverrides({
+    priority: priority !== DEFAULT_PRIORITY ? priority : null,
+    maxAttempts: maxAttempts !== DEFAULT_MAX_ATTEMPTS ? maxAttempts : null,
+    hostPolicy:
+      runtime === "omnigent" && omnigentLaunchPolicyAuthored
+        ? selectableOmnigentPolicies.find((policy) => policy.ref === omnigentLaunchPolicyRef)
+            ?.displayName || omnigentLaunchPolicyRef || "default"
+        : null,
+    stepOverrideCount: steps.reduce(
       (count, step) =>
         count +
         advancedStepOverrideCount(
@@ -11605,7 +11617,14 @@ function WorkflowStartPageContent({
           skillsQuery.data?.detailsById[step.skillId.trim()] || null,
         ),
       0,
-    );
+    ),
+  });
+  const dependencyTitles = selectedDependencies.map(
+    (workflowId) =>
+      (dependencyOptionsQuery.data || []).find(
+        (item) => dependencyWorkflowId(item) === workflowId,
+      )?.title || workflowId,
+  );
 
   useEffect(() => {
     if (!showPrimaryCtaArrow || isTemporalFormBlocked) {
@@ -11659,7 +11678,48 @@ function WorkflowStartPageContent({
         data-canonical-create-section="Header"
         aria-label="Header"
       >
-        <h2 className="page-title">{visiblePageTitle}</h2>
+        <PageHeader
+          title={visiblePageTitle}
+          documentTitle={pageTitle}
+          actions={
+            // The Advanced toggle precedes every control it reveals.
+            <div className="queue-advanced-row">
+              <label className="checkbox queue-advanced-checkbox">
+                <input
+                  type="checkbox"
+                  checked={showAdvancedStepOptions}
+                  onChange={(event) => {
+                    const advancedEnabled = event.target.checked;
+                    setShowAdvancedStepOptions(advancedEnabled);
+                    updateDashboardPreferences({
+                      createExpertMode: advancedEnabled,
+                    });
+                  }}
+                />
+                Advanced mode
+              </label>
+              {!showAdvancedStepOptions && advancedOverridesSummary ? (
+                <span className="small queue-advanced-override-count">
+                  {advancedOverridesSummary}
+                </span>
+              ) : null}
+              <InfoTooltip
+                label="Advanced mode info"
+                panelId="queue-advanced-info-panel"
+                title="About advanced mode"
+                className="queue-advanced-info-toggle"
+              >
+                <div className="notice queue-advanced-info-panel">
+                  <p className="small">
+                    Shows optional Skill inputs, skill args, required capabilities,
+                    and worker routing overrides. Harness, publish mode, skills, and
+                    presets already add common capabilities automatically.
+                  </p>
+                </div>
+              </InfoTooltip>
+            </div>
+          }
+        />
       </section>
 
       {pageMode.mode !== "create" && temporalDraftQuery.isLoading ? (
@@ -13228,36 +13288,41 @@ function WorkflowStartPageContent({
             templateMessage ? (
               <div className="stack queue-preset-management-block">
                 {presetCatalogEnabled && presetSaveEnabled ? (
-                  <div
-                    className="actions queue-template-actions queue-preset-management-inline"
-                    aria-label="Preset Management"
+                  <CreateOptionDisclosure
+                    id="presets"
+                    label="Preset management"
+                    summary="Save these steps as a preset, or delete one"
                   >
-                    <strong>Preset Management</strong>
-                    <button
-                      type="button"
-                      id="queue-template-save-current"
-                      className="queue-step-icon-button"
-                      aria-label="Save preset"
-                      title="Save the current steps as a preset"
-                      aria-busy={isSavingPreset}
-                      disabled={isSavingPreset}
-                      onClick={openPresetSaveDialog}
+                    <div
+                      className="actions queue-template-actions queue-preset-management-inline"
+                      aria-label="Preset Management"
                     >
-                      <SaveIcon />
-                    </button>
-                    <button
-                      type="button"
-                      id="queue-template-delete-current"
-                      className="queue-step-icon-button destructive"
-                      aria-label="Delete preset"
-                      aria-busy={isDeletingPreset}
-                      title="Delete an instance preset by name"
-                      disabled={isDeletingPreset}
-                      onClick={openPresetDeleteDialog}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </div>
+                      <button
+                        type="button"
+                        id="queue-template-save-current"
+                        className="queue-step-icon-button"
+                        aria-label="Save preset"
+                        title="Save the current steps as a preset"
+                        aria-busy={isSavingPreset}
+                        disabled={isSavingPreset}
+                        onClick={openPresetSaveDialog}
+                      >
+                        <SaveIcon />
+                      </button>
+                      <button
+                        type="button"
+                        id="queue-template-delete-current"
+                        className="queue-step-icon-button destructive"
+                        aria-label="Delete preset"
+                        aria-busy={isDeletingPreset}
+                        title="Delete an instance preset by name"
+                        disabled={isDeletingPreset}
+                        onClick={openPresetDeleteDialog}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </CreateOptionDisclosure>
                 ) : null}
                 {/* Expand and reapply results report here even when saving
                     presets is unavailable. */}
@@ -13524,52 +13589,22 @@ function WorkflowStartPageContent({
           </div>
         ) : null}
 
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={produceReport}
-            aria-label="Produce report artifact"
-            onChange={(event) => setProduceReport(event.target.checked)}
-          />
-          Report
-        </label>
-        <div className="queue-advanced-row">
-          <label className="checkbox queue-advanced-checkbox">
+        <CreateOptionDisclosure
+          id="report"
+          label="Report"
+          summary={summarizeReport(produceReport)}
+          defaultOpen={produceReport}
+        >
+          <label className="checkbox">
             <input
               type="checkbox"
-              checked={showAdvancedStepOptions}
-              onChange={(event) => {
-                const advancedEnabled = event.target.checked;
-                setShowAdvancedStepOptions(advancedEnabled);
-                updateDashboardPreferences({
-                  createExpertMode: advancedEnabled,
-                });
-              }}
+              checked={produceReport}
+              aria-label="Produce report artifact"
+              onChange={(event) => setProduceReport(event.target.checked)}
             />
-            Advanced mode
+            Produce a report artifact
           </label>
-          {!showAdvancedStepOptions && advancedOverrideCount > 0 ? (
-            <span className="small queue-advanced-override-count">
-              {advancedOverrideCount === 1
-                ? "1 override"
-                : `${advancedOverrideCount} overrides`}
-            </span>
-          ) : null}
-          <InfoTooltip
-            label="Advanced mode info"
-            panelId="queue-advanced-info-panel"
-            title="About advanced mode"
-            className="queue-advanced-info-toggle"
-          >
-            <div className="notice queue-advanced-info-panel">
-              <p className="small">
-                Shows optional Skill inputs, skill args, required capabilities,
-                and worker routing overrides. Harness, publish mode, skills, and
-                presets already add common capabilities automatically.
-              </p>
-            </div>
-          </InfoTooltip>
-        </div>
+        </CreateOptionDisclosure>
         </section>
 
         {pageMode.mode === "create" ? (
@@ -13579,101 +13614,113 @@ function WorkflowStartPageContent({
           data-canonical-create-section="Schedule"
           aria-label="Schedule"
         >
-          <strong>Schedule</strong>
-          <div className="stack">
-            <label>
-              Schedule Mode
-              <select
-                name="scheduleMode"
-                id="schedule-mode-select"
-                value={scheduleMode}
-                onChange={(event) =>
-                  setScheduleMode(event.target.value as ScheduleMode)
-                }
-              >
-                <option value="immediate">Immediate</option>
-                <option value="once">
-                  Deferred (run once at a specific time)
-                </option>
-                <option value="deferred_minutes">
-                  Deferred (run in N minutes)
-                </option>
-                <option value="recurring">
-                  Recurring (create a cron schedule)
-                </option>
-              </select>
-            </label>
-
-            <div
-              id="schedule-once-fields"
-              className={scheduleMode === "once" ? "" : "hidden"}
-            >
+          <CreateOptionDisclosure
+            id="schedule"
+            label="Schedule"
+            summary={summarizeSchedule({
+              mode: scheduleMode,
+              scheduledFor,
+              deferredMinutes: scheduleDeferredMinutes,
+              cron: scheduleCron,
+              timezone: scheduleTimezone,
+            })}
+            defaultOpen={scheduleMode !== "immediate"}
+          >
+            <div className="stack">
               <label>
-                Scheduled For
-                <input
-                  type="datetime-local"
-                  name="scheduledFor"
-                  id="schedule-datetime"
-                  value={scheduledFor}
-                  onChange={(event) => setScheduledFor(event.target.value)}
-                />
-              </label>
-            </div>
-
-            <div
-              id="schedule-deferred-minutes-fields"
-              className={scheduleMode === "deferred_minutes" ? "" : "hidden"}
-            >
-              <label>
-                Minutes from now
-                <input
-                  type="number"
-                  name="scheduleDeferredMinutes"
-                  min="1"
-                  max="525600"
-                  step="1"
-                  placeholder="e.g. 15"
-                  value={scheduleDeferredMinutes}
+                Schedule Mode
+                <select
+                  name="scheduleMode"
+                  id="schedule-mode-select"
+                  value={scheduleMode}
                   onChange={(event) =>
-                    setScheduleDeferredMinutes(event.target.value)
+                    setScheduleMode(event.target.value as ScheduleMode)
                   }
-                />
+                >
+                  <option value="immediate">Immediate</option>
+                  <option value="once">
+                    Deferred (run once at a specific time)
+                  </option>
+                  <option value="deferred_minutes">
+                    Deferred (run in N minutes)
+                  </option>
+                  <option value="recurring">
+                    Recurring (create a cron schedule)
+                  </option>
+                </select>
               </label>
-            </div>
 
-            <div
-              id="schedule-recurring-fields"
-              className={scheduleMode === "recurring" ? "stack" : "hidden"}
-            >
-              <label>
-                Cron Expression
-                <input
-                  name="scheduleCron"
-                  placeholder="*/30 * * * *"
-                  value={scheduleCron}
-                  onChange={(event) => setScheduleCron(event.target.value)}
-                />
-              </label>
-              <label>
-                Timezone
-                <input
-                  name="scheduleTimezone"
-                  placeholder="UTC"
-                  value={scheduleTimezone}
-                  onChange={(event) => setScheduleTimezone(event.target.value)}
-                />
-              </label>
-              <label>
-                Schedule Name
-                <input
-                  name="scheduleName"
-                  placeholder="My recurring workflow"
-                  value={scheduleName}
-                  onChange={(event) => setScheduleName(event.target.value)}
-                />
-              </label>
+              <div
+                id="schedule-once-fields"
+                className={scheduleMode === "once" ? "" : "hidden"}
+              >
+                <label>
+                  Scheduled For
+                  <input
+                    type="datetime-local"
+                    name="scheduledFor"
+                    id="schedule-datetime"
+                    value={scheduledFor}
+                    onChange={(event) => setScheduledFor(event.target.value)}
+                  />
+                </label>
+              </div>
+
+              <div
+                id="schedule-deferred-minutes-fields"
+                className={scheduleMode === "deferred_minutes" ? "" : "hidden"}
+              >
+                <label>
+                  Minutes from now
+                  <input
+                    type="number"
+                    name="scheduleDeferredMinutes"
+                    min="1"
+                    max="525600"
+                    step="1"
+                    placeholder="e.g. 15"
+                    value={scheduleDeferredMinutes}
+                    onChange={(event) =>
+                      setScheduleDeferredMinutes(event.target.value)
+                    }
+                  />
+                </label>
+              </div>
+
+              <div
+                id="schedule-recurring-fields"
+                className={scheduleMode === "recurring" ? "stack" : "hidden"}
+              >
+                <label>
+                  Cron Expression
+                  <input
+                    name="scheduleCron"
+                    placeholder="*/30 * * * *"
+                    value={scheduleCron}
+                    onChange={(event) => setScheduleCron(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Timezone
+                  <input
+                    name="scheduleTimezone"
+                    placeholder="UTC"
+                    value={scheduleTimezone}
+                    onChange={(event) => setScheduleTimezone(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Schedule Name
+                  <input
+                    name="scheduleName"
+                    placeholder="My recurring workflow"
+                    value={scheduleName}
+                    onChange={(event) => setScheduleName(event.target.value)}
+                  />
+                </label>
+              </div>
             </div>
-          </div>
+          </CreateOptionDisclosure>
         </section>
         ) : null}
 
@@ -13682,90 +13729,103 @@ function WorkflowStartPageContent({
           data-canonical-create-section="Dependencies"
           aria-label="Dependencies"
         >
-          <div className="queue-dependencies-heading">
-            <strong>Dependencies</strong>
-            <InfoTooltip
-              label="Dependencies info"
-              panelId="queue-dependencies-info-panel"
-              title="About dependencies"
-              className="queue-dependencies-info-toggle"
-            >
-              <div className="notice queue-dependencies-info-panel">
-                <p className="small">
-                  Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
-                  prerequisites. The new run stays blocked until each
-                  prerequisite finishes in <code>completed</code> state.
-                </p>
-                <p className="small">
-                  Direct dependencies only. The new run stays blocked while a
-                  prerequisite is running, failed, canceled, terminated, timed
-                  out, or unresolvable, and unblocks once the prerequisite
-                  completes successfully. Cancel this run or bypass the
-                  dependency to proceed without that prerequisite.
-                </p>
-                <p className="small">
-                  {dependencyOptionsQuery.isLoading
-                    ? "Loading recent runs..."
-                    : dependencyOptionsQuery.isError
-                      ? "Failed to load recent runs. You can still start the workflow without dependencies, or try refreshing."
-                      : `${availableDependencyOptions.length} recent runs available.`}
-                </p>
-              </div>
-            </InfoTooltip>
-          </div>
-          <label htmlFor="queue-dependency-picker">
-            Prerequisite
-            <select
-              id="queue-dependency-picker"
-              value={selectedDependencyWorkflowId}
-              onChange={(event) => {
-                const workflowId = event.target.value;
-                if (workflowId) {
-                  addDependency(workflowId);
-                } else {
-                  setSelectedDependencyWorkflowId("");
-                  setDependencyMessage(null);
-                }
-              }}
-            >
-              <option value="">Select prerequisite to add...</option>
-              {availableDependencyOptions.map((item) => (
-                <option key={dependencyWorkflowId(item)} value={dependencyWorkflowId(item)}>
-                  {`${item.title} (${dependencyWorkflowId(item)})`}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selectedDependencies.length > 0 ? (
-            <ul className="list" id="queue-dependency-list">
-              {selectedDependencies.map((workflowId) => {
-                const match = (dependencyOptionsQuery.data || []).find(
-                  (item) => dependencyWorkflowId(item) === workflowId,
-                );
-                return (
-                  <li key={workflowId}>
-                    <span>
-                      <strong>{match?.title || workflowId}</strong>{" "}
-                      <code>{workflowId}</code>
-                    </span>
-                    <button
-                      type="button"
-                      className="queue-step-icon-button destructive"
-                      aria-label={`Remove prerequisite ${workflowId}`}
-                      title={`Remove prerequisite ${workflowId}`}
-                      onClick={() => removeDependency(workflowId)}
-                    >
-                      <CloseIcon />
-                      <span className="sr-only">{`Remove prerequisite ${workflowId}`}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
-          {dependencyMessage ? (
-            <p className="notice error">{dependencyMessage}</p>
-          ) : null}
+          <CreateOptionDisclosure
+            id="dependencies"
+            label="Dependencies"
+            summary={summarizeDependencies(dependencyTitles)}
+            defaultOpen={selectedDependencies.length > 0}
+          >
+            <div className="queue-dependencies-heading">
+              <span className="small">
+                The new run waits until each prerequisite completes.
+              </span>
+              <InfoTooltip
+                label="Dependencies info"
+                panelId="queue-dependencies-info-panel"
+                title="About dependencies"
+                className="queue-dependencies-info-toggle"
+              >
+                <div className="notice queue-dependencies-info-panel">
+                  <p className="small">
+                    Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
+                    prerequisites. The new run stays blocked until each
+                    prerequisite finishes in <code>completed</code> state.
+                  </p>
+                  <p className="small">
+                    Direct dependencies only. The new run stays blocked while a
+                    prerequisite is running, failed, canceled, terminated, timed
+                    out, or unresolvable, and unblocks once the prerequisite
+                    completes successfully. Cancel this run or bypass the
+                    dependency to proceed without that prerequisite.
+                  </p>
+                  <p className="small">
+                    {dependencyOptionsQuery.isLoading
+                      ? "Loading recent runs..."
+                      : dependencyOptionsQuery.isError
+                        ? "Failed to load recent runs. You can still start the workflow without dependencies, or try refreshing."
+                        : `${availableDependencyOptions.length} recent runs available.`}
+                  </p>
+                </div>
+              </InfoTooltip>
+            </div>
+            <label htmlFor="queue-dependency-picker">
+              Prerequisite
+              <select
+                id="queue-dependency-picker"
+                value={selectedDependencyWorkflowId}
+                onChange={(event) => {
+                  const workflowId = event.target.value;
+                  if (workflowId) {
+                    addDependency(workflowId);
+                  } else {
+                    setSelectedDependencyWorkflowId("");
+                    setDependencyMessage(null);
+                  }
+                }}
+              >
+                <option value="">Select prerequisite to add...</option>
+                {availableDependencyOptions.map((item) => (
+                  <option
+                    key={dependencyWorkflowId(item)}
+                    value={dependencyWorkflowId(item)}
+                    title={dependencyWorkflowId(item)}
+                  >
+                    {item.title || dependencyWorkflowId(item)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedDependencies.length > 0 ? (
+              <ul className="list" id="queue-dependency-list">
+                {selectedDependencies.map((workflowId) => {
+                  const match = (dependencyOptionsQuery.data || []).find(
+                    (item) => dependencyWorkflowId(item) === workflowId,
+                  );
+                  return (
+                    <li key={workflowId}>
+                      <span>
+                        <strong>{match?.title || workflowId}</strong>{" "}
+                        <code className="small">{workflowId}</code>
+                      </span>
+                      <button
+                        type="button"
+                        className="queue-step-icon-button destructive"
+                        aria-label={`Remove prerequisite ${workflowId}`}
+                        title={`Remove prerequisite ${workflowId}`}
+                        onClick={() => removeDependency(workflowId)}
+                      >
+                        <CloseIcon />
+                        <span className="sr-only">{`Remove prerequisite ${workflowId}`}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+            {dependencyMessage ? (
+              <p className="notice error">{dependencyMessage}</p>
+            ) : null}
+          </CreateOptionDisclosure>
         </section>
 
         <section
