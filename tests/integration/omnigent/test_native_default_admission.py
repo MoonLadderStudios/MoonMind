@@ -4,11 +4,12 @@ Reuses the composed native journey's controlled transports and real storage.
 This joins API admission and bootstrap inventory to the immutable plan actually
 used by the shared durable lifecycle. Temporal scheduling/grants remain controlled;
 this does not qualify an installed image or execute a paid provider turn.
-Generic admission retains the shared fixture's explicit Codex opt-in. A separate
-unqualified Codex control preserves the current profile-bound plan owner.
+No generic Codex opt-in is supplied. A separate explicit-false control preserves
+the supported profile-bound compatibility choice.
 """
 
 import hashlib
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -56,7 +57,7 @@ session_factory = native_fixture.session_factory
 
 
 @pytest.mark.parametrize(
-    "native_journey,generic_codex_qualified",
+    "native_journey,shared_default",
     [
         ("codex-native", True),
         ("codex-native", False),
@@ -67,15 +68,17 @@ session_factory = native_fixture.session_factory
 )
 async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
     native_journey,
-    generic_codex_qualified,
+    shared_default,
     monkeypatch,
 ):
     journey = native_journey
-    if not generic_codex_qualified:
-        monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", raising=False)
+    if shared_default:
+        assert "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED" not in os.environ
+    else:
+        monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
     expected_realizer = (
         "generic-omnigent-host@1"
-        if generic_codex_qualified
+        if shared_default
         else "codex-profile-bound@1"
     )
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
@@ -142,7 +145,7 @@ async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
             admitted[0][0].payload.credentialBindings
             == admitted[1][0].payload.credentialBindings
         )
-    if generic_codex_qualified:
+    if shared_default:
         await _execute_admitted_generic_plan(journey, *admitted[0])
 
 
@@ -180,4 +183,15 @@ async def _execute_admitted_generic_plan(journey, plan, record):
     journey.plan, journey.request = plan, request
     journey.manager.plan, journey.manager.request = plan, request
     journey.docker.host_class, _ = await journey.services.planned_host_resolver(plan)
-    await assert_native_turn_saved_and_cleaned(journey)
+    from tests.integration.omnigent.test_generic_bound_native_chat import (
+        _during_active_session,
+        assert_bound_native_round_trip,
+    )
+
+    await _during_active_session(
+        journey,
+        lambda: assert_bound_native_round_trip(journey),
+        execute=lambda: assert_native_turn_saved_and_cleaned(
+            journey, expected_messages=2
+        ),
+    )

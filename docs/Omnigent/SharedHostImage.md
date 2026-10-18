@@ -71,7 +71,7 @@ saved-work/finalization evidence remains authoritative during discovery gaps.
 
 **One sentence:** One neutral digest-pinned host image carries every approved vendor runtime, while trusted runtime-pack descriptors, separate Host Classes, profile-owned credential materialization, and a gated planner keep harness support, credentials, and lifecycle authority exact.
 
-**One paragraph:** `ghcr.io/moonladderstudios/omnigent-host-moonmind` is the one host image Codex, Claude Code, and OpenCode Host Classes share. A runtime pack (`codex-native-pack@1`, `claude-native-pack@1`, `opencode-native-pack@1`) is the deployment-owned descriptor that declares one vendor runtime's pinned version, supported range, credential-home layout, bounded environment, and readiness probes. `omnigent-codex@1` and `omnigent-claude@1` are separate Host Class templates on the same digest: same image, no shared harness support. `codex-oauth-home@1` and `claude-oauth-home@1` attach the enrollment-owned OAuth credential home with profile-owned semantics (read-write, fenced by generation, detached but preserved on cleanup). The trusted planner routes `codex-native` to `codex-profile-bound@1` until the generic Codex combination is qualified, and `claude-native` to `generic-omnigent-host@1`. Explicit generic Codex selection before qualification, or Claude selection under its explicit stop, fails closed and never falls back.
+**One paragraph:** `ghcr.io/moonladderstudios/omnigent-host-moonmind` is the one host image Codex, Claude Code, and OpenCode Host Classes share. A runtime pack (`codex-native-pack@1`, `claude-native-pack@1`, `opencode-native-pack@1`) is the deployment-owned descriptor that declares one vendor runtime's pinned version, supported range, credential-home layout, bounded environment, and readiness probes. `omnigent-codex@1` and `omnigent-claude@1` are separate Host Class templates on the same digest: same image, no shared harness support. `codex-oauth-home@1` and `claude-oauth-home@1` attach the enrollment-owned OAuth credential home with profile-owned semantics (read-write, fenced by generation, detached but preserved on cleanup). The trusted planner routes both harnesses through `generic-omnigent-host@1` by default. Explicit Codex compatibility selection retains `codex-profile-bound@1`; a rollout stop fails closed unless an explicit supported restore control applies.
 
 The [seven product outcomes](./PrimaryRuntimeProviderStrategy.md#11-seven-required-product-outcomes) are the acceptance contract for this infrastructure. A shared image is not the product outcome by itself: each claimed harness must complete the on-demand launch, bound Workflow Detail interaction, recovery, durable-evidence, and cleanup journey. Runtime and one Profile remain the ordinary choices; the image, Host Class, runtime pack, materializer, and execution configuration resolve behind that selection.
 
@@ -205,13 +205,13 @@ An existing Codex or Claude Code OAuth Provider Profile remains the account and 
 
 ## 5. Realizer admission
 
-The trusted planner (never the workflow) selects the execution realizer. The gates below describe the currently implemented contract and remain authoritative until their owning migrations land; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target.
+The trusted planner selects the execution realizer through the existing rollout policy.
 
-- `codex-native` keeps `codex-profile-bound@1` until the operator sets `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=true` after exact shared-image Codex evidence passes. Before then, an explicit `generic-omnigent-host@1` Codex selection fails closed.
+- `codex-native` uses `generic-omnigent-host@1` without an opt-in. Explicit `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` preserves the profile-bound compatibility default; the generic-admission stop control does not implicitly restore it.
 - `claude-native` routes to `generic-omnigent-host@1` by default. `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED` defaults to true; explicit false is an emergency stop under which planning a `claude-native` combination fails closed rather than advertising the target.
 - Those operator flags are inputs to the versioned runtime-provider rollout policy, which is the one authority that decides whether a combination is a default, an explicit-only choice, a labeled compatibility path, or unavailable. See [`docs/Omnigent/RuntimeProviderRollout.md`](./RuntimeProviderRollout.md).
 
-The Codex gate defaults to false and the Claude gate to true. No generic plan silently falls back to a direct, legacy, or another-harness path: a failed generic launch returns a typed terminal failure through the same plan and fenced binding.
+Both admission settings default to true. No generic plan silently falls back to a direct, legacy, or another-harness path: a failed generic launch returns a typed terminal failure through the same plan and fenced binding.
 
 ## 6. Implementation mechanisms and evidence-gated outcomes
 

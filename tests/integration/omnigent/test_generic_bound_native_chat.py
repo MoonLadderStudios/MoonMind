@@ -74,7 +74,7 @@ def _application(store, base_url):
     return app
 
 
-async def _during_active_session(journey, callback):
+async def _during_active_session(journey, callback, *, execute=None):
     errors = []
     called = []
 
@@ -86,7 +86,11 @@ async def _during_active_session(journey, callback):
             errors.append(exc)
 
     journey.server.on_first_message = active
-    result = await journey.realizer.execute(journey.request, journey.plan)
+    result = await (
+        execute()
+        if execute is not None
+        else journey.realizer.execute(journey.request, journey.plan)
+    )
     if errors:
         raise errors[0]
     assert called and result.failure_class is None, result
@@ -123,84 +127,88 @@ async def test_attested_generic_native_binding_reads_and_sends(
 ):
     journey = native_journey
     _select_request_plan_shape(journey, explicit_binding)
-    store = OmnigentBridgeSessionStore(session_factory)
+    await _during_active_session(
+        journey, lambda: assert_bound_native_round_trip(journey)
+    )
+
+
+async def assert_bound_native_round_trip(journey):
+    """Observe a useful response and an idempotent retry on the same live binding."""
+    store = OmnigentBridgeSessionStore(journey.session_factory)
     follow_up = _message("Return only the heading of the generated report.")
 
-    async def active():
-        row = await store.resolve_projection_session(
-            idempotency_key=journey.request.idempotency_key
+    row = await store.resolve_projection_session(
+        idempotency_key=journey.request.idempotency_key
+    )
+    resolution = await store.resolve_chat_binding(
+        workflow_id=row.moonmind_workflow_id
+    )
+    assert resolution.read_only is False
+    assert resolution.capabilities["viewTranscript"] is True
+    assert resolution.capabilities["sendMessage"] is True
+    binding_id = row.chat_binding_id
+    base_url = os.environ["OMNIGENT_SERVER_URL"]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_application(store, base_url)),
+        base_url="http://moonmind.test",
+    ) as client:
+        document = await client.get(
+            f"/omnigent-ui/workflow-chat/{binding_id}?embedded=1"
         )
-        resolution = await store.resolve_chat_binding(
-            workflow_id=row.moonmind_workflow_id
+        assert document.status_code == 200
+        assert '"sendMessage":true' in document.text
+        path = f"/api/workflow-chat-bindings/{binding_id}/omnigent/v1/sessions/{binding_id}"
+        response = await client.get(path)
+        assert response.status_code == 200, response.text
+        assert response.json()["id"] == binding_id
+        assert response.json()["status"] == "running"
+        response = await client.post(
+            path + "/events",
+            json=follow_up,
+            headers={"Idempotency-Key": "bound-follow-up"},
         )
-        assert resolution.read_only is False
-        assert resolution.capabilities["viewTranscript"] is True
-        assert resolution.capabilities["sendMessage"] is True
-        binding_id = row.chat_binding_id
-        base_url = os.environ["OMNIGENT_SERVER_URL"]
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=_application(store, base_url)),
-            base_url="http://moonmind.test",
-        ) as client:
-            document = await client.get(
-                f"/omnigent-ui/workflow-chat/{binding_id}?embedded=1"
-            )
-            assert document.status_code == 200
-            assert '"sendMessage":true' in document.text
-            path = f"/api/workflow-chat-bindings/{binding_id}/omnigent/v1/sessions/{binding_id}"
-            response = await client.get(path)
-            assert response.status_code == 200, response.text
-            assert response.json()["id"] == binding_id
-            assert response.json()["status"] == "running"
-            response = await client.post(
-                path + "/events",
-                json=follow_up,
-                headers={"Idempotency-Key": "bound-follow-up"},
-            )
-            assert response.status_code == 200, response.text
-            assert response.json() == {"queued": True, "pending_id": "pending-2"}
-            # Queue acceptance is not answer completion. Observe the actual
-            # consumed input and a distinct useful response through the bridge.
-            transcript = await client.get(path)
-            assert transcript.status_code == 200, transcript.text
-            items = transcript.json()["items"]
-            user_item = next(
-                item
-                for item in items
-                if item["data"]
-                == {"role": "user", "content": follow_up["data"]["content"]}
-            )
-            answers = [item for item in items if item["data"]["role"] == "assistant"]
-            assert len(answers) == 1, "queued follow-up produced no distinct answer"
-            assert answers[0]["data"]["content"] == [
-                {"type": "output_text", "text": "# Native generated result"}
-            ]
-            assert answers[0]["id"] != user_item["id"]
-            assert items.index(user_item) < items.index(answers[0])
-            assert transcript.json()["pending_inputs"] == []
-            event_count = len(journey.server.events)
-            replay = await client.post(
-                path + "/events",
-                json=follow_up,
-                headers={"Idempotency-Key": "bound-follow-up"},
-            )
-            assert replay.status_code == 200, replay.text
-            assert len(journey.server.events) == event_count
-            replay_transcript = await client.get(path)
-            assert replay_transcript.status_code == 200, replay_transcript.text
-            assert replay_transcript.json()["items"] == items
-            assert event_count == 2
-            assert (
-                journey.server.events[-1]["data"]["content"][0]["text"]
-                == follow_up["data"]["content"][0]["text"]
-            )
-            assert "sessions.get" in journey.server.route_calls
-            foreign = await client.get(
-                path.replace(f"/sessions/{binding_id}", "/sessions/foreign-session")
-            )
-            assert foreign.status_code in {403, 404}
-
-    await _during_active_session(journey, active)
+        assert response.status_code == 200, response.text
+        assert response.json() == {"queued": True, "pending_id": "pending-2"}
+        # Queue acceptance is not answer completion. Observe the actual
+        # consumed input and a distinct useful response through the bridge.
+        transcript = await client.get(path)
+        assert transcript.status_code == 200, transcript.text
+        items = transcript.json()["items"]
+        user_item = next(
+            item
+            for item in items
+            if item["data"]
+            == {"role": "user", "content": follow_up["data"]["content"]}
+        )
+        answers = [item for item in items if item["data"]["role"] == "assistant"]
+        assert len(answers) == 1, "queued follow-up produced no distinct answer"
+        assert answers[0]["data"]["content"] == [
+            {"type": "output_text", "text": "# Native generated result"}
+        ]
+        assert answers[0]["id"] != user_item["id"]
+        assert items.index(user_item) < items.index(answers[0])
+        assert transcript.json()["pending_inputs"] == []
+        event_count = len(journey.server.events)
+        replay = await client.post(
+            path + "/events",
+            json=follow_up,
+            headers={"Idempotency-Key": "bound-follow-up"},
+        )
+        assert replay.status_code == 200, replay.text
+        assert len(journey.server.events) == event_count
+        replay_transcript = await client.get(path)
+        assert replay_transcript.status_code == 200, replay_transcript.text
+        assert replay_transcript.json()["items"] == items
+        assert event_count == 2
+        assert (
+            journey.server.events[-1]["data"]["content"][0]["text"]
+            == follow_up["data"]["content"][0]["text"]
+        )
+        assert "sessions.get" in journey.server.route_calls
+        foreign = await client.get(
+            path.replace(f"/sessions/{binding_id}", "/sessions/foreign-session")
+        )
+        assert foreign.status_code in {403, 404}
 
 
 async def _authority_records(store, row):
