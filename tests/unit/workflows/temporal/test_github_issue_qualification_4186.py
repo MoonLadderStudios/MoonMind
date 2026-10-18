@@ -398,7 +398,6 @@ def test_row10_silent_owner_surfaces_attention_without_age_release() -> None:
         intended_to_target="to_available",
         writer_evidence={},
         trusted_handoff_present=False,
-        local_workflow_available=False,
     )
     assert decision.action != recon.ACTION_COMPLETE
     assert decision.action in {

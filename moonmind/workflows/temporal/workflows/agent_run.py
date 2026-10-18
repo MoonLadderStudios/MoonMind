@@ -14,6 +14,7 @@ from temporalio.exceptions import (
     ApplicationError,
     CancelledError,
     TimeoutType,
+    is_cancelled_exception,
 )
 from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 from temporalio.workflow import (
@@ -342,6 +343,12 @@ OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
 # execution Activity starts, so queued work occupies no execution slot.
 OMNIGENT_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-pre-activity-capacity-admission-v1"
+)
+AGENT_RUN_ISSUE_CLAIM_DURABLE_CAPACITY_WAIT_PATCH_ID = (
+    "agent-run-issue-claim-durable-capacity-wait-v1"
+)
+OMNIGENT_DURABLE_CAPACITY_OBSERVATION_PATCH_ID = (
+    "agent-run-omnigent-durable-capacity-observation-v1"
 )
 CODEX_PRE_ACTIVITY_CAPACITY_ADMISSION_PATCH_ID = (
     "agent-run-codex-pre-activity-capacity-admission-v1"
@@ -1231,10 +1238,8 @@ class MoonMindAgentRun:
     def __init__(self):
         self.completion_event = asyncio.Event()
         self.slot_assigned_event = asyncio.Event()
-        # True only while this run is queued for provider/host capacity it has
-        # requested but not been granted. An issue reservation is not renewed
-        # during that wait: the run has started no work, so holding the issue
-        # behind a queue this deployment cannot drain helps nobody.
+        # Retained histories use these fields to replay the former issue-claim
+        # capacity backoff. New runs renew their claim throughout durable waits.
         self._capacity_requested = False
         # True once any provider/host slot has been granted, to this run or
         # to an earlier AgentRun under the same issue claim (the parent marks
@@ -5229,7 +5234,37 @@ class MoonMindAgentRun:
         )
         self._omnigent_capacity_runtime_id = runtime_id
         waited_seconds = 0
+        preserve_request = workflow.patched(
+            OMNIGENT_DURABLE_CAPACITY_OBSERVATION_PATCH_ID
+        )
+        wait_deadline = (
+            workflow.now() + timedelta(seconds=_OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS)
+            if preserve_request
+            else None
+        )
+
+        def remaining_wait():
+            if wait_deadline is None:
+                return _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS - waited_seconds
+            return (wait_deadline - workflow.now()).total_seconds()
+
+        def capacity_timeout():
+            elapsed = (
+                _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS
+                if preserve_request
+                else waited_seconds
+            )
+            return ApplicationError(
+                "Omnigent Provider Profile capacity was not admitted for "
+                f"profile={profile_id} runtime={runtime_id} after "
+                f"{elapsed}s of durable queueing",
+                type="SlotAcquisitionTimeout",
+                non_retryable=True,
+            )
+
         while not self.slot_assigned_event.is_set():
+            if preserve_request and remaining_wait() <= 0:
+                raise capacity_timeout()
             self.run_status = RunStatus.awaiting_slot
             await self._signal_parent_child_state_changed(
                 parent_info,
@@ -5242,28 +5277,51 @@ class MoonMindAgentRun:
             )
             if self.slot_assigned_event.is_set():
                 break
+            if preserve_request and remaining_wait() <= 0:
+                raise capacity_timeout()
             try:
                 await workflow.wait_condition(
                     lambda: self.slot_assigned_event.is_set(),
-                    timeout=timedelta(seconds=_SLOT_WAIT_TIMEOUT_SECONDS),
+                    timeout=timedelta(
+                        seconds=(
+                            min(_SLOT_WAIT_TIMEOUT_SECONDS, remaining_wait())
+                            if preserve_request
+                            else _SLOT_WAIT_TIMEOUT_SECONDS
+                        )
+                    ),
                 )
             except TimeoutError:
                 waited_seconds += _SLOT_WAIT_TIMEOUT_SECONDS
-                if waited_seconds >= _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS:
-                    raise ApplicationError(
-                        "Omnigent Provider Profile capacity was not admitted for "
-                        f"profile={profile_id} runtime={runtime_id} after "
-                        f"{waited_seconds}s of durable queueing",
-                        type="SlotAcquisitionTimeout",
-                        non_retryable=True,
-                    )
+                if remaining_wait() <= 0:
+                    raise capacity_timeout()
                 # The durable request stays queued in the manager; re-assert it
                 # only after confirming the manager is not holding it already.
-                manager_state = await self._manager_state_for_slot_wait(
-                    runtime_id=runtime_id,
-                    requester_workflow_id=workflow.info().workflow_id,
-                    execution_profile_ref=profile_id,
-                )
+                try:
+                    manager_state = await self._manager_state_for_slot_wait(
+                        runtime_id=runtime_id,
+                        requester_workflow_id=workflow.info().workflow_id,
+                        execution_profile_ref=profile_id,
+                    )
+                except CancelledError:
+                    raise
+                except Exception as exc:
+                    if not preserve_request or is_cancelled_exception(exc):
+                        raise
+                    self._get_logger().warning(
+                        "Provider manager %s observation failed; preserving the "
+                        "durable capacity request: %s",
+                        manager_id,
+                        exc,
+                    )
+                    continue
+                if preserve_request:
+                    if remaining_wait() <= 0:
+                        raise capacity_timeout()
+                    if (
+                        manager_state.get("inspection_succeeded") is False
+                        or manager_state.get("error") == "invalid_manager_state_payload"
+                    ):
+                        continue
                 if manager_state.get("requester_pending") is True:
                     continue
                 if self._profile_id_from_manager_lease(manager_state) == profile_id:
@@ -5287,6 +5345,8 @@ class MoonMindAgentRun:
                     lease_metadata=fence_metadata,
                     lease_purpose=lease_purpose,
                 )
+        if preserve_request and remaining_wait() <= 0:
+            raise capacity_timeout()
         admitted_profile_id = str(self._assigned_profile_id or "").strip()
         if admitted_profile_id and admitted_profile_id != profile_id:
             # An explicit Omnigent plan must never execute against a profile the
@@ -7179,11 +7239,22 @@ class MoonMindAgentRun:
                     retry_policy=RetryPolicy(maximum_attempts=1),
                 )
 
-            return await execute_with_issue_lease(lease=lease,
-                execute=lambda: self._run_under_claim(request), renew=renew,
-                # A run queued behind unavailable provider/host capacity has
-                # not started work; it must not keep the issue reserved.
-                should_renew=lambda: not self._capacity_blocked())
+            durable_capacity_wait = workflow.patched(
+                AGENT_RUN_ISSUE_CLAIM_DURABLE_CAPACITY_WAIT_PATCH_ID
+            )
+            return await execute_with_issue_lease(
+                lease=lease,
+                execute=lambda: self._run_under_claim(request),
+                renew=renew,
+                # Capacity is owned by its durable queue. The claim owner
+                # keeps identity/deadline checks without treating a busy slot
+                # as loss of authority. Retain old decisions for replay.
+                should_renew=(
+                    None
+                    if durable_capacity_wait
+                    else lambda: not self._capacity_blocked()
+                ),
+            )
         return await self._run_under_claim(request)
 
     async def _run_under_claim(self, request: AgentExecutionRequest) -> AgentRunResult:

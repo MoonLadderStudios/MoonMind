@@ -678,7 +678,6 @@ async def _reconcile_one_issue(
             "to_closed": "to_closed",
         }.get(normalized_disposition, "")
 
-    manual = not trusted and not known
     decision = recon.decide_issue_reconciliation(
         issue=issue_view,
         intended_from_settled=_string(known.get("intendedFromSettled")),
@@ -688,12 +687,10 @@ async def _reconcile_one_issue(
         preservation_evidence=preservation_evidence,
         proposed_disposition=proposed_disposition,
         trusted_handoff_present=bool(trusted),
-        manual_in_progress=manual,
         operator_hold=bool(retry_history.get("operatorHold")),
         contradiction_observed=(malformed or pr_contradiction),
         pr_state=pr_state,
         remote_handoff=newest or None,
-        local_workflow_available=False,
     )
     outcome.update(action=decision.action, reasonCode=decision.reason_code, summary=decision.summary)
     if (
@@ -802,6 +799,55 @@ async def _reconcile_one_issue(
         return outcome
 
     if decision.action == recon.ACTION_ATTENTION:
+        # Escalation changes admission just as a repair does. Do not leave a
+        # hold from an obsolete observation after an operator or owner moves
+        # the issue forward. Missing MoonMind metadata is not itself a fault.
+        if budget["requests"] + 2 > recon.MAX_SCAN_API_REQUESTS:
+            outcome.update(
+                action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode="request_budget_exhausted",
+                summary="Budget exhausted before attention revalidation; deferred without writes.",
+            )
+            return outcome
+        current = await _fetch_issue(
+            service=service, repository=repository, issue_number=issue_number
+        )
+        _spend()
+        if not current.get("ok"):
+            outcome.update(
+                action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode="attention_read_unknown",
+                summary="Issue re-read unavailable before attention escalation; deferred without writes.",
+            )
+            return outcome
+        current_state, current_names = _label_names(current.get("issue"))
+        current_comments = await service.list_issue_comments(
+            repo=repository, issue_number=issue_number
+        )
+        _spend()
+        if (
+            not isinstance(current_comments, Mapping)
+            or not current_comments.get("ok")
+            or current_comments.get("incomplete")
+            or not isinstance(current_comments.get("comments"), list)
+        ):
+            outcome.update(
+                action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode="attention_read_unknown",
+                summary="Comment re-read unavailable before attention escalation; deferred without writes.",
+            )
+            return outcome
+        if (
+            current_state != read_state
+            or set(current_names) != set(names)
+            or current_comments["comments"] != comments
+        ):
+            outcome.update(
+                action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode="attention_evidence_changed",
+                summary="Issue or comments changed before attention escalation; a later scan reassesses current evidence.",
+            )
+            return outcome
         # Targeted attention escalation (retain old status) + one coalesced
         # observation comment per incident (Req 3 + Req 5).
         ops = recon.targeted_attention_ops(current_labels=names, attention_already_present="status: needs-attention" in {n.lower() for n in names})
