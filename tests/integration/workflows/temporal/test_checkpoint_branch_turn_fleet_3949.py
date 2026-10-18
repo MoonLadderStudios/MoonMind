@@ -41,6 +41,7 @@ from temporalio.worker import (
 from api_service.db.models import (
     TemporalArtifact,
     TemporalExecutionCanonicalRecord,
+    TemporalExecutionRecord,
     TemporalExecutionRemediationLink,
     TemporalWorkflowType,
     WorkflowCheckpointBranch,
@@ -620,6 +621,7 @@ async def test_overlapping_running_claim_preserves_terminal_commit_3949(
         for model in (
             TemporalArtifact,
             TemporalExecutionCanonicalRecord,
+            TemporalExecutionRecord,
             WorkflowCheckpointBranch,
             TemporalExecutionRemediationLink,
             WorkflowCheckpointBranchGitBinding,

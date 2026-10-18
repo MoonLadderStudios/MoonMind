@@ -124,7 +124,7 @@ When authorized, **Continue in a new workflow** creates a linked Workflow Execut
 Linked continuation is not:
 
 - a native chat message,
-- failed-Step recovery,
+- retry from a step,
 - an in-place update of the terminal source,
 - evidence that `SubmitChatInstruction` is enabled.
 

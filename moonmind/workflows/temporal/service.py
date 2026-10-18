@@ -50,7 +50,7 @@ from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
 )
 from moonmind.config.settings import settings
-from moonmind.core.artifacts import canonical_artifact_ref, temporal_artifact_id
+from moonmind.core.artifacts import temporal_artifact_id
 from moonmind.schemas.temporal_models import (
     AGENT_RUN_ID_MEMO_KEYS,
     AGENT_RUN_ID_PARAM_KEYS,
@@ -60,12 +60,8 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_UPDATE_NAMES,
     USER_WORKFLOW_PLAN_SOURCE_ERROR,
     DependencyResolvedSignalPayload,
-    FailedRunRecoveryManifestModel,
-    RecoveryCheckpointModel,
-    RecoverySourceModel,
     has_user_workflow_plan_source,
 )
-from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
 from moonmind.security import scan_outbound_text
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.statuses.compat import (
@@ -80,10 +76,6 @@ from moonmind.workflows.executions.repository_contract import (
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
-from moonmind.workflows.temporal.activity_catalog import (
-    TemporalActivityCatalogError,
-    build_default_activity_catalog,
-)
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactAuthorizationError,
@@ -93,8 +85,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactStateError,
     TemporalArtifactValidationError,
 )
-from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
@@ -126,9 +118,6 @@ from moonmind.statuses.workflow import (
     WORKFLOW_STATE_TO_CLOSE_STATUS,
     coerce_workflow_state,
 )
-from moonmind.workflows.executions.checkpoint_resume_admission import (
-    AdmittedCheckpointResumeDecision,
-)
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
@@ -144,6 +133,7 @@ from moonmind.workflows.executions.title_derivation import (
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationLifecyclePublisher,
+    load_remediation_target,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -383,6 +373,8 @@ ALLOWED_REMEDIATION_MODES = frozenset(
     {"snapshot", "live_follow", "snapshot_then_follow"}
 )
 MAX_REMEDIATION_STEP_SELECTORS = 25
+# Closed runs are queried by replaying their history on a worker.
+_REMEDIATION_STEP_LEDGER_QUERY_TIMEOUT_SECONDS = 15.0
 MAX_REMEDIATION_CHECKPOINT_BRANCH_LINKS = 10
 MAX_REMEDIATION_CHECKPOINT_BRANCH_TURNS = 25
 MAX_REMEDIATION_CHECKPOINT_BRANCH_ARTIFACTS = 500
@@ -433,20 +425,6 @@ def _recovery_source_block_from_record(record: TemporalExecutionRecord) -> Mappi
     if isinstance(recovery_source, Mapping):
         return recovery_source
     return {}
-
-
-def _recovery_plan_digest_from_record(record: TemporalExecutionRecord) -> str | None:
-    memo = dict(getattr(record, "memo", None) or {})
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    resume_block = _recovery_source_block_from_record(record)
-    return _first_nonempty_text(
-        memo.get("resume_plan_digest"),
-        memo.get("resumePlanDigest"),
-        memo.get("plan_digest"),
-        search_attributes.get("mm_recovery_plan_digest"),
-        resume_block.get("sourcePlanDigest"),
-        resume_block.get("source_plan_digest"),
-    )
 
 
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
@@ -590,8 +568,20 @@ class TemporalExecutionRerunPlanError(TemporalExecutionValidationError):
         }
 
 
-class TemporalExecutionRecoveryCheckpointError(TemporalExecutionValidationError):
-    """Raised when failed-step Recovery checkpoint evidence is missing or invalid."""
+class TemporalExecutionRetryUnavailableError(TemporalExecutionValidationError):
+    """Raised when a closed run cannot be retried from the requested step."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @property
+    def detail(self) -> dict[str, Any]:
+        return {
+            "code": "retry_from_step_unavailable",
+            "reason": self.reason,
+            "message": str(self),
+        }
 
 
 class TemporalExecutionHistoricalTypeError(TemporalExecutionValidationError):
@@ -715,7 +705,23 @@ class TemporalExecutionService:
             artifact_service=TemporalArtifactService(
                 TemporalArtifactRepository(self._session)
             ),
+            step_ledger_loader=self._query_step_ledger_rows,
         )
+
+    async def _query_step_ledger_rows(
+        self, workflow_id: str, run_id: str | None
+    ) -> list[Mapping[str, Any]]:
+        handle = await self._client_adapter.get_workflow_handle(
+            workflow_id, run_id=run_id
+        )
+        payload = await asyncio.wait_for(
+            handle.query("get_step_ledger"),
+            timeout=_REMEDIATION_STEP_LEDGER_QUERY_TIMEOUT_SECONDS,
+        )
+        steps = payload.get("steps") if isinstance(payload, Mapping) else None
+        if not isinstance(steps, list):
+            return []
+        return [row for row in steps if isinstance(row, Mapping)]
 
     async def check_system_paused(self) -> bool:
         """Return True if the system-wide worker pause singleton is active.
@@ -1055,13 +1061,20 @@ class TemporalExecutionService:
                 "workflow.publish.mode is unsupported for remediation."
             )
 
-        target_record = await self._session.get(
-            TemporalExecutionCanonicalRecord, target_workflow_id
+        target_record = await load_remediation_target(
+            self._session, target_workflow_id
         )
         if target_record is None:
             raise TemporalExecutionValidationError(
                 f"Remediation target not found: {target_workflow_id}"
             )
+        if isinstance(target_record, TemporalExecutionCanonicalRecord) and (
+            await self._session.get(TemporalExecutionRecord, target_workflow_id)
+            is None
+        ):
+            # The link is keyed to the target's projection row; repair it in
+            # the same transaction as the link.
+            await self._upsert_projection_from_source(target_record)
         if not self._can_reference_remediation_target(
             target_record,
             owner_id=owner_id,
@@ -1395,11 +1408,11 @@ class TemporalExecutionService:
     def _target_step_selector_identity(
         cls, record: TemporalExecutionCanonicalRecord
     ) -> dict[str, Any]:
-        """Collect target-owned selector identity from canonical persisted state.
+        """Collect target-owned selector identity from persisted target state.
 
         Remediation authoring may copy selectors from several bounded target
         projections, but create admission must never trust those posted values.
-        The canonical record remains the source of truth for exact membership.
+        The persisted target record remains the source of truth for membership.
         """
 
         output: dict[str, Any] = {
@@ -3386,6 +3399,287 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         return response
 
+    async def retry_execution_from_step(
+        self,
+        record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+        *,
+        ledger_rows: Sequence[Mapping[str, Any]],
+        idempotency_key: str,
+        step_id: str | None = None,
+        expected_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Restart a closed run from one of its steps by resetting its history.
+
+        Temporal keeps every event before the chosen step, so completed steps
+        and the workflow state they produced are reused exactly; the chosen
+        step and everything after it run again on the installed code under
+        the same workflow id.
+        """
+
+        from moonmind.workflows.temporal.retry_from_step import (
+            RetryFromStepUnavailable,
+            accepted_retry_step,
+            plan_retry_from_step,
+            replay_failure_before_reset,
+            retry_reset_reason,
+        )
+
+        reject_historical_control(record)
+        if record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW:
+            raise TemporalExecutionRetryUnavailableError(
+                "unsupported_workflow_type",
+                "Retry from a step is available for MoonMind.UserWorkflow runs.",
+            )
+        if idempotency_key and idempotency_key == record.last_update_idempotency_key:
+            cached = record.last_update_response
+            if isinstance(cached, dict) and cached.get("retryFromStep"):
+                return dict(cached)
+        record_run_id = str(record.run_id or "").strip()
+        source_run_id = str(expected_run_id or "").strip() or record_run_id
+        # A run id that moved on may be this request's own retry, accepted by
+        # Temporal before its response was saved; only that is recovered.
+        if source_run_id != record_run_id and not idempotency_key:
+            raise TemporalExecutionTargetRunChangedError(
+                "The run changed before the retry was requested; reload the workflow."
+            )
+        try:
+            description = await self._client_adapter.describe_workflow(
+                record.workflow_id
+            )
+        except Exception as exc:
+            raise TemporalExecutionRetryUnavailableError(
+                "history_unavailable",
+                "Temporal could not describe this run; retry when it is reachable.",
+            ) from exc
+        current_run_id = str(description.run_id or "")
+        successor_run_id = (
+            current_run_id
+            if current_run_id != source_run_id or source_run_id != record_run_id
+            else None
+        )
+        if successor_run_id is None:
+            if description.status not in {
+                WorkflowExecutionStatus.FAILED,
+                WorkflowExecutionStatus.CANCELED,
+                WorkflowExecutionStatus.TERMINATED,
+                WorkflowExecutionStatus.TIMED_OUT,
+            }:
+                raise TemporalExecutionRetryUnavailableError(
+                    "run_not_failed",
+                    "Only a failed, canceled, terminated, or timed-out run can be "
+                    "retried.",
+                )
+            if getattr(description, "parent_id", None):
+                raise TemporalExecutionRetryUnavailableError(
+                    "child_workflow",
+                    "This run belongs to a parent workflow, which owns its retries.",
+                )
+        try:
+            history = await self._client_adapter.fetch_workflow_history(
+                record.workflow_id, run_id=source_run_id
+            )
+        except Exception as exc:
+            if successor_run_id is not None:
+                raise TemporalExecutionTargetRunChangedError(
+                    "A newer run of this workflow exists; reload the workflow."
+                ) from exc
+            raise TemporalExecutionRetryUnavailableError(
+                "history_unavailable",
+                "The run's Temporal history is unavailable, so it cannot be retried "
+                "from a step; rerun it instead.",
+            ) from exc
+        decode_memo_value = (
+            MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payload
+        )
+        if successor_run_id is not None:
+            accepted = None
+            if current_run_id and current_run_id != source_run_id:
+                try:
+                    successor = await self._client_adapter.fetch_workflow_history(
+                        record.workflow_id, run_id=current_run_id
+                    )
+                except Exception:
+                    successor = None
+                if successor is not None:
+                    accepted = accepted_retry_step(
+                        successor_events=successor.events,
+                        source_events=history.events,
+                        ledger_rows=ledger_rows,
+                        source_run_id=source_run_id,
+                        request_id=idempotency_key,
+                        decode_memo_value=decode_memo_value,
+                    )
+            if accepted is None:
+                raise TemporalExecutionTargetRunChangedError(
+                    "A newer run of this workflow exists; reload the workflow."
+                )
+            logger.info(
+                "Retry %s of %s was accepted as run %s before its response was saved",
+                idempotency_key,
+                record.workflow_id,
+                current_run_id,
+            )
+            return await self._save_retry_response(
+                record,
+                idempotency_key=idempotency_key,
+                new_run_id=current_run_id,
+                source_run_id=source_run_id,
+                step_id=accepted.logical_step_id,
+                title=accepted.title,
+            )
+        memo = dict(record.memo or {})
+        finish_summary = getattr(record, "finish_summary_json", None)
+        if not isinstance(finish_summary, Mapping):
+            finish_summary = memo.get("finishSummary") or memo.get("finish_summary")
+        failure = (
+            finish_summary.get("failure") if isinstance(finish_summary, Mapping) else None
+        )
+        failed_step_id = (
+            str(failure.get("stepId") or "").strip() or None
+            if isinstance(failure, Mapping)
+            else None
+        )
+        try:
+            plan = plan_retry_from_step(
+                events=history.events,
+                ledger_rows=ledger_rows,
+                decode_memo_value=decode_memo_value,
+                requested_step_id=step_id,
+                failed_step_id=failed_step_id,
+            )
+        except RetryFromStepUnavailable as exc:
+            raise TemporalExecutionRetryUnavailableError(exc.reason, str(exc)) from exc
+        await self._require_live_issue_claim(record)
+        replay_failure = await replay_failure_before_reset(
+            history, until_event_id=plan.replay_until_event_id
+        )
+        if replay_failure is not None:
+            logger.warning(
+                "Retry of %s from %s refused: installed code cannot replay its history: %s",
+                record.workflow_id,
+                plan.logical_step_id,
+                replay_failure,
+            )
+            raise TemporalExecutionRetryUnavailableError(
+                "history_not_replayable",
+                "The installed MoonMind code cannot replay this run's earlier "
+                "steps, so it cannot continue the run; rerun it instead.",
+            )
+        new_run_id = await self._client_adapter.reset_workflow_execution(
+            record.workflow_id,
+            run_id=source_run_id,
+            workflow_task_finish_event_id=plan.reset_event_id,
+            reason=retry_reset_reason(plan.logical_step_id, idempotency_key),
+            request_id=idempotency_key,
+        )
+        return await self._save_retry_response(
+            record,
+            idempotency_key=idempotency_key,
+            new_run_id=new_run_id,
+            source_run_id=source_run_id,
+            step_id=plan.logical_step_id,
+            title=plan.title,
+        )
+
+    async def _save_retry_response(
+        self,
+        record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+        *,
+        idempotency_key: str,
+        new_run_id: str,
+        source_run_id: str,
+        step_id: str,
+        title: str | None,
+    ) -> dict[str, Any]:
+        response = {
+            "accepted": True,
+            "retryFromStep": True,
+            "workflowId": record.workflow_id,
+            "runId": new_run_id,
+            "sourceRunId": source_run_id,
+            "stepId": step_id,
+            "stepTitle": title,
+            "message": f"Retrying from {title or step_id}; earlier steps are kept.",
+        }
+        if idempotency_key:
+            record.last_update_idempotency_key = idempotency_key
+            record.last_update_response = dict(response)
+        await self._session.commit()
+        await self._sync_retried_run_projection(record.workflow_id, new_run_id)
+        return response
+
+    async def _require_live_issue_claim(
+        self,
+        record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    ) -> None:
+        """Refuse a retry whose GitHub issue claim can no longer be renewed.
+
+        The retried steps renew the run's claim. Once its lease expired or the
+        claim was released, that renewal fails and the work would stop, and
+        the issue lifecycle's own continuation owns the issue instead.
+        """
+
+        from api_service.db.models import GitHubIssueClaim
+        from moonmind.workflows.temporal.github_issue_attempts import (
+            parse_attempt_comment,
+        )
+        from moonmind.workflows.temporal.github_issue_claim_lease import expired
+
+        owner = f"{record.namespace or 'default'}/{record.workflow_id}"
+        row = await self._session.get(GitHubIssueClaim, owner)
+        if row is None:
+            return
+        if row.released or row.ownership_ended:
+            raise TemporalExecutionRetryUnavailableError(
+                "issue_claim_released",
+                f"The run released its claim on issue #{row.issue_number}; the "
+                "issue lifecycle continues it from the saved work.",
+            )
+        handoff = parse_attempt_comment(row.comment_body or "").handoff
+        if handoff is None or expired(handoff):
+            raise TemporalExecutionRetryUnavailableError(
+                "issue_claim_expired",
+                f"The run's claim on issue #{row.issue_number} expired; the issue "
+                "lifecycle continues it from the saved work.",
+            )
+
+    async def _sync_retried_run_projection(
+        self, workflow_id: str, run_id: str
+    ) -> None:
+        """Show the retried run as current; we just created it, so it is newer."""
+
+        from api_service.core.sync import (
+            map_temporal_state_to_projection,
+            mutate_execution_projection,
+        )
+
+        try:
+            description = await self._client_adapter.describe_workflow(
+                workflow_id, run_id=run_id
+            )
+            payload = await map_temporal_state_to_projection(description)
+            loaded = bool(payload.pop("_temporal_memo_loaded", False))
+            # The reset keeps the memo and search attributes of the restarted
+            # step, so their mm_updated_at predates the failure. The reset is
+            # positive successor evidence for the new run.
+            payload["updated_at"] = datetime.now(UTC)
+            payload["first_run_id"] = payload.get("first_run_id") or run_id
+            await mutate_execution_projection(
+                self._session,
+                workflow_id=workflow_id,
+                payload=payload,
+                owner="temporal",
+                metadata_loaded=loaded,
+            )
+            await self._session.commit()
+        except Exception as exc:
+            await self._session.rollback()
+            logger.warning(
+                "Projection refresh after retrying %s failed; the next sync repairs it: %s",
+                workflow_id,
+                exc,
+            )
+
     @staticmethod
     def _is_terminal_update_error(exc: Exception) -> bool:
         message = str(exc).strip().lower()
@@ -5139,725 +5433,6 @@ class TemporalExecutionService:
         recovery_provenance["sourceWorkflowId"] = canonical_workflow_id
         recovery_provenance["sourceRunId"] = canonical_run_id
         return recovery_provenance
-
-    async def create_typed_recovery_execution(
-        self,
-        record: TemporalExecutionCanonicalRecord,
-        *,
-        recovery_target: WorkflowRecoveryTargetModel | Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Create exactly one linked destination from an admitted recovery target."""
-
-        try:
-            target = (
-                recovery_target
-                if isinstance(recovery_target, WorkflowRecoveryTargetModel)
-                else WorkflowRecoveryTargetModel.model_validate(recovery_target)
-            )
-            target.require_admitted()
-        except ValidationError as exc:
-            raise TemporalExecutionValidationError(
-                "Typed recovery target is invalid."
-            ) from exc
-        except ValueError as exc:
-            raise TemporalExecutionRecoveryCheckpointError(str(exc)) from exc
-
-        source_run_id = str(record.run_id or "").strip()
-        if record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW:
-            raise TemporalExecutionValidationError(
-                "Typed recovery is only available for MoonMind.UserWorkflow executions."
-            )
-        if record.state not in TERMINAL_WORKFLOW_STATES:
-            raise TemporalExecutionValidationError(
-                "Typed recovery requires an immutable terminal source execution."
-            )
-        if (
-            target.source.workflow_id != record.workflow_id
-            or target.source.run_id != source_run_id
-        ):
-            raise TemporalExecutionValidationError(
-                "Typed recovery source identity does not match the source execution."
-            )
-        if (
-            record.input_ref
-            and target.source.task_input_snapshot_ref != record.input_ref
-            and target.source.task_input_snapshot_ref
-            != str((record.memo or {}).get("task_input_snapshot_ref") or "")
-        ):
-            raise TemporalExecutionValidationError(
-                "Typed recovery task input snapshot does not match the source execution."
-            )
-        if record.plan_ref and target.source.plan_ref not in {None, record.plan_ref}:
-            raise TemporalExecutionValidationError(
-                "Typed recovery plan ref does not match the source execution."
-            )
-        if target.target.kind in {"publication", "restoration_failure"}:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "RECOVERY_PHASE_UNSUPPORTED"
-            )
-        if target.target.kind == "failed_step" and target.preserved_step_refs:
-            # The existing resume path materializes preserved steps from their
-            # expanded identities and output refs. Ref-only typed collections
-            # are not dereferenced by the workflow yet, so admitting them would
-            # repeat already completed work.
-            raise TemporalExecutionRecoveryCheckpointError(
-                "RECOVERY_PHASE_UNSUPPORTED"
-            )
-        trusted_capabilities = resolve_runtime_execution_capabilities(
-            target.destination.runtime_id
-        )
-        if (
-            trusted_capabilities is None
-            or target.capability_snapshot
-            != trusted_capabilities.model_dump(by_alias=True, mode="json")
-        ):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "RECOVERY_CAPABILITY_DIGEST_MISMATCH"
-            )
-        source_artifact_refs = {
-            canonical_artifact_ref(str(ref))
-            for ref in (record.artifact_refs or []) if str(ref).strip()
-        }
-        required_recovery_refs = {
-            canonical_artifact_ref(target.checkpoint.ref),
-            canonical_artifact_ref(target.checkpoint.validation_ref),
-        }
-        if not required_recovery_refs.issubset(source_artifact_refs):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "RECOVERY_CHECKPOINT_INVALID"
-            )
-        await self._validate_readable_temporal_artifact_ref(
-            target.checkpoint.ref,
-            field_name="recoveryTarget.checkpoint.ref",
-        )
-        await self._validate_readable_temporal_artifact_ref(
-            target.checkpoint.validation_ref,
-            field_name="recoveryTarget.checkpoint.validationRef",
-        )
-        existing_destination = await self._session.get(
-            TemporalExecutionCanonicalRecord,
-            target.destination.workflow_id,
-        )
-        if (
-            existing_destination is not None
-            and existing_destination.create_idempotency_key
-            != target.destination.creation_key
-        ):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "RECOVERY_DESTINATION_IDENTITY_MISMATCH"
-            )
-
-        params = dict(record.parameters or {})
-        for key in AGENT_RUN_ID_PARAM_KEYS:
-            params.pop(key, None)
-        frozen_target = target.model_dump(by_alias=True, mode="json")
-        destination_run_id = str(uuid4())
-        workflow_params = dict(_workflow_payload(params))
-        workflow_params["recovery"] = {
-            "schemaVersion": target.schema_version,
-            "kind": target.target.kind,
-            "phase": target.continuation.phase,
-            "sourceWorkflowId": target.source.workflow_id,
-            "sourceRunId": target.source.run_id,
-            "creationKey": target.destination.creation_key,
-        }
-        params.pop("task", None)
-        params["workflow"] = workflow_params
-        params["recoveryTarget"] = frozen_target
-        params["recoverySource"] = {
-            "sourceWorkflowId": target.source.workflow_id,
-            "sourceRunId": target.source.run_id,
-            "sourcePlanRef": target.source.plan_ref,
-            "sourcePlanDigest": target.source.plan_digest,
-            "recoveryCheckpointRef": target.checkpoint.ref,
-            "failedRunRecoveryManifestRef": target.checkpoint.validation_ref,
-            "recoveryWorkspace": {
-                "checkpointRef": target.checkpoint.ref,
-                "checkpointKind": target.checkpoint.kind,
-                "checkpointDigest": target.checkpoint.digest,
-                "validationRef": target.checkpoint.validation_ref,
-            },
-            "preservedSteps": [],
-            "preservedStepRefs": list(target.preserved_step_refs),
-            "selectedStartStepId": target.target.logical_step_id,
-            "selectedStartStepExecution": target.target.source_step_execution_id,
-            "recoveryMode": "selected_step",
-        }
-        params["recoveryLineage"] = {
-            "source": target.source.model_dump(by_alias=True, mode="json"),
-            "checkpointRef": target.checkpoint.ref,
-            "checkpointDigest": target.checkpoint.digest,
-            "preservedStepRefs": list(target.preserved_step_refs),
-            "sideEffectDispositionRef": target.side_effect_disposition_ref,
-            "destinationWorkflowId": target.destination.workflow_id,
-            "destinationRunId": destination_run_id,
-            "destinationWorkspaceReservationId": (
-                target.destination.workspace_reservation_id
-            ),
-        }
-
-        created = await self.create_execution(
-            workflow_type=record.workflow_type.value,
-            owner_id=record.owner_id,
-            owner_type=record.owner_type.value if record.owner_type else "user",
-            title=str((record.memo or {}).get("title") or "").strip() or None,
-            input_artifact_ref=record.input_ref,
-            plan_artifact_ref=record.plan_ref,
-            manifest_artifact_ref=record.manifest_ref,
-            failure_policy=None,
-            initial_parameters=params,
-            idempotency_key=target.destination.creation_key,
-            repository=repository_name_from_value(params.get("repository")) or None,
-            integration=None,
-            summary=(
-                f"Typed {target.target.kind} recovery from {record.workflow_id}."
-            ),
-            _workflow_id=target.destination.workflow_id,
-            _run_id=destination_run_id,
-            _publication_identity_source=record,
-        )
-        destination = await self._session.get(
-            TemporalExecutionCanonicalRecord, created.workflow_id
-        )
-        if destination is not None:
-            destination_params = dict(destination.parameters or {})
-            lineage = dict(destination_params.get("recoveryLineage") or {})
-            lineage["destinationRunId"] = created.run_id
-            destination_params["recoveryLineage"] = lineage
-            destination.parameters = destination_params
-            await self._session.flush()
-        return {
-            "accepted": True,
-            "applied": "created_recovery_execution",
-            "targetKind": target.target.kind,
-            "continuationPhase": target.continuation.phase,
-            "source": {
-                "workflowId": record.workflow_id,
-                "runId": source_run_id,
-            },
-            "execution": {
-                "workflowId": created.workflow_id,
-                "runId": created.run_id,
-                "detailHref": f"/workflows/{created.workflow_id}",
-            },
-            "recoveryCheckpointRef": target.checkpoint.ref,
-            "creationKey": target.destination.creation_key,
-        }
-
-    async def create_failed_step_recovery_execution(
-        self,
-        record: TemporalExecutionCanonicalRecord,
-        *,
-        recovery_checkpoint_ref: str | None,
-        idempotency_key: str,
-        checkpoint_payload: Mapping[str, Any] | None = None,
-        failed_run_recovery_manifest_ref: str | None = None,
-        failed_run_recovery_manifest: Mapping[str, Any] | None = None,
-        selected_start_step_id: str | None = None,
-        admitted_checkpoint_resume_decision: AdmittedCheckpointResumeDecision | None = None,
-    ) -> dict[str, Any]:
-        """Create a linked follow-up execution for failed-step recovery."""
-
-        if record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW:
-            raise TemporalExecutionValidationError(
-                "Failed-step recovery is only available for MoonMind.UserWorkflow executions."
-            )
-        if record.state is not MoonMindWorkflowState.FAILED:
-            raise TemporalExecutionValidationError(
-                "Failed-step recovery is only available for failed executions."
-            )
-        if (
-            admitted_checkpoint_resume_decision is not None
-            and not admitted_checkpoint_resume_decision.admitted
-        ):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Checkpoint Resume admission is not eligible."
-            )
-        source_run_id = str(record.run_id or "").strip()
-        if not source_run_id:
-            raise TemporalExecutionValidationError("Recovery source runId is required.")
-
-        memo = dict(record.memo or {})
-        canonical_checkpoint_ref = (
-            str(memo.get("recovery_checkpoint_ref") or "").strip()
-            or str(memo.get("recoveryCheckpointRef") or "").strip()
-            or str(memo.get("resume_checkpoint_ref") or "").strip()
-            or str(memo.get("resumeCheckpointRef") or "").strip()
-        )
-
-        if checkpoint_payload is None:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint payload is required."
-            )
-        manifest_ref = str(failed_run_recovery_manifest_ref or "").strip()
-        if not manifest_ref:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Failed-run recovery manifest ref is required."
-            )
-        if failed_run_recovery_manifest is None:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Failed-run recovery manifest is required."
-            )
-        try:
-            recovery_manifest = FailedRunRecoveryManifestModel.model_validate(
-                failed_run_recovery_manifest
-            )
-        except ValidationError as exc:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Failed-run recovery manifest is invalid."
-            ) from exc
-        manifest_checkpoint_ref = str(
-            recovery_manifest.validation.checkpoint_ref
-            or recovery_manifest.recovery_eligibility.checkpoint_ref
-            or ""
-        ).strip()
-        if not canonical_checkpoint_ref:
-            canonical_checkpoint_ref = manifest_checkpoint_ref
-        if not canonical_checkpoint_ref:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint ref is required."
-            )
-        requested_checkpoint_ref = str(recovery_checkpoint_ref or "").strip()
-        if (
-            requested_checkpoint_ref
-            and requested_checkpoint_ref != canonical_checkpoint_ref
-        ):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint ref does not match source execution."
-            )
-        checkpoint_ref = canonical_checkpoint_ref
-        if not recovery_manifest.resume_allowed:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Failed-run recovery manifest does not allow resume."
-            )
-        eligibility = recovery_manifest.recovery_eligibility
-        if eligibility.requested_action != "resume_from_workspace_checkpoint":
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery manifest does not authorize checkpoint Resume."
-            )
-        immutable_proof = (
-            eligibility.resume_phase,
-            eligibility.checkpoint_boundary,
-            eligibility.checkpoint_kind,
-            eligibility.target_runtime_id,
-            eligibility.capability_set_version,
-            eligibility.capability_digest,
-            eligibility.restore_activity,
-            eligibility.workspace_authority,
-        )
-        # Legacy manifests recorded only requiredBoundary/checkpointRef. A
-        # boundary alone therefore does not opt an old payload into v2 proof
-        # validation; any other proof field does.
-        has_immutable_proof = any(
-            value for index, value in enumerate(immutable_proof) if index != 1
-        )
-        if has_immutable_proof and not all(immutable_proof):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
-            )
-        if (
-            has_immutable_proof
-            and eligibility.checkpoint_boundary != recovery_manifest.validation.boundary
-        ):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "CHECKPOINT_BOUNDARY_INCOMPATIBLE"
-            )
-        if any(
-            item.disposition in {"blocked", "needs_compensation"}
-            for item in recovery_manifest.side_effect_dispositions
-        ):
-            raise TemporalExecutionRecoveryCheckpointError(
-                "CHECKPOINT_SIDE_EFFECT_UNSAFE"
-            )
-        if has_immutable_proof:
-            capabilities = resolve_runtime_execution_capabilities(
-                eligibility.target_runtime_id
-            )
-            if capabilities is None:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING"
-                )
-            if capabilities.capability_digest != eligibility.capability_digest:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH"
-                )
-            if eligibility.checkpoint_kind not in capabilities.checkpoint_restore_kinds:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "CHECKPOINT_KIND_INCOMPATIBLE"
-                )
-            if capabilities.checkpoint_restore_activity != eligibility.restore_activity:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "CHECKPOINT_RESTORE_ROUTE_MISSING"
-                )
-            try:
-                build_default_activity_catalog().resolve_activity(
-                    eligibility.restore_activity
-                )
-            except TemporalActivityCatalogError as exc:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "CHECKPOINT_RESTORE_ROUTE_MISSING"
-                ) from exc
-        if recovery_manifest.workflow_id != record.workflow_id:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Failed-run recovery manifest workflowId does not match source execution."
-            )
-        if recovery_manifest.run_id != source_run_id:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Failed-run recovery manifest runId does not match source execution."
-            )
-        if manifest_checkpoint_ref != checkpoint_ref:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Failed-run recovery manifest checkpoint ref does not match source execution."
-            )
-        try:
-            checkpoint = RecoveryCheckpointModel.model_validate(checkpoint_payload)
-        except ValidationError as exc:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint payload is invalid."
-            ) from exc
-        if checkpoint.source.workflow_id != record.workflow_id:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint workflowId does not match source execution."
-            )
-        if checkpoint.source.run_id != source_run_id:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint runId does not match source execution."
-            )
-        source_snapshot_ref = str(
-            memo.get("task_input_snapshot_ref")
-            or memo.get("taskInputSnapshotRef")
-            or checkpoint.task_input_snapshot_ref
-            or ""
-        ).strip()
-        if not source_snapshot_ref:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Original task input snapshot ref is required for failed-step recovery."
-            )
-        if checkpoint.task_input_snapshot_ref != source_snapshot_ref:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery checkpoint task input snapshot does not match source execution."
-            )
-        source_plan_ref = str(record.plan_ref or "").strip() or None
-        if checkpoint.plan_ref is not None and source_plan_ref is not None:
-            if checkpoint.plan_ref != source_plan_ref:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "Recovery checkpoint plan identity does not match source execution."
-                )
-        source_plan_digest = _recovery_plan_digest_from_record(record)
-        if checkpoint.plan_digest is not None and source_plan_digest is not None:
-            if checkpoint.plan_digest != source_plan_digest:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "Recovery checkpoint plan identity does not match source execution."
-                )
-        checkpoint_failed_step_id = checkpoint.failed_step.logical_step_id
-        checkpoint_failed_step_execution = checkpoint.failed_step.execution_ordinal
-        if not checkpoint_failed_step_id:
-            raise TemporalExecutionRecoveryCheckpointError(
-                "Recovery failed step id is required."
-            )
-        selected_step_id = str(selected_start_step_id or "").strip()
-        recovery_mode = "selected_step" if selected_step_id else "last_failed_step"
-        failed_step_id = checkpoint_failed_step_id
-        failed_step_execution = checkpoint_failed_step_execution
-        preserved_steps = list(checkpoint.preserved_steps)
-        if selected_step_id:
-            if selected_step_id == checkpoint_failed_step_id:
-                recovery_mode = "last_failed_step"
-            else:
-                selected_preserved = next(
-                    (
-                        step
-                        for step in checkpoint.preserved_steps
-                        if step.logical_step_id == selected_step_id
-                    ),
-                    None,
-                )
-                if selected_preserved is None:
-                    raise TemporalExecutionRecoveryCheckpointError(
-                        "Selected start step is not compatible with recovery checkpoint evidence."
-                    )
-                if selected_preserved.order >= checkpoint.failed_step.order:
-                    raise TemporalExecutionRecoveryCheckpointError(
-                        "Selected start step must precede the failed step."
-                    )
-                failed_step_id = selected_preserved.logical_step_id
-                failed_step_execution = selected_preserved.source_execution_ordinal
-                preserved_steps = [
-                    step
-                    for step in checkpoint.preserved_steps
-                    if step.order < selected_preserved.order
-                ]
-
-        params = dict(record.parameters or {})
-        for key in AGENT_RUN_ID_PARAM_KEYS:
-            params.pop(key, None)
-        recovery_source_fields = dict(
-            checkpointSourceWorkflowId=checkpoint.source.workflow_id,
-            checkpointSourceRunId=checkpoint.source.run_id,
-            sideEffectSafe=True,
-            sourceWorkflowId=record.workflow_id,
-            sourceRunId=source_run_id,
-            sourceTaskInputSnapshotRef=source_snapshot_ref,
-            sourcePlanRef=checkpoint.plan_ref or source_plan_ref,
-            sourcePlanDigest=checkpoint.plan_digest,
-            failedStepId=failed_step_id,
-            failedStepExecution=failed_step_execution,
-            recoveryMode=recovery_mode,
-            selectedStartStepId=(
-                failed_step_id if recovery_mode == "selected_step" else None
-            ),
-            selectedStartStepExecution=(
-                failed_step_execution if recovery_mode == "selected_step" else None
-            ),
-            recoveryCheckpointRef=checkpoint_ref,
-            recoveryWorkspace=checkpoint.recovery_workspace,
-            preservedSteps=preserved_steps,
-        )
-        if has_immutable_proof:
-            recovery_source_payload = RecoverySourceModel(
-                recoveryAction="resume_from_workspace_checkpoint",
-                resumePhase=eligibility.resume_phase,
-                targetRuntimeId=eligibility.target_runtime_id,
-                capabilitySetVersion=eligibility.capability_set_version,
-                capabilityDigest=eligibility.capability_digest,
-                checkpointKind=eligibility.checkpoint_kind,
-                checkpointRestoreKinds=eligibility.checkpoint_restore_kinds,
-                checkpointRestoreActivity=eligibility.restore_activity,
-                workspaceAuthority=eligibility.workspace_authority,
-                selectedTargetRuntimeId=eligibility.target_runtime_id,
-                selectedCapabilityDigest=capabilities.capability_digest,
-                registeredRestoreActivity=capabilities.checkpoint_restore_activity,
-                **recovery_source_fields,
-            ).model_dump(by_alias=True, mode="json")
-        else:
-            # Preserve the exact pre-v2 recovery shape for manifests recorded
-            # before immutable runtime proof was introduced.
-            recovery_source_payload = {
-                "kind": "recover_from_failed_step",
-                "sourceWorkflowId": record.workflow_id,
-                "sourceRunId": source_run_id,
-                "sourceTaskInputSnapshotRef": source_snapshot_ref,
-                "sourcePlanRef": checkpoint.plan_ref or source_plan_ref,
-                "sourcePlanDigest": checkpoint.plan_digest,
-                "failedStepId": failed_step_id,
-                "failedStepExecution": failed_step_execution,
-                "recoveryMode": recovery_mode,
-                "selectedStartStepId": (
-                    failed_step_id if recovery_mode == "selected_step" else None
-                ),
-                "selectedStartStepExecution": (
-                    failed_step_execution if recovery_mode == "selected_step" else None
-                ),
-                "recoveryCheckpointRef": checkpoint_ref,
-                "recoveryWorkspace": checkpoint.recovery_workspace,
-                "preservedSteps": [
-                    step.model_dump(by_alias=True, mode="json")
-                    for step in preserved_steps
-                ],
-            }
-        recovery_source_payload["failedRunRecoveryManifestRef"] = manifest_ref
-        # Preserve the validated Omnigent authority snapshot at the Activity
-        # boundary.  The resumed workflow must not silently turn an Omnigent
-        # checkpoint into a fresh profile-bound execution.
-        omnigent_checkpoint = checkpoint_payload.get("omnigentCheckpoint")
-        if omnigent_checkpoint is None:
-            omnigent_checkpoint = checkpoint_payload.get("omnigent_checkpoint")
-        if omnigent_checkpoint is not None:
-            try:
-                from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
-
-                validated_omnigent = OmnigentCheckpointIdentity.model_validate(
-                    omnigent_checkpoint
-                )
-                if (
-                    recovery_mode == "selected_step"
-                    and validated_omnigent.logical_step_id != failed_step_id
-                ):
-                    raise TemporalExecutionRecoveryCheckpointError(
-                        "Selected start step has no matching Omnigent checkpoint evidence."
-                    )
-                recovery_source_payload["omnigentCheckpoint"] = (
-                    validated_omnigent.model_dump(
-                        by_alias=True, mode="json", exclude_none=True
-                    )
-                )
-                task_payload = _workflow_payload(params)
-                runtime_payload = _mapping_payload(task_payload.get("runtime"))
-                instruction_identity = hashlib.sha256(
-                    source_snapshot_ref.encode("utf-8")
-                ).hexdigest()
-                immutable_snapshot = {
-                    "instructionDigest": f"sha256:{instruction_identity}",
-                    "runtimeId": eligibility.target_runtime_id,
-                    "model": str(
-                        runtime_payload.get("model")
-                        or task_payload.get("model")
-                        or params.get("model")
-                        or "default"
-                    ),
-                    "effort": str(
-                        runtime_payload.get("effort")
-                        or task_payload.get("effort")
-                        or params.get("effort")
-                        or "default"
-                    ),
-                    "providerProfileId": validated_omnigent.provider_profile_id,
-                    "launchPolicyRef": validated_omnigent.launch_policy_ref,
-                    "repositoryBranch": validated_omnigent.source_branch,
-                    "publishMode": str(
-                        task_payload.get("publishMode")
-                        or params.get("publishMode")
-                        or "none"
-                    ),
-                }
-                # Pin the checkpoint's validated selection into the authored
-                # launch. A later profile/default lookup must not silently alter
-                # a recovery after the immutable comparison has admitted it.
-                pinned_runtime_payload = dict(runtime_payload)
-                pinned_runtime_payload["model"] = immutable_snapshot["model"]
-                pinned_runtime_payload["effort"] = immutable_snapshot["effort"]
-                task_payload["runtime"] = pinned_runtime_payload
-                task_payload["model"] = immutable_snapshot["model"]
-                task_payload["effort"] = immutable_snapshot["effort"]
-                task_payload["publishMode"] = immutable_snapshot["publishMode"]
-                params[
-                    "workflow" if _mapping_payload(params.get("workflow")) else "task"
-                ] = task_payload
-                # This command preserves the source workflow inputs. Branch
-                # APIs construct a distinct requested snapshot when an operator
-                # changes any immutable dimension.
-                recovery_source_payload["immutableSource"] = immutable_snapshot
-                recovery_source_payload["immutableRequested"] = dict(
-                    immutable_snapshot
-                )
-            except ValidationError as exc:
-                raise TemporalExecutionRecoveryCheckpointError(
-                    "Omnigent recovery checkpoint identity is invalid."
-                ) from exc
-        recovery_source_payload["selectedCheckpointBoundary"] = (
-            recovery_manifest.validation.boundary
-        )
-        if admitted_checkpoint_resume_decision is not None:
-            recovery_source_payload["admittedCheckpointResumeDecision"] = (
-                admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")
-            )
-        if recovery_mode == "last_failed_step":
-            recovery_source_payload.pop("recoveryMode", None)
-            recovery_source_payload.pop("selectedStartStepId", None)
-            recovery_source_payload.pop("selectedStartStepExecution", None)
-        params["recoverySource"] = recovery_source_payload
-
-        workflow_payload = _workflow_payload(params)
-        workflow_params = dict(workflow_payload)
-        workflow_params["recovery"] = {
-            "kind": "recover_from_failed_step",
-            "sourceWorkflowId": record.workflow_id,
-            "sourceRunId": source_run_id,
-        }
-        preserved_step_refs: list[str] = []
-        for preserved_step in preserved_steps:
-            for candidate in (
-                preserved_step.state_checkpoint_ref,
-                preserved_step.workspace_checkpoint_ref,
-                preserved_step.step_checkpoint_ref,
-            ):
-                if candidate and candidate not in preserved_step_refs:
-                    preserved_step_refs.append(candidate)
-            artifacts = preserved_step.artifacts or {}
-            for artifact_ref in artifacts.values():
-                if (
-                    isinstance(artifact_ref, str)
-                    and artifact_ref
-                    and artifact_ref not in preserved_step_refs
-                ):
-                    preserved_step_refs.append(artifact_ref)
-        recovery_workspace = checkpoint.recovery_workspace or {}
-        workspace_policy = resolve_checkpoint_policy(
-            boundary="before_recovery_restoration",
-            recovery_source=recovery_source_payload,
-        ).workspace_policy
-        dependency_signatures = recovery_workspace.get("dependencySignatures")
-        if not isinstance(dependency_signatures, dict):
-            dependency_signatures = {}
-        recover_ref = {
-            "kind": "recover_from_failed_step",
-            "sourceWorkflowId": record.workflow_id,
-            "sourceRunId": source_run_id,
-            "failedStepId": failed_step_id,
-            "failedStepExecution": failed_step_execution,
-            "recoveryCheckpointRef": checkpoint_ref,
-            "checkpointBoundary": "before_recovery_restoration",
-            "taskInputSnapshotRef": source_snapshot_ref,
-            "preservedStepRefs": preserved_step_refs,
-            "dependencySignatures": dependency_signatures,
-            "workspacePolicy": workspace_policy,
-        }
-        if admitted_checkpoint_resume_decision is not None:
-            recover_ref["admittedCheckpointResumeDecision"] = (
-                admitted_checkpoint_resume_decision.model_dump(by_alias=True, mode="json")
-            )
-        recover_ref["failedRunRecoveryManifestRef"] = manifest_ref
-        if recovery_mode == "selected_step":
-            recover_ref["recoveryMode"] = recovery_mode
-            recover_ref["selectedStartStepId"] = failed_step_id
-            recover_ref["selectedStartStepExecution"] = failed_step_execution
-        plan_ref = checkpoint.plan_ref or source_plan_ref
-        if plan_ref:
-            recover_ref["planRef"] = plan_ref
-        if checkpoint.plan_digest:
-            recover_ref["planDigest"] = checkpoint.plan_digest
-        workflow_params["resume"] = recover_ref
-        params.pop("task", None)
-        params["workflow"] = workflow_params
-        title = (
-            str(workflow_params.get("title") or "").strip()
-            or str((record.memo or {}).get("title") or "").strip()
-            or None
-        )
-        repository = repository_name_from_value(params.get("repository")) or None
-        created = await self.create_execution(
-            workflow_type=record.workflow_type.value,
-            owner_id=record.owner_id,
-            owner_type=record.owner_type.value if record.owner_type else "user",
-            title=title,
-            input_artifact_ref=record.input_ref,
-            plan_artifact_ref=record.plan_ref,
-            manifest_artifact_ref=record.manifest_ref,
-            failure_policy=None,
-            initial_parameters=params,
-            idempotency_key=self._recovery_create_idempotency_key(
-                record.workflow_id,
-                idempotency_key,
-            ),
-            repository=repository,
-            integration=None,
-            summary=(
-                f"Recovered from selected step of {record.workflow_id}."
-                if recovery_mode == "selected_step"
-                else f"Recovered from failed step of {record.workflow_id}."
-            ),
-            _recovery_artifact_source=record,
-            _publication_identity_source=record,
-        )
-        return {
-            "accepted": True,
-            "applied": "created_resumed_execution",
-            "source": {
-                "workflowId": record.workflow_id,
-                "runId": source_run_id,
-            },
-            "execution": {
-                "workflowId": created.workflow_id,
-                "runId": created.run_id,
-                "detailHref": f"/workflows/{created.workflow_id}",
-            },
-            "relationship": (
-                "Recovered from selected step"
-                if recovery_mode == "selected_step"
-                else "Recovered from failed step"
-            ),
-            "recoveryCheckpointRef": checkpoint_ref,
-        }
 
     @staticmethod
     def _rerun_create_idempotency_key(

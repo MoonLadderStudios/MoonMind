@@ -1,3 +1,4 @@
+import { responseError } from './api/client';
 import { readModelSelection } from "./modelSelection";
 import { z } from 'zod';
 
@@ -17,7 +18,7 @@ export const ExecutionActionsSchema = z
     canApprove: z.boolean().optional(),
     canPause: z.boolean().optional(),
     canResume: z.boolean().optional(),
-    canResumeFromFailedStep: z.boolean().optional(),
+    canRetryFromStep: z.boolean().optional(),
     canContinueRemediation: z.boolean().optional(),
     canRetryPublication: z.boolean().optional(),
     canPublishSavedWork: z.boolean().optional(),
@@ -109,9 +110,7 @@ const DISABLED_REASON_SENTENCES: Record<string, string> = {
   publication_retry_not_applicable: 'This workflow has no publication to retry.',
   publication_not_failed: 'Publication did not fail, so there is nothing to retry.',
   publication_retry_not_eligible: 'The failed publication cannot be retried.',
-  stale_recovery_evidence: 'The saved recovery evidence is out of date.',
-  recovery_checkpoint_missing: 'No recovery checkpoint was saved for the failed step.',
-  failed_step_identity_missing: 'The failed step could not be identified.',
+  child_workflow: 'This run belongs to a parent workflow, which owns its retries.',
 };
 
 /**
@@ -153,8 +152,7 @@ export type WorkflowActionHandlers = {
   onEditTask: () => void;
   onCompareRun: () => void;
   onRerun: () => void;
-  onResumeFromFailedStep: () => void;
-  onRecoverFromSelectedStep: () => void;
+  onRetryFromStep: () => void;
   onContinueRemediation: () => void;
   onRetryPublication: () => void;
   onPause: () => void;
@@ -184,15 +182,6 @@ export type WorkflowActionMenuBuilderParams = {
   editTaskDisabledReason: string | null;
   /** Display-ready reason for an unavailable Rerun action, or null. */
   rerunDisabledReason: string | null;
-  /**
-   * Number of operator-selected recovery steps. The "Recover from selected step"
-   * action only applies when a step is selected on the detail page, so the list
-   * row passes 0 and that option is omitted.
-   */
-  selectedRecoveryOptionCount: number;
-  selectedRecoveryStepEligible: boolean;
-  /** Display-ready reason for an ineligible selected recovery step. */
-  selectedRecoveryStepDisabledReason: string | null;
   canCreateRemediation: boolean;
   /**
    * List Remediate as unavailable, with a reason, even when the target is not
@@ -225,9 +214,6 @@ export function buildWorkflowActionMenuItems(
     canShowEditWorkflow,
     editTaskDisabledReason,
     rerunDisabledReason,
-    selectedRecoveryOptionCount,
-    selectedRecoveryStepEligible,
-    selectedRecoveryStepDisabledReason,
     canCreateRemediation,
     keepRemediationVisible = false,
     handlers,
@@ -376,6 +362,14 @@ export function buildWorkflowActionMenuItems(
     disabledReason: disabledReason('canRetryPublication'),
     onSelect: handlers.onRetryPublication,
   });
+  // Retry keeps the workflow's recorded inputs, so it does not need editing.
+  addButton({
+    id: 'retry-from-failed-step',
+    label: 'Retry from failed step',
+    available: Boolean(actions.canRetryFromStep),
+    disabledReason: disabledReason('canRetryFromStep'),
+    onSelect: handlers.onRetryFromStep,
+  });
   if (taskEditingOn) {
     addButton({
       id: 'rerun',
@@ -384,22 +378,6 @@ export function buildWorkflowActionMenuItems(
       disabledReason: rerunDisabledReason,
       onSelect: handlers.onRerun,
     });
-    addButton({
-      id: 'resume-from-failed-step',
-      label: 'Resume from failed step',
-      available: Boolean(actions.canResumeFromFailedStep),
-      disabledReason: disabledReason('canResumeFromFailedStep'),
-      onSelect: handlers.onResumeFromFailedStep,
-    });
-    if (actions.canResumeFromFailedStep && selectedRecoveryOptionCount > 0) {
-      addButton({
-        id: 'recover-from-selected-step',
-        label: 'Recover from selected step',
-        available: selectedRecoveryStepEligible,
-        disabledReason: selectedRecoveryStepDisabledReason ?? 'selected step is not eligible',
-        onSelect: handlers.onRecoverFromSelectedStep,
-      });
-    }
   }
   addButton({
     id: 'rename',
@@ -458,6 +436,77 @@ export function buildWorkflowActionMenuItems(
   const sectionOrder = (item: WorkflowActionMenuItem) =>
     WORKFLOW_ACTION_MENU_SECTIONS.indexOf(item.section ?? 'primary');
   return items.sort((left, right) => sectionOrder(left) - sectionOrder(right));
+}
+
+export type RetryFromStepRequest = {
+  apiBase: string;
+  workflowId: string;
+  /** The failed run being retried; a newer run makes the request conflict. */
+  sourceRunId?: string | null;
+  /** Omit to restart from the failed step the server records. */
+  stepId?: string | null;
+};
+
+export type RetryFromStepResult = {
+  workflowId: string;
+  runId: string;
+  sourceRunId: string;
+  stepId: string;
+  stepTitle?: string | null;
+  message: string;
+};
+
+/**
+ * A fixed-length key for one retry intent, so repeated clicks deduplicate and
+ * long workflow or step ids stay within the API's 128-character limit. The
+ * server compares keys per workflow, so a 64-bit hash is ample.
+ */
+export function retryFromStepIdempotencyKey(
+  workflowId: string,
+  sourceRunId?: string | null,
+  stepId?: string | null,
+): string {
+  const identity = [workflowId, sourceRunId || 'latest', stepId || 'failed'].join('\n');
+  // Two FNV-1a passes with different offsets; crypto.subtle needs a secure
+  // context, which a LAN deployment over plain HTTP does not have.
+  const fnv1a = (offset: number) => {
+    let hash = offset;
+    for (let index = 0; index < identity.length; index += 1) {
+      hash ^= identity.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  };
+  return `retry-${fnv1a(0x811c9dc5)}${fnv1a(0x050c5d1f)}`;
+}
+
+/**
+ * Restart a closed run from one of its steps. Earlier steps are kept and the
+ * workflow keeps its id; a refusal throws an ApiError with its reason code.
+ */
+export async function requestRetryFromStep({
+  apiBase,
+  workflowId,
+  sourceRunId,
+  stepId,
+}: RetryFromStepRequest): Promise<RetryFromStepResult> {
+  const response = await fetch(
+    `${apiBase}/executions/${encodeURIComponent(workflowId)}/retry-from-step`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: retryFromStepIdempotencyKey(workflowId, sourceRunId, stepId),
+        ...(sourceRunId ? { sourceRunId } : {}),
+        ...(stepId ? { stepId } : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw await responseError(response);
+  }
+  return response.json();
 }
 
 function coalesceString(...values: unknown[]): string {

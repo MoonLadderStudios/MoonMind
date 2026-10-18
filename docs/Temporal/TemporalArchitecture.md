@@ -277,7 +277,8 @@ Ordinary starts use a new `mm:<uuid>` unless an API idempotency key resolves
 to an existing accepted start; singleton managers use stable IDs with an
 ensure/start-or-signal pattern; schedule runs get a fresh Workflow ID per run
 (§15.1); rerun uses Continue-As-New only where the rerun contract permits; and
-failed-step recovery is a linked follow-up execution. The per-type matrix is
+retry from a step resets the closed run's history, keeping its Workflow ID. The
+per-type matrix is
 in `WorkflowTypeCatalogAndLifecycle.md` and
 `WorkflowRunHistoryAndNewRunSemantics.md`.
 
@@ -652,7 +653,7 @@ Rerun posture:
 
 - active `RequestRerun` may Continue-As-New only where the workflow type supports the [run-history/rerun contract](WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics)
 - terminal `RequestRerun` starts a fresh linked execution (new Workflow ID and Run ID) and leaves the closed source unchanged; clients follow the returned destination
-- failed-step recovery is a separate linked follow-up execution with pinned source Workflow ID and Run ID
+- retry from a step resets a closed run's Temporal history to the step's start under the same Workflow ID; earlier steps are replayed, not repeated
 
 ---
 

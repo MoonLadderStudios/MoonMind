@@ -45,8 +45,7 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 | `POST` | `/api/executions/{workflowId}/integration/poll` | Record integration poll results. |
 | `POST` | `/api/executions/{workflowId}/reschedule` | Change the scheduled time of a scheduled execution. |
 | `POST` | `/api/executions/{workflowId}/rerun` | Create a fresh execution with the original parameters and a new `workflowId`. |
-| `POST` | `/api/executions/{workflowId}/recover-from-failed-step` | Create a linked recovery execution that resumes from the last failed Step using durable checkpoint evidence. |
-| `POST` | `/api/executions/{workflowId}/recover-from-selected-step` | Create a linked recovery execution from an operator-selected eligible Step using pinned source identity and checkpoint evidence. |
+| `POST` | `/api/executions/{workflowId}/retry-from-step` | Reset a failed run's Temporal history to the start of the failed or a chosen Step; same `workflowId`, new `runId`. |
 | `POST` | `/api/executions/{workflowId}/continue` | Create an authorized linked continuation from terminal source evidence when the product exposes **Continue in a new workflow**. |
 
 > There are no `GET /api/executions/{workflowId}/manifest-status` or
@@ -54,16 +53,16 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 > `manifest_ref`/`manifestArtifactRef` reads are served through the
 > execution list/detail projections.
 
-The terminal continuation route leaves the source execution unchanged. It is not an ordinary chat message, not failed-Step recovery, and not proof that the deferred chat-instruction feature is enabled.
+The terminal continuation route leaves the source execution unchanged. It is not an ordinary chat message, not retry from a step, and not proof that the deferred chat-instruction feature is enabled.
 
 Continuation eligibility uses the canonical terminal domain states, including
 `no_commit`. Scheduled
-executions may have no API-created source row: continuation and failed-Step
-recovery read their exact Temporal run's admitted inputs, verify the owner and
-workflow type, and retain current checkpoint and terminal evidence from the
-Temporal-authoritative projection. Missing history returns an actionable
-`recovery_source_unavailable` response; compact Visibility parameters do not
-replace admitted inputs, and recovery does not backfill or mutate the source.
+executions may have no API-created source row: continuation reads its exact
+Temporal run's admitted inputs, verifies the owner and workflow type, and keeps
+current checkpoint and terminal evidence from the Temporal-authoritative
+projection. Missing history returns an actionable `recovery_source_unavailable`
+response; compact Visibility parameters do not replace admitted inputs, and
+continuation does not backfill or mutate the source.
 
 A continuation compiles its newly authored instructions and steps through the
 parameter-backed planning path. It hydrates workflow and top-level settings from
@@ -139,13 +138,11 @@ Full log bodies and diagnostics come from managed-run artifact storage and spool
 
 The Omnigent Bridge separately retains raw and normalized event journals, snapshots, resources, manifests, diagnostics, mutation audit refs, and terminal evidence. The native Chat application presents live state; MoonMind artifacts remain durable workflow evidence.
 
-## 4.1 Recovery behavior
+## 4.1 Retry behavior
 
-Failed `MoonMind.UserWorkflow` executions may expose failed-Step recovery when the source run has an original input snapshot, recovery checkpoint ref, plan identity, workspace checkpoint evidence, and completed prior-Step output refs.
+A failed, canceled, terminated, or timed-out `MoonMind.UserWorkflow` run offers `canRetryFromStep` unless a parent workflow owns it or submission is disabled (`temporal_submit_disabled`). `POST /api/executions/{workflowId}/retry-from-step` takes `idempotencyKey`, an optional `stepId` (default: the earliest failed step), and an optional `sourceRunId` that must still be the latest run unless that run is this request's own accepted retry. It returns `202` with the new `runId`; refusals are `409` with `detail.code = "retry_from_step_unavailable"` and a `reason`. Earlier steps are replayed rather than re-executed, and the run keeps its original input.
 
-The default `recover-from-failed-step` route preserves the original input and starts new execution at the recorded failed Step. The `recover-from-selected-step` route is for intentional earlier recovery: the request includes the source `workflowId`, source `runId`, and `selectedStartStepId`. The service validates those values against canonical source execution and checkpoint evidence before creating linked work.
-
-Recovery routes do not accept edited instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators use edit/rerun flows for those behaviors.
+Retry does not accept edited instructions, attachments, runtime/model settings, dependency changes, or publish changes. Operators use edit/rerun flows for those behaviors. Admission rules live in [Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-retry-from-a-step).
 
 ## 4.2 Workflow Chat behavior
 

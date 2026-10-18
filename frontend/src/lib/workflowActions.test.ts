@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from './api/client';
 import {
   buildRemediationRuntimeRequestFields,
   buildWorkflowActionMenuItems,
   describeWorkflowActionDisabledReason,
   isRemediationEligibleTarget,
+  requestRetryFromStep,
+  retryFromStepIdempotencyKey,
   type ExecutionActionCapabilities,
   type WorkflowActionHandlers,
 } from './workflowActions';
@@ -15,8 +18,7 @@ function noopHandlers(): WorkflowActionHandlers {
     onEditTask: vi.fn(),
     onCompareRun: vi.fn(),
     onRerun: vi.fn(),
-    onResumeFromFailedStep: vi.fn(),
-    onRecoverFromSelectedStep: vi.fn(),
+    onRetryFromStep: vi.fn(),
     onContinueRemediation: vi.fn(),
     onRetryPublication: vi.fn(),
     onPause: vi.fn(),
@@ -45,9 +47,6 @@ function buildParams(
     canShowEditWorkflow: false,
     editTaskDisabledReason: null,
     rerunDisabledReason: null,
-    selectedRecoveryOptionCount: 0,
-    selectedRecoveryStepEligible: false,
-    selectedRecoveryStepDisabledReason: null,
     canCreateRemediation: false,
     handlers: noopHandlers(),
     ...overrides,
@@ -191,13 +190,12 @@ describe('buildWorkflowActionMenuItems', () => {
         canShowEditWorkflow: true,
         editHref: '/tasks/abc/edit',
         compareHref: '/tasks/abc/compare',
-        actions: { canRerun: true, canResumeFromFailedStep: true },
+        actions: { canRerun: true },
       }),
     );
     expect(withEditing.map((item) => item.id)).toEqual([
       'edit-task',
       'rerun',
-      'resume-from-failed-step',
       'compare-run',
     ]);
     expect(withEditing.find((item) => item.id === 'edit-task')?.href).toBe('/tasks/abc/edit');
@@ -260,22 +258,26 @@ describe('buildWorkflowActionMenuItems', () => {
     });
   });
 
-  it('omits recover-from-selected-step unless a recovery option is selected', () => {
-    const base = {
-      taskEditingOn: true,
-      actions: { canResumeFromFailedStep: true } as ExecutionActionCapabilities,
-    };
-    const withoutSelection = buildWorkflowActionMenuItems(buildParams(base));
-    expect(withoutSelection.some((item) => item.id === 'recover-from-selected-step')).toBe(false);
+  it('offers retry from the failed step without requiring task editing', () => {
+    const handlers = noopHandlers();
+    const items = buildWorkflowActionMenuItems(
+      buildParams({ actions: { canRetryFromStep: true }, handlers }),
+    );
+    expect(items.map((item) => item.id)).toEqual(['retry-from-failed-step']);
+    expect(items[0]?.label).toBe('Retry from failed step');
+    items[0]?.onSelect?.();
+    expect(handlers.onRetryFromStep).toHaveBeenCalledOnce();
 
-    const withSelection = buildWorkflowActionMenuItems(
+    const unavailable = buildWorkflowActionMenuItems(
       buildParams({
-        ...base,
-        selectedRecoveryOptionCount: 1,
-        selectedRecoveryStepEligible: true,
+        actions: { canRetryFromStep: false },
+        disabledReason: (key) => (key === 'canRetryFromStep' ? 'child workflow' : null),
       }),
     );
-    expect(withSelection.some((item) => item.id === 'recover-from-selected-step')).toBe(true);
+    expect(unavailable[0]).toMatchObject({
+      id: 'retry-from-failed-step',
+      disabledReason: 'child workflow',
+    });
   });
 
   it('surfaces a disabled reason for unavailable actions that report one', () => {
@@ -406,5 +408,64 @@ describe('MoonLadderStudios/MoonMind#4636 remediation authored selection', () =>
   it.each([{}, { modelTier: 2 }, { model: null, effort: null }, { modelTier: 2, effort: 'max', tierFallback: 'strict' }])('preserves raw selection %j without diagnostic companions', (selection) => {
     const fields = buildRemediationRuntimeRequestFields({ targetRuntime: 'codex_cli', profileId: 'profile', resolvedModel: 'old-model', effort: 'old-effort', inputParameters: { workflow: { runtime: selection } } });
     expect(fields.runtime).toEqual({ mode: 'codex_cli', profileId: 'profile', ...selection });
+  });
+});
+
+describe('requestRetryFromStep', () => {
+  it('sends a bounded idempotency key that is stable per retry intent', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(
+        JSON.stringify({ workflowId: 'w', runId: 'r2', sourceRunId: 'r1', stepId: 's', message: 'ok' }),
+        { status: 202, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    try {
+      const workflowId = `mm:${'w'.repeat(255)}`;
+      const stepId = 's'.repeat(300);
+      await requestRetryFromStep({ apiBase: '/api', workflowId, sourceRunId: 'run-1', stepId });
+      const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
+      // The API accepts at most 128 characters.
+      expect(body.idempotencyKey.length).toBeLessThanOrEqual(128);
+      expect(body.idempotencyKey).toBe(retryFromStepIdempotencyKey(workflowId, 'run-1', stepId));
+      expect(body.stepId).toBe(stepId);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+    expect(retryFromStepIdempotencyKey('w', 'run-1', 'a')).not.toBe(
+      retryFromStepIdempotencyKey('w', 'run-1', 'b'),
+    );
+    expect(retryFromStepIdempotencyKey('w', 'run-1')).not.toBe(
+      retryFromStepIdempotencyKey('w', 'run-2'),
+    );
+  });
+
+  it('reports a refused retry as an API error with its status, code, and message', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: 'retry_from_step_unavailable',
+            reason: 'history_not_replayable',
+            message: 'The run history no longer replays on the installed MoonMind version.',
+          },
+        }),
+        { status: 409, statusText: 'Conflict', headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    try {
+      const error = await requestRetryFromStep({
+        apiBase: '/api',
+        workflowId: 'mm:failed',
+        sourceRunId: 'run-1',
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).status).toBe(409);
+      expect((error as ApiError).code).toBe('retry_from_step_unavailable');
+      expect((error as ApiError).message).toBe(
+        'The run history no longer replays on the installed MoonMind version.',
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

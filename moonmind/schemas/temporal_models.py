@@ -2791,349 +2791,29 @@ class UpdateExecutionRequest(BaseModel):
     title: Optional[str] = Field(None, alias="title")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
-class RecoverFromFailedStepRequest(BaseModel):
-    """Request payload for creating a failed-step recovery follow-up execution."""
 
-    model_config = ConfigDict(
-        populate_by_name=True,
-        extra="allow",
-        json_schema_extra={"additionalProperties": False},
-    )
+class RetryFromStepRequest(BaseModel):
+    """Restart a closed run from one of its steps under the same workflow."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=128)
-    source_workflow_id: Optional[str] = Field(None, alias="sourceWorkflowId", min_length=1)
+    step_id: Optional[str] = Field(None, alias="stepId", min_length=1)
     source_run_id: Optional[str] = Field(None, alias="sourceRunId", min_length=1)
-    logical_step_id: Optional[str] = Field(None, alias="logicalStepId", min_length=1)
-    source_execution_ordinal: Optional[int] = Field(
-        None, alias="sourceExecutionOrdinal", ge=1
-    )
-    recovery_checkpoint_ref: Optional[str] = Field(None, alias="recoveryCheckpointRef")
-    failed_run_recovery_manifest_ref: Optional[str] = Field(
-        None, alias="failedRunRecoveryManifestRef"
-    )
-    checkpoint_boundary: Optional[StepExecutionCheckpointBoundary] = Field(
-        None, alias="checkpointBoundary"
-    )
-    task_input_snapshot_ref: Optional[str] = Field(
-        None, alias="taskInputSnapshotRef", min_length=1
-    )
-    plan_ref: Optional[str] = Field(None, alias="planRef", min_length=1)
-    plan_digest: Optional[str] = Field(None, alias="planDigest", min_length=1)
-    preserved_step_refs: list[str] = Field(default_factory=list, alias="preservedStepRefs")
-    dependency_signatures: dict[str, Any] = Field(
-        default_factory=dict, alias="dependencySignatures"
-    )
-    workspace_policy: Optional[WorkspacePolicy] = Field(None, alias="workspacePolicy")
-    operator_metadata: dict[str, Any] = Field(
-        default_factory=dict, alias="operatorMetadata"
-    )
-
-    @field_validator(
-        "source_workflow_id",
-        "source_run_id",
-        "logical_step_id",
-        "recovery_checkpoint_ref",
-        "failed_run_recovery_manifest_ref",
-        "task_input_snapshot_ref",
-        "plan_ref",
-        "plan_digest",
-        mode="before",
-    )
-    @classmethod
-    def _normalize_optional_text(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        candidate = str(value).strip()
-        return candidate or None
-
-    @field_validator("preserved_step_refs")
-    @classmethod
-    def _normalize_preserved_step_refs(cls, value: list[str]) -> list[str]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for item in value:
-            candidate = str(item).strip()
-            if not candidate or candidate in seen:
-                continue
-            seen.add(candidate)
-            normalized.append(candidate)
-        return normalized
-
-    @field_validator("dependency_signatures", mode="before")
-    @classmethod
-    def _validate_dependency_signatures(cls, value: Any) -> dict[str, Any]:
-        return validate_compact_temporal_mapping(
-            value or {}, field_name="dependencySignatures"
-        )
 
 
-class RecoverFromSelectedStepRequest(RecoverFromFailedStepRequest):
-    """Request payload for creating a selected-step recovery follow-up execution."""
-
-    model_config = ConfigDict(
-        populate_by_name=True,
-        extra="allow",
-        json_schema_extra={"additionalProperties": False},
-    )
-
-    source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
-    source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
-    selected_start_step_id: str = Field(
-        ..., alias="selectedStartStepId", min_length=1
-    )
-
-
-class RecoveryCheckpointSourceModel(BaseModel):
-    """Source identity embedded in failed-step Recovery checkpoint evidence."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    workflow_id: str = Field(..., alias="workflowId", min_length=1)
-    run_id: str = Field(..., alias="runId", min_length=1)
-
-class RecoveryCheckpointFailedStepModel(BaseModel):
-    """Failed logical step identity to retry."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
-    order: int = Field(..., alias="order", ge=1)
-    execution_ordinal: int = Field(
-        ...,
-        alias="executionOrdinal",
-        validation_alias=AliasChoices("executionOrdinal", "at" + "tempt"),
-        ge=1,
-    )
-    title: Optional[str] = Field(None, alias="title")
-
-class RecoveryCheckpointPreservedStepModel(BaseModel):
-    """Completed source step that may be materialized as preserved."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
-    order: int = Field(..., alias="order", ge=1)
-    status: Literal["completed", "skipped"] = Field(..., alias="status")
-    source_execution_ordinal: int = Field(..., alias="sourceExecutionOrdinal", ge=1)
-    artifacts: dict[str, Any] = Field(default_factory=dict, alias="artifacts")
-    state_checkpoint_ref: Optional[str] = Field(None, alias="stateCheckpointRef")
-    workspace_checkpoint_ref: Optional[str] = Field(
-        None, alias="workspaceCheckpointRef"
-    )
-    step_checkpoint_ref: Optional[str] = Field(None, alias="stepCheckpointRef")
-
-    @field_validator("status", mode="before")
-    @classmethod
-    def _normalize_legacy_status(cls, value: Any) -> Any:
-        if str(value or "").strip().lower() == "succeeded":
-            return "completed"
-        return value
-
-    @field_validator("artifacts", mode="before")
-    @classmethod
-    def _validate_compact_artifacts(cls, value: Any) -> dict[str, Any]:
-        return validate_compact_temporal_mapping(
-            value, field_name="preservedStep.artifacts"
-        )
-
-    @field_validator("state_checkpoint_ref", mode="before")
-    @classmethod
-    def _normalize_state_checkpoint_ref(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        candidate = str(value).strip()
-        return candidate or None
-
-    @field_validator("workspace_checkpoint_ref", "step_checkpoint_ref", mode="before")
-    @classmethod
-    def _normalize_optional_checkpoint_ref(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        candidate = str(value).strip()
-        return candidate or None
-
-    @model_validator(mode="after")
-    def _require_recovery_evidence(self) -> "RecoveryCheckpointPreservedStepModel":
-        if not any(value for value in self.artifacts.values()):
-            raise ValueError("preserved step requires at least one artifact ref")
-        if self.state_checkpoint_ref is None:
-            raise ValueError("preserved step requires a state checkpoint ref")
-        return self
-
-class RecoveryCheckpointModel(BaseModel):
-    """Compact checkpoint evidence required before failed-step recovery execution."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
-    source: RecoveryCheckpointSourceModel = Field(..., alias="source")
-    task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef", min_length=1)
-    plan_ref: Optional[str] = Field(None, alias="planRef")
-    plan_digest: Optional[str] = Field(None, alias="planDigest")
-    failed_step: RecoveryCheckpointFailedStepModel = Field(..., alias="failedStep")
-    preserved_steps: list[RecoveryCheckpointPreservedStepModel] = Field(
-        default_factory=list, alias="preservedSteps"
-    )
-    prepared_artifact_refs: list[str] = Field(
-        default_factory=list, alias="preparedArtifactRefs"
-    )
-    recovery_workspace: dict[str, Any] = Field(
-        default_factory=dict, alias="recoveryWorkspace"
-    )
-
-    @field_validator("plan_ref", "plan_digest", mode="before")
-    @classmethod
-    def _normalize_optional_ref(cls, value: Any) -> str | None:
-        if value is None:
-            return None
-        candidate = str(value).strip()
-        return candidate or None
-
-    @field_validator("recovery_workspace", mode="before")
-    @classmethod
-    def _validate_compact_recovery_workspace(cls, value: Any) -> dict[str, Any]:
-        compact = validate_compact_temporal_mapping(
-            value, field_name="recoveryWorkspace"
-        )
-        for raw_key in compact:
-            key = str(raw_key).strip()
-            if key.lower() == "inlinecheckpointpayload":
-                raise ValueError(
-                    "recoveryWorkspace must not contain inline checkpoint payload"
-                )
-        return compact
-
-    @field_validator("prepared_artifact_refs")
-    @classmethod
-    def _normalize_prepared_refs(cls, value: list[str]) -> list[str]:
-        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-
-    @model_validator(mode="after")
-    def _require_recovery_evidence(self) -> "RecoveryCheckpointModel":
-        if self.plan_ref is None and self.plan_digest is None:
-            raise ValueError("recovery checkpoint requires plan identity or digest")
-        if not any(value for value in self.recovery_workspace.values()):
-            raise ValueError("recovery checkpoint requires workspace checkpoint evidence")
-        return self
-
-class RecoverySourceModel(BaseModel):
-    """Compact source provenance carried by a resumed execution."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    kind: Literal["recover_from_failed_step"] = Field(
-        "recover_from_failed_step", alias="kind"
-    )
-    recovery_action: Literal["resume_from_workspace_checkpoint"] = Field(
-        "resume_from_workspace_checkpoint", alias="recoveryAction"
-    )
-    resume_phase: RecoveryResumePhase = Field(..., alias="resumePhase")
-    target_runtime_id: str = Field(..., alias="targetRuntimeId", min_length=1)
-    capability_set_version: str = Field(..., alias="capabilitySetVersion", min_length=1)
-    capability_digest: str = Field(..., alias="capabilityDigest", min_length=1)
-    checkpoint_kind: str = Field(..., alias="checkpointKind", min_length=1)
-    checkpoint_restore_kinds: tuple[str, ...] = Field(..., alias="checkpointRestoreKinds")
-    checkpoint_restore_activity: str = Field(..., alias="checkpointRestoreActivity", min_length=1)
-    workspace_authority: str = Field(..., alias="workspaceAuthority", min_length=1)
-    # Optional only while decoding pre-patch histories. New recovery creation
-    # supplies the complete proof set and patch-gated workflow preflight rejects
-    # absent or contradictory values before restoration.
-    selected_target_runtime_id: str | None = Field(None, alias="selectedTargetRuntimeId")
-    selected_capability_digest: str | None = Field(None, alias="selectedCapabilityDigest")
-    registered_restore_activity: str | None = Field(None, alias="registeredRestoreActivity")
-    checkpoint_source_workflow_id: str | None = Field(None, alias="checkpointSourceWorkflowId")
-    checkpoint_source_run_id: str | None = Field(None, alias="checkpointSourceRunId")
-    side_effect_safe: bool | None = Field(None, alias="sideEffectSafe")
-    source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
-    source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
-    source_task_input_snapshot_ref: str = Field(
-        ..., alias="sourceTaskInputSnapshotRef", min_length=1
-    )
-    source_plan_ref: Optional[str] = Field(None, alias="sourcePlanRef")
-    source_plan_digest: Optional[str] = Field(None, alias="sourcePlanDigest")
-    failed_step_id: str = Field(..., alias="failedStepId", min_length=1)
-    failed_step_execution: int = Field(..., alias="failedStepExecution", ge=1)
-    recovery_mode: Literal["last_failed_step", "selected_step"] = Field(
-        "last_failed_step", alias="recoveryMode"
-    )
-    selected_start_step_id: Optional[str] = Field(None, alias="selectedStartStepId")
-    selected_start_step_execution: Optional[int] = Field(
-        None, alias="selectedStartStepExecution", ge=1
-    )
-    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef", min_length=1)
-    failed_run_recovery_manifest_ref: str | None = Field(
-        None, alias="failedRunRecoveryManifestRef"
-    )
-    selected_checkpoint_boundary: str | None = Field(
-        None, alias="selectedCheckpointBoundary"
-    )
-    admitted_checkpoint_resume_decision: dict[str, Any] | None = Field(
-        None, alias="admittedCheckpointResumeDecision"
-    )
-    recovery_workspace: dict[str, Any] = Field(
-        default_factory=dict, alias="recoveryWorkspace"
-    )
-    preserved_steps: list[RecoveryCheckpointPreservedStepModel] = Field(
-        default_factory=list, alias="preservedSteps"
-    )
-    checkpoint_recovery: dict[str, Any] | None = Field(
-        None, alias="checkpointRecovery"
-    )
-
-    @model_validator(mode="after")
-    def _validate_restore_contract(self) -> "RecoverySourceModel":
-        if self.checkpoint_kind not in self.checkpoint_restore_kinds:
-            raise ValueError("checkpointKind must be present in checkpointRestoreKinds")
-        return self
-
-class ResumeExecutionRefModel(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    workflow_id: str = Field(..., alias="workflowId", min_length=1)
-    run_id: str = Field(..., alias="runId", min_length=1)
-    detail_href: Optional[str] = Field(None, alias="detailHref")
-
-class RecoverFromFailedStepResponse(BaseModel):
-    """Response from the failed-step recovery command."""
+class RetryFromStepResponse(BaseModel):
+    """The new run that continues the workflow from the chosen step."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     accepted: Literal[True] = Field(True, alias="accepted")
-    applied: Literal["created_resumed_execution"] = Field(
-        "created_resumed_execution", alias="applied"
-    )
-    source: ResumeExecutionRefModel = Field(..., alias="source")
-    execution: ResumeExecutionRefModel = Field(..., alias="execution")
-    relationship: Literal[
-        "Recovered from failed step", "Recovered from selected step"
-    ] = Field("Recovered from failed step", alias="relationship")
-    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
-
-
-class RecoverExecutionResponse(BaseModel):
-    """Response from the canonical typed recovery command."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    accepted: Literal[True] = Field(True, alias="accepted")
-    applied: Literal["created_recovery_execution"] = Field(
-        "created_recovery_execution", alias="applied"
-    )
-    target_kind: Literal[
-        "failed_step", "control_stop", "publication", "restoration_failure"
-    ] = Field(..., alias="targetKind")
-    continuation_phase: Literal[
-        "rerun_failed_step",
-        "continue_to_gate",
-        "continue_after_gate",
-        "continue_to_remediation",
-        "resume_publication",
-        "retry_restoration",
-    ] = Field(..., alias="continuationPhase")
-    source: ResumeExecutionRefModel
-    execution: ResumeExecutionRefModel
-    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
-    creation_key: str = Field(..., alias="creationKey")
+    workflow_id: str = Field(..., alias="workflowId")
+    run_id: str = Field(..., alias="runId")
+    source_run_id: str = Field(..., alias="sourceRunId")
+    step_id: str = Field(..., alias="stepId")
+    step_title: Optional[str] = Field(None, alias="stepTitle")
+    message: str = Field(..., alias="message")
 
 
 class SignalExecutionRequest(BaseModel):
@@ -3304,9 +2984,7 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_approve: bool = Field(False, alias="canApprove")
     can_pause: bool = Field(False, alias="canPause")
     can_resume: bool = Field(False, alias="canResume")
-    can_failed_step_resume: bool = Field(
-        False, alias="canResumeFromFailedStep"
-    )
+    can_retry_from_step: bool = Field(False, alias="canRetryFromStep")
     can_continue_remediation: bool = Field(False, alias="canContinueRemediation")
     can_retry_publication: bool = Field(False, alias="canRetryPublication")
     can_publish_saved_work: bool = Field(False, alias="canPublishSavedWork")
@@ -4041,13 +3719,12 @@ class ExecutionReportProjectionModel(BaseModel):
         payload = handler(self)
         return {key: value for key, value in payload.items() if value is not None}
 
-class ExecutionResumeSummaryModel(BaseModel):
-    """Failed-step recovery availability and checkpoint summary."""
+class ExecutionRetryFromStepSummaryModel(BaseModel):
+    """Whether a closed run can restart from a step, and its default step."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     available: bool = Field(False, alias="available")
-    checkpoint_ref: Optional[str] = Field(None, alias="checkpointRef")
     failed_step_id: Optional[str] = Field(None, alias="failedStepId")
     source_run_id: Optional[str] = Field(None, alias="sourceRunId")
     disabled_reason: Optional[str] = Field(None, alias="disabledReason")
@@ -4319,9 +3996,8 @@ class ExecutionModel(BaseModel):
     actions: ExecutionActionCapabilityModel = Field(
         default_factory=ExecutionActionCapabilityModel, alias="actions"
     )
-    resume: ExecutionResumeSummaryModel | None = Field(None, alias="resume")
-    recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
-        None, alias="recoveryEligibility"
+    retry_from_step: ExecutionRetryFromStepSummaryModel | None = Field(
+        None, alias="retryFromStep"
     )
     related_runs: list[ExecutionRelatedRunModel] = Field(
         default_factory=list, alias="relatedRuns"

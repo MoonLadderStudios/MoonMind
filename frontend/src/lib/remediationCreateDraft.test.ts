@@ -41,7 +41,7 @@ describe('remediationCreateDraft', () => {
       model: 'gpt-5',
       effort: 'high',
       profileId: 'profile:codex',
-      resume: { checkpointRef: 'artifact://checkpoint/failed-step' },
+      latestCheckpointRef: 'artifact://checkpoint/failed-step',
     });
 
     expect(draft).toMatchObject({
@@ -51,6 +51,10 @@ describe('remediationCreateDraft', () => {
       // repository and no destination publication to fail at submit.
       repository: '',
       publishMode: 'none',
+      skill: 'remediate-workflow',
+      instructions: expect.stringContaining(
+        'Diagnose why workflow Failed target failed using the remediation context',
+      ),
       target: {
         workflowId: 'mm:target',
         runId: 'run-target',

@@ -2184,6 +2184,7 @@ def test_update_search_attributes_status_memo_is_patch_gated(
 def test_run_memo_includes_current_step_order_when_step_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Retry from a step locates step starts in history by this memo key."""
     memo_updates = _configure_workflow_runtime(monkeypatch)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
     workflow = MoonMindRunWorkflow()

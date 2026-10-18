@@ -6,7 +6,7 @@ For the Codex harness on Omnigent (canonical identity `agentKind=external`, `age
 
 The Workflow Details page is the canonical view for inspecting a single MoonMind Workflow Execution. It presents the Workflow identity, current state, original Workflow configuration, execution history, outputs, errors, and all actions that are available for the Workflow in its current state.
 
-The page is declarative and state-driven. Every visible control is derived from the Workflow Execution status, the Workflow type, and explicit backend capabilities. A failed Workflow presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit Workflow**, **Rerun**, and **Resume**.
+The page is declarative and state-driven. Every visible control is derived from the Workflow Execution status, the Workflow type, and explicit backend capabilities. A failed Workflow presents the user with the complete set of available recovery actions, which may include **Remediate**, **Edit Workflow**, **Rerun**, and **Retry from failed step**.
 
 ## Route
 
@@ -115,13 +115,13 @@ The status badge stays visible and uses the shared [workflow status vocabulary](
 
 The primary action bar appears in the header and remains available near the top of the page. On smaller screens, the same actions may collapse into a sticky bottom action bar or an overflow menu, but the actions remain discoverable.
 
-Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit Workflow**, **Rerun**, or **Resume** on failed Workflows.
+Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit Workflow**, **Rerun**, or **Retry from failed step** on failed Workflows.
 
 ### Failed Workflow actions
 
-For a failed Workflow, expose every recovery action the backend permits. `canResumeFromFailedStep` requires restorable checkpointed progress; terminal editing uses `canEditForRerun`, not `canUpdateInputs`.
+For a failed Workflow, expose every recovery action the backend permits. `canRetryFromStep` is true for a closed UserWorkflow run that no parent workflow owns; terminal editing uses `canEditForRerun`, not `canUpdateInputs`.
 
-Failed Workflows are terminal executions. The user may inspect, remediate, edit for a new run, rerun, or resume from the last failed step, but the original failed execution is not mutated in place.
+Failed Workflows are terminal executions. The user may inspect, remediate, edit for a new run, rerun, or retry from a step. Retry starts a new run of the same Workflow; the failed run stays in Temporal history and is not mutated.
 
 ### Remediate button
 
@@ -196,29 +196,19 @@ Rerun executes directly from the capability-gated action control without collect
 
 After a successful rerun request, the user is taken to the new Workflow Execution details page or shown a success toast with a link to the new run.
 
-### Resume button
+### Retry from failed step
 
-The failed-Workflow **Resume** button is present when `capabilities.canResumeFromFailedStep` is true.
+The **Retry from failed step** action and the **Retry** panel are present when `capabilities.canRetryFromStep` is true.
 
-Use the accessible name **Resume from failed step** to distinguish recovery from lifecycle resume.
+Retry behavior:
 
-The failed-Workflow **Resume** action is separate from the paused-Workflow **Resume** lifecycle action. Failed-Workflow **Resume** retries the last failed step with the completed work before that step restored from durable checkpoints.
+- Does not open an editing form and keeps the original input, plan, and execution choices.
+- Restarts the earliest failed step by default. The panel's **Restart from** selector can choose an earlier step that started; its button then reads **Retry from selected step**.
+- Sends `POST /api/executions/{workflowId}/retry-from-step` with the run the page shows as `sourceRunId`.
+- Keeps the `workflowId`, so the page follows the Workflow to its new run. Earlier steps keep their results.
+- Shows the backend's reason when retry is refused, such as a released issue claim or a history that no longer replays on the installed MoonMind version.
 
-Resume behavior:
-
-- Does not open an editing form.
-- Uses the original Workflow input snapshot unchanged.
-- Pins the source execution by both `workflowId` and `runId`.
-- Identifies the last failed step from backend progress data.
-- Restores completed prior steps from durable step output refs and workspace, branch, commit, or equivalent checkpoints.
-- Creates a linked follow-up execution.
-- Displays prior completed steps in the new execution as reused from the original run.
-- Starts new execution work at the failed step.
-- Leaves the original failed Workflow unchanged.
-
-Resume executes directly from the capability-gated action control without collecting extra operator input.
-
-After success, the page opens the resumed run or shows a toast linking to it.
+When editing is enabled and rerun is available, the panel also offers **Rerun from the start**. The panel stays hidden for runs that are still active or that completed. Retry is unrelated to the paused-Workflow **Resume** lifecycle action.
 
 ### Cancel button
 
@@ -232,7 +222,7 @@ The **Pause** button is present when `capabilities.canPause` is true.
 
 The lifecycle **Resume** button is present when `capabilities.canResume` is true.
 
-Only one of **Pause** or lifecycle **Resume** is visible at a time. This lifecycle action resumes a paused active Workflow and is not the failed-Workflow **Resume** action described above.
+Only one of **Pause** or lifecycle **Resume** is visible at a time. This lifecycle action resumes a paused active Workflow and is unrelated to retrying a failed one.
 
 ### More menu
 
@@ -319,13 +309,12 @@ It contains:
 - Pending steps
 - Step-level timestamps
 - Step-level outputs or summaries, when available
-- Preserved steps reused from a source run, when viewing a resumed execution
 
 For running Workflows, this section updates as new progress is received.
 
 For terminal Workflows, this section displays the final execution path.
 
-For resumed executions, label completed steps as reused from the source run and identify the step where new execution resumes.
+After a retry, the earlier steps show their recorded results and the retried step shows as a new attempt.
 
 ## Failure section
 
@@ -345,7 +334,7 @@ It contains:
 - Relevant logs or trace snippets
 - Suggested next actions
 - Remediation status, when available
-- Resume availability or the disabled reason, when a failed step exists but checkpointed progress cannot be restored
+- Retry availability, or the reason retry is unavailable
 
 The failure section must not obscure the primary action bar. Users can always see or quickly access **Remediate**, **Edit Workflow**, and **Rerun** on failed Workflows.
 
@@ -507,7 +496,6 @@ It contains:
 - Original run, when viewing a rerun
 - Reruns created from the current Workflow
 - Edited reruns created from the current Workflow
-- Resumed runs created from the current Workflow
 - Remediation-generated runs, when applicable
 
 Each related run displays:
@@ -519,7 +507,7 @@ Each related run displays:
 - Duration
 - Link to run details
 
-Distinguish original, rerun, edited rerun, failed-step recovery, and remediation relationships. Newly created follow-up executions appear here with their source link.
+Distinguish original, rerun, edited rerun, and remediation relationships. Newly created follow-up executions appear here with their source link; a retry keeps the same Workflow, so its new run becomes the page's current run instead.
 
 ## Metadata section
 
@@ -599,4 +587,4 @@ On mobile:
 
 ## Recovery boundaries
 
-Use canonical submission data rather than display-only labels to rebuild edit forms. Failed-step **Resume** does not edit instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies; those changes belong to **Edit Workflow**. Terminal recovery creates linked executions and preserves the failed execution as evidence.
+Use canonical submission data rather than display-only labels to rebuild edit forms. **Retry from failed step** does not edit instructions, steps, attachments, runtime, publish mode, branch, presets, or dependencies; those changes belong to **Edit Workflow**. Rerun and edited rerun create linked executions, and retry starts a new run of the same Workflow; each keeps the failed run as evidence.
