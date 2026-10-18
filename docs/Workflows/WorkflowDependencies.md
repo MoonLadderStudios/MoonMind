@@ -12,6 +12,8 @@
 
 **Related Docs:** `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowCancellation.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/PrMergeAutomation.md`
 
+For configuration, diagnostics, and recovery, see the [Operator Guide](WorkflowDependenciesOperatorGuide.md).
+
 ## 1. Purpose
 
 Workflow Dependencies let one MoonMind.UserWorkflow wait on another independently durable, visible, cancelable, rerunnable execution. They express ordering and successful prerequisite completion, not publication-policy inheritance or implicit transfer of code into a workspace.
@@ -78,7 +80,7 @@ The gate clears when all prerequisites complete or an operator uses a supported 
 
 A terminal prerequisite notifies dependents with an idempotent DependencyResolved signal carrying prerequisiteWorkflowId, terminalState, available Temporal close status, resolvedAt, and bounded message/failure context.
 
-Duplicates, stale, and unexpected notifications are ignored safely. A bounded reconciliation path repairs uncertain delivery against durable state; an indefinite custom polling loop is not the primary design.
+Fan-out is best-effort, bounded, and idempotent; a closed or missing dependent is logged without stopping other deliveries. Duplicates, stale, and unexpected notifications are ignored safely. A bounded reconciliation path repairs uncertain delivery against durable state; an indefinite custom polling loop is not the primary design.
 
 ### 4.4 Waiting semantics
 

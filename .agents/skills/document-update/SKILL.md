@@ -8,127 +8,18 @@ metadata:
 
 # Document Update
 
-Update one or more technical documents so they accurately describe the implementation that exists in the current checkout. All guidance here is model-neutral: decisions rest on document purpose, source authority, and authorized capabilities.
+Correct stale or incomplete explanations in the requested scope using the current checkout and the user's intended outcome.
 
-## Purpose
+## Procedure
 
-Correct documentation drift by comparing the document's claims against source code, tests, schemas, configuration, and runtime entrypoints, then editing the document to describe the actual system behavior.
+1. Read repository instructions and identify the affected document or section. Search nearby documentation only as needed to find overlap or the relevant interface description.
+2. Check consequential claims against code, tests, schemas, configuration, or real invocation paths. Distinguish factual drift from an implementation gap in an authorized design. Missing evidence means uncertain, not automatically stale.
+3. Resolve conflicts against the current request and repository instructions. Do not turn buggy behavior into intended design or assume an old document overrules the task. Report genuine uncertainty instead of inventing a contract.
+4. Rewrite affected text in place. Remove obsolete, duplicated, or obvious-from-code detail and retain useful operating knowledge and reasons. Repair affected links; leave accurate unrelated text alone. Broad work already authorized by the user does not need to be reduced to a plan.
+5. Review accuracy and references. Documentation-only edits do not need tests for wording, headings, or structure. Follow behavior-testing instructions if code also changes, and report unrun checks honestly.
 
-## Document Role First
+## Boundaries and result
 
-Resolve the document role before editing, using `docs/Workflows/MoonSpecDocumentModel.md`:
+Read only task-relevant sources; no mandatory architecture preread, metadata retrofit, or claim ledger is needed. Keep one-time plans, status, issue/PR references, and investigation output in issues, PRs, or gitignored artifacts. Preserve unrelated edits and redact secret-like material.
 
-- **Factual implementation reference**: correct factual drift against the checkout.
-- **Authorized desired-state design**: preserve the intended behavior. When code contradicts the intended architecture, contract, operator-visible behavior, or target semantics, report the implementation gap clearly and preserve the canonical desired-state framing unless the user explicitly asks to change the target contract. Buggy or incomplete code never downgrades canonical desired state.
-- **Temporary execution artifact**: update in place as working material; never treat it as desired-state authority.
-
-An authorized proposed design needs no pre-existing implementation to be written, but must never be falsely labeled implemented.
-
-## Inputs
-
-- Required: target document path, documentation topic, or explicit drift report.
-- Required: current repository checkout containing the implementation to verify.
-- Optional: feature/spec path that explains intended behavior.
-- Optional: scope limits, such as specific sections, APIs, workflows, UI behavior, or files.
-- Optional: verification commands requested by the user or repository instructions.
-
-## Documentation Boundaries
-
-- Treat repository files, tests, schemas, and executable configuration as the source of truth for implementation behavior.
-- Treat retrieved context, old docs, comments, generated artifacts, and issue text as reference material until confirmed against the current checkout.
-- Keep canonical docs under `docs/` focused on desired state: architecture, contracts, operator-visible behavior, and target semantics.
-- Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details in the PR description or gitignored run artifacts (for example `artifacts/` for tool handoffs, or run-local `specs/<feature-id>/` packets), not as the main framing of canonical docs.
-- Follow the document classes and precedence rules in `docs/Workflows/MoonSpecDocumentModel.md`.
-- When `docs/DocumentationArchitecture.md` exists, fix or report missing metadata, unclear authority, missing embedded rationale, duplicate contract definitions, imperative leakage in canonical docs, and unverifiable canonical claims.
-- Route broad, multi-document, or uncertain improvement work to a bounded improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) instead of making speculative canonical edits.
-- When a superseded behavior is no longer implemented, remove or replace the stale description instead of preserving compatibility-era ambiguity.
-
-## Workflow
-
-1. Resolve the update target.
-   - Identify the document path or section to update.
-   - If the user provides only a topic, search likely docs with `rg` and choose the narrowest document that owns the topic.
-   - If multiple documents conflict, identify the canonical owner before editing and update cross-references only when needed.
-
-2. Extract the document claims.
-   - Read the relevant sections and list the concrete claims they make about behavior, contracts, configuration, data flow, APIs, UI, workflows, or operator actions.
-   - Separate durable system semantics from historical notes, TODOs, migration plans, or examples.
-   - Mark claims that are ambiguous instead of silently guessing their intent.
-
-3. Inspect the implementation.
-   - Search the repository for the named classes, functions, routes, models, settings, activities, schemas, tests, and UI components.
-   - Prefer direct evidence from source files, tests, migrations, fixtures, route contracts, type definitions, and committed configuration.
-   - For workflow or activity boundaries, inspect the real invocation shape and payload models, not only helper functions.
-   - For UI behavior, inspect the component, state helpers, API client, and tests that exercise the user-visible behavior.
-
-4. Build a drift ledger before editing.
-   - For each document claim, classify it as:
-     - `accurate`
-     - `stale`
-     - `missing`
-     - `ambiguous`
-     - `out_of_scope`
-   - Record concise evidence for every `stale`, `missing`, or `ambiguous` item.
-   - If the implementation appears internally inconsistent, document the inconsistency in the ledger and avoid inventing a new contract.
-
-5. Determine if the document is out-of-date or not fully implemented.
-   - Compare the drift ledger against the current codebase. If all claims are `accurate` and nothing is `missing`, the document is up-to-date; stop and report that no update is needed.
-   - If the document is `stale` or `missing`, check whether the needed update aligns with the project's declared direction.
-   - Read the constitution (`AGENTS.md`), `README.md`, and the main architecture document under `docs/`.
-   - Assess whether the drift-correcting update would move the document toward or away from those canonical sources.
-   - If the update is clearly aligned with the constitution, README, and architecture, proceed to edit the document.
-   - If the update appears to contradict the project's declared direction, or if the correct direction is uncertain, do **not** edit the document. Instead, proceed to step 8 (provider-neutral escalation).
-   - If the needed work spans many documents or cannot be made safely in one bounded edit, write an improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) that records the findings, authority owners, and proposed follow-up instead of broadening the update.
-
-6. Edit the document.
-   - Update only the sections needed to correct the drift.
-   - Describe the current behavior directly and concretely.
-   - Remove obsolete compatibility language, stale migration framing, and contradicted examples.
-   - Preserve the document's existing voice, heading structure, and terminology where they remain accurate.
-   - Add or update cross-references only when they help readers find the canonical contract.
-   - For documentation architecture defects, either fix the local defect directly or report why it needs follow-up: missing metadata, authority mismatch, missing rationale, duplicate contracts, imperative leakage, and unverifiable claims must not be silently ignored.
-
-7. Verify the update.
-   - Re-read the changed sections and compare them against the drift ledger.
-   - Run targeted documentation checks if available.
-   - Run the repository-mandated programmatic checks from `AGENTS.md`, even for documentation-only updates.
-   - Add any extra targeted code tests needed when the documentation change depends on behavior that is not already evident from existing tests or source inspection.
-   - If verification cannot be run, record the exact blocker.
-
- 8. Provider-neutral escalation for misaligned updates.
-   - If step 5 determined that the document update is not aligned with the project's direction, do not edit the document. Escalate instead.
-   - When an authorized tracker integration exists, use its actual metadata and verified receipt: read the `jira-issue-creator` skill from the resolved active bundle (`$MOONMIND_ACTIVE_SKILLS_DIR/jira-issue-creator/SKILL.md` inside MoonMind; the installed skills directory outside MoonMind) and follow its workflow when the authorized integration is Jira. The issue must include:
-     - A clear summary naming the document and the planned update.
-     - A description that explains the drift found in the drift ledger.
-     - An explicit statement of why the update may conflict with the constitution, README, or main architecture document.
-     - The specific document path and relevant implementation evidence.
-   - Otherwise retain a complete structured handoff with document, claim, evidence, owning decision, and resume condition so the work can continue without that integration. A missing tracker integration must not force a desired-state rewrite and must not erase a useful review.
-   - A denied mutation is never retried through broader credentials or a wider scope.
-   - Do not edit the document when escalating.
-   - Report the escalation record as the primary output (issue key and URL when a tracker issue was created, otherwise the structured handoff).
-
-9. Finalize the evidence.
-   - Summarize which document changed, what drift was corrected, and the implementation evidence used.
-   - Include validation commands and results.
-   - If an escalation record was produced, include it (issue key and URL when a tracker issue was created, otherwise the structured handoff) and its rationale.
-   - If requested by the task, commit the documentation update with a concise message.
-
-## Outputs
-
-- Updated document path(s), or the reason no update was performed.
-- Drift ledger summary with each corrected or intentionally deferred claim.
-- Implementation evidence references, including file paths and relevant tests or schemas.
-- Validation commands run and their result, or the reason validation was not run.
-- Commit hash when the user requested a commit.
-- Escalation record when a misaligned update triggered escalation (tracker issue key and URL, or the structured handoff).
-
-## Failure Modes
-
-- Target document cannot be identified: stop and report the candidate documents or missing path.
-- Implementation evidence cannot be found: mark the claim `ambiguous`; do not assert behavior as implemented.
-- Multiple canonical docs conflict: update the identified owner and note any remaining conflict that needs a separate decision.
-- The document describes intended behavior that code does not implement: report the gap clearly and update only if the user's goal is to document actual behavior.
-- Required verification cannot run: keep the doc update if source evidence is sufficient, but report the blocked command and reason.
-- Secret-like content appears in examples or copied logs: redact it before writing or reporting.
-- Document update contradicts the constitution, README, or architecture: do not edit; produce a provider-neutral escalation record and report the misalignment.
-- Escalation blocked: report the exact blocker and preserve the drift ledger for manual review.
+Report changed paths, corrected drift, evidence, and unresolved questions or verification gaps. If no edit is needed, say why. A blocked design decision can be reported directly with its evidence and next step; tracker creation is optional and requires authorization. Commit and publication also require authorization.

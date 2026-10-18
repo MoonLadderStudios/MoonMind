@@ -1,41 +1,19 @@
-# \<Module Name\> — Module Contract Specification
+# <Interface name> contract
 
-**Status:** Draft
-**Document Class:** Canonical declarative
-**Viewpoint:** Module Contract Specification
-**Updated:** \<YYYY-MM-DD\>
-**Audience:** \<primary readers\>
-**Authority:** \<module contract claims this document owns\>
-**Owning Surface:** \<providing module or ownership surface\>
-**Related Docs:** \<links to adjacent canonical docs\>
-**Related Implementation:** \<code modules, entrypoints, or tracking issues\>
+Optional outline from the [documentation guide](../DocumentationArchitecture.md). Keep only useful sections, then remove this note.
 
-> Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
+## Provider and consumers
 
-## 1. Purpose
+What provides this interface and who uses it.
 
-What contract this module exposes and who consumes it.
+## Inputs and outputs
 
-## 2. Interface
+Operations, payloads, status values, and defaults that callers need to understand. Link to schemas where they already express the details clearly.
 
-The operations, inputs, and outputs the module guarantees (signatures, payload shapes, status values).
+## Guarantees and failure behavior
 
-## 3. Guarantees & invariants
+Relevant ordering, idempotency, errors, and recovery behavior, with reasons for non-obvious constraints.
 
-What callers can rely on: ordering, idempotency, error semantics, compatibility commitments.
+## Compatibility
 
-### CONTRACT-001 <concise stable contract heading>
-
-The durable interface guarantee this contract owns.
-
-## 4. Failure modes
-
-How the contract behaves on invalid input, downstream failure, and degraded conditions.
-
-## 5. Versioning & compatibility
-
-How changes to this contract are versioned and what compatibility callers can expect. For Temporal-facing contracts (workflows, activities, signals, updates), explicitly address replay compatibility, in-flight compatibility, and workflow boundary test coverage.
-
-### TEST-001 <concise stable verification heading>
-
-The required boundary or regression coverage for this contract.
+What callers can rely on when the interface changes. For Temporal interfaces, explain relevant replay and in-flight behavior and link to coverage that exercises the actual boundary.
