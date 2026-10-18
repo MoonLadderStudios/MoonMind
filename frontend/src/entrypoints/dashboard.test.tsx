@@ -2209,7 +2209,7 @@ describe('Dashboard shared entry', () => {
 
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Loading MoonMind...')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Loading MoonMind...' })).toBeTruthy();
     expect(screen.queryByText('Workflow start route loaded')).toBeNull();
 
     resolveUiInfo({

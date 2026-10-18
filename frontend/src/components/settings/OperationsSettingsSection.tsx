@@ -914,15 +914,21 @@ export function OperationsSettingsSection({
     (action, index) => index < VISIBLE_UPDATE_HISTORY || isActiveUpdate(action),
   );
   const olderUpdates = updateHistory.filter((action) => !recentUpdates.includes(action));
-  // Retired-updater rows all carry the same rollback disclaimer; say it once.
+  // Retired-updater rows usually carry the same rollback disclaimer; say it
+  // once then. Differing reasons name each update's prior image, so they stay
+  // on their own rows.
+  const legacyRollbackReasons = new Set(
+    updateHistory.flatMap((action) =>
+      action.owner === 'workflow' &&
+      action.rollbackEligibility &&
+      !action.rollbackEligibility.eligible &&
+      action.rollbackEligibility.reason
+        ? [action.rollbackEligibility.reason]
+        : [],
+    ),
+  );
   const legacyRollbackNote =
-    updateHistory.find(
-      (action) =>
-        action.owner === 'workflow' &&
-        action.rollbackEligibility &&
-        !action.rollbackEligibility.eligible &&
-        action.rollbackEligibility.reason,
-    )?.rollbackEligibility?.reason ?? null;
+    legacyRollbackReasons.size === 1 ? [...legacyRollbackReasons][0] ?? null : null;
   const renderUpdate = (action: DeploymentAction) => {
     const target =
       action.rollbackEligibility?.targetImage?.reference ||
@@ -1004,7 +1010,7 @@ export function OperationsSettingsSection({
               Retry operation
             </button>
           ) : null}
-          {action.owner !== 'workflow' &&
+          {(action.owner !== 'workflow' || !legacyRollbackNote) &&
           action.rollbackEligibility &&
           !action.rollbackEligibility.eligible &&
           action.rollbackEligibility.reason ? (

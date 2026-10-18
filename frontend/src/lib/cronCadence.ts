@@ -55,6 +55,10 @@ function weekdayPhrase(raw: string): string | null {
     if (start === null || end === null || start >= end) {
       return null;
     }
+    // A range ending at 7 (Sunday) that starts on Sunday or Monday covers the week.
+    if (end === 7 && start <= 1) {
+      return 'Every day';
+    }
     return `Every ${WEEKDAY_NAMES[start % 7]} to ${WEEKDAY_NAMES[end % 7]}`;
   }
   const days = parseList(raw, 0, 7);

@@ -10433,7 +10433,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           preserveContext
         />
       ) : !execution && detailQuery.isError ? (
-        <ApiErrorState error={detailQuery.error} subject="workflow" onRetry={() => void detailQuery.refetch()} />
+        <ApiErrorState error={detailQuery.error} subject="workflow" onRetry={() => void detailQuery.refetch()} headingLevel={2} />
       ) : execution ? (
         <>
           <QueryStaleNotice query={detailQuery} />

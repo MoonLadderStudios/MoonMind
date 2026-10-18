@@ -517,6 +517,38 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(card).queryByText(new RegExp(NIL_UUID))).toBeNull();
   });
 
+  it('keeps differing legacy rollback guidance attached to its own update', async () => {
+    const reasonFor = (image: string) =>
+      `Rollback through the retired workflow updater is unavailable; update to ${image} instead.`;
+    const legacy = ['prior-a', 'prior-b'].map((tag, index) => ({
+      status: 'SUCCEEDED',
+      owner: 'workflow',
+      requestedImage: `ghcr.io/moonladderstudios/moonmind:legacy-${index}`,
+      startedAt: `2026-04-0${index + 1}T10:00:00Z`,
+      completedAt: `2026-04-0${index + 1}T10:05:00Z`,
+      runDetailUrl: `/workflows/legacy-${index}`,
+      rollbackEligibility: {
+        eligible: false,
+        sourceActionId: `legacy-${index}`,
+        targetImage: null,
+        reason: reasonFor(`ghcr.io/moonladderstudios/moonmind:${tag}`),
+      },
+    }));
+    mockStackState({ ...stackState, recentActions: legacy });
+
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(card).findByRole('heading', { name: /update history/i });
+    legacy.forEach((action) => {
+      const reason = within(card).getByText(action.rollbackEligibility.reason);
+      const row = within(card).getAllByRole('link', { name: /run detail/i })
+        .find((link) => link.getAttribute('href') === action.runDetailUrl)
+        ?.closest('.rounded-2xl');
+      expect(row?.contains(reason)).toBe(true);
+    });
+  });
+
   it('renders update timestamps as readable dates with the ISO value kept for inspection', async () => {
     renderOperations();
 

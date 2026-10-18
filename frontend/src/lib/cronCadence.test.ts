@@ -17,6 +17,9 @@ describe('describeCron', () => {
     ['0 8 * * 1,3,5', 'Every Monday, Wednesday and Friday at 08:00'],
     ['0 8 * * 7', 'Every Sunday at 08:00'],
     ['0 8 * * 2-4', 'Every Tuesday to Thursday at 08:00'],
+    ['0 9 * * 0-7', 'Every day at 09:00'],
+    ['0 9 * * 1-7', 'Every day at 09:00'],
+    ['0 9 * * 5-7', 'Every Friday to Sunday at 09:00'],
     ['0 0 1 * *', 'Monthly on day 1 at 00:00'],
     ['45 23 15 * *', 'Monthly on day 15 at 23:45'],
   ])('describes %s as %s', (cron, expected) => {
