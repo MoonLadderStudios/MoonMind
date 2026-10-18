@@ -84,4 +84,4 @@ Keep one-time plans, progress, issue/PR references, and run evidence in issues, 
 
 ## Result
 
-Honor `output_mode`: a concise summary, fuller report, structured `json_ledger`, or an unapplied `patch_plan`. Include affected paths, preservation and reference repairs, checks actually performed, and unresolved blockers. Do not claim completion of held-back actions or publication that has not been confirmed.
+Honor `output_mode` for presentation: a concise summary, fuller report, structured `json_ledger`, or patch-oriented summary. The mode does not cancel authorized remediation. In the document-health-update preset, apply valid approved findings and describe the resulting changes even when the selected mode is `patch_plan`. Only an explicit request to plan without applying changes makes the output unapplied. Include affected paths, preservation and reference repairs, checks actually performed, and unresolved blockers. Do not claim completion of held-back actions or publication that has not been confirmed.
