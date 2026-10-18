@@ -20309,6 +20309,7 @@ describe("Task Create runtime command previews", () => {
         },
       },
       instructions: "Repair the failed workflow.",
+      skill: "remediate-workflow",
       runtime: { mode: "omnigent" },
       remediation: {
         target: {
@@ -20356,6 +20357,9 @@ describe("Task Create runtime command previews", () => {
     expect((screen.getByLabelText("Starting branch") as HTMLInputElement).value).toBe("main");
     expect((screen.getByLabelText("Checkpoint work branch") as HTMLInputElement).value).toBe("repair/mm-3623");
     expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("pr");
+    expect((screen.getByLabelText("Step 1 skill") as HTMLInputElement).value).toBe(
+      "remediate-workflow",
+    );
     expect(
       window.sessionStorage.getItem(
         "moonmind.remediation-create-draft.complete",

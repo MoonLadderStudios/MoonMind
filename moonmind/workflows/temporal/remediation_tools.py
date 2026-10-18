@@ -41,6 +41,7 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_decision_log,
     build_remediation_final_summary,
     build_remediation_target_annotation,
+    load_remediation_target,
 )
 from moonmind.workflows.temporal.remediation_verification import (
     CanonicalRecordEvidenceReader,
@@ -702,9 +703,8 @@ class RemediationEvidenceToolService:
         context = await self._read_context_payload(
             link=link, principal=principal, admitted_principal=admitted_principal
         )
-        target = await self._session.get(
-            db_models.TemporalExecutionCanonicalRecord,
-            link.target_workflow_id,
+        target = await load_remediation_target(
+            self._session, link.target_workflow_id
         )
         if target is None:
             raise RemediationEvidenceToolError(

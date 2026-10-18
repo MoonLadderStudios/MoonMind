@@ -51,6 +51,10 @@ describe('remediationCreateDraft', () => {
       // repository and no destination publication to fail at submit.
       repository: '',
       publishMode: 'none',
+      skill: 'remediate-workflow',
+      instructions: expect.stringContaining(
+        'Diagnose why workflow Failed target failed using the remediation context',
+      ),
       target: {
         workflowId: 'mm:target',
         runId: 'run-target',

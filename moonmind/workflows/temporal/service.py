@@ -133,6 +133,7 @@ from moonmind.workflows.executions.title_derivation import (
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationLifecyclePublisher,
+    load_remediation_target,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     TERMINAL_MANAGED_SESSION_STATUSES,
@@ -372,6 +373,8 @@ ALLOWED_REMEDIATION_MODES = frozenset(
     {"snapshot", "live_follow", "snapshot_then_follow"}
 )
 MAX_REMEDIATION_STEP_SELECTORS = 25
+# Closed runs are queried by replaying their history on a worker.
+_REMEDIATION_STEP_LEDGER_QUERY_TIMEOUT_SECONDS = 15.0
 MAX_REMEDIATION_CHECKPOINT_BRANCH_LINKS = 10
 MAX_REMEDIATION_CHECKPOINT_BRANCH_TURNS = 25
 MAX_REMEDIATION_CHECKPOINT_BRANCH_ARTIFACTS = 500
@@ -702,7 +705,21 @@ class TemporalExecutionService:
             artifact_service=TemporalArtifactService(
                 TemporalArtifactRepository(self._session)
             ),
+            step_ledger_loader=self._query_step_ledger_rows,
         )
+
+    async def _query_step_ledger_rows(
+        self, workflow_id: str
+    ) -> list[Mapping[str, Any]]:
+        handle = await self._client_adapter.get_workflow_handle(workflow_id)
+        payload = await asyncio.wait_for(
+            handle.query("get_step_ledger"),
+            timeout=_REMEDIATION_STEP_LEDGER_QUERY_TIMEOUT_SECONDS,
+        )
+        steps = payload.get("steps") if isinstance(payload, Mapping) else None
+        if not isinstance(steps, list):
+            return []
+        return [row for row in steps if isinstance(row, Mapping)]
 
     async def check_system_paused(self) -> bool:
         """Return True if the system-wide worker pause singleton is active.
@@ -1042,13 +1059,20 @@ class TemporalExecutionService:
                 "workflow.publish.mode is unsupported for remediation."
             )
 
-        target_record = await self._session.get(
-            TemporalExecutionCanonicalRecord, target_workflow_id
+        target_record = await load_remediation_target(
+            self._session, target_workflow_id
         )
         if target_record is None:
             raise TemporalExecutionValidationError(
                 f"Remediation target not found: {target_workflow_id}"
             )
+        if isinstance(target_record, TemporalExecutionCanonicalRecord) and (
+            await self._session.get(TemporalExecutionRecord, target_workflow_id)
+            is None
+        ):
+            # The link is keyed to the target's projection row; repair it in
+            # the same transaction as the link.
+            await self._upsert_projection_from_source(target_record)
         if not self._can_reference_remediation_target(
             target_record,
             owner_id=owner_id,
@@ -1382,11 +1406,11 @@ class TemporalExecutionService:
     def _target_step_selector_identity(
         cls, record: TemporalExecutionCanonicalRecord
     ) -> dict[str, Any]:
-        """Collect target-owned selector identity from canonical persisted state.
+        """Collect target-owned selector identity from persisted target state.
 
         Remediation authoring may copy selectors from several bounded target
         projections, but create admission must never trust those posted values.
-        The canonical record remains the source of truth for exact membership.
+        The persisted target record remains the source of truth for membership.
         """
 
         output: dict[str, Any] = {

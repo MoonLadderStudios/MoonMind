@@ -181,6 +181,30 @@ def test_planning_failure_without_steps_still_emits_blocked_manifest() -> None:
     assert manifest.validation.result == "missing"
 
 
+def test_failure_outside_a_step_keeps_checkpoint_evidence_valid() -> None:
+    # A publication failure has no failed step to restart, but the accepted
+    # step's checkpoint is still valid evidence for diagnosis.
+    manifest = _build(
+        step_ledger_rows=[_rows()[0]],
+        checkpoint_refs_by_boundary={
+            "prepare": {"after_execution": "artifact://checkpoint/after"}
+        },
+        failure_diagnostic={
+            "stage": "publishing",
+            "category": "execution_error",
+            "message": "PR head moved",
+        },
+    )
+
+    assert manifest.failed_logical_step_id is None
+    assert manifest.validation.result == "valid"
+    assert manifest.resume_allowed is False
+    assert manifest.blocked_reason == "no_failed_step_execution_to_resume"
+    eligibility = manifest.recovery_eligibility
+    assert eligibility.disabled_reason_code == "RECOVERY_TARGET_UNAVAILABLE"
+    assert eligibility.checkpoint_validation_status == "valid"
+
+
 def test_environment_failure_routes_to_fix_environment_guidance() -> None:
     manifest = _build(
         checkpoint_refs_by_boundary={},
