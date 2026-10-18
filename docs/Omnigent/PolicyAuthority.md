@@ -26,9 +26,10 @@ CPU, memory, process, timeout, temporary storage and concurrency; named network
 and enforced egress; locator/mutation/mount/UID/GID/cache/artifact/Skill/tool/
 OAuth/state boundaries; Provider Profile compatibility and capacity; the full
 session lifecycle; capture classes, bounded logs, redaction and completeness;
-checkpoint/resume/branch/publication/promotion; remediation allowlists, risks,
-locks, limits and autonomy; reviewer requirements; retention, rollout,
-diagnostics and deprecation.
+checkpoint/resume/branch/publication/promotion; retention, rollout,
+diagnostics and deprecation. The `remediation` and `approvals` sections are
+validated and bound into the digest, but no boundary consumes them: a
+remediation never acts on its target, and nothing else resolves approval rules.
 
 Documents contain references only. Secret bodies, OAuth-volume content, Docker
 socket access, arbitrary Docker options, and raw machine paths are invalid.
@@ -51,7 +52,7 @@ Validation precedes credentials, leases, sessions, mounts, or host mutation.
 Compilation canonicalizes the complete document into
 `omnigent-policy:sha256:<digest>`. Workflow/step manifests, bridge sessions and
 first messages, profiles and leases, host diagnostics and cleanup, ContextPacks,
-checkpoints and branch turns, remediation and approvals, capture manifests,
+checkpoints and branch turns, capture manifests,
 terminal summaries, audit, and conformance evidence carry the same envelope.
 Every boundary consumes its compiled section and rejects missing, unknown, or
 contradictory authority without widening or substitution.
@@ -66,25 +67,8 @@ remain mandatory before lease acquisition or host mutation.
 
 Stable diagnostics cover invalid images, unavailable host/backend, missing
 egress, unsafe mounts, unsupported workspace, incompatible profile,
-resource/capacity excess, missing capture, denied remediation/checkpoint, and
+resource/capacity excess, missing capture, denied checkpoint, and
 stale versions.
-
-## Approvals
-
-Actions resolve under the bound snapshot to `allow`, `approval_required`, or
-`deny`. Approval-required rules name an approval class and reviewer rule.
-
-MoonMind persists the reviewer decision on the owning remediation link and
-resolves its opaque `approvalRef` at the trusted dispatch boundary. A caller
-string or structurally valid binding is insufficient. The stored action and
-parameter digests, target run/state, security profile and immutable policy
-authority must still match; denied, expired, consumed, or stale records fail
-closed before Omnigent or another owning adapter runs. High-risk reviewer rules
-are evaluated against the authenticated reviewer, separately from the action
-requester.
-Requests bind policy ref/digest, target expected state, and snapshot ref. Policy
-changes do not authorize pending requests; mismatch fails stale and is
-re-evaluated.
 
 ## Bootstrap migration
 

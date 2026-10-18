@@ -61,11 +61,9 @@ Progress uses the validated remaining-work/candidate evidence identity. Repeated
 
 ## 5. When immediate verification is still required
 
-Administrative effects on sessions, hosts, leases, locks, helpers, cleanup, target liveness, or repository publication retain their exact action/resource/postcondition verification. Destructive/high-risk or dependent repairs may require an intermediate health check or full gate. [Workflow Remediation §11.6.1](WorkflowRemediation.md#1161-trusted-post-action-verification-phase) owns action dispositions such as `verified_resolved`, `verified_no_change`, `still_failed`, `regressed`, `evidence_unavailable`, `approval_required`, `verification_failed`, and `canceled`.
+Destructive/high-risk or dependent repairs may require an intermediate health check or full gate. Repository publication keeps its own postcondition verification.
 
-Delivery, pending verification, operational postcondition, and objective repair are separate. Verify exact linked branch/recovery result identity without rewriting the historical source failure. A successful pause, lease reconciliation, or branch completion proves neither the coding objective nor separately requested publication/promotion. LLM verdicts cannot replace authorization, effect reconciliation, or secret controls.
-
-Long-running action verification persists under the existing action owner and resumes from authoritative results or bounded durable reconciliation. Short in-process polling, browser presence, or mutation redispatch cannot be the only completion path.
+Delivery, pending verification, operational postcondition, and objective repair are separate. Verify exact linked branch/recovery result identity without rewriting the historical source failure. A branch completion proves neither the coding objective nor separately requested publication/promotion. LLM verdicts cannot replace authorization, effect reconciliation, or secret controls.
 
 ## 6. Recommended step labels
 
