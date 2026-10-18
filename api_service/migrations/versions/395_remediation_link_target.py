@@ -11,7 +11,7 @@ The constraint is added ``NOT VALID`` in both directions: existing rows are
 kept as they are and new rows are checked. Downgrade keeps links that target
 schedule-started runs rather than deleting remediation history.
 
-Revision ID: 395_remediation_target_projection
+Revision ID: 395_remediation_link_target
 Revises: 394_default_conn_issues_grant
 """
 
@@ -21,7 +21,7 @@ from typing import Union
 
 from alembic import op
 
-revision: str = "395_remediation_target_projection"
+revision: str = "395_remediation_link_target"
 down_revision: Union[str, None] = "394_default_conn_issues_grant"
 branch_labels = None
 depends_on = None
