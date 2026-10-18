@@ -13,6 +13,7 @@ import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 import { newRequestId } from '../lib/requestId';
 import {
   clearRecurringScheduleFocusRequest,
@@ -2013,6 +2014,11 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
   });
 
   const schedules = data?.items || [];
+  const visibleScheduleIds = useMemo(
+    () => (!routeDefinitionId && data ? data.items.map((schedule) => schedule.id) : null),
+    [data, routeDefinitionId],
+  );
+  usePublishVisibleCollectionItems('recurring', visibleScheduleIds);
   const activeFilters = activeRecurringFilterEntries(filters);
   const nextCursor = cleanCursor(data?.nextPageToken || null);
   const pageIndex = cursorStack.length;

@@ -4,6 +4,8 @@ import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
+import { RouterSearchListener } from '../components/RouterSearchListener';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
@@ -791,6 +793,15 @@ function sortRows(
   return copy;
 }
 
+/** The list's shareable URL query; sort stays out of it (it is current-page-only). */
+function workflowListUrlQuery(filters: ColumnFilters, pageSize: number, cursor: string | null): string {
+  const params = new URLSearchParams();
+  appendFilterParams(params, filters);
+  params.set('limit', String(pageSize));
+  if (cursor) params.set('nextPageToken', cursor);
+  return params.toString();
+}
+
 function replaceUrlQuery(params: URLSearchParams) {
   const queryText = params.toString();
   const path = window.location.pathname;
@@ -1346,8 +1357,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   );
 
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
+  // The URL the applied filters came from: the mount URL, or a later URL this
+  // page did not write (the Workflows nav link, Back/Forward).
+  const [filterUrlParams, setFilterUrlParams] = useState(initial);
 
-  const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
+  const initialFilterValidationErrors = useMemo(
+    () => validateInitialFilterParams(filterUrlParams),
+    [filterUrlParams],
+  );
   const focusListOnWorkspaceReturn = useMemo(
     () => consumeWorkflowListReturnFocusIntent(initial),
     [initial],
@@ -1425,15 +1442,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const syncUrl = useCallback(() => {
     if (filterValidationErrors.length > 0) return;
-    const params = new URLSearchParams();
-    appendFilterParams(params, filters);
-    params.set('limit', String(pageSize));
-    if (listCursor) params.set('nextPageToken', listCursor);
-    params.delete(WORKFLOW_LIST_CONTEXT_RETURN_PARAM);
     // MM-954: do not persist sort/sortDir to the URL. Sorting only reorders the
     // currently loaded page, so writing it to the URL would falsely imply a
     // global server-side sort across the full filtered result set.
-    replaceUrlQuery(params);
+    replaceUrlQuery(new URLSearchParams(workflowListUrlQuery(filters, pageSize, listCursor)));
   }, [
     filters,
     filterValidationErrors.length,
@@ -1444,6 +1456,33 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   useEffect(() => {
     syncUrl();
   }, [syncUrl]);
+
+  // URL -> filters: adopt a query this page did not write. Its own writes
+  // round-trip to the same canonical query and are ignored.
+  const adoptUrlSearch = (search: string) => {
+    const params = new URLSearchParams(search);
+    const nextFilters = parseInitialFilters(params);
+    const limitParam = params.get('limit') ?? params.get('pageSize');
+    const nextPageSize = limitParam !== null
+      ? parsePageSize(limitParam)
+      : readDashboardPreferences().workflowListPageSize;
+    const nextCursor = hasUnsupportedWorkflowScopeState(params)
+      ? null
+      : params.get('nextPageToken')?.trim() || null;
+    if (
+      workflowListUrlQuery(nextFilters, nextPageSize, nextCursor)
+      === workflowListUrlQuery(filters, pageSize, listCursor)
+    ) {
+      return;
+    }
+    setFilterUrlParams(params);
+    setHasEditedFilters(false);
+    setFilters(nextFilters);
+    setDraftFilters(nextFilters);
+    setPageSize(nextPageSize);
+    setListCursor(nextCursor);
+    setCursorStack([]);
+  };
 
   const listQueryParams = useMemo(() => {
     const params = new URLSearchParams();
@@ -1840,6 +1879,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const sortedItems = useMemo(() => {
     return sortRows(pageItems, sortField, sortDir, knownProviderProfiles.ambiguous);
   }, [pageItems, sortField, sortDir, knownProviderProfiles.ambiguous]);
+  const visibleWorkflowIds = useMemo(
+    () => (data ? sortedItems.map(rowWorkflowId).filter(Boolean) : null),
+    [data, sortedItems],
+  );
+  usePublishVisibleCollectionItems('workflow', visibleWorkflowIds);
   const detailListContext = useMemo(() => {
     const params = new URLSearchParams();
     appendFilterParams(params, filters);
@@ -2681,6 +2725,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
+      <RouterSearchListener onSearchChange={adoptUrlSearch} />
       {hasWorkflowListNotices ? (
         <section className="workflow-list-notices-deck" aria-label="Workflow list notices">
           {!listEnabled ? (

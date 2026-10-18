@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { BrowserRouter, Link } from 'react-router-dom';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
@@ -10,6 +11,7 @@ import {
   DASHBOARD_PREFERENCES_VERSION,
 } from '../utils/dashboardPreferences';
 import { WorkflowListPage } from './workflow-list';
+import { VisibleCollectionItemsContext } from '../lib/visibleCollectionItems';
 
 describe('Workflows Entrypoint', () => {
   const mockPayload: BootPayload = {
@@ -1577,6 +1579,74 @@ describe('Workflows Entrypoint', () => {
     expect(
       updatedLaterLink.compareDocumentPosition(createdLateLink) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it('publishes the rows it shows, in display order, for the shell first-item choice', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'older-row',
+            source: 'temporal',
+            title: 'Older row',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T19:00:00Z',
+            updatedAt: '2026-04-15T19:05:00Z',
+          },
+          {
+            taskId: 'newer-row',
+            source: 'temporal',
+            title: 'Newer row',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T00:00:00Z',
+            updatedAt: '2026-04-15T20:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+    const publish = vi.fn();
+
+    renderWithClient(
+      <VisibleCollectionItemsContext.Provider value={{ publish }}>
+        <WorkflowListPage payload={mockPayload} />
+      </VisibleCollectionItemsContext.Provider>,
+    );
+
+    await screen.findAllByText('Newer row');
+    await waitFor(() => {
+      expect(publish).toHaveBeenLastCalledWith('workflow', ['newer-row', 'older-row']);
+    });
+  });
+
+  it('follows the URL when navigation drops its filters', async () => {
+    window.history.pushState({}, 'Test', '/workflows?stateIn=failed');
+
+    renderWithClient(
+      <BrowserRouter>
+        <Link to="/workflows">Workflows nav</Link>
+        <WorkflowListPage payload={mockPayload} />
+      </BrowserRouter>,
+    );
+
+    await screen.findAllByText('Example task');
+    expect(String(lastExecutionListUrl())).toContain('stateIn=failed');
+    expect(screen.getByLabelText('Active filters').textContent).toContain('failed');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Workflows nav' }));
+
+    await waitFor(() => {
+      expect(String(lastExecutionListUrl())).not.toContain('stateIn');
+    });
+    expect(screen.queryByLabelText('Active filters')).toBeNull();
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows');
+      expect(window.location.search).not.toContain('stateIn');
+    });
   });
 
   it('reuses the trimmed repository filter for both the request and the query key', async () => {

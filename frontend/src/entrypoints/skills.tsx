@@ -30,6 +30,7 @@ import {
 } from '../lib/collectionListDisplayMode';
 import { updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
+import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 
 /**
  * Normalized Skills catalog item shared by the full table, the sidebar, and
@@ -657,6 +658,11 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
     () => skills.filter((item) => skillMatchesFilter(item, filterText)),
     [filterText, skills],
   );
+  const visibleSkillIds = useMemo(
+    () => (listDisplayMode === 'table' && skillsQuery.data ? filteredSkills.map((item) => item.id) : null),
+    [filteredSkills, listDisplayMode, skillsQuery.data],
+  );
+  usePublishVisibleCollectionItems('skill', visibleSkillIds);
   const selectedSkill = useMemo(
     () => (routeSkillId ? skills.find((item) => item.id === routeSkillId) ?? null : null),
     [routeSkillId, skills],
