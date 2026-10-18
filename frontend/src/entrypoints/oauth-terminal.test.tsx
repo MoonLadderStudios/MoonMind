@@ -173,6 +173,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('OAuthTerminalPage chrome', () => {
+  it('titles the tab and keeps one page h1', async () => {
+    renderPage();
+    await waitForSocket();
+    expect(screen.getByRole('heading', { level: 1, name: 'Provider Login Terminal' })).toBeTruthy();
+    expect(document.querySelectorAll('h1')).toHaveLength(1);
+    expect(document.title).toBe('Provider Login Terminal | MoonMind');
+  });
+});
+
 describe('OAuthTerminalPage clipboard behavior', () => {
   it('offers selectable text with intact wrapped URLs without clipboard permission', async () => {
     renderPage();

@@ -79,6 +79,8 @@ async function renderProvidersPage(): Promise<void> {
     </BrowserRouter>,
     { container: panel },
   );
+  // The profile editor opens from Add profile rather than always rendering.
+  (await screen.findByRole('button', { name: 'Add profile' })).click();
   await screen.findByRole('list', { name: 'Model and effort tiers' });
   await screen.findByText('Managed Secrets');
 }
@@ -129,7 +131,7 @@ describe('Providers & Secrets phone gutters', () => {
     // second gutter on top of the dashboard root.
     expectInsetAtMost(header, shell, rootGutter, 'page header card');
     expectInsetAtMost(profiles, shell, rootGutter, 'Profiles section');
-    expectInsetAtMost(header.querySelector('h2')!, header, LEVEL_INSET_PX, 'page title');
+    expectInsetAtMost(header.querySelector('h1')!, header, LEVEL_INSET_PX, 'page title');
 
     // Sections stay visually separate without desktop-sized vertical gaps.
     const gap = profiles.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
