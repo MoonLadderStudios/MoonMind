@@ -979,9 +979,128 @@ def _credential_recovery_container_facts(
     }
 
 
+async def _admit_stock_native_catalog(client, factory, host_class, monkeypatch):
+    """Check real stock discovery and pure plan admission without provider input.
+
+    The existing driver verifies the server registry digest before supplying it.
+    The host's build digest remains separate. This is catalog/compiler evidence,
+    not a provider turn or qualification of the generic Codex execution path.
+    """
+    import json
+
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        DbHarnessCatalogRepository,
+        OmnigentHarnessCatalogService,
+    )
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        create_binding_set,
+    )
+    from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+    from moonmind.omnigent.harness_platform.host_classes import (
+        OmnigentHostClassSelector,
+    )
+    from moonmind.omnigent.harness_platform.planner import compile_execution_plan
+    from moonmind.omnigent.harness_platform.skills import create_resolved_skillset
+
+    server_digest = os.environ["MOONMIND_CREDENTIAL_RECOVERY_SERVER_IMAGE_DIGEST"]
+    repository = DbHarnessCatalogRepository(factory)
+    # These switches select this isolated test's supported catalog. They do not
+    # grant credentials, start turns, or change the deployment's rollout state.
+    with monkeypatch.context() as scoped:
+        scoped.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
+        scoped.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+        catalog = await OmnigentHarnessCatalogService(
+            client=client,
+            repository=repository,
+            endpoint_ref="exact-docker-test",
+            omnigent_build_digest=server_digest,
+            observation_overlay=_overlay_native_harnesses,
+        ).synchronize()
+        assert (
+            await repository.load(catalog.snapshot.catalogRef)
+        ).snapshot == catalog.snapshot
+        assert catalog.snapshot.omnigentBuildDigest == server_digest
+        agents = {item["name"]: item for item in catalog.diagnostics["agents"]}
+        harnesses = {item.id: item for item in catalog.snapshot.harnesses}
+        trusts = {item.harnessId: item for item in catalog.trust_records}
+        for harness_id in ("codex-native", "claude-native", "opencode-native"):
+            agent = agents[harness_id + "-ui"]
+            assert agent["id"] and agent["harness"] == harness_id
+            harness = harnesses[harness_id]
+            registered = harness_registration(harness_id)
+            assert harness.capabilities.integrationMode == registered.integrationMode
+            assert harness.capabilities.authModel == registered.authModel
+            selected_host = OmnigentHostClassSelector().select(
+                harness=harness,
+                omnigent_version=catalog.snapshot.omnigentVersion,
+                integration_mode=registered.integrationMode,
+                materializer_refs=[registered.materializerRef],
+                requested_host_class_ref=registered.hostClassRef,
+                host_image_ref=host_class.imageRef,
+                omnigent_host_build_digest=host_class.omnigentBuildDigest,
+                architecture=host_class.architectures[0],
+            )
+            plan = compile_execution_plan(
+                agent_profile={
+                    "endpointRef": catalog.snapshot.endpointRef,
+                    "source": {
+                        "kind": "upstream",
+                        "upstreamId": agent["id"],
+                        "upstreamVersion": str(agent.get("version") or "unversioned"),
+                        "upstreamSnapshotDigest": "sha256:"
+                        + hashlib.sha256(
+                            json.dumps(agent, sort_keys=True).encode()
+                        ).hexdigest(),
+                    },
+                    "harness": {
+                        "id": harness_id,
+                        "catalogRef": catalog.snapshot.catalogRef,
+                        "implementationRef": harness.implementation.implementation_ref(),
+                    },
+                    "credentialSlots": [
+                        {
+                            "id": "primary-model",
+                            "acceptedAuthModels": [registered.authModel],
+                        }
+                    ],
+                },
+                harness_catalog=catalog.snapshot,
+                trust_record=trusts[harness_id],
+                resolved_skills=create_resolved_skillset(
+                    skill_bundle_bytes=b'{"skills":[]}',
+                    delivery_metadata={},
+                ),
+                credential_binding_set=create_binding_set(
+                    bindingSetId="stock-catalog-admission",
+                    version=1,
+                    bindings={
+                        "primary-model": {
+                            "providerProfileRef": "unused-catalog-fixture",
+                            "materializerRef": registered.materializerRef,
+                        }
+                    },
+                ),
+                host_class_ref=selected_host.ref,
+                host_class=selected_host,
+                launch_policy_ref=LAUNCH_POLICY_REF,
+                model_qualified_id=None,
+                model_effort=None,
+                model_route_ref=None,
+                model_normalized_options={},
+            )
+            assert plan.payload.harnessId == harness_id
+            assert plan.payload.agentSource["upstreamId"] == agent["id"]
+            assert plan.payload.harnessCatalogRef == catalog.snapshot.catalogRef
+        return agents
+
+
 @pytest.mark.asyncio
 async def test_exact_host_replacement_resumes_same_session_without_provider_input(
     tmp_path,
+    monkeypatch,
 ):
     """Qualify the credential-free Docker/session boundary of legacy recovery.
 
@@ -1152,11 +1271,10 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
         await _qualify_exact_image_github_projection(
             backend, image_ref, run_ref, host_class.runtime
         )
-        agents = await client.list_agents()
-        agent = next(
-            (item for item in agents if item.get("name") == "opencode-native-ui"), None
+        agents = await _admit_stock_native_catalog(
+            client, factory, host_class, monkeypatch
         )
-        assert agent is not None, "credential-free OpenCode stock agent is unavailable"
+        agent = agents["opencode-native-ui"]
         await launcher.launch(
             spec=spec,
             host_class=host_class,
@@ -1187,6 +1305,11 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
             receipt, expected_host_id=spec.expectedOmnigentHostId
         )
         initial = await client.get_session(session_id)
+        assert initial["agent_id"] == agent["id"]
+        assert initial["harness"] == HARNESS_ID
+        assert initial["status"] in {"idle", "running", "waiting", "failed"}
+        assert initial["pending_inputs"] == []
+        assert isinstance(initial["items"], list)
         initial_items = [
             item.get("id")
             for item in initial.get("items", [])
@@ -1243,6 +1366,9 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
         )
         resumed = await client.get_session(session_id)
         assert resumed["id"] == session_id
+        assert resumed["agent_id"] == agent["id"] and resumed["harness"] == HARNESS_ID
+        assert resumed["status"] in {"idle", "running", "waiting", "failed"}
+        assert resumed["pending_inputs"] == []
         assert resumed["host_id"] == spec.expectedOmnigentHostId
         assert resumed["runner_online"] is True
         assert resumed.get("runner_id") != initial.get("runner_id")
