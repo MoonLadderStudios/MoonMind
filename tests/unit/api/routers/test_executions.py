@@ -5092,7 +5092,10 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
-    db_session = SimpleNamespace(get=AsyncMock(return_value=None))
+    db_session = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        commit=AsyncMock(),
+    )
     test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     snapshot = {
         "profileId": "default",
@@ -5108,7 +5111,7 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
     with patch(
         "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
         new=AsyncMock(return_value=snapshot),
-    ):
+    ) as resolve_default_profile:
         response = test_client.post(
             "/api/executions",
             json={
@@ -5131,7 +5134,15 @@ def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
         )
 
     assert response.status_code == 422, response.text
-    assert "Selected Provider Profile" in response.json()["detail"]["message"]
+    assert response.json()["detail"] == {
+        "code": "invalid_execution_request",
+        "message": "Provider profile not found: 'codex-oauth-profile'.",
+    }
+    db_session.get.assert_awaited_once_with(
+        ManagedAgentProviderProfile, "codex-oauth-profile"
+    )
+    resolve_default_profile.assert_not_awaited()
+    db_session.commit.assert_not_awaited()
     service.create_execution.assert_not_awaited()
 
 
@@ -9608,11 +9619,36 @@ def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
     }
     assert initial_parameters["workflow"]["publish"] == {"mode": "none"}
 
+
+@pytest.fixture
+def caller_runtime_profile_session() -> SimpleNamespace:
+    provider_profile = ManagedAgentProviderProfile(
+        profile_id="codex_default",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        enabled=True,
+        default_model="gpt-profile-default",
+        default_effort="low",
+        model_tiers=[],
+        default_model_tier=None,
+    )
+
+    async def get_row(model, key):
+        if model is ManagedAgentProviderProfile and key == provider_profile.profile_id:
+            return provider_profile
+        return None
+
+    return SimpleNamespace(get=AsyncMock(side_effect=get_row))
+
+
 def test_create_task_shaped_execution_inherits_caller_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
+    db_session = caller_runtime_profile_session
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     service.describe_execution.return_value = SimpleNamespace(
         workflow_id="mm:parent-task",
         owner_id=str(user.id),
@@ -9654,11 +9690,17 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
         },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
+    db_session.get.assert_any_await(ManagedAgentProviderProfile, "codex_default")
+    service.create_execution.assert_awaited_once()
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
+    assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
     assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert initial_parameters["profileId"] == "codex_default"
+    assert initial_parameters["requestedModel"] == "gpt-5.4"
+    assert initial_parameters["modelSource"] == "task_override"
     assert initial_parameters["model"] == "gpt-5.4"
     assert initial_parameters["effort"] == "high"
     runtime = initial_parameters["workflow"]["runtime"]
@@ -9685,6 +9727,7 @@ def _execution_fanout_token(*, parent_workflow_id: str = "mm:parent-task") -> st
 
 def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, service, user = client
     for dependency in tuple(test_client.app.dependency_overrides):
@@ -9711,9 +9754,8 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
         search_attributes={},
     )
 
-    test_client.app.dependency_overrides[get_async_session] = lambda: (
-        SimpleNamespace(get=AsyncMock(return_value=None))
-    )
+    db_session = caller_runtime_profile_session
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     response = test_client.post(
         "/api/executions",
         headers={
@@ -9736,13 +9778,20 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
         },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
+    db_session.get.assert_any_await(ManagedAgentProviderProfile, "codex_default")
+    service.create_execution.assert_awaited_once()
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
     assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
     assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert initial_parameters["profileId"] == "codex_default"
+    assert initial_parameters["workflow"]["runtime"]["executionProfileRef"] == (
+        "codex_default"
+    )
     assert service.create_execution.await_args.kwargs["owner_id"] == user.id
+    assert service.create_execution.await_args.kwargs["owner_type"] == "user"
 
 
 def test_execution_fanout_cannot_author_recovery_or_profile_snapshots(
