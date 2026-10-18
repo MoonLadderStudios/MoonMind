@@ -15,7 +15,6 @@ import { responseError } from '../lib/api/client';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
-import { responseError } from '../lib/api/client';
 import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 import { newRequestId } from '../lib/requestId';
 import {
@@ -1858,7 +1857,7 @@ function ScheduleRowActions({
     },
     queryFn: async () => {
       const response = await fetch(runsEndpoint, { credentials: 'include' });
-      if (!response.ok) throw new Error('Failed to fetch schedule runs');
+      if (!response.ok) throw await responseError(response, 'Failed to fetch schedule runs');
       return ScheduleRunsResponseSchema.parse(await response.json());
     },
   });

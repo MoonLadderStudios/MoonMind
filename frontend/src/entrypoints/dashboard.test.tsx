@@ -203,7 +203,7 @@ vi.mock('./skills', async () => {
   const { usePublishVisibleCollectionItems } = await vi.importActual<
     typeof import('../lib/visibleCollectionItems')
   >('../lib/visibleCollectionItems');
-  return { default: ({ payload }: { payload: BootPayload }) => {
+  return { default: function MockSkillsPage({ payload }: { payload: BootPayload }) {
     const initialData = payload.initialData as {
       dashboardConfig?: { initialPath?: string };
       skillsListDisplayMode?: unknown;
@@ -231,7 +231,7 @@ vi.mock('./workflows-workspace', async () => {
   const { usePublishVisibleCollectionItems } = await vi.importActual<
     typeof import('../lib/visibleCollectionItems')
   >('../lib/visibleCollectionItems');
-  return { default: ({ payload }: { payload: BootPayload }) => {
+  return { default: function MockWorkflowsWorkspace({ payload }: { payload: BootPayload }) {
     const isDetailRoute =
       window.location.pathname.startsWith('/workflows/') && window.location.pathname !== '/workflows/new';
     const isCreateRoute = window.location.pathname === '/workflows/new';
