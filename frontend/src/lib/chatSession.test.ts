@@ -405,6 +405,20 @@ describe('chat session bookkeeping cost (MoonLadderStudios/MoonMind#4870)', () =
     expect(blocks.some((block) => block.kind === 'assistant' && block.text.includes('delta 3 '))).toBe(true);
   });
 
+  it('streams deltas only into the open assistant block when earlier turns share its scope', () => {
+    const { blocks } = projectChatSessionBlocks([
+      row(1, 'turn_started', 'turn one'),
+      row(2, 'assistant_message_delta', 'first '),
+      row(3, 'assistant_message_delta', 'answer'),
+      row(4, 'turn_started', 'turn two'),
+      row(5, 'assistant_message_delta', 'second '),
+      row(6, 'assistant_message_delta', 'answer'),
+    ]);
+
+    expect(blocks.filter((block) => block.kind === 'assistant').map((block) => block.text))
+      .toEqual(['first answer', 'second answer']);
+  });
+
   it('keeps single-event reduction immutable', () => {
     const before = reduceChatSessionEvents(createChatSessionState(), [
       mapObservabilityEventToChatSessionEvent(row(1, 'runtime_status', 'running')),

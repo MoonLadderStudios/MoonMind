@@ -5012,4 +5012,4 @@ tests = ["aiosqlite", "jsonschema", "pytest", "pytest-asyncio", "pytest-mock", "
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.16"
-content-hash = "b30316fa54bcae4d57c99700d1d9d4e2799b73fea3111b14e0ff744cdad98440"
+content-hash = "9d6a944393956ba5d4320d8f9211822e123bd840ef1546fed8584a26ce2addef"

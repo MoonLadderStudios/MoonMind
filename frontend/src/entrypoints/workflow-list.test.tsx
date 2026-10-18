@@ -3792,6 +3792,34 @@ describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
     expect(executionListCalls()).toHaveLength(afterPausing + 1);
   });
 
+  it('resumes list polling when the viewport drops below desktop with a column filter open', async () => {
+    const viewport = stubViewport(true);
+    const executionListCalls = () =>
+      vi.mocked(window.fetch).mock.calls.filter(([url]) =>
+        String(url).startsWith('/api/executions?'),
+      );
+    const pollPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { pollIntervalsMs: { list: 25 } } },
+    };
+    const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    renderWithClient(<WorkflowListPage payload={pollPayload} />);
+    await screen.findAllByText('Example task');
+
+    // An open column filter pauses polling so results do not shift under it.
+    fireEvent.click(screen.getByRole('button', { name: 'Status filter. No filter applied.' }));
+    expect(screen.getByRole('dialog', { name: 'Status filter' })).toBeTruthy();
+    await waitMs(30);
+    const whileFiltering = executionListCalls().length;
+    await waitMs(25 * 4);
+    expect(executionListCalls()).toHaveLength(whileFiltering);
+
+    // The mobile layout has no column popover, so it must not stay paused.
+    act(() => viewport.setDesktop(false));
+    await waitFor(() => expect(executionListCalls().length).toBeGreaterThan(whileFiltering + 1));
+  });
+
   it('does not refetch on focus when live updates are disabled', async () => {
     const executionListCalls = () =>
       vi.mocked(window.fetch).mock.calls.filter(([url]) =>

@@ -375,6 +375,7 @@ function RuntimeCommandDetail({
 const RESOURCE_EVIDENCE_MAX_POLL_MS = 60_000;
 
 type ResourceEvidenceQuery = {
+  queryHash?: string;
   state: {
     data?: unknown;
     status: string;
@@ -388,13 +389,20 @@ type ResourceEvidenceQuery = {
  * base rate and a terminal one stops once evidence is complete. Failing
  * requests, and evidence still pending after the workflow ended, keep polling
  * so late evidence is still collected, but back off per consecutive result:
- * 5s, 10s, 20s, 40s, then every 60s.
+ * 5s, 10s, 20s, 40s, then every 60s. The panel outlives a bridge session when
+ * the workspace navigates, so a different query starts a fresh streak.
  */
 export function createResourceEvidencePoller() {
   let stuckStreak = 0;
   let lastSettledAt = -1;
+  let lastQueryHash: string | undefined;
   return (query: ResourceEvidenceQuery, isTerminal: boolean): number | false => {
     const { state } = query;
+    if (query.queryHash !== lastQueryHash) {
+      lastQueryHash = query.queryHash;
+      stuckStreak = 0;
+      lastSettledAt = -1;
+    }
     const completeness = (state.data as { completeness?: string } | null | undefined)?.completeness;
     const stuck = state.status === 'error' || (isTerminal && (!completeness || completeness === 'pending'));
     const settledAt = Math.max(state.dataUpdatedAt, state.errorUpdatedAt);
@@ -11462,7 +11470,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 showEmpty={shouldFetchRemediationLinks && artifactsQuery.isSuccess}
               />
 
+              {/* Keyed by run so paging and expansion start fresh per collection. */}
               <ArtifactBrowserPanel
+                key={`${namespace}/${workflowId}/${artifactRunId ?? ''}`}
                 artifacts={artifactsQuery.data?.artifacts || []}
                 apiBase={payload.apiBase}
                 isLoading={artifactsQuery.isLoading}
