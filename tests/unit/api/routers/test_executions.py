@@ -21206,6 +21206,68 @@ def test_saved_profile_default_selects_create_route_and_model(
     assert parameters["runtimeCutover"]["selectionSource"] == "profile"
 
 
+@pytest.mark.parametrize("entrypoint", ["api", "recurring"])
+@pytest.mark.parametrize(
+    "selector",
+    [{"providerId": "minimax", "tagsAll": ["team"]}, {}],
+    ids=["explicit-pool", "empty-selector"],
+)
+def test_saved_profile_default_preserves_explicit_profile_selector(
+    monkeypatch, entrypoint, selector
+) -> None:
+    default_ref = AsyncMock(return_value="saved-openai")
+    monkeypatch.setattr(
+        "api_service.services.settings_catalog.SettingsCatalogService.default_provider_profile_ref",
+        default_ref,
+    )
+    profile = _mm3788_provider_profile(
+        profile_id="saved-openai", runtime_id="codex_cli"
+    )
+    profile.provider_id = "openai"
+    body = {
+        "type": "workflow",
+        "payload": {
+            "workflow": {
+                "instructions": "Choose an available account from the requested pool.",
+                "runtime": {"mode": "codex_cli", "profileSelector": selector},
+            }
+        },
+    }
+    create_definition = AsyncMock(
+        return_value=SimpleNamespace(
+            id=uuid4(),
+            name="Selector",
+            cron="0 * * * *",
+            timezone="UTC",
+            next_run_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    if entrypoint == "recurring":
+        body["payload"]["schedule"] = {"mode": "recurring", "cron": "0 * * * *"}
+        monkeypatch.setattr(
+            "api_service.services.recurring_workflows_service.RecurringWorkflowsService.create_definition",
+            create_definition,
+        )
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = (
+        create_definition.await_args.kwargs["target"]["initialParameters"]
+        if entrypoint == "recurring"
+        else service.create_execution.await_args.kwargs["initial_parameters"]
+    )
+    expected_profile = None if selector else profile.profile_id
+    assert parameters.get("profileId") == expected_profile
+    runtime = parameters["workflow"]["runtime"]
+    assert runtime.get("providerProfileRef") == expected_profile
+    assert runtime["profileSelector"] == selector
+    if selector:
+        default_ref.assert_not_awaited()
+    else:
+        default_ref.assert_awaited_once()
+
+
 def test_saved_profile_default_does_not_replace_explicit_profile(monkeypatch) -> None:
     from moonmind.workflow_cli import build_execution_payload
 

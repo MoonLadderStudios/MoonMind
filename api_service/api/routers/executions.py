@@ -8769,6 +8769,11 @@ async def _saved_default_provider_profile_ref(
     for payload in payloads:
         if payload.get("agentProfile") is not None:
             return None
+        # A selector delegates account choice to the provider pool. An exact
+        # saved default would constrain that pool, not merely fill an omission.
+        selector = payload.get("profileSelector")
+        if isinstance(selector, Mapping) and selector:
+            return None
         if any(
             str(payload.get(key) or "").strip()
             for key in (
@@ -8779,12 +8784,15 @@ async def _saved_default_provider_profile_ref(
             )
         ):
             return None
-    from api_service.services.settings_catalog import SettingsCatalogService
+    from api_service.services.settings_catalog import (
+        SettingsCatalogService,
+        coerce_settings_subject_id,
+    )
 
-    user_id = getattr(user, "id", None)
+    user_id = coerce_settings_subject_id(getattr(user, "id", None))
     catalog = SettingsCatalogService(
         session=session,
-        workspace_id=getattr(user, "workspace_id", None),
+        workspace_id=coerce_settings_subject_id(getattr(user, "workspace_id", None)),
         user_id=user_id,
     )
     return await catalog.default_provider_profile_ref(

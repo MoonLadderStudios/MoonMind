@@ -453,6 +453,18 @@ class SettingsDiagnosticsResponse(BaseModel):
     values: dict[str, SettingsDiagnosticRead]
 
 
+def coerce_settings_subject_id(value: Any) -> UUID | None:
+    """Normalize persisted settings subjects; machine identities have no user scope."""
+    if isinstance(value, UUID):
+        return value
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def settings_permissions_for_user(user: Any) -> set[str]:
     if bool(getattr(user, "is_superuser", False)):
         return set(SETTINGS_PERMISSION_NAMES)
