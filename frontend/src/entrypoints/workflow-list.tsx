@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { responseError } from '../lib/api/client';
 import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 import { RouterSearchListener } from '../components/RouterSearchListener';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
@@ -808,49 +809,6 @@ function replaceUrlQuery(params: URLSearchParams) {
   navigateTo(queryText ? `${path}?${queryText}` : path, { replace: true });
 }
 
-function sanitizeApiErrorMessage(message: string): string {
-  return message.replace(/\s+/g, ' ').trim().slice(0, 500);
-}
-
-function apiErrorMessageFromPayload(payload: unknown): string | null {
-  if (typeof payload === 'string') {
-    return sanitizeApiErrorMessage(payload) || null;
-  }
-  if (!payload || typeof payload !== 'object') return null;
-  const record = payload as Record<string, unknown>;
-  if (typeof record.detail === 'string') {
-    return sanitizeApiErrorMessage(record.detail) || null;
-  }
-  if (record.detail && typeof record.detail === 'object' && !Array.isArray(record.detail)) {
-    const detail = record.detail as Record<string, unknown>;
-    if (typeof detail.message === 'string') {
-      return sanitizeApiErrorMessage(detail.message) || null;
-    }
-  }
-  if (Array.isArray(record.detail)) {
-    const firstMessage = record.detail
-      .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>).msg : null))
-      .find((message): message is string => typeof message === 'string');
-    if (firstMessage) return sanitizeApiErrorMessage(firstMessage) || null;
-  }
-  if (typeof record.message === 'string') {
-    return sanitizeApiErrorMessage(record.message) || null;
-  }
-  return null;
-}
-
-async function taskListErrorMessage(response: Response): Promise<string> {
-  try {
-    const payload = await response.json();
-    const message = apiErrorMessageFromPayload(payload);
-    if (message) return message;
-  } catch {
-    // Fall back to status text below when the body is empty or not JSON.
-  }
-  const statusText = sanitizeApiErrorMessage(response.statusText || '');
-  return statusText ? `Failed to fetch: ${statusText}` : 'Failed to fetch workflows.';
-}
-
 function emptyValueFilter(): ValueFilter {
   return { mode: 'include', values: [], blank: '' };
 }
@@ -1501,7 +1459,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     queryFn: async () => {
       const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
       if (!response.ok) {
-        throw new Error(await taskListErrorMessage(response));
+        throw await responseError(response, 'Failed to fetch workflows');
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
@@ -1545,7 +1503,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         appendFilterParams(params, facetFilters);
         const response = await fetch(`${payload.apiBase}/executions/facets?${params}`, { signal });
         if (!response.ok) {
-          throw new Error(`Failed to fetch facets: ${response.statusText}`);
+          throw await responseError(response, 'Failed to fetch facets');
         }
         return ExecutionFacetResponseSchema.parse(await response.json());
       },

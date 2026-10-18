@@ -30,6 +30,7 @@ import {
 } from '../lib/collectionListDisplayMode';
 import { updateDashboardPreferences } from '../utils/dashboardPreferences';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
+import { responseError } from '../lib/api/client';
 import { usePublishVisibleCollectionItems } from '../lib/visibleCollectionItems';
 
 /**
@@ -178,6 +179,8 @@ type MarkdownToken = {
   tokens?: MarkdownToken[];
   depth?: number;
   ordered?: boolean;
+  /** First number of an ordered list (marked gives '' for unordered lists). */
+  start?: number | '';
   items?: MarkdownListItem[];
   lang?: string;
   href?: string;
@@ -191,6 +194,50 @@ type MarkdownListItem = {
 
 function markdownTokens(markdown: string): MarkdownToken[] {
   return marked.lexer(markdown) as unknown as MarkdownToken[];
+}
+
+type FrontMatterEntry = { key: string; value: string };
+
+const FRONT_MATTER_PATTERN = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
+const FRONT_MATTER_KEY_PATTERN = /^([A-Za-z0-9_][\w.-]*):(?:[ \t]+(.*))?$/;
+
+function frontMatterScalar(raw: string): string {
+  const value = raw.trim();
+  // A block scalar indicator (`|`, `>-`, ...) means the value is on the
+  // following indented lines.
+  if (/^[|>][+-]?$/.test(value)) {
+    return '';
+  }
+  const quoted = /^(['"])(.*)\1$/.exec(value);
+  return quoted ? (quoted[2] ?? '') : value;
+}
+
+/**
+ * Split leading YAML front matter (a SKILL.md `name`, `description`, ...) from
+ * the Markdown body so it renders as metadata instead of a stray heading or
+ * paragraph. Only flat `key: value` front matter is recognized: indented lines
+ * continue the previous value, and anything else stays Markdown.
+ */
+function splitFrontMatter(markdown: string): { entries: FrontMatterEntry[]; body: string } {
+  const match = FRONT_MATTER_PATTERN.exec(markdown);
+  if (!match) {
+    return { entries: [], body: markdown };
+  }
+  const entries: FrontMatterEntry[] = [];
+  for (const line of (match[1] ?? '').split(/\r?\n/)) {
+    const keyMatch = FRONT_MATTER_KEY_PATTERN.exec(line);
+    const last = entries[entries.length - 1];
+    if (keyMatch) {
+      entries.push({ key: keyMatch[1] ?? '', value: frontMatterScalar(keyMatch[2] ?? '') });
+    } else if (line.trim() && last && /^\s/.test(line)) {
+      last.value = last.value ? `${last.value}\n${line.trim()}` : line.trim();
+    } else if (line.trim()) {
+      return { entries: [], body: markdown };
+    }
+  }
+  return entries.length > 0
+    ? { entries, body: markdown.slice(match[0].length) }
+    : { entries: [], body: markdown };
 }
 
 function isSafeMarkdownHref(value: string): boolean {
@@ -267,8 +314,13 @@ function renderBlockToken(token: MarkdownToken, key: string): ReactNode {
       );
     case 'list': {
       const ListTag = token.ordered ? 'ol' : 'ul';
+      // A list split by another block continues its numbering (`3.` after a
+      // paragraph), which the browser only shows through `start`.
+      const start = token.ordered && typeof token.start === 'number' && token.start !== 1
+        ? token.start
+        : undefined;
       return (
-        <ListTag key={key} className="mt-3 list-outside space-y-2 pl-6">
+        <ListTag key={key} className="mt-3 list-outside space-y-2 pl-6" start={start}>
           {(token.items || []).map((item, index) => (
             <li key={`${key}-${index}`} className={token.ordered ? 'list-decimal' : 'list-disc'}>
               {item.tokens && item.tokens.length > 0
@@ -306,11 +358,32 @@ function renderMarkdownBlocks(tokens: MarkdownToken[], keyPrefix: string): React
 }
 
 function MarkdownRenderer({ markdown }: { markdown: string }) {
-  const tokens = useMemo(() => markdownTokens(markdown), [markdown]);
-  if (tokens.length === 0) {
+  const { frontMatter, tokens } = useMemo(() => {
+    const { entries, body } = splitFrontMatter(markdown);
+    return { frontMatter: entries, tokens: markdownTokens(body) };
+  }, [markdown]);
+  if (tokens.length === 0 && frontMatter.length === 0) {
     return <p className="text-sm text-slate-500 dark:text-slate-400">No markdown content is available for this skill.</p>;
   }
-  return <>{renderMarkdownBlocks(tokens, 'skill-markdown')}</>;
+  return (
+    <>
+      {frontMatter.length > 0 ? (
+        <dl
+          role="group"
+          aria-label="Skill front matter"
+          className="mb-4 grid gap-1 rounded-lg border border-mm-border/80 p-3 text-xs leading-5"
+        >
+          {frontMatter.map((entry, index) => (
+            <div key={`${entry.key}-${index}`} className="flex gap-3">
+              <dt className="font-semibold text-slate-900 dark:text-white">{entry.key}</dt>
+              <dd className="min-w-0 whitespace-pre-line break-words">{entry.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {renderMarkdownBlocks(tokens, 'skill-markdown')}
+    </>
+  );
 }
 
 function recordLastSelectedSkill(skillId: string): void {
@@ -647,7 +720,7 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
         },
       });
       if (!response.ok) {
-        throw new Error('Failed to load skills.');
+        throw await responseError(response, 'Failed to load skills');
       }
       return normalizeSkillCatalog(await response.json());
     },
@@ -781,8 +854,7 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
         }),
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || 'Failed to create skill.');
+        throw await responseError(response, 'Failed to create skill');
       }
       return response.json();
     },
@@ -817,8 +889,7 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
         body,
       });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || 'Failed to upload skill zip.');
+        throw await responseError(response, 'Failed to upload skill zip');
       }
       return response.json() as Promise<{ name?: string; skill?: string }>;
     },
