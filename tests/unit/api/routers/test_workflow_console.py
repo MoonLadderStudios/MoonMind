@@ -377,9 +377,10 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     ]
     assert primary_keys == ["workflows", "create"]
     assert payload["endpoints"]["workflows"] == "/api/executions"
-    assert (
-        payload["endpoints"]["workflowUpdatesStream"] == "/api/workflows/updates/stream"
-    )
+    # No route serves a workflow update/event stream, so none is advertised;
+    # each dashboard query owns its own polling.
+    assert "workflowUpdatesStream" not in payload["endpoints"]
+    assert "workflowEventsStream" not in payload["endpoints"]
     assert payload["endpoints"]["remediations"] == "/api/executions/remediations"
     assert payload["workerPause"] == {
         "get": "/api/system/worker-pause",

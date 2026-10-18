@@ -230,6 +230,20 @@ describe('Workflow actions menu', () => {
     await waitFor(() => expect(postCalls('/signal')).toHaveLength(1));
   });
 
+  it('MoonLadderStudios/MoonMind#4870 refreshes the workflow list and detail after an action', async () => {
+    mockFetch(runningExecution);
+    const { queryClient } = renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const menu = await openWorkflowActionsMenu('Pause');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Pause' }));
+    await waitFor(() => expect(postCalls('/signal')).toHaveLength(1));
+    await waitFor(() => {
+      const keys = invalidateSpy.mock.calls.map(([filters]) => filters?.queryKey?.[0]);
+      expect(keys).toContain('workflow-list');
+      expect(keys).toContain('workflow-detail');
+    });
+  });
+
   it('keeps Force cancel reachable under Troubleshooting on a completed workflow', async () => {
     mockFetch(completedExecution);
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);

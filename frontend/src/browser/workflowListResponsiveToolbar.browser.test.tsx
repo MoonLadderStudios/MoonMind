@@ -293,7 +293,7 @@ describe('workflow list recorded Provider Profile', () => {
     for (const retired of ['Runtime', 'Harness', 'Backend', 'Host', 'Container']) {
       expect(headers.some((text) => text.trim().startsWith(retired))).toBe(false);
     }
-    // The mobile cards share the DOM, so equal-name checks are scoped to the desktop table.
+    // Only the desktop table is mounted at this viewport.
     const table = within(screen.getByRole('table'));
     expect(table.getByText('Work · acct-a')).toBeTruthy();
     expect(table.getByText('Work · acct-b')).toBeTruthy();

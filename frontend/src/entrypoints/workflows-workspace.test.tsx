@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserRouter } from 'react-router-dom';
 
@@ -11,13 +12,20 @@ vi.mock('./workflow-list', () => ({
 
 vi.mock('./workflow-detail', () => ({
   default: () => <div data-testid="workflow-detail-entrypoint">Workflow detail entrypoint</div>,
+  WorkflowDetailPage: () => <div data-testid="workflow-detail-page">Workflow detail page</div>,
+}));
+
+vi.mock('../components/workflows/WorkflowWorkspaceShell', () => ({
   WorkflowWorkspaceShell: ({
     displayMode,
+    children,
   }: {
     displayMode?: 'hidden' | 'sidebar' | 'table';
+    children?: ReactNode;
   }) => (
     <div data-testid="workflow-workspace-shell" data-display-mode={displayMode ?? 'unset'}>
       Workflow workspace shell
+      {children}
     </div>
   ),
 }));
@@ -61,7 +69,7 @@ describe('WorkflowsWorkspacePage', () => {
   it.each([
     { listEnabled: false, workspaceShellEnabled: true },
     { listEnabled: true, workspaceShellEnabled: false },
-  ])('honors disabled desktop workspace shell flags %#', (temporalDashboard) => {
+  ])('honors disabled desktop workspace shell flags %#', async (temporalDashboard) => {
     renderWorkspace({
       page: 'dashboard',
       apiBase: '/api',
@@ -72,14 +80,16 @@ describe('WorkflowsWorkspacePage', () => {
       },
     });
 
-    expect(screen.getByTestId('workflow-detail-entrypoint')).toBeTruthy();
+    expect(await screen.findByTestId('workflow-detail-entrypoint')).toBeTruthy();
     expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
   });
 
-  it('mounts the desktop workspace shell when runtime flags allow it', () => {
+  it('mounts the desktop workspace shell when runtime flags allow it', async () => {
     renderWorkspace({ page: 'dashboard', apiBase: '/api' });
 
+    // The shell renders at once; the detail page fills it after its chunk loads.
     expect(screen.getByTestId('workflow-workspace-shell')).toBeTruthy();
+    expect(await screen.findByTestId('workflow-detail-page')).toBeTruthy();
     expect(screen.queryByTestId('workflow-detail-entrypoint')).toBeNull();
   });
 
@@ -92,12 +102,12 @@ describe('WorkflowsWorkspacePage', () => {
     expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
   });
 
-  it('renders the create workflow route as the create surface', () => {
+  it('renders the create workflow route as the create surface', async () => {
     window.history.pushState({}, 'Workspace Create Test', '/workflows/new');
 
     renderWorkspace({ page: 'dashboard', apiBase: '/api' });
 
-    expect(screen.getByTestId('workflow-start-page')).toBeTruthy();
+    expect(await screen.findByTestId('workflow-start-page')).toBeTruthy();
     expect(screen.queryByTestId('workflow-list-page')).toBeNull();
     expect(screen.queryByTestId('workflow-workspace-shell')).toBeNull();
   });

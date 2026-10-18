@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from api_service.api.routers.temporal_artifacts import (
+    artifact_read_response_policy,
     _get_temporal_artifact_service,
     _raise_temporal_artifact_http,
     _resolve_principal,
@@ -467,20 +468,6 @@ def _session_resource_filename(artifact: object) -> str:
     return f"{artifact_id}.json" if is_json else artifact_id
 
 
-def _session_resource_response_policy(artifact: object, *, as_attachment: bool) -> tuple[str, dict[str, str]]:
-    """Only inert resource types may render on the operator's origin."""
-    media_type = str(getattr(artifact, "content_type", "") or "").split(";", 1)[0].strip().lower()
-    inert_types = {
-        "application/json", "text/plain", "image/png", "image/jpeg",
-        "image/gif", "image/webp", "image/avif", "image/bmp",
-    }
-    disposition = "inline" if not as_attachment and media_type in inert_types else "attachment"
-    return disposition, {
-        "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'",
-    }
-
-
 async def _read_session_resource_artifact(
     *,
     session_id: str,
@@ -504,7 +491,7 @@ async def _read_session_resource_artifact(
             artifact_id=artifact_id,
             principal=principal,
         )
-        disposition, headers = _session_resource_response_policy(artifact, as_attachment=as_attachment)
+        disposition, headers = artifact_read_response_policy(artifact, as_attachment=as_attachment)
         return FileResponse(
             path,
             filename=_session_resource_filename(artifact),
@@ -526,7 +513,7 @@ async def _read_session_resource_artifact(
         _raise_temporal_artifact_http(exc)
         raise
 
-    content_disposition_type, headers = _session_resource_response_policy(artifact, as_attachment=as_attachment)
+    content_disposition_type, headers = artifact_read_response_policy(artifact, as_attachment=as_attachment)
     filename = _session_resource_filename(artifact)
     return StreamingResponse(
         chunks,

@@ -63,6 +63,7 @@ if _ENABLE_TEST_UI_ROUTE:
 
 from api_service.api.routers.workflow_console import router as workflow_console_router
 from api_service.dashboard_static import DashboardStaticFiles
+from api_service.response_compression import add_response_compression
 from api_service.api.routers.agent_runs import router as agent_runs_router
 from api_service.api.routers.agent_runs import (
     sessions_router as session_resources_router,
@@ -1523,6 +1524,8 @@ def _resolve_cors_allowed_origins() -> list[str]:
             "cookie-authenticated browsers (#4121)."
         )
     return resolve_credentialed_cors_origins(explicit, allow_credentials=True)
+
+add_response_compression(app)
 
 app.add_middleware(
     CORSMiddleware,

@@ -2916,6 +2916,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           </>
         ) : (
           <>
+            {/* Mount only the layout this viewport shows; list state lives above
+                both, so a breakpoint change keeps sort, filters and density. */}
+            {isDesktop ? (
             <div className="queue-table-wrapper" data-layout="table" data-density={density}>
                 <table>
                   <colgroup>
@@ -3123,6 +3126,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   </tbody>
                 </table>
               </div>
+            ) : (
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
                       const statusSupplements = statusSupplementItems(row);
@@ -3198,6 +3202,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       );
                     })}
               </ul>
+            )}
               {sortedItems.length === 0 ? (
                 data?.nextPageToken ? (
                   // MoonLadderStudios/MoonMind#3947 (R2): an excluded-only page
