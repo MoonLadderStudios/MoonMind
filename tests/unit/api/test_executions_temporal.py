@@ -489,20 +489,18 @@ def test_normalize_temporal_list_scope_logs_retired_scope_safely(caplog) -> None
     assert "system\ninjected" not in message
 
 
-def test_execution_router_exposes_typed_and_legacy_recover_routes() -> None:
+def test_execution_router_exposes_retry_from_step_instead_of_recovery_routes() -> None:
     app = FastAPI()
     app.include_router(executions_module.router)
 
     route_paths = {getattr(route, "path", "") for route in _iter_test_routes(app.routes)}
 
     assert (
-        app.url_path_for("recover_execution_from_failed_step", workflow_id="wf-1")
-        == "/api/executions/wf-1/recover-from-failed-step"
+        app.url_path_for("retry_execution_from_step", workflow_id="wf-1")
+        == "/api/executions/wf-1/retry-from-step"
     )
-    assert (
-        app.url_path_for("recover_execution", workflow_id="wf-1")
-        == "/api/executions/wf-1/recover"
-    )
+    for retired in ("recover", "recover-from-failed-step", "recover-from-selected-step"):
+        assert f"/api/executions/{{workflow_id}}/{retired}" not in route_paths
     assert "/api/executions/{workflow_id}/resume-from-failed-step" not in route_paths
     assert "/api/workflows" not in route_paths
     with pytest.raises(NoMatchFound):

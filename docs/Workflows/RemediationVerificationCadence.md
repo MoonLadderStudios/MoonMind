@@ -4,7 +4,7 @@
 **Status:** Accepted
 **Owners:** MoonMind Platform and dashboard.
 
-Related: [Workflow Remediation](WorkflowRemediation.md), [Step Ledger and Progress](../Temporal/StepLedgerAndProgressModel.md), [Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md), [Recovery semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-failed-step-recovery-semantics), [Artifact Presentation](../Artifacts/ArtifactPresentationContract.md), and [Workflow Detail](../UI/WorkflowDetailsPage.md).
+Related: [Workflow Remediation](WorkflowRemediation.md), [Step Ledger and Progress](../Temporal/StepLedgerAndProgressModel.md), [Step Executions and Checkpointing](../Steps/StepExecutionsAndCheckpointing.md), [Retry from a step](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-retry-from-a-step), [Artifact Presentation](../Artifacts/ArtifactPresentationContract.md), and [Workflow Detail](../UI/WorkflowDetailsPage.md).
 
 ## 1. Purpose
 

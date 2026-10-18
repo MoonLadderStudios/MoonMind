@@ -2514,9 +2514,11 @@ class TemporalExecutionRemediationLink(Base):
         primary_key=True,
     )
     remediation_run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Schedule-started targets have only a projection row, so the target is
+    # keyed to the projection rather than the API source table.
     target_workflow_id: Mapped[str] = mapped_column(
         String(255),
-        ForeignKey("temporal_execution_sources.workflow_id", ondelete="CASCADE"),
+        ForeignKey("temporal_executions.workflow_id", ondelete="CASCADE"),
         nullable=False,
     )
     target_run_id: Mapped[str] = mapped_column(String(64), nullable=False)

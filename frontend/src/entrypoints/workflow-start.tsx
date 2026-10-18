@@ -7081,6 +7081,7 @@ function WorkflowStartPageContent({
         createStepStateEntry(1, {
           title: "Remediate target workflow",
           instructions: draft.instructions,
+          ...(draft.skill ? { skillId: draft.skill } : {}),
         }),
       ]);
       setNextStepNumber(2);

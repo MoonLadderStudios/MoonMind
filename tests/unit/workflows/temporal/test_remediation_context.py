@@ -19,7 +19,11 @@ from api_service.db.models import (
     TemporalArtifactRedactionLevel,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalExecutionProjectionSourceMode,
+    TemporalExecutionRecord,
     TemporalExecutionRemediationLink,
+    TemporalWorkflowType,
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal import (
@@ -31,6 +35,7 @@ from moonmind.workflows.temporal import (
     remediation_tools,
 )
 from moonmind.workflows.temporal.remediation_context import (
+    MAX_FAILURE_EVIDENCE_STEPS,
     RemediationContextBuilder,
     RemediationContextError,
     RemediationLifecyclePublisher,
@@ -636,6 +641,184 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
         assert "raw-api-key" not in serialized
         assert "password" not in serialized.lower()
         assert "token=" not in serialized.lower()
+
+@pytest.mark.asyncio
+async def test_scheduled_failed_run_remediation_context_embeds_failure_evidence(
+    tmp_path, mock_client_adapter
+):
+    """A schedule-started run has only a projection row and stays remediable."""
+
+    async with temporal_db(tmp_path) as session:
+        target_id = "mm:schedule-1-2026-10-18T03:35:00Z"
+        artifact_service = TemporalArtifactService(TemporalArtifactRepository(session))
+        manifest, _upload = await artifact_service.create(
+            principal=f"workflow:{target_id}",
+            content_type="application/json",
+            metadata_json={"name": "reports/recovery_manifest.json"},
+        )
+        await artifact_service.write_complete(
+            artifact_id=manifest.artifact_id,
+            principal=f"workflow:{target_id}",
+            payload=json.dumps(
+                {"blockedReason": "no_failed_step_execution_to_resume"}
+            ).encode("utf-8"),
+            content_type="application/json",
+        )
+        session.add(
+            TemporalExecutionRecord(
+                workflow_id=target_id,
+                run_id="scheduled-run",
+                owner_id="system",
+                owner_type=TemporalExecutionOwnerType.SYSTEM,
+                source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                state=MoonMindWorkflowState.FAILED,
+                entry="run",
+                memo={"title": "Scheduled search"},
+                search_attributes={},
+                artifact_refs=[],
+                parameters={
+                    "repository": "MoonLadderStudios/Tactics",
+                    "workflow": {
+                        "steps": [
+                            {
+                                "id": "implement",
+                                "title": "Implement",
+                                "instructions": "Implement the issue.",
+                            }
+                        ]
+                    },
+                },
+                finish_summary_json={
+                    "failure": {
+                        "category": "execution_error",
+                        "message": "ValueError: PR head no longer matches",
+                    },
+                    "lastStep": {"id": "implement"},
+                    "recoveryManifest": {"manifestRef": manifest.artifact_id},
+                    "publishContext": {"large": "x" * 10_000},
+                },
+            )
+        )
+        await session.commit()
+        ledger_handle = SimpleNamespace(
+            query=AsyncMock(
+                return_value={
+                    "steps": [
+                        {
+                            "logicalStepId": "implement",
+                            "order": 1,
+                            "title": "Implement",
+                            "status": "failed",
+                            "lastError": "ValueError: PR head no longer matches",
+                            "artifacts": {"runtimeDiagnostics": "art_diag"},
+                        }
+                    ]
+                }
+            )
+        )
+        mock_client_adapter.get_workflow_handle = AsyncMock(return_value=ledger_handle)
+        mock_client_adapter.start_workflow.side_effect = [
+            SimpleNamespace(run_id="remediation-run"),
+        ]
+        execution_service = TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        )
+
+        remediation = await execution_service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=None,
+            title="Remediate scheduled run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Find why the scheduled run failed.",
+                    "remediation": {
+                        "target": {"workflowId": target_id, "runId": "scheduled-run"},
+                        "authorityMode": "observe_only",
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.target_run_id == "scheduled-run"
+        _artifact, body = await artifact_service.read(
+            artifact_id=link.context_artifact_ref,
+            principal="service:remediation-context",
+            admitted_principal=f"workflow:{remediation.workflow_id}",
+        )
+        evidence = json.loads(body)["failureEvidence"]
+        assert evidence["failure"]["message"] == "ValueError: PR head no longer matches"
+        assert "publishContext" not in evidence
+        assert evidence["authoredWork"] == {
+            "repository": "MoonLadderStudios/Tactics",
+            "steps": [
+                {
+                    "id": "implement",
+                    "title": "Implement",
+                    "instructions": "Implement the issue.",
+                }
+            ],
+        }
+        assert evidence["steps"] == [
+            {
+                "logicalStepId": "implement",
+                "order": 1,
+                "title": "Implement",
+                "status": "failed",
+                "lastError": "ValueError: PR head no longer matches",
+                "artifacts": {"runtimeDiagnostics": "art_diag"},
+            }
+        ]
+        assert evidence["documents"] == [
+            {
+                "kind": "recovery_manifest",
+                "artifactRef": manifest.artifact_id,
+                "content": {"blockedReason": "no_failed_step_execution_to_resume"},
+            }
+        ]
+        assert evidence["unavailable"] == []
+        ledger_handle.query.assert_awaited_once_with("get_step_ledger")
+        # The ledger comes from the failed run the link pins, not from a
+        # successor a retry may have started meanwhile.
+        mock_client_adapter.get_workflow_handle.assert_awaited_once_with(
+            target_id, run_id="scheduled-run"
+        )
+
+
+@pytest.mark.asyncio
+async def test_failure_steps_keep_the_failed_step_when_the_ledger_is_bounded():
+    rows = [
+        {"logicalStepId": f"step-{order}", "order": order, "status": "completed"}
+        for order in range(1, MAX_FAILURE_EVIDENCE_STEPS + 31)
+    ]
+    rows[69]["status"] = "failed"
+    loader = AsyncMock(return_value=rows)
+    builder = RemediationContextBuilder(
+        session=None, artifact_service=None, step_ledger_loader=loader
+    )
+
+    steps, reason = await builder._failure_steps(
+        "mm:wf", run_id="run-1", failed_step_id="step-80"
+    )
+
+    assert reason is None
+    loader.assert_awaited_once_with("mm:wf", "run-1")
+    orders = [step["order"] for step in steps]
+    assert len(orders) == MAX_FAILURE_EVIDENCE_STEPS
+    assert orders == sorted(orders)
+    # The failed row, the recorded failed step, and their neighbors survive.
+    assert {68, 69, 70, 71, 72, 78, 79, 80, 81, 82} <= set(orders)
+    assert steps[orders.index(70)]["status"] == "failed"
+
 
 @pytest.mark.asyncio
 async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_follow(

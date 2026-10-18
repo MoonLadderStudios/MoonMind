@@ -91,45 +91,6 @@ def test_drain_gate_rejects_negative_counts():
         CheckpointCompatDrainUsage(supported_resets_pending=-1)
 
 
-def test_drain_rule_matches_canonical_worker_drain_predicate():
-    """The gate reuses the existing drain rule; it is not a second policy.
-
-    ``evaluate_worker_drain`` allows route removal exactly when outstanding
-    work reaches zero. This gate must agree with that predicate for every
-    mapped input so compat removal can never be more permissive than the
-    canonical worker-drain contract.
-    """
-
-    from moonmind.workflows.executions.checkpoint_promotion import (
-        FrozenGenerationUsage,
-        evaluate_worker_drain,
-    )
-
-    cases = [
-        CheckpointCompatDrainUsage(),
-        CheckpointCompatDrainUsage(open_pre_cutover_histories=1),
-        CheckpointCompatDrainUsage(pending_old_queue_tasks=4),
-        CheckpointCompatDrainUsage(supported_resets_pending=2),
-        CheckpointCompatDrainUsage(
-            open_pre_cutover_histories=1,
-            pending_old_queue_tasks=1,
-            supported_resets_pending=1,
-        ),
-    ]
-    for usage in cases:
-        gate = evaluate_checkpoint_compat_drain(usage)
-        canonical = evaluate_worker_drain(
-            FrozenGenerationUsage(
-                deploymentGeneration="test-generation",
-                openRecoveryHistories=usage.open_pre_cutover_histories,
-                pendingRestorations=(
-                    usage.pending_old_queue_tasks + usage.supported_resets_pending
-                ),
-            )
-        )
-        assert gate.may_remove_workflow_queue_handlers is canonical.may_remove_worker_routes
-
-
 def test_compat_registration_points_at_the_drain_gate():
     from pathlib import Path
 

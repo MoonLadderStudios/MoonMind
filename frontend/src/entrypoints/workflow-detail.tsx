@@ -75,6 +75,7 @@ import {
   describeWorkflowActionDisabledReason,
   ExecutionActionsSchema,
   isRemediationEligibleTarget,
+  requestRetryFromStep,
   type WorkflowActionMenuItem,
 } from '../lib/workflowActions';
 import {
@@ -1017,10 +1018,9 @@ const ExecutionDetailSchema = z
       .optional(),
     actions: ExecutionActionsSchema.optional(),
     finishSummary: z.unknown().nullable().optional(),
-    resume: z
+    retryFromStep: z
       .object({
         available: z.boolean().optional(),
-        checkpointRef: z.string().nullable().optional(),
         failedStepId: z.string().nullable().optional(),
         sourceRunId: z.string().nullable().optional(),
         disabledReason: z.string().nullable().optional(),
@@ -1056,7 +1056,6 @@ const ExecutionDetailSchema = z
       .nullable()
       .optional(),
     targetDiagnostics: TargetDiagnosticsSchema.nullable().optional(),
-    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
     interventionAudit: z
       .array(
         z
@@ -1888,14 +1887,6 @@ const StepLedgerSnapshotSchema = z.object({
   runScope: z.string().default('latest'),
   steps: z.array(StepLedgerRowSchema).default([]),
 });
-
-const StepExecutionDetailSchema = z
-  .object({
-    logicalStepId: z.string(),
-    executionOrdinal: z.number(),
-    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
-  })
-  .passthrough();
 
 const RunSummaryArtifactSchema = z
   .object({
@@ -7075,167 +7066,116 @@ function TargetDiagnosticsPanel({
   );
 }
 
-function RecoveryEvidencePanel({
-  recovery,
-  resume,
-  diagnostics,
-  onResumeFromFailedStep,
+type RetryStepOption = {
+  logicalStepId: string;
+  title: string;
+  isDefault: boolean;
+};
+
+/**
+ * Steps a failed run can restart from: every step it started, up to the
+ * earliest failed step, matching the server's default. The server makes the
+ * final decision from Temporal history, which records a step's start before
+ * the ledger sets startedAt, so a failed step counts as started without it.
+ */
+function retryStepOptions(
+  rows: z.infer<typeof StepLedgerRowSchema>[],
+  failedStepId: string | null | undefined,
+): RetryStepOption[] {
+  const isFailed = (row: z.infer<typeof StepLedgerRowSchema>) =>
+    row.status === 'failed' || row.logicalStepId === failedStepId;
+  const started = rows.filter((row) => Boolean(row.startedAt) || isFailed(row));
+  const defaultRow = started.find(isFailed) || started[started.length - 1];
+  if (!defaultRow) return [];
+  return started
+    .filter((row) => row.order <= defaultRow.order)
+    .map((row) => ({
+      logicalStepId: row.logicalStepId,
+      title: row.title || row.logicalStepId,
+      isDefault: row.logicalStepId === defaultRow.logicalStepId,
+    }));
+}
+
+function RetryFromStepPanel({
+  retry,
+  options,
+  selectedStepId,
+  onSelectStep,
+  onRetry,
   onRerun,
+  canRerun,
   busy,
   taskEditingOn,
 }: {
-  recovery: z.infer<typeof RecoveryEligibilitySchema> | null | undefined;
-  resume: ExecutionDetail['resume'];
-  diagnostics: z.infer<typeof TargetDiagnosticsSchema> | null | undefined;
-  onResumeFromFailedStep: () => void;
+  retry: ExecutionDetail['retryFromStep'];
+  options: RetryStepOption[];
+  selectedStepId: string;
+  onSelectStep: (stepId: string) => void;
+  onRetry: (stepId: string | null) => void;
   onRerun: () => void;
+  canRerun: boolean;
   busy: boolean;
   taskEditingOn: boolean;
 }) {
-  const diagnosticsRecovery = diagnostics?.recovery ?? null;
-  if (!recovery && !diagnosticsRecovery && !resume?.checkpointRef) return null;
-  const checkpointRef = recovery?.checkpointRef || resume?.checkpointRef || diagnostics?.recovery?.checkpointRef || null;
-  const requiredBoundary = recovery?.checkpointBoundary || recovery?.requiredBoundary || 'before_execution';
-  const disabledReason = recovery?.disabledReasonCode || resume?.disabledReason || null;
-  const sourceWorkflowId = recovery?.sourceWorkflowId || diagnostics?.recovery?.sourceWorkflowId || null;
-  const sourceRunId = recovery?.sourceRunId || resume?.sourceRunId || diagnostics?.recovery?.sourceRunId || null;
-  const diagnosticsEvidence = recovery?.evidence?.filter((item) =>
-    ['environment', 'provider_lease', 'preflight', 'sidecar', 'ghcr', 'diagnostics'].includes(item.category),
-  ) || [];
-  const preservedSteps = diagnosticsRecovery?.preservedSteps || [];
-  const disabledGuidance = (() => {
-    const runtime = recovery?.targetRuntimeId || 'the selected runtime';
-    const kind = recovery?.checkpointKind || 'the selected checkpoint kind';
-    const route = recovery?.restoreActivity || 'a registered restore route';
-    switch (disabledReason) {
-      case 'CHECKPOINT_RESTORE_UNSUPPORTED': return `${runtime} does not support workspace checkpoint restore. Retry from source.`;
-      case 'CHECKPOINT_RESTORE_ROUTE_MISSING': return `${runtime} has no registered restore route (${route}). Retry from source.`;
-      case 'CHECKPOINT_KIND_INCOMPATIBLE': return `${runtime} cannot restore ${kind}. Retry from source.`;
-      case 'CHECKPOINT_DESTINATION_IDENTITY_MISMATCH': return 'The selected destination runtime changed. Refresh recovery evidence before retrying.';
-      case 'CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING': return 'The immutable runtime capability snapshot is missing. Refresh recovery evidence.';
-      case 'CHECKPOINT_CAPABILITY_DIGEST_MISMATCH': return `${runtime} capabilities changed. Refresh recovery evidence before retrying.`;
-      case 'CHECKPOINT_ARTIFACT_INVALID': return 'The checkpoint artifact or its source identity is invalid. Retry from source.';
-      case 'RECOVERY_TARGET_UNAVAILABLE': return 'The checkpoint is valid, but this run has no supported recovery target. Use Edit for rerun or Full retry.';
-      case 'CHECKPOINT_SIDE_EFFECT_UNSAFE': return 'Prior side effects make checkpoint restoration unsafe. Resolve them or retry from source.';
-      case 'CHECKPOINT_BOUNDARY_INCOMPATIBLE': return 'This checkpoint boundary has no legal continuation phase. Retry from source.';
-      case 'CHECKPOINT_CAPTURE_UNSUPPORTED': return `${runtime} cannot capture a restorable workspace checkpoint. Retry from source.`;
-      case 'SAME_SESSION_UNREACHABLE': return 'The prior session is no longer reachable. Retry from source.';
-      case 'SAME_SESSION_CONTINUATION_UNSUPPORTED': return `${runtime} does not support same-session continuation. Retry from source.`;
-      default: return null;
-    }
-  })();
-
+  if (!retry) return null;
+  const reason = retry.disabledReason || null;
+  // Active and completed runs have nothing to retry; keep the panel quiet.
+  if (!retry.available && (!reason || reason === 'state_not_eligible')) return null;
+  const selected =
+    options.find((option) => option.logicalStepId === selectedStepId) ||
+    options.find((option) => option.isDefault) ||
+    null;
   return (
     <section className="detail-section">
-      <h3>Recovery evidence</h3>
-      {recovery?.operatorGuidance === 'fix_environment' ? (
+      <h3>Retry</h3>
+      {retry.available ? (
+        <>
+          <p className="small">
+            Retry continues this workflow from a step it already reached. Earlier steps keep
+            their results; the chosen step and every step after it run again on the installed
+            MoonMind version.
+          </p>
+          {options.length > 0 ? (
+            <div className="stack">
+              <label className="field-label" htmlFor="retry-from-step">
+                Restart from
+              </label>
+              <select
+                id="retry-from-step"
+                value={selected?.logicalStepId || ''}
+                disabled={busy}
+                onChange={(event) => onSelectStep(event.target.value)}
+              >
+                {options.map((option) => (
+                  <option key={option.logicalStepId} value={option.logicalStepId}>
+                    {option.title}
+                    {option.isDefault ? ' (failed step)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          <div className="action-row">
+            <button
+              type="button"
+              className="queue-action"
+              disabled={busy}
+              onClick={() => onRetry(selected?.logicalStepId || null)}
+            >
+              Retry from {selected && !selected.isDefault ? 'selected step' : 'failed step'}
+            </button>
+            {taskEditingOn && canRerun ? (
+              <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
+                Rerun from the start
+              </button>
+            ) : null}
+          </div>
+        </>
+      ) : (
         <p className="small">
-          Fix the runtime environment before retrying. Check the diagnostic refs below for sidecar, registry,
-          preflight, or provider lease failures.
+          Retry from a step is unavailable: {describeWorkflowActionDisabledReason(reason)}
         </p>
-      ) : recovery?.eligible ? (
-        <p className="small">
-          Resume from checkpoint is the default recovery action for boundary {formatStatusLabel(requiredBoundary)}.
-        </p>
-      ) : disabledReason ? (
-        <p className="small">Resume from checkpoint unavailable: {disabledGuidance || formatStatusLabel(disabledReason)}</p>
-      ) : null}
-
-      <div className="action-row">
-        {taskEditingOn && recovery?.eligible ? (
-          <button type="button" className="queue-action" disabled={busy} onClick={onResumeFromFailedStep}>
-            Resume from checkpoint
-          </button>
-        ) : null}
-        {taskEditingOn ? (
-          <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
-            Retry from source
-          </button>
-        ) : null}
-      </div>
-
-      <ul className="step-detail-list">
-        {checkpointRef ? (
-          <li><strong>Checkpoint:</strong> <code className="text-xs break-all">{checkpointRef}</code></li>
-        ) : null}
-        {requiredBoundary ? (
-          <li><strong>Required boundary:</strong> {formatStatusLabel(requiredBoundary)}</li>
-        ) : null}
-        {sourceWorkflowId ? (
-          <li><strong>Source workflow:</strong> <code className="text-xs break-all">{sourceWorkflowId}</code></li>
-        ) : null}
-        {sourceRunId ? (
-          <li><strong>Source run:</strong> <code className="text-xs break-all">{sourceRunId}</code></li>
-        ) : null}
-        {recovery?.checkpointKind ? (
-          <li><strong>Checkpoint kind:</strong> {formatStatusLabel(recovery.checkpointKind)}</li>
-        ) : null}
-        {recovery?.sessionRecoverable != null ? (
-          <li><strong>Session reattach:</strong> {recovery.sessionRecoverable ? 'supported' : `unavailable${recovery.liveReattachReason ? ` — ${formatStatusLabel(recovery.liveReattachReason)}` : ''}`}</li>
-        ) : null}
-        {recovery?.workspaceRecoverable != null ? (
-          <li><strong>Workspace restore:</strong> {recovery.workspaceRecoverable ? 'supported' : `unavailable${recovery.workspaceRestoreReason ? ` — ${formatStatusLabel(recovery.workspaceRestoreReason)}` : ''}`}</li>
-        ) : null}
-        {recovery?.branchCreationAvailable != null ? (
-          <li><strong>Checkpoint branch:</strong> {recovery.branchCreationAvailable ? 'supported' : `unavailable${recovery.branchCreationReason ? ` — ${formatStatusLabel(recovery.branchCreationReason)}` : ''}`}</li>
-        ) : null}
-        {recovery?.checkpointValidationStatus ? (
-          <li><strong>Checkpoint validation:</strong> {formatStatusLabel(recovery.checkpointValidationStatus)}</li>
-        ) : null}
-        {recovery?.requiredProfileRef ? (
-          <li><strong>Required profile:</strong> <code className="text-xs break-all">{recovery.requiredProfileRef}</code></li>
-        ) : null}
-        {recovery?.requiredPolicyRef ? (
-          <li><strong>Required policy:</strong> <code className="text-xs break-all">{recovery.requiredPolicyRef}</code></li>
-        ) : null}
-        {recovery?.capacityBlocked ? (
-          <li><strong>Capacity:</strong> blocked</li>
-        ) : null}
-        {recovery?.readinessBlocked ? (
-          <li><strong>Readiness:</strong> blocked</li>
-        ) : null}
-        {recovery?.authoritativeWorkspaceCheckpointKind ? (
-          <li><strong>Authoritative workspace checkpoint:</strong> {formatStatusLabel(recovery.authoritativeWorkspaceCheckpointKind)}</li>
-        ) : null}
-        {recovery?.partialRecoveryReason ? (
-          <li><strong>Partial recovery:</strong> {recovery.partialRecoveryReason}</li>
-        ) : null}
-        {recovery?.runtimeId ? (
-          <li><strong>Runtime:</strong> {formatStatusLabel(recovery.runtimeId)}</li>
-        ) : null}
-        {recovery?.deploymentGeneration ? (
-          <li><strong>Deployment generation:</strong> <code>{recovery.deploymentGeneration}</code></li>
-        ) : null}
-        {recovery?.promotionState ? (
-          <li><strong>Promotion state:</strong> {formatStatusLabel(recovery.promotionState)}</li>
-        ) : null}
-        {recovery?.capabilitySetVersion ? (
-          <li><strong>Capability set:</strong> <code>{recovery.capabilitySetVersion}</code></li>
-        ) : null}
-        {recovery?.capabilityDigest ? (
-          <li><strong>Capability digest:</strong> <code className="text-xs break-all">{recovery.capabilityDigest}</code></li>
-        ) : null}
-        {diagnosticsEvidence.map((item, index) => (
-          <li key={`${item.category}-${item.artifactRef || item.reasonCode || index}`}>
-            <strong>{formatStatusLabel(item.category)}:</strong>{' '}
-            {item.artifactRef ? <code className="text-xs break-all">{item.artifactRef}</code> : formatStatusLabel(item.status)}
-            {item.reasonCode ? <span className="small"> {formatStatusLabel(item.reasonCode)}</span> : null}
-          </li>
-        ))}
-      </ul>
-      {preservedSteps.length > 0 ? (
-        <div>
-          <h4>Preserved provenance</h4>
-          <ul className="step-detail-list">
-            {preservedSteps.map((step) => (
-              <li key={`${step.logicalStepId}-${step.sourceExecutionOrdinal || ''}`}>
-                Preserved step: {step.title || step.logicalStepId}
-                {step.sourceWorkflowId ? <span className="small"> from <code>{step.sourceWorkflowId}</code></span> : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      )}
     </section>
   );
 }
@@ -9257,7 +9197,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const [remediationActionPolicy, setRemediationActionPolicy] = useState(
     DEFAULT_REMEDIATION_ACTION_POLICY,
   );
-  const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
+  const [selectedRetryStepId, setSelectedRetryStepId] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [continuationMaxAttempts, setContinuationMaxAttempts] = useState(1);
   const [
@@ -9448,81 +9388,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     authorizedContinuationBudget?.maxConsecutiveNoProgressAttempts,
   ]);
   const artifactRunId = execution?.stepsHref ? stepsQuery.data?.runId : runId;
-  const selectedRecoveryOptions = useMemo(() => {
-    const failedStepId = execution?.resume?.failedStepId || '';
-    const rows = stepsQuery.data?.steps || [];
-    if (!failedStepId || rows.length === 0) {
-      return [];
-    }
-    const failedRow = rows.find((row) => row.logicalStepId === failedStepId);
-    const failedOrder = failedRow?.order ?? Number.POSITIVE_INFINITY;
-    return rows.map((row) => {
-      const preservation = row.recoveryPreservation;
-      const isFailedStep = row.logicalStepId === failedStepId;
-      const eligible = isFailedStep || Boolean(preservation?.eligible);
-      let reason = '';
-      if (!eligible) {
-        if (row.order > failedOrder) {
-          reason = 'after failed step';
-        } else if (preservation?.message) {
-          reason = preservation.message;
-        } else if (preservation?.reason) {
-          reason = formatStatusLabel(preservation.reason);
-        } else {
-          reason = 'checkpoint evidence missing';
-        }
-      }
-      return {
-        logicalStepId: row.logicalStepId,
-        title: row.title,
-        executionOrdinal: row.executionOrdinal,
-        eligible,
-        reason,
-        isFailedStep,
-      };
-    });
-  }, [execution?.resume?.failedStepId, stepsQuery.data?.steps]);
-  const selectedRecoveryStep =
-    selectedRecoveryOptions.find((option) => option.logicalStepId === selectedRecoveryStepId) ||
-    selectedRecoveryOptions.find((option) => option.isFailedStep) ||
-    selectedRecoveryOptions.find((option) => option.eligible) ||
-    null;
-
-  const stepRecoveryQuery = useQuery({
-    queryKey: [
-      'workflow-detail-step-execution',
-      workflowId,
-      selectedRecoveryStep?.logicalStepId,
-      selectedRecoveryStep?.executionOrdinal,
-      sourceTemporal,
-    ],
-    queryFn: async () => {
-      if (!workflowId || !selectedRecoveryStep?.logicalStepId || !selectedRecoveryStep.executionOrdinal) {
-        throw new Error('Step execution recovery evidence requires a selected step.');
-      }
-      const suffix = sourceTemporal ? '?source=temporal' : '';
-      const response = await fetch(
-        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(
-          selectedRecoveryStep.logicalStepId,
-        )}/step-executions/${encodeURIComponent(String(selectedRecoveryStep.executionOrdinal))}${suffix}`,
-        { credentials: 'include' },
-      );
-      if (!response.ok) {
-        throw await responseError(response, 'Step execution');
-      }
-      return StepExecutionDetailSchema.parse(await response.json());
-    },
-    enabled: Boolean(
-      stepsTabActive &&
-        workflowId &&
-        selectedRecoveryStep?.logicalStepId &&
-        selectedRecoveryStep.executionOrdinal > 0,
-    ),
-    refetchInterval: stepsTabActive && !isTerminalExecution ? detailPoll : false,
-    staleTime: evidenceStaleTime,
-  });
-  const recoveryEligibility =
-    execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
+  const retryOptions = useMemo(
+    () => retryStepOptions(stepsQuery.data?.steps || [], execution?.retryFromStep?.failedStepId),
+    [execution?.retryFromStep?.failedStepId, stepsQuery.data?.steps],
+  );
 
   const artifactsQuery = useQuery({
     queryKey: ['workflow-detail-artifacts', namespace, workflowId, artifactRunId],
@@ -9760,29 +9629,16 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     onError: (error: Error) => setActionError(error.message),
   });
 
-  const failedStepResumeMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(
-        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-failed-step`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            idempotencyKey: `resume-${workflowId}-${latestRunId || runId || 'latest'}`,
-            ...(execution?.resume?.checkpointRef
-              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
-              : {}),
-            operatorMetadata: { requestedFrom: 'workflow-detail' },
-          }),
-        },
-      );
-      if (!response.ok) {
-        throw await responseError(response);
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      setActionNotice('Resumed from failed step.');
+  const retryFromStepMutation = useMutation({
+    mutationFn: ({ stepId }: { stepId: string | null }) =>
+      requestRetryFromStep({
+        apiBase: payload.apiBase,
+        workflowId,
+        sourceRunId: execution?.retryFromStep?.sourceRunId || latestRunId || runId || null,
+        stepId,
+      }),
+    onSuccess: (result) => {
+      setActionNotice(result.message || 'Retry started.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -9843,42 +9699,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           ? `Continuation started: ${result.destinationWorkflowId}`
           : 'Continuation started.',
       );
-      invalidate();
-    },
-    onError: (error: Error) => setActionError(error.message),
-  });
-
-  const selectedStepRecoveryMutation = useMutation({
-    mutationFn: async () => {
-      const selectedStepId = selectedRecoveryStep?.logicalStepId || '';
-      const sourceRunId = execution?.resume?.sourceRunId || latestRunId || runId || '';
-      if (!selectedStepId || !sourceRunId) {
-        throw new Error('Selected-step recovery requires a source run and start step.');
-      }
-      const response = await fetch(
-        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/recover-from-selected-step`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
-            idempotencyKey: `selected-step-recovery-${workflowId}-${sourceRunId}-${selectedStepId}`,
-            sourceWorkflowId: workflowId,
-            sourceRunId,
-            selectedStartStepId: selectedStepId,
-            ...(execution?.resume?.checkpointRef
-              ? { recoveryCheckpointRef: execution.resume.checkpointRef }
-              : {}),
-            operatorMetadata: { requestedFrom: 'workflow-detail', mode: 'selected-step' },
-          }),
-        },
-      );
-      if (!response.ok) {
-        throw await responseError(response);
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      setActionNotice('Recovery started from selected step.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -10133,14 +9953,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     signalMutation.mutate({ signalName: 'Resume', payload: {} });
   };
 
-  const onResumeFromFailedStep = () => {
+  const onRetryFromStep = (stepId: string | null = null) => {
     setActionError(null);
-    failedStepResumeMutation.mutate();
-  };
-
-  const onRecoverFromSelectedStep = () => {
-    setActionError(null);
-    selectedStepRecoveryMutation.mutate();
+    retryFromStepMutation.mutate({ stepId });
   };
 
   const onApprove = () => {
@@ -10251,10 +10066,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     updateMutation.isPending ||
     signalMutation.isPending ||
     cancelMutation.isPending ||
-    failedStepResumeMutation.isPending ||
+    retryFromStepMutation.isPending ||
     continueRemediationMutation.isPending ||
     retryPublicationMutation.isPending ||
-    selectedStepRecoveryMutation.isPending ||
     createRemediationMutation.isPending ||
     remediationApprovalMutation.isPending ||
     checkpointBranchMutation.isPending;
@@ -10340,11 +10154,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     canShowEditWorkflow,
     editTaskDisabledReason: describeWorkflowActionDisabledReason(editTaskUnavailableReason),
     rerunDisabledReason: describeWorkflowActionDisabledReason(rerunUnavailableReason),
-    selectedRecoveryOptionCount: selectedRecoveryOptions.length,
-    selectedRecoveryStepEligible: Boolean(selectedRecoveryStep?.eligible),
-    selectedRecoveryStepDisabledReason:
-      describeWorkflowActionDisabledReason(selectedRecoveryStep?.reason) ??
-      'The selected step cannot be recovered right now.',
     canCreateRemediation: remediationActionAvailable,
     handlers: {
       onRename,
@@ -10365,8 +10174,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         });
       },
       onRerun,
-      onResumeFromFailedStep,
-      onRecoverFromSelectedStep,
+      onRetryFromStep: () => onRetryFromStep(null),
       onRetryPublication: () => {
         setActionError(null);
         retryPublicationMutation.mutate();
@@ -11561,39 +11369,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {stepsTabActive &&
-          actionsOn &&
-          actions &&
-          taskEditingOn &&
-          actions.canResumeFromFailedStep &&
-          selectedRecoveryOptions.length > 0 ? (
-            <section className="stack td-actions-region">
-              <div className="stack">
-                <label className="field-label" htmlFor="selected-recovery-step">
-                  Recovery start step
-                </label>
-                <select
-                  id="selected-recovery-step"
-                  value={selectedRecoveryStep?.logicalStepId || ''}
-                  disabled={busy}
-                  onChange={(event) => setSelectedRecoveryStepId(event.target.value)}
-                >
-                  {selectedRecoveryOptions.map((option) => (
-                    <option
-                      key={option.logicalStepId}
-                      value={option.logicalStepId}
-                      disabled={!option.eligible}
-                    >
-                      {option.title || option.logicalStepId}
-                      {option.isFailedStep ? ' (failed step)' : ''}
-                      {!option.eligible && option.reason ? ` - ${option.reason}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </section>
-          ) : null}
-
           {stepsTabActive && actionsOn && actions && hasInterventionSection ? (
             <InterventionPanel
               audit={execution.interventionAudit || []}
@@ -11603,15 +11378,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           {stepsTabActive ? (
             <>
               <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
-              <RecoveryEvidencePanel
-                recovery={recoveryEligibility}
-                resume={execution.resume}
-                diagnostics={execution.targetDiagnostics}
-                onResumeFromFailedStep={onResumeFromFailedStep}
-                onRerun={onRerun}
-                busy={busy}
-                taskEditingOn={taskEditingOn}
-              />
+              {actionsOn ? (
+                <RetryFromStepPanel
+                  retry={execution.retryFromStep}
+                  options={retryOptions}
+                  selectedStepId={selectedRetryStepId}
+                  onSelectStep={setSelectedRetryStepId}
+                  onRetry={onRetryFromStep}
+                  onRerun={onRerun}
+                  canRerun={Boolean(actions?.canRerun)}
+                  busy={busy}
+                  taskEditingOn={taskEditingOn}
+                />
+              ) : null}
             </>
           ) : null}
 

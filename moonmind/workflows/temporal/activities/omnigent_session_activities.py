@@ -140,6 +140,21 @@ async def _write_json_artifact(
         return str(completed.artifact_id)
 
 
+async def _remediation_context_input_ref(workflow_id: str) -> str | None:
+    """Return the context artifact admitted with this remediation run.
+
+    The API builds the context after the run's task-input snapshot is sealed,
+    so the remediation link, not the snapshot, records it.
+    """
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import TemporalExecutionRemediationLink
+
+    async with async_session_maker() as session:
+        link = await session.get(TemporalExecutionRemediationLink, workflow_id)
+    ref = str(getattr(link, "context_artifact_ref", "") or "").strip()
+    return f"artifact://{_artifact_id(ref)}" if ref else None
+
+
 async def _read_json_artifact(
     ref: str, *, admitted_principal: str | None = None
 ) -> dict[str, Any]:
@@ -865,8 +880,14 @@ async def _reconstruct_plan_bound_request(
                 or item.get("ref")
                 or ""
             ).strip()
+            # The host materializes only durable ``artifact://`` refs.
+            ref = f"artifact://{_artifact_id(ref)}" if ref else ""
             if ref and ref not in attachment_refs:
                 attachment_refs.append(ref)
+    if isinstance(workflow.get("remediation"), Mapping) and workflow_id:
+        context_ref = await _remediation_context_input_ref(workflow_id)
+        if context_ref and context_ref not in attachment_refs:
+            attachment_refs.append(context_ref)
     workspace_spec = (
         dict(workflow.get("workspace") or {})
         if isinstance(workflow.get("workspace"), Mapping)

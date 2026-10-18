@@ -337,7 +337,11 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
     assert request.instruction_ref == "Implement the selected change."
     assert request.instruction_ref != binding.task_input_snapshot_ref
     assert request.idempotency_key == "step-execution-1"
-    assert request.input_refs == ["art-top-level", "art-workflow", "art-step"]
+    assert request.input_refs == [
+        "artifact://art-top-level",
+        "artifact://art-workflow",
+        "artifact://art-step",
+    ]
     assert request.resolved_skillset_ref == "art-skills"
     assert request.workspace_spec["startingBranch"] == "main"
     assert request.workspace_spec["targetBranch"] == "authority-fix"
@@ -408,6 +412,78 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
     assert bundled.parameters["omnigent"]["agent"]["agentId"] == (
         "imported-agent-42"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remediation", [True, False])
+async def test_compact_plan_handoff_delivers_remediation_context_as_input(
+    monkeypatch: pytest.MonkeyPatch, remediation: bool
+) -> None:
+    workflow: dict[str, object] = {"instructions": "Diagnose the failed run."}
+    if remediation:
+        workflow["remediation"] = {"target": {"workflowId": "mm:failed"}}
+    snapshot = {
+        "schemaVersion": "task-input-snapshot/v1",
+        "draft": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "omnigent",
+            "workflow": workflow,
+        },
+    }
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "1" * 64,
+        planDigest="sha256:" + "1" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-task-snapshot",
+        taskInputSnapshotDigest=omnigent_session_activities._digest_bytes(
+            omnigent_session_activities._json_bytes(snapshot)
+        ),
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            authority=SimpleNamespace(
+                taskInputSnapshotRef=binding.task_input_snapshot_ref,
+                taskInputSnapshotDigest=binding.task_input_snapshot_digest,
+            ),
+            credentialBindings={
+                "primary-model": SimpleNamespace(
+                    providerProfileRef="provider-profile-1"
+                )
+            },
+            resolvedSkills={"resolvedSkillSetRef": "artifact:art-skills"},
+            harnessId="opencode-native",
+            launchPolicyRef="opencode-on-demand@1",
+            agentSource={"kind": "upstream", "upstreamId": "opencode-ai/opencode"},
+            modelConfig=SimpleNamespace(qualifiedId="opencode/gpt-5", effort="high"),
+        )
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_read_json_artifact",
+        AsyncMock(return_value=snapshot),
+    )
+    context_lookup = AsyncMock(return_value="artifact://art_remediation_context")
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_remediation_context_input_ref",
+        context_lookup,
+    )
+
+    request = await omnigent_session_activities._reconstruct_plan_bound_request(
+        binding=binding,
+        plan=plan,
+        workflow_id="mm:remediation",
+        step_execution_id="step-execution-1",
+        agent_run_id="agent-run-1",
+        logical_step_id=None,
+    )
+
+    if remediation:
+        assert request.input_refs == ["artifact://art_remediation_context"]
+        context_lookup.assert_awaited_once_with("mm:remediation")
+    else:
+        assert request.input_refs == []
+        context_lookup.assert_not_awaited()
 
 
 def test_activity_request_carries_one_atomic_runtime_binding_fence() -> None:

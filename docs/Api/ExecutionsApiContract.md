@@ -62,6 +62,7 @@ Bodies are JSON with camelCase fields.
 | POST | `/api/executions/{workflowId}/update` | Validated update or rerun request | 200 |
 | POST | `/api/executions/{workflowId}/signal` | Asynchronous signal | 202 |
 | POST | `/api/executions/{workflowId}/cancel` | Cancel or terminate | 202 |
+| POST | `/api/executions/{workflowId}/retry-from-step` | Reset a closed run to a step's start ([Workflow Runs API §4.1](../Workflows/WorkflowRunsApi.md#41-retry-behavior)) | 202 |
 | POST | `/api/executions/{workflowId}/checkpoint-branches/{branchId}/verification` | Admit a runtime-published objective-verifier report for the exact branch head | 200 |
 
 Checkpoint verification accepts only `verifierArtifactRef`, an existing immutable artifact reference. The branch owner validates producer, source run, completed turn, Step Execution, exact head, and verdict before recording the receipt and continuing pending remediation verification. Rejected evidence returns 409 `checkpoint_verification_rejected`; invalid fields return 422. [Checkpoint Branch System §8.5](../Workflows/CheckpointBranchSystem.md#85-launch-branch-turn) covers report admission.

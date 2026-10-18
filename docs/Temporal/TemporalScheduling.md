@@ -108,7 +108,7 @@ An occurrence waiting for an absent worker release reports infrastructure
 unavailability and points to the deployment recovery owner. Recurring
 occurrences retain the same authored-input and recovery evidence contract as
 immediate API-created work; bypassing API creation is not permission to omit
-the snapshot needed for cancellation, retry, and failed-step recovery.
+the snapshot needed for cancellation, rerun, and retry from a step.
 
 ### 5.5 Overlap policy mapping
 

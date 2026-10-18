@@ -148,7 +148,7 @@ A future explicit steering contract may define additional terminal behavior, but
 ## 9. Relationship to execution actions
 
 - This endpoint is not a replacement for **Cancel**.
-- It is not failed-Step recovery.
+- It is not retry from a step.
 - It is not **Rerun**, **Resume**, **Remediate**, or **Edit Workflow**.
 - It is not the native Omnigent message route.
 - It is an optional, separately invoked workflow-level command surface only.

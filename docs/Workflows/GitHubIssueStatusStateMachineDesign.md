@@ -250,7 +250,7 @@ Prefer the trusted existing PR, reassessing its current head against requirement
 
 Record the adopted repository, PR, branch, base, and head. Persist branch identity before PR creation to reconcile lost responses; an issue-number mention alone does not identify the canonical PR.
 
-Private filesystem/MinIO checkpoints are not cross-device recovery. Another deployment needs GitHub-accessible code and a sanitized portable handoff; exact failed-step resume additionally needs all compatible checkpoint inputs. Continuing saved code is not necessarily exact resume.
+Private filesystem/MinIO checkpoints are not cross-device recovery. Another deployment needs GitHub-accessible code and a sanitized portable handoff; retry from a step additionally needs the run's retained Temporal history and its live issue claim. Continuing saved code is not necessarily exact resume.
 
 Publication authority is unchanged: None permits no recovery push/PR/merge, and local-only work requires owner recovery. Do not merge a partial PR merely to transfer it. Explicitly accepted partial increments need authorization and no misleading closing semantics.
 

@@ -7,7 +7,7 @@ workflow history carries refs and compact metadata instead of raw logs or artifa
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Sequence
@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from api_service.db import models as db_models
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.temporal.artifacts import ExecutionRef, TemporalArtifactService
 from moonmind.workflows.temporal.remediation_verification import (
     REMEDIATION_VERIFICATION_OUTCOMES,
@@ -114,6 +114,22 @@ REMEDIATION_LOCK_RELEASE_STATUSES = frozenset(
 )
 MAX_REMEDIATION_CONTEXT_TAIL_LINES = 2000
 MAX_REMEDIATION_CONTEXT_AGENT_RUN_IDS = 20
+# Failure evidence is embedded, not referenced: an Omnigent remediation agent
+# reads the context from its workspace and has no MoonMind API to follow refs.
+MAX_FAILURE_EVIDENCE_DOCUMENT_BYTES = 64 * 1024
+MAX_FAILURE_EVIDENCE_READ_BYTES = 1024 * 1024
+MAX_FAILURE_EVIDENCE_TEXT_CHARS = 4000
+MAX_FAILURE_EVIDENCE_STEPS = 60
+FINISH_SUMMARY_EVIDENCE_KEYS = (
+    "failure",
+    "failureSummary",
+    "finishOutcome",
+    "lastStep",
+    "operatorSummary",
+    "publish",
+    "recoveryManifest",
+    "incidentReconstruction",
+)
 TARGET_EVIDENCE_CLASSES = (
     ("stdout", "stdoutRef"),
     ("stderr", "stderrRef"),
@@ -164,6 +180,26 @@ class RemediationContextBuildResult:
     payload: dict[str, Any]
 
 
+# (workflow_id, run_id): the ledger of that exact run.
+StepLedgerLoader = Callable[[str, str | None], Awaitable[Sequence[Mapping[str, Any]]]]
+
+
+async def load_remediation_target(
+    session: AsyncSession, workflow_id: str
+) -> db_models.TemporalExecutionRecord | db_models.TemporalExecutionCanonicalRecord | None:
+    """Load a remediation target: its API source row, else its projection.
+
+    Temporal Schedules start runs without an API source row, so their
+    Temporal-authoritative projection is the durable record of them. Source
+    and projection rows are reconciled together, run id included.
+    """
+
+    source = await session.get(db_models.TemporalExecutionCanonicalRecord, workflow_id)
+    if source is not None:
+        return source
+    return await session.get(db_models.TemporalExecutionRecord, workflow_id)
+
+
 class RemediationContextBuilder:
     """Build bounded remediation context artifacts from persisted remediation links."""
 
@@ -172,9 +208,11 @@ class RemediationContextBuilder:
         *,
         session: AsyncSession,
         artifact_service: TemporalArtifactService,
+        step_ledger_loader: StepLedgerLoader | None = None,
     ) -> None:
         self._session = session
         self._artifact_service = artifact_service
+        self._step_ledger_loader = step_ledger_loader
 
     async def build_context(
         self,
@@ -201,9 +239,8 @@ class RemediationContextBuilder:
                 f"Remediation execution not found: {link.remediation_workflow_id}"
             )
 
-        target_record = await self._session.get(
-            db_models.TemporalExecutionCanonicalRecord,
-            link.target_workflow_id,
+        target_record = await load_remediation_target(
+            self._session, link.target_workflow_id
         )
         if target_record is None:
             raise RemediationContextError(
@@ -214,6 +251,13 @@ class RemediationContextBuilder:
             link=link,
             remediation_record=remediation_record,
             target_record=target_record,
+        )
+        failure_evidence = await self._failure_evidence(
+            target_record, run_id=link.target_run_id, principal=principal
+        )
+        payload["failureEvidence"] = failure_evidence
+        payload["boundedness"]["artifactContentsIncluded"] = bool(
+            failure_evidence["documents"]
         )
         payload_bytes = json.dumps(
             payload,
@@ -263,6 +307,147 @@ class RemediationContextBuilder:
             link=link,
             payload=payload,
         )
+
+    async def _failure_evidence(
+        self,
+        record: Any,
+        *,
+        run_id: str | None,
+        principal: str,
+    ) -> dict[str, Any]:
+        """Embed what the failed run recorded about its failure, bounded."""
+
+        memo = record.memo if isinstance(record.memo, Mapping) else {}
+        finish = getattr(record, "finish_summary_json", None)
+        if not isinstance(finish, Mapping):
+            finish = memo.get("finishSummary") or memo.get("finish_summary")
+        finish = finish if isinstance(finish, Mapping) else {}
+
+        evidence: dict[str, Any] = {
+            key: _bounded_evidence_value(redact_sensitive_payload(finish[key]))
+            for key in FINISH_SUMMARY_EVIDENCE_KEYS
+            if finish.get(key) is not None
+        }
+        evidence["authoredWork"] = _authored_work(record)
+        unavailable: list[dict[str, Any]] = []
+        failure = finish.get("failure")
+        steps, steps_reason = await self._failure_steps(
+            record.workflow_id,
+            run_id=run_id,
+            failed_step_id=(
+                _string_or_none(failure.get("stepId"))
+                if isinstance(failure, Mapping)
+                else None
+            ),
+        )
+        evidence["steps"] = steps
+        if steps_reason:
+            unavailable.append({"kind": "step_ledger", "reason": steps_reason})
+        documents: list[dict[str, Any]] = []
+        for kind, artifact_id in _failure_document_refs(finish, memo):
+            document, available = await self._evidence_document(
+                kind,
+                artifact_id,
+                target_workflow_id=record.workflow_id,
+                principal=principal,
+            )
+            (documents if available else unavailable).append(document)
+        evidence["documents"] = documents
+        evidence["unavailable"] = unavailable
+        evidence["maxDocumentBytes"] = MAX_FAILURE_EVIDENCE_DOCUMENT_BYTES
+        return evidence
+
+    async def _failure_steps(
+        self,
+        workflow_id: str,
+        *,
+        run_id: str | None,
+        failed_step_id: str | None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        if self._step_ledger_loader is None:
+            return [], "step ledger is not readable here"
+        try:
+            rows = await self._step_ledger_loader(workflow_id, run_id)
+        except Exception as exc:  # degraded evidence, not a failed remediation
+            return [], f"step ledger query failed: {type(exc).__name__}"
+        steps: list[dict[str, Any]] = []
+        for row in _bounded_failure_ledger_rows(rows, failed_step_id):
+            artifacts = row.get("artifacts")
+            artifacts = artifacts if isinstance(artifacts, Mapping) else {}
+            step = {
+                "logicalStepId": _string_or_none(row.get("logicalStepId")),
+                "order": row.get("order"),
+                "title": _string_or_none(row.get("title")),
+                "status": _string_or_none(row.get("status")),
+                "executionOrdinal": row.get("executionOrdinal")
+                or row.get("attempt"),
+                "summary": _bounded_evidence_value(
+                    redact_sensitive_text(_string_or_none(row.get("summary")))
+                ),
+                "lastError": _bounded_evidence_value(
+                    redact_sensitive_text(_string_or_none(row.get("lastError")))
+                ),
+                "artifacts": {
+                    key: artifacts[key]
+                    for key in (
+                        "outputSummary",
+                        "runtimeDiagnostics",
+                        "runtimeStderr",
+                        "runtimeMergedLogs",
+                    )
+                    if _string_or_none(artifacts.get(key))
+                },
+            }
+            steps.append(
+                {key: value for key, value in step.items() if value not in (None, "", {})}
+            )
+        return steps, None
+
+    async def _evidence_document(
+        self,
+        kind: str,
+        artifact_id: str,
+        *,
+        target_workflow_id: str,
+        principal: str,
+    ) -> tuple[dict[str, Any], bool]:
+        document: dict[str, Any] = {"kind": kind, "artifactRef": artifact_id}
+        # The target's lifecycle manifests are owned by its workflow principal,
+        # and its runtime evidence is linked to its execution.
+        admitted = f"workflow:{target_workflow_id}"
+        try:
+            artifact, _links, _pinned, _policy = (
+                await self._artifact_service.get_metadata(
+                    artifact_id=artifact_id,
+                    principal=principal,
+                    admitted_principal=admitted,
+                )
+            )
+            size = int(getattr(artifact, "size_bytes", 0) or 0)
+            if size > MAX_FAILURE_EVIDENCE_READ_BYTES:
+                return (
+                    {**document, "reason": "too large to embed", "sizeBytes": size},
+                    False,
+                )
+            _artifact, body = await self._artifact_service.read(
+                artifact_id=artifact_id,
+                principal=principal,
+                admitted_principal=admitted,
+            )
+        except Exception as exc:  # degraded evidence, not a failed remediation
+            return {**document, "reason": f"unreadable: {type(exc).__name__}"}, False
+        text = body.decode("utf-8", errors="replace")
+        if len(text) <= MAX_FAILURE_EVIDENCE_DOCUMENT_BYTES:
+            try:
+                document["content"] = redact_sensitive_payload(json.loads(text))
+                return document, True
+            except ValueError:
+                pass
+        document["contentText"] = redact_sensitive_text(
+            text[:MAX_FAILURE_EVIDENCE_DOCUMENT_BYTES]
+        )
+        document["truncated"] = len(text) > MAX_FAILURE_EVIDENCE_DOCUMENT_BYTES
+        return document, True
 
     def _build_payload(
         self,
@@ -1725,6 +1910,133 @@ def build_target_remediation_linkage_summary(
     if last_updated_at is not None:
         summary["lastUpdatedAt"] = _timestamp_string(last_updated_at)
     return summary
+
+
+def _bounded_evidence_value(value: Any, *, depth: int = 0) -> Any:
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        if len(value) <= MAX_FAILURE_EVIDENCE_TEXT_CHARS:
+            return value
+        return value[:MAX_FAILURE_EVIDENCE_TEXT_CHARS] + "...[truncated]"
+    if depth >= 6:
+        return "[truncated]"
+    if isinstance(value, Mapping):
+        return {
+            str(key): _bounded_evidence_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:100]
+        }
+    if isinstance(value, list | tuple):
+        return [_bounded_evidence_value(item, depth=depth + 1) for item in value[:50]]
+    return _bounded_evidence_value(str(value), depth=depth)
+
+
+def _bounded_failure_ledger_rows(
+    rows: Sequence[Any], failed_step_id: str | None
+) -> list[Mapping[str, Any]]:
+    """Bound the ledger while keeping the failed steps and their neighbors.
+
+    Remediation needs the failed row's status, error and artifact refs most,
+    and a long plan can fail far past any head slice. Remaining room goes to
+    the earliest rows; ledger order is kept.
+    """
+
+    mapped = [row for row in rows if isinstance(row, Mapping)]
+    if len(mapped) <= MAX_FAILURE_EVIDENCE_STEPS:
+        return mapped
+    failed = [
+        index
+        for index, row in enumerate(mapped)
+        if str(row.get("status") or "").strip().lower() == "failed"
+        or (failed_step_id and row.get("logicalStepId") == failed_step_id)
+    ]
+    neighbors = [
+        index
+        for center in failed
+        for index in range(center - 2, center + 3)
+        if 0 <= index < len(mapped)
+    ]
+    kept: dict[int, None] = {}
+    for index in [*failed, *neighbors, *range(len(mapped))]:
+        if len(kept) >= MAX_FAILURE_EVIDENCE_STEPS:
+            break
+        kept.setdefault(index, None)
+    return [mapped[index] for index in sorted(kept)]
+
+
+def _authored_work(record: Any) -> dict[str, Any]:
+    """What the failed run was asked to do, so remediation keeps its intent."""
+
+    parameters = record.parameters if isinstance(record.parameters, Mapping) else {}
+    workflow = parameters.get("workflow") or parameters.get("task")
+    workflow = workflow if isinstance(workflow, Mapping) else {}
+    steps = workflow.get("steps") if isinstance(workflow.get("steps"), list) else []
+    authored_steps = []
+    for step in steps[:MAX_FAILURE_EVIDENCE_STEPS]:
+        if not isinstance(step, Mapping):
+            continue
+        tool = step.get("tool") or step.get("skill")
+        tool = tool if isinstance(tool, Mapping) else {}
+        authored_steps.append(
+            {
+                key: value
+                for key, value in {
+                    "id": _string_or_none(step.get("id")),
+                    "title": _string_or_none(step.get("title")),
+                    "skill": _string_or_none(tool.get("name") or tool.get("id")),
+                    "instructions": _bounded_evidence_value(
+                        redact_sensitive_text(_string_or_none(step.get("instructions")))
+                    ),
+                }.items()
+                if value
+            }
+        )
+    work = {
+        "repository": _bounded_evidence_value(
+            redact_sensitive_payload(parameters.get("repository"))
+        ),
+        "instructions": _bounded_evidence_value(
+            redact_sensitive_text(
+                _string_or_none(
+                    workflow.get("instructions") or parameters.get("instructions")
+                )
+            )
+        ),
+        "steps": authored_steps,
+    }
+    return {key: value for key, value in work.items() if value}
+
+
+def _failure_document_refs(
+    finish: Mapping[str, Any], memo: Mapping[str, Any]
+) -> list[tuple[str, str]]:
+    def nested(key: str, field: str) -> Any:
+        value = finish.get(key)
+        return value.get(field) if isinstance(value, Mapping) else None
+
+    candidates = (
+        ("recovery_manifest", nested("recoveryManifest", "manifestRef")),
+        (
+            "incident_reconstruction",
+            nested("incidentReconstruction", "manifestRef")
+            or memo.get("incident_reconstruction_ref"),
+        ),
+        (
+            "failed_step_diagnostics",
+            nested("failure", "diagnosticsRef") or nested("lastStep", "diagnosticsRef"),
+        ),
+    )
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for kind, raw_ref in candidates:
+        ref = _string_or_none(raw_ref)
+        if not ref:
+            continue
+        artifact_id = ref.removeprefix("artifact://").removeprefix("artifact:")
+        if artifact_id.startswith("art_") and artifact_id not in seen:
+            seen.add(artifact_id)
+            refs.append((kind, artifact_id))
+    return refs
 
 
 def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] | None:

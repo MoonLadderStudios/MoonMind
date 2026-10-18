@@ -10,6 +10,8 @@ const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DRAFT_PRESENCE_PREFIX = 'moonmind.remediation-create-draft-presence.';
 const MAX_REMEDIATION_STEP_SELECTORS = 25;
 export const REMEDIATION_CREATE_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
+/** Skill that reads the remediation context MoonMind places in the workspace. */
+export const REMEDIATION_SKILL_ID = 'remediate-workflow';
 
 export type RemediationCreateDraftReadResult =
   | { status: 'valid'; draft: RemediationCreateDraft }
@@ -54,6 +56,8 @@ export type RemediationCreateDraft = {
     providerProfileRef: string;
   };
   instructions?: string;
+  /** Skill for the remediation step; the operator may change it before submit. */
+  skill?: string;
   remediation: {
     target: {
       workflowId: string;
@@ -82,10 +86,6 @@ type RemediationDraftExecution = {
   state?: string | null | undefined;
   rawState?: string | null | undefined;
   status?: string | null | undefined;
-  resume?: {
-    checkpointRef?: string | null | undefined;
-    sourceRunId?: string | null | undefined;
-  } | null | undefined;
   inputParameters?: Record<string, unknown> | null | undefined;
   steps?: Array<Record<string, unknown>> | null | undefined;
   stepLedger?: Array<Record<string, unknown>> | null | undefined;
@@ -178,12 +178,6 @@ function checkpointSelectors(execution: RemediationDraftExecution): Array<Record
     });
   };
 
-  if (execution.resume?.checkpointRef) {
-    selectors.push({
-      source: 'resume',
-      checkpointRef: execution.resume.checkpointRef,
-    });
-  }
   for (const item of execution.checkpoints || []) add(item, 'checkpoint');
   for (const item of execution.stepLedger || []) add(item, 'step_ledger');
   for (const item of execution.steps || []) add(item, 'step');
@@ -330,7 +324,8 @@ export function buildRemediationCreateDraft(
       : {}),
     instructions:
       options.instructions ||
-      `Investigate and remediate target execution ${workflowId} using bounded evidence.`,
+      `Diagnose why workflow ${title || workflowId} failed using the remediation context in the workspace, fix the cause where it is safe to, and report how to keep it from recurring.`,
+    skill: REMEDIATION_SKILL_ID,
     remediation: {
       target: remediationTarget,
       mode: remediationMode(options.mode),
@@ -451,6 +446,7 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     optionalTextIsValid(draft.publishMode) &&
     optionalTextIsValid(draft.executionProfileRef) &&
     optionalTextIsValid(draft.launchPolicyRef) &&
+    optionalTextIsValid(draft.skill) &&
     (
       remediation.actionPolicyRef === undefined ||
       remediation.actionPolicyRef === DEFAULT_REMEDIATION_ACTION_POLICY

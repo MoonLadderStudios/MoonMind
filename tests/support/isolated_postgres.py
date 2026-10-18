@@ -24,10 +24,16 @@ async def isolated_postgres(tables):
     try:
         async with admin.begin() as conn:
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-        async with engine.begin() as conn:
-            for table in tables:
+        if tables:
+            # One DDL run creates each native enum type once, even when
+            # several tables (for example execution sources and projections)
+            # share it, and orders tables by their foreign keys.
+            metadata = tables[0].metadata
+            async with engine.begin() as conn:
                 await conn.run_sync(
-                    lambda connection, table=table: table.create(connection)
+                    lambda connection: metadata.create_all(
+                        connection, tables=list(tables)
+                    )
                 )
         yield async_sessionmaker(engine, expire_on_commit=False)
     finally:
