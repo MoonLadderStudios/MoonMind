@@ -6331,8 +6331,8 @@ def _build_target_diagnostics(
         )
     )
     checkpoint_ref = _mapping_str_value(
-        diagnostics_recovery, "checkpointRef", "checkpoint_ref"
-    )
+        recovery_source, "recoveryCheckpointRef", "recovery_checkpoint_ref"
+    ) or _mapping_str_value(diagnostics_recovery, "checkpointRef", "checkpoint_ref")
     preserved_steps = _preserved_steps_from_recovery_source(
         recovery_source
     ) or _preserved_steps_from_recovery_source(diagnostics_recovery)
