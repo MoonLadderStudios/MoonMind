@@ -30,6 +30,7 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowConflictError,
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
+    ScheduleRunExecution,
 )
 
 LIST_DEFAULTS = {
@@ -400,18 +401,32 @@ async def test_delete_recurring_workflow_deletes_authorized_definition() -> None
     service.delete_definition.assert_awaited_once_with(definition)
 
 @pytest.mark.asyncio
-async def test_list_recurring_workflow_runs_hydrates_actual_start_time() -> None:
+async def test_list_recurring_workflow_runs_reports_execution_separately_from_dispatch() -> None:
+    """A run's ``outcome`` is the dispatch result ("enqueued"); the execution
+    it started reports its own lifecycle state and derived outcome."""
+
     service = AsyncMock()
     definition = _definition()
     started_at = datetime(2026, 6, 24, 2, 0, 2, tzinfo=UTC)
-    run_row = _run(
+    dispatched = _run(
         definition_id=definition.id,
+        outcome=RecurringWorkflowRunOutcome.ENQUEUED,
         temporal_workflow_id="workflow-from-schedule",
     )
+    unobserved = _run(
+        definition_id=definition.id,
+        outcome=RecurringWorkflowRunOutcome.ENQUEUED,
+        temporal_workflow_id="workflow-not-projected",
+    )
     service.get_definition.return_value = definition
-    service.list_runs.return_value = [run_row]
-    service.started_at_by_workflow_id.return_value = {
-        "workflow-from-schedule": started_at
+    service.list_runs.return_value = [dispatched, unobserved]
+    service.run_executions_by_workflow_id.return_value = {
+        "workflow-from-schedule": ScheduleRunExecution(
+            started_at=started_at,
+            state="completed",
+            objective_outcome="succeeded",
+            completion_disposition="gated_continuation",
+        )
     }
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
 
@@ -422,9 +437,17 @@ async def test_list_recurring_workflow_runs_hydrates_actual_start_time() -> None
         user=user,
     )
 
-    assert response.items[0].temporal_workflow_id == "workflow-from-schedule"
-    assert response.items[0].started_at == started_at
-    service.started_at_by_workflow_id.assert_awaited_once()
+    first, second = response.items
+    assert first.outcome == "enqueued"
+    assert first.started_at == started_at
+    assert first.execution is not None
+    assert first.execution.state == "completed"
+    assert first.execution.objective_outcome == "succeeded"
+    assert first.execution.completion_disposition == "gated_continuation"
+    assert second.outcome == "enqueued"
+    assert second.started_at is None
+    assert second.execution is None
+    service.run_executions_by_workflow_id.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

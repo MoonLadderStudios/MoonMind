@@ -879,7 +879,7 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("temporal-schedule-alpha")).not.toBeNull();
     expect(screen.getByText("MoonLadderStudios/MoonMind")).not.toBeNull();
     expect(screen.getByRole("columnheader", { name: "Actual Start" })).not.toBeNull();
-    expect(screen.getByRole("columnheader", { name: "Status" })).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Dispatch" })).not.toBeNull();
     expect(screen.getByText("Started")).not.toBeNull();
     expect(screen.getByRole("link", { name: "workflow-from-schedule" }).getAttribute("href")).toBe(
       "/workflows/workflow-from-schedule?source=temporal",
@@ -1416,6 +1416,44 @@ describe("SchedulesPage", () => {
       "/workflows/workflow-from-schedule?source=temporal",
     );
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("shows each run's dispatch result separately from its execution outcome", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+    const fallback = fetchSpy.getMockImplementation()!;
+    const run = detailRuns.items[0]!;
+    fetchSpy.mockImplementation(async (input, init) => (
+      String(input) === "/console/schedules/schedule-alpha/runs?limit=200"
+        ? ({ ok: true, json: async () => ({ items: [
+          { ...run, execution: { state: "completed", objectiveOutcome: "succeeded",
+            completionDisposition: "gated_continuation" } },
+          { ...run, id: "run-failed", temporalWorkflowId: "workflow-failed",
+            execution: { state: "failed" } },
+          { ...run, id: "run-unobserved", temporalWorkflowId: "workflow-unobserved", startedAt: null },
+          { ...run, id: "run-skipped", outcome: "skipped", temporalWorkflowId: null, startedAt: null },
+        ] }) } as Response)
+        : fallback(input, init)
+    ));
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    const table = await screen.findByRole("table", { name: "Schedule runs" });
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(5));
+    const headers = within(table).getAllByRole("columnheader").map((cell) => cell.textContent);
+    const dispatchColumn = headers.indexOf("Dispatch");
+    const executionColumn = headers.indexOf("Execution");
+    expect(dispatchColumn).toBeGreaterThanOrEqual(0);
+    expect(executionColumn).toBeGreaterThanOrEqual(0);
+    const cellsOf = (row: HTMLElement) => within(row).getAllByRole("cell").map((cell) => cell.textContent);
+    const [, handedOff, failed, unobserved, skipped] = within(table).getAllByRole("row") as HTMLElement[];
+    expect(cellsOf(handedOff!)[dispatchColumn]).toBe("Enqueued");
+    expect(cellsOf(handedOff!)[executionColumn]).toBe("Handed off");
+    expect(cellsOf(failed!)[dispatchColumn]).toBe("Enqueued");
+    expect(cellsOf(failed!)[executionColumn]).toBe("Failed");
+    expect(cellsOf(unobserved!)[dispatchColumn]).toBe("Enqueued");
+    expect(cellsOf(unobserved!)[executionColumn]).toBe("-");
+    expect(cellsOf(skipped!)[dispatchColumn]).toBe("Skipped");
+    expect(cellsOf(skipped!)[executionColumn]).toBe("-");
   });
 
   it.each([
