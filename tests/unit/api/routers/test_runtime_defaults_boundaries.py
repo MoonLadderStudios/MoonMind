@@ -151,6 +151,112 @@ def dedicated_body():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("entrypoint", ["raw", "api", "recurring", "dedicated"])
+@pytest.mark.parametrize(
+    "saved_runtime,process_runtime",
+    [("claude_code", "omnigent"), ("omnigent", "claude_code")],
+)
+@pytest.mark.parametrize("missing_saved_account", [False, True])
+async def test_tool_only_saved_runtime_matches_explicit_without_account_consumption(
+    dedicated_context,
+    monkeypatch,
+    entrypoint,
+    saved_runtime,
+    process_runtime,
+    missing_saved_account,
+):
+    from api_service.db.models import ManagedAgentProviderProfile
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from tests.unit.api.routers.test_execution_account_intent_matrix import body_for
+
+    dedicated = dedicated_context
+    ctx = dedicated.context
+    monkeypatch.setattr(settings.workflow, "default_runtime", process_runtime)
+    await ctx.catalog.apply_overrides(
+        scope="workspace", changes={"workflow.default_runtime": saved_runtime}
+    )
+    if missing_saved_account:
+        await ctx.catalog.apply_overrides(
+            scope="workspace",
+            changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
+        )
+        saved = await ctx.session.get(ManagedAgentProviderProfile, "saved-codex_cli")
+        await ctx.session.delete(saved)
+        await ctx.session.commit()
+    schedule = AsyncMock(return_value="mm-schedule:tool-runtime")
+    monkeypatch.setattr(TemporalClientAdapter, "create_schedule", schedule)
+    monkeypatch.setattr(
+        TemporalClientAdapter,
+        "resolve_workflow_task_queue",
+        lambda *args, **kwargs: "mm.workflow.user.v2",
+    )
+    task = {
+        "instructions": "Read without an agent",
+        "publish": {"mode": "none"},
+        "steps": [
+            {
+                "id": "lookup",
+                "type": "tool",
+                "tool": {
+                    "id": "github.resolve_pull_request_target",
+                    "inputs": {"pullRequest": "831"},
+                },
+            }
+        ],
+    }
+    if entrypoint == "dedicated":
+        body = dedicated_body()
+        parameters = body["target"]["initialParameters"]
+        parameters["task"] = task
+        client, url = dedicated.client, "/api/recurring-workflows"
+    else:
+        body = body_for(entrypoint, task)
+        parameters = body.get("initialParameters", body.get("payload"))
+        parameters.pop("targetRuntime")
+        client, url = ctx.client, "/api/executions"
+    explicit = copy.deepcopy(body)
+    explicit_parameters = (
+        explicit["target"]["initialParameters"]
+        if entrypoint == "dedicated"
+        else explicit.get("initialParameters", explicit.get("payload"))
+    )
+    explicit_parameters["targetRuntime"] = saved_runtime
+    ctx.settings_reads.clear()
+    for request_body in (explicit, body):
+        response = await client.post(url, json=request_body)
+        expected = (
+            201
+            if saved_runtime == "claude_code"
+            else 422 if entrypoint == "raw" else 409
+        )
+        assert response.status_code == expected, response.text
+        assert "saved-codex_cli" not in response.text
+        if expected == 201:
+            if entrypoint == "dedicated":
+                recorded = response.json()["target"]["initialParameters"]
+            elif entrypoint == "recurring":
+                recorded = schedule.await_args.kwargs["workflow_input"][
+                    "initial_parameters"
+                ]
+            else:
+                recorded = await stored_parameters(ctx, response)
+            assert recorded["targetRuntime"] == saved_runtime
+            assert not agent_requests(recorded)
+            assert "saved-codex_cli" not in str(recorded)
+        elif entrypoint == "raw":
+            assert (
+                response.json()["detail"]["code"]
+                == "omnigent_product_boundary_required"
+            )
+        else:
+            assert (
+                response.json()["detail"]
+                == "default Omnigent Agent Profile is unavailable"
+            )
+    assert len(ctx.settings_reads) == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "layer,key",
     [
@@ -1376,7 +1482,10 @@ async def test_dedicated_agent_free_omnigent_keeps_plan_admission(
     ctx = dedicated_context
     await ctx.context.catalog.apply_overrides(
         scope="workspace",
-        changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
+        changes={
+            "workflow.default_runtime": "omnigent",
+            "workflow.default_provider_profile_ref": "saved-codex_cli",
+        },
     )
     saved = await ctx.context.session.get(
         ManagedAgentProviderProfile, "saved-codex_cli"
@@ -1396,5 +1505,5 @@ async def test_dedicated_agent_free_omnigent_keeps_plan_admission(
     assert response.status_code == 409, response.text
     assert "default Omnigent Agent Profile is unavailable" in response.text
     assert "saved-codex_cli" not in response.text
-    assert not ctx.context.settings_reads
+    assert len(ctx.context.settings_reads) == 1
     ctx.adapter.create_schedule.assert_not_awaited()

@@ -200,7 +200,7 @@ async def test_implicit_resolver_uses_saved_account_before_configuration_fallbac
         else "saved-codex_cli"
     )
     assert snapshots[0]["providerProfileRef"] == expected
-    assert len(ctx.settings_reads) == (1 if mode != "review_only" else 0)
+    assert len(ctx.settings_reads) == 1
     ctx.service._client_adapter.start_workflow.assert_not_awaited()
 
 

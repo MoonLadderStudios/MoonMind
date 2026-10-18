@@ -184,7 +184,8 @@ async def test_agent_free_ignores_missing_saved_account(matrix_context, entrypoi
     }
     recorded = await submit(ctx, entrypoint, task)
     assert not agent_requests(recorded), recorded
-    assert not ctx.settings_reads
+    assert "saved-codex_cli" not in str(recorded)
+    assert len(ctx.settings_reads) == 1
 
 
 @pytest.mark.asyncio
@@ -391,7 +392,7 @@ async def test_agent_free_omnigent_default_retains_product_admission(
         assert response.json()["detail"] == (
             "default Omnigent Agent Profile is unavailable"
         )
-    assert not ctx.settings_reads
+    assert len(ctx.settings_reads) == 1
     ctx.schedule.assert_not_awaited()
     ctx.service._client_adapter.start_workflow.assert_not_awaited()
 
