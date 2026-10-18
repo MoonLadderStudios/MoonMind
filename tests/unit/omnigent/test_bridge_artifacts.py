@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 import pytest
 
 from moonmind.omnigent.bridge_artifacts import (
@@ -21,6 +22,7 @@ from moonmind.omnigent.bridge_artifacts import (
     build_omnigent_terminal_refs,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 
 def _request() -> AgentExecutionRequest:
@@ -151,6 +153,82 @@ class OversizedHarvestClient(FakeHarvestClient):
 
     async def get_session_file_content(self, _session_id: str, _file_id: str) -> bytes:
         return b"too large"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_contract", ["download", "capped-json"])
+async def test_resource_harvester_preserves_download_or_records_preview_unavailable(
+    tmp_path, provider_contract
+):
+    body = b"complete report line\n" * 2500
+    preview = b"".join(body.splitlines(keepends=True)[:2000])
+    assert len(preview) < len(body) < 10 * 1024 * 1024
+
+    def handler(request):
+        path = request.url.path
+        if path.endswith(("/changes", "/filesystem")):
+            return httpx.Response(200, json={"data": [{"path": "report.txt"}]})
+        if path.endswith("/filesystem/report.txt"):
+            assert request.url.params["download"] == "true"
+            if provider_contract == "download":
+                return httpx.Response(
+                    200,
+                    content=body,
+                    headers={
+                        "Content-Disposition": 'attachment; filename="report.txt"',
+                        "Content-Type": "text/plain; charset=utf-8",
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "object": "session.environment.filesystem.file_content",
+                    "path": "report.txt",
+                    "content": preview.decode(),
+                    "encoding": "utf-8",
+                    "bytes": len(preview),
+                    "truncated": True,
+                },
+            )
+        if path.endswith("/diff/report.txt"):
+            return httpx.Response(
+                200,
+                json={
+                    "object": "session.environment.filesystem.file_diff",
+                    "path": "report.txt",
+                    "before": "old\n",
+                    "after": preview.decode(),
+                },
+            )
+        assert path.endswith("/resources/files")
+        return httpx.Response(200, json={"data": []})
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test", transport=httpx.MockTransport(handler)
+    )
+    refs = {}
+    manifest = {"patchUnavailable": True, "artifactRefs": refs}
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    harvester = BridgeResourceHarvester(
+        client=client,
+        artifact_gateway=gateway,
+        request=_request(),
+        session_id="session",
+        manifest=manifest,
+        refs=refs,
+    )
+    await harvester.harvest_resources(capture_policy=None)
+    for group in ("changedFiles", "workspaceFiles"):
+        item = manifest[group][0]
+        if provider_contract == "download":
+            assert await gateway.read_bytes(item["artifactRef"]) == body
+        else:
+            assert "truncated" in item["unavailable"]
+            assert "artifactRef" not in item
+    assert manifest["patchUnavailable"] is True
+    assert "comparison" in manifest["workspaceDiffsUnavailable"]
+    assert not manifest.get("workspaceDiffs")
+    assert not list(tmp_path.rglob("*.diff"))
 
 
 def test_resource_reconciliation_accepts_explicit_null_lists() -> None:
