@@ -307,3 +307,68 @@ describe('workflow detail load failures', () => {
     expect(await screen.findByRole('heading', { name: 'Cached workflow title' })).toBeTruthy();
   });
 });
+
+describe('workflow detail elapsed time', () => {
+  function useFrozenClock(now: string) {
+    vi.useFakeTimers({ now: new Date(now), toFake: ['Date', 'setInterval', 'clearInterval'] });
+  }
+
+  it('advances an active step from its server start time and leaves completed timing unchanged', async () => {
+    useFrozenClock('2026-04-09T00:10:03Z');
+    window.history.pushState({}, '', '/workflows/test-123/steps?source=temporal');
+    routeFetch({
+      [DETAIL_URL]: () => jsonResponse({ ...baseExecution, stepsHref: STEPS_URL }),
+      [STEPS_URL]: () => jsonResponse(stepsSnapshot),
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={detailPayload()} />);
+
+    expect((await screen.findAllByText('10m 0s so far')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('35 s so far')).toBeNull();
+    expect(screen.getAllByText('1.0 s').length).toBeGreaterThan(0);
+
+    act(() => {
+      vi.advanceTimersByTime(65_000);
+    });
+
+    expect(screen.getAllByText('11m 5s so far').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1.0 s').length).toBeGreaterThan(0);
+  });
+
+  it('shows a running workflow duration that ticks in the overview', async () => {
+    useFrozenClock('2026-04-09T00:10:03Z');
+    window.history.pushState({}, '', '/workflows/test-123/overview?source=temporal');
+    routeFetch({ [DETAIL_URL]: () => jsonResponse(baseExecution) });
+
+    renderWithClient(<WorkflowDetailPage payload={detailPayload()} />);
+
+    expect(await screen.findByText('10m 3s so far')).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText('11m 3s so far')).toBeTruthy();
+  });
+
+  it('keeps a closed workflow duration fixed', async () => {
+    useFrozenClock('2026-04-09T00:10:03Z');
+    window.history.pushState({}, '', '/workflows/test-123/overview?source=temporal');
+    routeFetch({
+      [DETAIL_URL]: () => jsonResponse({
+        ...baseExecution,
+        status: 'completed',
+        state: 'completed',
+        rawState: 'completed',
+        temporalStatus: 'completed',
+        closedAt: '2026-04-09T00:01:00Z',
+      }),
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={detailPayload()} />);
+
+    expect(await screen.findByText('1m 0s')).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByText('1m 0s')).toBeTruthy();
+  });
+});

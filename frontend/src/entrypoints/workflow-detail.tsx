@@ -38,6 +38,7 @@ import { QueryStaleNotice } from '../components/dashboard/StaleDataNotice';
 import { ApiErrorState } from '../components/DashboardErrorState';
 import { responseError } from '../lib/api/client';
 import { isTransientError } from '../boot/queryClient';
+import { useLiveClock } from '../lib/liveClock';
 import { formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   readDashboardPreferences,
@@ -2229,6 +2230,23 @@ function workflowDuration(startedAt: string | null | undefined, closedAt: string
   const closed = new Date(closedAt).getTime();
   if (Number.isNaN(started) || Number.isNaN(closed) || closed < started) return '—';
   return formatDurationMs(closed - started);
+}
+
+/** Workflow duration; a running workflow ticks from its server start time. */
+function WorkflowDurationValue({
+  startedAt,
+  closedAt,
+  running,
+}: {
+  startedAt: string | null | undefined;
+  closedAt: string | null | undefined;
+  running: boolean;
+}) {
+  const started = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const live = running && !closedAt && Number.isFinite(started);
+  const nowMs = useLiveClock(live);
+  if (!live) return <>{workflowDuration(startedAt, closedAt)}</>;
+  return <>{`${formatDurationMs(Math.max(0, nowMs - started))} so far`}</>;
 }
 
 function githubRepositoryHref(repository: string | null | undefined): string | null {
@@ -5530,14 +5548,34 @@ function fallbackTimingMs(startedAt: string | null | undefined, endedAt: string 
   return Math.max(0, ended - started);
 }
 
-function rowTimingValueMs(row: StepLedgerRow): number | null {
-  return stepTimingMs(row.timing) ?? fallbackTimingMs(row.startedAt, row.updatedAt);
+/**
+ * Elapsed time of an active attempt: the server's start time to `nowMs`. The
+ * server's own elapsed figure is as of its last write to the row, so it only
+ * sets a floor (covering a client clock that runs behind the server's).
+ */
+function liveElapsedMs(
+  timing: StepTiming,
+  startedAt: string | null | undefined,
+  nowMs: number,
+): number | null {
+  const started = Date.parse(timing?.startedAt ?? startedAt ?? '');
+  if (!Number.isFinite(started)) return null;
+  return Math.max(stepTimingMs(timing) ?? 0, nowMs - started);
 }
 
-function stepTimingLabel(row: StepLedgerRow): string {
+function isLiveStepRow(row: StepLedgerRow): boolean {
+  return ACTIVE_STEP_TIMING_STATUSES.has(row.status) && !(row.preservedFrom || row.timing?.preserved);
+}
+
+function rowTimingValueMs(row: StepLedgerRow, nowMs: number): number | null {
+  const live = isLiveStepRow(row) ? liveElapsedMs(row.timing, row.startedAt, nowMs) : null;
+  return live ?? stepTimingMs(row.timing) ?? fallbackTimingMs(row.startedAt, row.updatedAt);
+}
+
+function stepTimingLabel(row: StepLedgerRow, nowMs: number): string {
   const status = row.status;
   const timing = row.timing;
-  const valueMs = rowTimingValueMs(row);
+  const valueMs = rowTimingValueMs(row, nowMs);
   if (row.preservedFrom || timing?.preserved) {
     return valueMs === null ? 'Original timing unavailable' : `Original duration: ${formatDurationMs(valueMs)}`;
   }
@@ -5548,18 +5586,31 @@ function stepTimingLabel(row: StepLedgerRow): string {
   return formatDurationMs(valueMs);
 }
 
-function executionTimingLabel(execution: StepExecutionProjection): string {
-  const valueMs = stepTimingMs(execution.timing) ?? fallbackTimingMs(execution.startedAt, execution.updatedAt);
+const ACTIVE_STEP_EXECUTION_TIMING_STATUSES = new Set(['preparing', 'executing', 'running', 'checking']);
+
+function isLiveStepExecution(execution: StepExecutionProjection): boolean {
+  return ACTIVE_STEP_EXECUTION_TIMING_STATUSES.has(execution.status);
+}
+
+function executionTimingValueMs(execution: StepExecutionProjection, nowMs: number): number | null {
+  const live = isLiveStepExecution(execution)
+    ? liveElapsedMs(execution.timing, execution.startedAt, nowMs)
+    : null;
+  return live ?? stepTimingMs(execution.timing) ?? fallbackTimingMs(execution.startedAt, execution.updatedAt);
+}
+
+function executionTimingLabel(execution: StepExecutionProjection, nowMs: number): string {
+  const valueMs = executionTimingValueMs(execution, nowMs);
   if (valueMs === null || execution.timing?.precision === 'unavailable') return 'Timing unavailable';
-  const suffix = ACTIVE_STEP_TIMING_STATUSES.has(execution.status) ? ' so far' : '';
+  const suffix = isLiveStepExecution(execution) ? ' so far' : '';
   return `${formatDurationMs(valueMs)}${suffix}`;
 }
 
-function visibleStepTimingOverview(rows: StepLedgerRow[]) {
+function visibleStepTimingOverview(rows: StepLedgerRow[], nowMs: number) {
   const completed = rows.filter((row) => row.status === 'completed').length;
   const active = rows.find((row) => ACTIVE_STEP_TIMING_STATUSES.has(row.status));
   const timedRows = rows
-    .map((row) => ({ row, valueMs: rowTimingValueMs(row) }))
+    .map((row) => ({ row, valueMs: rowTimingValueMs(row, nowMs) }))
     .filter((item): item is { row: StepLedgerRow; valueMs: number } => item.valueMs !== null);
   const longest = timedRows.reduce<{ row: StepLedgerRow; valueMs: number } | null>(
     (current, item) => (!current || item.valueMs > current.valueMs ? item : current),
@@ -5574,14 +5625,16 @@ function visibleStepTimingOverview(rows: StepLedgerRow[]) {
 }
 
 function StepTimingChip({ row }: { row: StepLedgerRow }) {
-  return <span className="step-timing-chip">{stepTimingLabel(row)}</span>;
+  const nowMs = useLiveClock(isLiveStepRow(row));
+  return <span className="step-timing-chip">{stepTimingLabel(row, nowMs)}</span>;
 }
 
 function StepTimingDetails({ row }: { row: StepLedgerRow }) {
   const timing = row.timing;
-  const valueMs = rowTimingValueMs(row);
+  const nowMs = useLiveClock(isLiveStepRow(row));
+  const valueMs = rowTimingValueMs(row, nowMs);
   const elapsed = row.preservedFrom || timing?.preserved
-    ? stepTimingLabel(row)
+    ? stepTimingLabel(row, nowMs)
     : valueMs === null
       ? 'Timing unavailable'
       : ACTIVE_STEP_TIMING_STATUSES.has(row.status)
@@ -5601,13 +5654,14 @@ function StepTimingDetails({ row }: { row: StepLedgerRow }) {
 }
 
 function StepTimingOverview({ rows }: { rows: StepLedgerRow[] }) {
-  const overview = visibleStepTimingOverview(rows);
+  const nowMs = useLiveClock(rows.some(isLiveStepRow));
+  const overview = visibleStepTimingOverview(rows, nowMs);
   return (
     <div className="step-timing-overview" aria-label="Step timing overview">
       <span>
         Current step{' '}
         <strong>
-          {overview.active ? `${overview.active.title} · ${stepTimingLabel(overview.active)}` : 'None'}
+          {overview.active ? `${overview.active.title} · ${stepTimingLabel(overview.active, nowMs)}` : 'None'}
         </strong>
       </span>
       <span>
@@ -5661,8 +5715,10 @@ function StepExecutionRefList({ entries }: { entries: Array<[string, string]> })
 // disposition, downstream invalidation) as refs and typed diagnostics only.
 function StepExecutionHistoryRow({
   execution,
+  nowMs,
 }: {
   execution: StepExecutionProjection;
+  nowMs: number;
 }) {
   const contextBundleRef = execution.stepEvidence?.contextBundleRef?.artifactRef ?? null;
   const gateVerdict =
@@ -5682,7 +5738,7 @@ function StepExecutionHistoryRow({
       <div className="step-execution-history-head">
         <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
         <StepExecutionStatusPill status={execution.status} />
-        <span className="step-timing-chip">{executionTimingLabel(execution)}</span>
+        <span className="step-timing-chip">{executionTimingLabel(execution, nowMs)}</span>
         <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
         {downstreamInvalidated ? (
           <span
@@ -5828,12 +5884,14 @@ function StepExecutionHistory({
     staleTime,
   });
 
+  const executions = historyQuery.data?.stepExecutions ?? [];
+  const nowMs = useLiveClock(enabled && executions.some(isLiveStepExecution));
+
   if (!enabled) return null;
 
-  const executions = historyQuery.data?.stepExecutions ?? [];
   const ordered = [...executions].sort((a, b) => b.executionOrdinal - a.executionOrdinal);
   const totalMs = executions
-    .map((execution) => stepTimingMs(execution.timing) ?? fallbackTimingMs(execution.startedAt, execution.updatedAt))
+    .map((execution) => executionTimingValueMs(execution, nowMs))
     .filter((value): value is number => value !== null)
     .reduce((sum, value) => sum + value, 0);
 
@@ -5853,7 +5911,7 @@ function StepExecutionHistory({
           </p>
           <ol className="step-execution-history" aria-label="Step Execution history">
             {ordered.map((execution) => (
-              <StepExecutionHistoryRow key={execution.stepExecutionId} execution={execution} />
+              <StepExecutionHistoryRow key={execution.stepExecutionId} execution={execution} nowMs={nowMs} />
             ))}
           </ol>
         </>
@@ -10596,7 +10654,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               <FactGroup title="Lifecycle">
                 <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
                 <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
-                <Fact label="Duration">{workflowDuration(execution.startedAt, execution.closedAt)}</Fact>
+                <Fact label="Duration">
+                  <WorkflowDurationValue
+                    startedAt={execution.startedAt}
+                    closedAt={execution.closedAt}
+                    running={!isTerminalExecution}
+                  />
+                </Fact>
                 <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
                 <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
                 {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
