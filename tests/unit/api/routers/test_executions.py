@@ -515,7 +515,14 @@ def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
 
 
 def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
-    return SimpleNamespace(execute=AsyncMock(return_value=_ExecuteResult(rows)))
+    from api_service.db.models import SettingsOverride
+
+    async def execute(statement):
+        if statement.column_descriptions[0].get("entity") is SettingsOverride:
+            return _ExecuteResult([])
+        return _ExecuteResult(rows)
+
+    return SimpleNamespace(execute=AsyncMock(side_effect=execute))
 
 
 class _SnapshotReuseSession:
