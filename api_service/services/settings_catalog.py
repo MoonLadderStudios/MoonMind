@@ -453,6 +453,18 @@ class SettingsDiagnosticsResponse(BaseModel):
     values: dict[str, SettingsDiagnosticRead]
 
 
+def coerce_settings_subject_id(value: Any) -> UUID | None:
+    """Normalize persisted settings subjects; machine identities have no user scope."""
+    if isinstance(value, UUID):
+        return value
+    if value is None:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def settings_permissions_for_user(user: Any) -> set[str]:
     if bool(getattr(user, "is_superuser", False)):
         return set(SETTINGS_PERMISSION_NAMES)
@@ -1157,6 +1169,19 @@ class SettingsCatalogService:
             value_version=version,
             diagnostics=diagnostics,
         )
+
+    async def default_provider_profile_ref(self, *, scope: SettingScope) -> str | None:
+        """Return configured account intent, including an unavailable Profile.
+
+        Missing, disabled, and unready accounts must reach admission validation;
+        treating them as an omission could silently authorize another account.
+        """
+        effective = await self.effective_value_async(
+            "workflow.default_provider_profile_ref", scope=scope
+        )
+        if not isinstance(effective.value, str) or not effective.value.strip():
+            return None
+        return effective.value.strip()
 
     async def effective_values_async(
         self,

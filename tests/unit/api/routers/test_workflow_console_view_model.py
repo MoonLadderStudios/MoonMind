@@ -1505,13 +1505,17 @@ async def test_resolve_dashboard_runtime_config_propagates_overrides() -> None:
 
     assert config["system"]["defaultRuntime"] == "claude_code"
     assert (
-        config["system"]["providerProfiles"]["defaultProfileRef"]
-        == "claude-anthropic"
+        config["system"]["providerProfiles"]["defaultProfileRef"] == "claude-anthropic"
     )
 
 
 @pytest.mark.asyncio
-async def test_resolve_dashboard_runtime_config_drops_invalid_profile_ref() -> None:
+@pytest.mark.parametrize(
+    "diagnostic_code", ["provider_profile_not_found", "provider_profile_disabled"]
+)
+async def test_resolve_dashboard_runtime_config_drops_invalid_profile_ref(
+    diagnostic_code,
+) -> None:
     """Provider profile diagnostics flag missing/disabled refs; we omit them."""
 
     user = SimpleNamespace(id=None, workspace_id=None)
@@ -1525,8 +1529,8 @@ async def test_resolve_dashboard_runtime_config_drops_invalid_profile_ref() -> N
                 "stale-profile",
                 diagnostics=[
                     SettingDiagnostic(
-                        code="provider_profile_not_found",
-                        message="missing",
+                        code=diagnostic_code,
+                        message="Unavailable",
                         severity="error",
                     )
                 ],

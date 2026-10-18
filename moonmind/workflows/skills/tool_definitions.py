@@ -28,6 +28,34 @@ JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
 JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 
 
+JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
+JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
+JIRA_IMPLEMENT_TASKS_TOOL_NAME = "story.create_jira_implement_tasks"
+GITHUB_CREATE_ISSUES_TOOL_NAME = "story.create_github_issues"
+GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME = (
+    "story.create_github_issue_orchestrate_workflows"
+)
+GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME = "story.create_github_issue_implement_workflows"
+DOCUMENT_UPDATE_TASKS_TOOL_NAME = "story.create_document_update_tasks"
+JIRA_STORY_TOOL_NAMES = frozenset(
+    {
+        JIRA_CREATE_ISSUES_TOOL_NAME,
+        JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
+        JIRA_IMPLEMENT_TASKS_TOOL_NAME,
+    }
+)
+GITHUB_STORY_TOOL_NAMES = frozenset(
+    {
+        GITHUB_CREATE_ISSUES_TOOL_NAME,
+        GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME,
+        GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME,
+    }
+)
+STORY_OUTPUT_TASK_TOOLS = (
+    JIRA_STORY_TOOL_NAMES | GITHUB_STORY_TOOL_NAMES | {DOCUMENT_UPDATE_TASKS_TOOL_NAME}
+)
+
+
 def default_registry_tool_payload(*, name: str) -> dict[str, Any]:
     if is_container_job_tool(name):
         return build_container_job_tool_definition_payload(name=name)
