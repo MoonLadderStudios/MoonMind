@@ -129,7 +129,7 @@ Retry is distinct from rerun (a fresh execution of the authored input), Continue
 
 ### 7A.2 Choosing the step
 
-The run workflow writes each step's order to the `mm_current_step_order` memo when the step starts, and the first history change to an order marks that step's start. The step ledger's `order` matches that value. By default MoonMind restarts the step the finish summary names as failed, else the last failed ledger step, else the last step that started. The operator may instead choose any earlier step that started; a step that never started cannot be chosen.
+The run workflow writes each step's order to the `mm_current_step_order` memo when the step starts, and the first history change to an order marks that step's start. The step ledger's `order` matches that value. By default MoonMind restarts the earliest failed step, whether the finish summary names it or the ledger marks it failed, else the last step that started. A plan that continued past an earlier failure would replay that failure in any reset after it. The operator may instead choose any earlier step that started; a step that never started cannot be chosen.
 
 ### 7A.3 Admission
 
@@ -145,7 +145,7 @@ Before resetting, MoonMind requires that:
 - the history up to the chosen step replays against the installed workflow code (`history_not_replayable`), checked with the Temporal replayer before any reset, so an incompatible code change refuses the retry and leaves the failed run untouched;
 - the history is still retained (`history_unavailable`).
 
-The request's `idempotencyKey` is the reset's request id, so repeating a request returns the same new run. Signals and updates received after the reset point are not reapplied to the new run.
+The request's `idempotencyKey` is the reset's request id and is named in the reset reason, so repeating a request returns the same new run, even when Temporal accepted the reset before MoonMind saved its response. Signals and updates received after the reset point are not reapplied to the new run.
 
 ### 7A.4 What is not repeated
 

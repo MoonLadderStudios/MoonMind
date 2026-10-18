@@ -7,6 +7,7 @@ import {
   describeWorkflowActionDisabledReason,
   isRemediationEligibleTarget,
   requestRetryFromStep,
+  retryFromStepIdempotencyKey,
   type ExecutionActionCapabilities,
   type WorkflowActionHandlers,
 } from './workflowActions';
@@ -411,6 +412,33 @@ describe('MoonLadderStudios/MoonMind#4636 remediation authored selection', () =>
 });
 
 describe('requestRetryFromStep', () => {
+  it('sends a bounded idempotency key that is stable per retry intent', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(
+        JSON.stringify({ workflowId: 'w', runId: 'r2', sourceRunId: 'r1', stepId: 's', message: 'ok' }),
+        { status: 202, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    try {
+      const workflowId = `mm:${'w'.repeat(255)}`;
+      const stepId = 's'.repeat(300);
+      await requestRetryFromStep({ apiBase: '/api', workflowId, sourceRunId: 'run-1', stepId });
+      const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
+      // The API accepts at most 128 characters.
+      expect(body.idempotencyKey.length).toBeLessThanOrEqual(128);
+      expect(body.idempotencyKey).toBe(retryFromStepIdempotencyKey(workflowId, 'run-1', stepId));
+      expect(body.stepId).toBe(stepId);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+    expect(retryFromStepIdempotencyKey('w', 'run-1', 'a')).not.toBe(
+      retryFromStepIdempotencyKey('w', 'run-1', 'b'),
+    );
+    expect(retryFromStepIdempotencyKey('w', 'run-1')).not.toBe(
+      retryFromStepIdempotencyKey('w', 'run-2'),
+    );
+  });
+
   it('reports a refused retry as an API error with its status, code, and message', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
