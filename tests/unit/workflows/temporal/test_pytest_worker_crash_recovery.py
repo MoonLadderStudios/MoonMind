@@ -15,6 +15,8 @@ import pytest
 from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 from temporalio.testing import WorkflowEnvironment
 
+from tests import conftest
+
 pytestmark = pytest.mark.slow
 
 CONFTEST = Path(__file__).resolve().parents[4] / "tests/conftest.py"
@@ -292,6 +294,26 @@ def test_thread_timeout_honors_debugger_suppression(
     assert result.returncode == 0, result.stdout
     assert "2 passed" in result.stdout
     assert [record["case"] for record in records] == ["control"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_confirms_stopped_owned_cli_has_exited() -> None:
+    async with await WorkflowEnvironment.start_local():
+        pids = subprocess.check_output(
+            ["pgrep", "-P", str(os.getpid()), "-f", " server start-dev"], text=True
+        ).split()
+        assert len(pids) == 1
+        pid = int(pids[0])
+        # A stopped real server cannot finish graceful SIGTERM shutdown. Fatal
+        # worker cleanup must confirm termination rather than race its drain.
+        os.kill(pid, signal.SIGSTOP)
+        os.waitid(os.P_PID, pid, os.WSTOPPED | os.WNOWAIT)
+        conftest._kill_owned_temporal_servers()
+        try:
+            command = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except FileNotFoundError:
+            command = b""
+        assert not command, "Cleanup returned while its owned CLI was still alive"
 
 
 @pytest.mark.asyncio

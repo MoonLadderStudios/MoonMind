@@ -388,7 +388,7 @@ Validate canonical configuration, host state, and credential preflight with:
 docker compose config --quiet
 docker compose ps omnigent-host-claude omnigent-host-codex
 docker compose exec omnigent-host-claude sh -lc 'test -d /home/app/.claude && test -w /home/app/.claude'
-docker compose exec omnigent-host-codex /opt/moonmind/check-codex-oauth-host.sh
+docker compose exec omnigent-host-codex /opt/moonmind/check-omnigent-host.sh
 ```
 
 The dedicated hosts retain the sanitized `/workspaces` and read-only MoonMind workspace policy for operator-provided static content. Do not add provider API keys to these services or mount either OAuth volume into the generic host. One OAuth profile remains limited to one active runtime consumer across direct MoonMind and Omnigent execution.

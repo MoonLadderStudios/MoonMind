@@ -6,6 +6,11 @@ oauth_root=${OAUTH_HOME:-}
 artifacts_root=${OMNIGENT_ARTIFACTS_PATH:-/artifacts}
 cache_root=${XDG_CACHE_HOME:-/home/app/.cache}
 
+case "$state_root:$artifacts_root:$cache_root" in
+  /home/app/.omnigent:/artifacts:/home/app/.cache) ;;
+  *) echo "unexpected OAuth host data paths" >&2; exit 64 ;;
+esac
+
 case "$oauth_root" in
   /home/app/.codex|/home/app/.claude) ;;
   *) echo "unexpected OAuth host path" >&2; exit 64 ;;

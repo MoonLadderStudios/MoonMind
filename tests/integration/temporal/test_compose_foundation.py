@@ -946,7 +946,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "codex-auth-init": {"condition": "service_completed_successfully"}
     }
     assert init_service["entrypoint"] == [
-        "/opt/moonmind/init-codex-oauth-host.sh"
+        "/opt/moonmind/init-oauth-host.sh"
     ]
     # Restricted egress: the host attaches only to the internal enforcing
     # network (MoonLadderStudios/MoonMind#3516), never the routable
