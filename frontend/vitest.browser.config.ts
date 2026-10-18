@@ -36,9 +36,9 @@ export default defineConfig({
       // Local runs default to both engines. CI assigns one engine per matrix leg.
       instances: engines.map((browser) => ({
         browser,
-        // Firefox can lose native Enter/Space activation when another test page
-        // takes focus between key delivery and the browser's default action.
-        ...(browser === 'firefox' ? { fileParallelism: false } : {}),
+        // Firefox and WebKit can lose native focus or keyboard activation when
+        // another test page takes focus during an interaction.
+        ...(browser === 'firefox' || browser === 'webkit' ? { fileParallelism: false } : {}),
         viewport: { width: 1280, height: 800 },
       })),
     },
