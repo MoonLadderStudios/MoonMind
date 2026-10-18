@@ -31,14 +31,17 @@ def _postgres_sql(monkeypatch, step: str) -> str:
     return " ".join(buffer.getvalue().split())
 
 
-def test_migration_is_the_single_head() -> None:
+def test_migration_follows_the_issue_grant_in_the_single_chain() -> None:
     migration = importlib.import_module(MIGRATION_MODULE)
     assert migration.down_revision == "394_default_conn_issues_grant"
     assert len(migration.revision) <= 32
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
-    assert tuple(ScriptDirectory.from_config(config).get_heads()) == (
-        migration.revision,
+    assert (
+        ScriptDirectory.from_config(config)
+        .get_revision("396_retire_remediation_actions")
+        .down_revision
+        == migration.revision
     )
 
 

@@ -76,7 +76,6 @@ from moonmind.omnigent.live_verification_health import (
     LiveVerificationHealthError,
     assert_live_health_projection,
 )
-from moonmind.omnigent.remediation_matrix import load_remediation_release_status
 from moonmind.omnigent.settings import (
     build_omnigent_gate,
     generic_host_enabled,
@@ -220,7 +219,6 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     support_gate_reasons: list[GateReason] = Field(alias="supportGateReasons")
     compatibility_diagnostics: dict[str, Any] = Field(alias="compatibilityDiagnostics")
     cutover: dict[str, Any]
-    remediation_release: dict[str, Any] = Field(alias="remediationRelease")
     admission_readiness: dict[str, Any] = Field(alias="admissionReadiness")
 
     @field_validator("harness", "harnesses", mode="before")
@@ -1675,7 +1673,6 @@ async def get_omnigent_codex_catalog_readiness(
         }
     )
     cutover_status = effective_phase()
-    remediation_release = load_remediation_release_status()
     return OmnigentCodexCatalogReadiness(
         available=available,
         defaultExecutionProfileRef=next(iter(PROFILES)),
@@ -1687,7 +1684,6 @@ async def get_omnigent_codex_catalog_readiness(
         supportGateReasons=support_reasons,
         compatibilityDiagnostics=diagnostics,
         cutover=cutover_status.as_dict(),
-        remediationRelease=remediation_release.as_dict(advisory=True),
         admissionReadiness=admission.to_dict(),
     )
 

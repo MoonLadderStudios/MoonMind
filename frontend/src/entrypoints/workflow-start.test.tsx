@@ -873,29 +873,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     supportGateReasons: [],
     compatibilityDiagnostics: {},
     cutover: {},
-    remediationRelease: {
-      policyVersion: "moonmind.operator-remediation-release/v1",
-      matrixVersion: "operator-remediation-support-matrix/v1",
-      manualDiagnosisSupported: true,
-      manualMutationSupported: true,
-      autonomousRolloutAuthorized: false,
-      advisory: true,
-      promotionAllowed: false,
-      manualPromotionAllowed: false,
-      rollbackRequired: false,
-      generatedAt: "2026-08-13T00:00:00Z",
-      expiresAt: "2026-08-20T00:00:00Z",
-      telemetry: {
-        schemaVersion: "moonmind.operator-remediation-telemetry/v1",
-        groups: {},
-      },
-      alerts: [{
-        code: "autonomous_rollout_gate_closed",
-        severity: "warning",
-        operatorAction: "keep_autonomous_mutation_disabled",
-      }],
-      blockers: ["autonomous_rollout_gate_closed"],
-    },
     admissionReadiness: {},
   } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
   const readyAgentProfiles = [{
@@ -1732,13 +1709,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
             checkpointRef: "artifact://checkpoint/run-tests",
           }],
         },
-        mode: "snapshot_then_follow",
-        authorityMode: "approval_gated",
-        actionPolicyRef: "admin_healer_default",
         evidencePolicy: { includeStepLedger: true },
-        approvalPolicy: { requiredForHighRisk: true },
-        lockPolicy: { targetMutationLock: true },
-        verificationPolicy: { verifyAppliedActions: true },
         checkpointBranchPolicy: {
           actionKind: "checkpoint_branch.create_from_remediation_context",
           runtimeContextPolicy: "fresh_agent_run",
@@ -1786,12 +1757,13 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     renderWorkflowStartPage(omnigentPayload());
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
-    fireEvent.click(await screen.findByText("Live remediation observations"));
-    expect(screen.getAllByText("Observed")).toHaveLength(2);
-    expect(screen.getByText(/Each action checks its own capability, policy, and approval/)).toBeTruthy();
-    expect((screen.getByRole("option", { name: "Administrator automatic (disabled)" }) as HTMLOptionElement).disabled).toBe(true);
-    expect(screen.getByText("moonmind.operator-remediation-telemetry/v1")).toBeTruthy();
-    expect(screen.getByText(/warning: autonomous_rollout_gate_closed/)).toBeTruthy();
+    // A remediation never acts on its target, so the draft offers no mode,
+    // authority, action-policy, approval, lock, or verification controls.
+    for (const label of ["Remediation mode", "Authority", "Action policy"]) {
+      expect(screen.queryByLabelText(label)).toBeNull();
+    }
+    expect(screen.queryByText("Require approval for high-risk actions")).toBeNull();
+    expect(screen.queryByText("Live remediation observations")).toBeNull();
     const start = screen.getByRole("button", { name: "Start Workflow" });
     await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(start);
@@ -20376,9 +20348,6 @@ describe("Task Create runtime command previews", () => {
           runId: "run-original",
           source: "remediation",
         },
-        mode: "snapshot_then_follow",
-        authorityMode: "approval_gated",
-        actionPolicyRef: "admin_healer_default",
         evidencePolicy: {
           includeStepLedger: true,
           includeCheckpointBranches: true,
@@ -20440,19 +20409,8 @@ describe("Task Create runtime command previews", () => {
     renderWithClient(<WorkflowStartPage payload={withRuntimeCommandPreview()} />);
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
-    const remediationMode = screen.getByLabelText("Remediation mode");
-    const remediationAuthority = screen.getByLabelText("Authority");
-    const actionPolicy = screen.getByLabelText("Action policy");
-    fireEvent.change(remediationMode, { target: { value: "live_follow" } });
-    fireEvent.change(remediationAuthority, { target: { value: "observe_only" } });
     fireEvent.click(screen.getByLabelText("Diagnostics"));
 
-    expect((remediationMode as HTMLSelectElement).value).toBe("live_follow");
-    expect((remediationAuthority as HTMLSelectElement).value).toBe("observe_only");
-    expect((actionPolicy as HTMLSelectElement).value).toBe("admin_healer_default");
-    expect(within(actionPolicy).queryByRole("option", {
-      name: "operator_review_only",
-    })).toBeNull();
     expect((screen.getByLabelText("Diagnostics") as HTMLInputElement).checked).toBe(false);
     expect(
       await screen.findByText(
@@ -20516,9 +20474,6 @@ describe("Task Create runtime command previews", () => {
             },
           ],
         },
-        mode: "snapshot_then_follow",
-        authorityMode: "approval_gated",
-        actionPolicyRef: "admin_healer_default",
         checkpointBranchPolicy: {
           actionKind: "checkpoint_branch.create_from_remediation_context",
           runtimeContextPolicy: "fresh_agent_run",
@@ -20615,9 +20570,6 @@ describe("Task Create runtime command previews", () => {
             },
           ],
         },
-        mode: "snapshot_then_follow",
-        authorityMode: "approval_gated",
-        actionPolicyRef: "admin_healer_default",
         checkpointBranchPolicy: {
           actionKind: "checkpoint_branch.create_from_remediation_context",
           runtimeContextPolicy: "fresh_agent_run",

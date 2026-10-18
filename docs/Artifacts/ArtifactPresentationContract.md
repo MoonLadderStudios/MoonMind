@@ -391,9 +391,9 @@ Workflow Detail shows one compact Saved Results section on the Artifacts tab, bo
 
 ### 11.7 Remediation evidence
 
-`remediation.context`, approval request/decision, action request/result, verification, audit, target annotation, decision log, and lifecycle summary artifacts keep durable links and remain the deep evidence. Workflow Detail projects only bounded, redacted JSON and metadata: artifact class, status, freshness/expiry, boundedness, and safe lifecycle fields. Per-class availability and degradation come from the canonical context artifact.
+`remediation.context` and every other `remediation.*` artifact linked to a remediation run, including retained approval, action, verification, audit, annotation, decision-log, and summary artifacts, keep durable links and remain the deep evidence. Workflow Detail projects only bounded, redacted metadata: artifact class, status, freshness/expiry, boundedness, and safe identifying fields. Per-class availability and degradation come from the canonical context artifact.
 
-Action delivery, repair verification, and prevention verification are reported separately and are not reconstructed from rendered logs, chat text, or assistant prose, because those are not authoritative. When a compact projection is unavailable, the durable artifact link stays visible and the UI reports degradation instead of inventing state.
+Repair verification and remediation results are not reconstructed from rendered logs, chat text, or assistant prose, because those are not authoritative. When a compact projection is unavailable, the durable artifact link stays visible and the UI reports degradation instead of inventing state.
 
 ---
 

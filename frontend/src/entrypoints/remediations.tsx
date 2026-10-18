@@ -18,7 +18,6 @@ type RemediationRow = {
   authorityMode: string;
   mode: string;
   latestActionSummary?: string | null;
-  resolution?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -74,7 +73,6 @@ function compactRows(payload: unknown): RemediationRow[] {
       authorityMode: compactText(record, 'authorityMode') || 'unspecified',
       mode: compactText(record, 'mode') || 'unspecified',
       latestActionSummary: compactText(record, 'latestActionSummary') || null,
-      resolution: compactText(record, 'resolution') || null,
       createdAt: compactText(record, 'createdAt'),
       updatedAt: compactText(record, 'updatedAt'),
     }];
@@ -144,7 +142,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     const term = filter.trim().toLowerCase();
     const allRows = query.data?.rows ?? [];
     return term ? allRows.filter((row) =>
-      [row.title, row.status, row.targetTitle, row.targetWorkflowId, row.latestActionSummary, row.resolution]
+      [row.title, row.status, row.targetTitle, row.targetWorkflowId, row.latestActionSummary]
         .some((value) => String(value ?? '').toLowerCase().includes(term))) : allRows;
   }, [filter, query.data]);
   const unavailableCount = query.data?.unavailableCount ?? 0;
@@ -154,7 +152,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
     { key: 'status', header: 'Lifecycle / attention', render: (row) => <><span>{row.status}</span>{row.attentionRequired ? <strong> · Attention</strong> : null}</> },
     { key: 'targetTitle', header: 'Source Workflow', render: (row) => <Link to={`/workflows/${encodeURIComponent(row.targetWorkflowId)}`} aria-label={`${row.targetTitle} source workflow`}>{row.targetTitle}</Link> },
     { key: 'authorityMode', header: 'Contract', render: (row) => `${row.authorityMode} · ${row.mode}` },
-    { key: 'latestActionSummary', header: 'Latest action', render: (row) => row.latestActionSummary || row.resolution || '—' },
+    { key: 'latestActionSummary', header: 'Latest action', render: (row) => row.latestActionSummary || '—' },
     { key: 'createdAt', header: 'Created', sortable: true, render: (row) => formatDateTime(row.createdAt) },
     { key: 'updatedAt', header: 'Updated', sortable: true, render: (row) => formatDateTime(row.updatedAt) },
   ], []);

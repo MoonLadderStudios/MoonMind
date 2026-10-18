@@ -16,8 +16,6 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
 from api_service.services.container_jobs import ContainerJobService
-from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
-from api_service.services.remediation_actions import build_remediation_action_executor
 from moonmind.config.settings import settings
 from moonmind.security.auth_modes_4120 import (
     is_disabled_local_mode,
@@ -53,10 +51,6 @@ from moonmind.mcp.skills_on_demand_registry import (
     SkillsOnDemandToolExecutionContext,
     SkillsOnDemandToolRegistry,
 )
-from moonmind.mcp.remediation_tool_registry import (
-    RemediationToolExecutionContext,
-    RemediationToolRegistry,
-)
 from moonmind.mcp.tool_registry import (
     ResourceListResponse,
     ResourceMetadata,
@@ -67,7 +61,6 @@ from moonmind.mcp.tool_registry import (
     ToolNotFoundError,
 )
 from moonmind.workflows import get_temporal_artifact_service
-from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +128,6 @@ _container_job_registry = ContainerJobToolRegistry()
 _skills_on_demand_registry = SkillsOnDemandToolRegistry(
     expose_commands=settings.workflow.skills_on_demand_enabled
 )
-_remediation_registry = RemediationToolRegistry()
 _jira_registry: JiraToolRegistry | None = None
 _jira_service: JiraToolService | None = None
 
@@ -191,7 +183,6 @@ def _list_registered_tools() -> list[Any]:
     tools = (
         _execution_tool_registry.list_tools()
         + _skills_on_demand_registry.list_tools()
-        + _remediation_registry.list_tools()
         + _list_container_job_tools()
     )
     if _jira_registry is not None:
@@ -202,7 +193,6 @@ def _list_registered_tools() -> list[Any]:
 def _list_streamable_callable_tools() -> list[Any]:
     tools = (
         _skills_on_demand_registry.list_tools()
-        + _remediation_registry.list_tools()
         + _list_container_job_tools()
     )
     if _jira_registry is not None:
@@ -312,29 +302,6 @@ async def _dispatch_tool_call(
             arguments=payload.arguments,
             context=skills_context,
         )
-    if payload.tool.startswith("remediation."):
-        if session is None:  # pragma: no cover - HTTP transport always supplies it
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"code": "backend_unavailable"},
-            )
-        log_adapter = ManagedRunRemediationLogAdapter()
-        context = RemediationToolExecutionContext(
-            service=RemediationEvidenceToolService(
-                session=session,
-                artifact_service=get_temporal_artifact_service(session),
-                log_reader=log_adapter,
-                live_follower=log_adapter,
-                action_executor=build_remediation_action_executor(session=session),
-            ),
-            principal=str(user.id),
-        )
-        return await _remediation_registry.call_tool(
-            tool=payload.tool,
-            arguments=payload.arguments,
-            context=context,
-        )
-
     raise ToolNotFoundError(payload.tool)
 
 

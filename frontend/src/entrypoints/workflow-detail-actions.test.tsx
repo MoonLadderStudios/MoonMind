@@ -373,64 +373,6 @@ describe('Checkpoint branch actions', () => {
   });
 });
 
-describe('Remediation operator controls', () => {
-  it('confirms Cancel remediation but takes over without a dialog', async () => {
-    window.history.pushState({}, 'Artifacts', '/workflows/test-123/artifacts?source=temporal');
-    const remediation = {
-      remediationWorkflowId: 'mm:remediation-1',
-      remediationRunId: 'run-remediation-1',
-      targetWorkflowId: 'test-123',
-      targetRunId: '01-run',
-      mode: 'snapshot_then_follow',
-      authorityMode: 'approval_gated',
-      status: 'running',
-      operatorControls: {
-        canCancel: true,
-        canForceCancel: false,
-        canTakeOver: true,
-        canResume: false,
-        paused: false,
-        disabledReasons: {},
-      },
-    };
-    mockFetch(
-      baseExecution({ status: 'failed', state: 'failed', rawState: 'failed', temporalStatus: 'failed' }),
-      (url) => {
-        if (url.includes('/remediations?direction=inbound')) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ direction: 'inbound', items: [remediation] }),
-          } as Response);
-        }
-        if (url.includes('/remediations?direction=outbound')) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ direction: 'outbound', items: [] }),
-          } as Response);
-        }
-        return null;
-      },
-    );
-    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Take over and pause' }));
-    expect(screen.queryByRole('dialog')).toBeNull();
-    await waitFor(() => expect(postCalls('/executions/mm%3Aremediation-1/signal')).toHaveLength(1));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel remediation' }));
-    const dialog = screen.getByRole('dialog', { name: 'Cancel remediation?' });
-    expect(postCalls('/executions/mm%3Aremediation-1/cancel')).toHaveLength(0);
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel remediation' }));
-    await waitFor(() => {
-      const [cancelCall] = postCalls('/executions/mm%3Aremediation-1/cancel');
-      expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
-        action: 'cancel',
-        graceful: true,
-      });
-    });
-  });
-});
-
 describe('Managed session controls', () => {
   const sessionExecution = baseExecution({
     title: 'Codex session task',

@@ -34,17 +34,7 @@ from moonmind.schemas.temporal_models import (
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
-from moonmind.workflows.temporal.artifacts import (
-    TemporalArtifactRepository,
-    TemporalArtifactService,
-)
-from moonmind.workflows.temporal.remediation_actions import (
-    RemediationActionAuthorityService,
-    RemediationMutationGuardPolicy,
-    RemediationMutationGuardService,
-)
 from moonmind.workflows.temporal.remediation_context import RemediationContextBuilder
-from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
 from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationAttemptInput,
     RemediationAttemptOutput,
@@ -72,13 +62,8 @@ from tests.unit.publish.test_saved_work_publication_journey import (
     journey,
 )
 from tests.unit.workflows.temporal.test_remediation_context import (
-    _admin_permissions,
-    _admin_profile,
     _create_target_and_remediation,
-    _fast_verification_phase,
-    _read_artifact_json,
 )
-from tests.unit.workflows.temporal.test_remediation_issue_3622 import AcceptedEffect
 from tests.unit.workflows.temporal.workflows.test_run_recover_from_failed_step import (
     _configure_workflow_runtime,
     _dependency_map,
@@ -127,7 +112,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
         client = MagicMock()
         client.start_workflow = AsyncMock()
         target, remediation = await _create_target_and_remediation(
-            session, client, owner_id=OPERATOR, authority_mode="admin_auto"
+            session, client, owner_id=OPERATOR
         )
         target = await session.get(
             models.TemporalExecutionCanonicalRecord, target.workflow_id
@@ -671,81 +656,12 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
         await RemediationContextBuilder(
             session=session, artifact_service=service
         ).build_context(remediation_workflow_id=remediation.workflow_id)
-        action_kind = "checkpoint_branch.create_from_remediation_context"
-        action_parameters = {
-            "remediationWorkflowId": remediation.workflow_id,
-            "remediationContextRef": objective_ref,
-            "checkpointRef": root_ref,
-            "instructionRef": instruction_ref,
-            "instructionDigest": turn.instruction_digest,
-            "repository": intent["repository"],
-            "baseBranch": "main",
-            "baseCommit": saved.baseline_commit,
-            "logicalStepId": "implement",
-            "executionOrdinal": 1,
-            "expectedRunId": target.run_id,
-        }
-        authority_result = await RemediationActionAuthorityService(
-            session=session
-        ).evaluate_action_request(
-            remediation_workflow_id=remediation.workflow_id,
-            action_kind=action_kind,
-            parameters=action_parameters,
-            dry_run=False,
-            idempotency_key="3512-action",
-            requesting_principal="workflow:remediator",
-            permissions=_admin_permissions(),
-            security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
-        )
-        guard = await RemediationMutationGuardService(session=session).evaluate(
-            remediation_workflow_id=remediation.workflow_id,
-            remediation_run_id=remediation.run_id,
-            target_workflow_id=target.workflow_id,
-            target_run_id=target.run_id,
-            action_kind=action_kind,
-            idempotency_key="3512-action",
-            parameters=action_parameters,
-            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
-            now=now,
-        )
-        # Controlled external action acceptance names the actual persisted
-        # candidate produced above. The action/result, observer and continuation
-        # owners are production code, not an alternate verification model.
-        executor = AcceptedEffect(
-            {
-                "workflowId": target.workflow_id,
-                "runId": target.run_id,
-                "branchId": branch.branch_id,
-                "branchTurnId": turn.branch_turn_id,
-                "stepExecutionId": step_id,
-            }
-        )
-        action_args = dict(
-            remediation_workflow_id=remediation.workflow_id,
-            authority_result=authority_result.to_dict(),
-            guard_result=guard.to_dict(),
-            principal="service:test",
-            admitted_principal="service:remediation-context",
-        )
-        tools = RemediationEvidenceToolService(
-            session=session,
-            artifact_service=service,
-            action_executor=executor,
-            verification_phase=_fast_verification_phase(session),
-        )
-        pending = await tools.execute_action(**action_args)
-        assert pending["verification"]["pending"] is True
-        assert pending["verification"]["outcome"] is None
-        assert executor.effects == 1
         await session.commit()
         # Replace the SQL/service owner as well as the workspace host. The
-        # verifier notification resumes the saved action without an open page.
+        # verifier records against the persisted candidate without an open page.
         async with AsyncSession(
             bind=session.bind, expire_on_commit=False
         ) as replacement_session:
-            replacement_artifacts = TemporalArtifactService(
-                TemporalArtifactRepository(replacement_session), store=service._store
-            )
             replacement_owner = CheckpointBranchService(replacement_session)
             verification = VerificationEvidence(
                 inputHeadRef=candidate_ref,
@@ -769,25 +685,6 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
                 branch_id=branch.branch_id,
                 evidence=verification,
             )
-            link = await replacement_session.get(
-                models.TemporalExecutionRemediationLink, remediation.workflow_id
-            )
-            assert link.verification_outcome == "verified_resolved"
-            result = await RemediationEvidenceToolService(
-                session=replacement_session,
-                artifact_service=replacement_artifacts,
-                action_executor=executor,
-                verification_phase=_fast_verification_phase(replacement_session),
-            ).execute_action(**action_args)
-            assert executor.effects == 1
-            assert (
-                result["verification"]["resultingIdentity"]["checkpointRef"]
-                == candidate_ref
-            )
-            receipt = await _read_artifact_json(
-                replacement_artifacts, result["artifactRefs"]["verification"]
-            )
-            assert receipt["outcome"] == "verified_resolved"
             failed = await replacement_session.get(
                 models.TemporalExecutionCanonicalRecord, target.workflow_id
             )

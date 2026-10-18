@@ -102,10 +102,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionTargetRunChangedError,
     TemporalExecutionValidationError,
 )
-from moonmind.workflows.temporal.artifacts import (
-    TemporalArtifactAuthorizationError,
-    TemporalArtifactStateError,
-)
+from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
@@ -204,65 +201,6 @@ def test_remediation_submission_branch_validation_accepts_editable_safe_refs() -
     )
 
 
-def test_remediation_approval_projection_disables_expired_request() -> None:
-    projection = executions_module._remediation_approval_state_from_link(
-        SimpleNamespace(
-            approval_state={
-                "requestId": "approval-expired",
-                "status": "pending",
-                "expiresAt": "2020-01-01T00:00:00+00:00",
-            }
-        ),
-        authority_mode="approval_gated",
-        status_value="awaiting_approval",
-    )
-
-    assert projection is not None
-    assert projection.status == "expired"
-    assert projection.decision == "expired"
-    assert projection.canDecide is False
-
-
-def test_remediation_approval_projection_enforces_reviewer_eligibility() -> None:
-    link = SimpleNamespace(
-        approval_state={
-            "requestId": "approval-high-risk",
-            "status": "pending",
-            "reviewerRule": "high_risk_reviewer",
-            "requestingActor": "requester@example.com",
-        }
-    )
-
-    ordinary_projection = executions_module._remediation_approval_state_from_link(
-        link,
-        authority_mode="approval_gated",
-        status_value="awaiting_approval",
-        actor="owner@example.com",
-        actor_can_approve_high_risk=False,
-    )
-    privileged_projection = executions_module._remediation_approval_state_from_link(
-        link,
-        authority_mode="approval_gated",
-        status_value="awaiting_approval",
-        actor="reviewer@example.com",
-        actor_can_approve_high_risk=True,
-    )
-    requester_projection = executions_module._remediation_approval_state_from_link(
-        link,
-        authority_mode="approval_gated",
-        status_value="awaiting_approval",
-        actor="requester@example.com",
-        actor_can_approve_high_risk=True,
-    )
-
-    assert ordinary_projection is not None
-    assert ordinary_projection.canDecide is False
-    assert privileged_projection is not None
-    assert privileged_projection.canDecide is True
-    assert requester_projection is not None
-    assert requester_projection.canDecide is False
-
-
 def test_authored_remediation_contract_preserves_follow_up_retrieval() -> None:
     contract = executions_module._authored_remediation_contract(
         {
@@ -271,7 +209,7 @@ def test_authored_remediation_contract_preserves_follow_up_retrieval() -> None:
                 "budgetPreset": "balanced",
             }
         },
-        {"remediation": {"authorityMode": "approval_gated"}},
+        {"remediation": {"authorityMode": "observe_only"}},
     )
 
     assert contract["retrieval"] == {
@@ -315,7 +253,10 @@ def test_context_evidence_projection_adds_per_class_freshness_and_degradation() 
 
 
 @pytest.mark.asyncio
-async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable() -> None:
+async def test_retained_remediation_action_artifact_stays_listed_and_linkable() -> None:
+    # An artifact retained from the retired typed-action lifecycle stays
+    # listed with bounded metadata; its body is read only through the
+    # ordinary artifact download.
     created_at = datetime.now(UTC)
     artifact_link = SimpleNamespace(
         link_type="remediation.action_request",
@@ -338,34 +279,14 @@ async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable(
     session.execute.return_value = SimpleNamespace(
         all=lambda: [(artifact_link, artifact)]
     )
-    artifact_service = SimpleNamespace(
-        read=AsyncMock(
-            return_value=(
-                artifact,
-                json.dumps(
-                    {
-                        "actionKind": "execution.pause",
-                        "password": "must-not-reach-the-browser",
-                        "expectedState": "paused",
-                    }
-                ).encode("utf-8"),
-            )
-        )
-    )
     link = SimpleNamespace(
         remediation_workflow_id="mm:remediation-artifact",
         remediation_run_id="run-remediation-artifact",
     )
 
-    with patch.object(
-        executions_module,
-        "get_temporal_artifact_service",
-        return_value=artifact_service,
-    ):
+    with patch.object(executions_module, "get_temporal_artifact_service") as service:
         await executions_module._attach_remediation_artifact_projection(
-            link,
-            session=session,
-            principal="operator-1",
+            link, session=session
         )
 
     assert link.lifecycle_artifacts == [
@@ -384,66 +305,8 @@ async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable(
             },
         }
     ]
-    assert link.latest_action_request["actionKind"] == "execution.pause"
-    assert link.latest_action_request["expectedState"] == "paused"
-    assert "must-not-reach-the-browser" not in json.dumps(link.latest_action_request)
-    artifact_service.read.assert_awaited_once_with(
-        artifact_id="art_action_request",
-        principal="operator-1",
-    )
-
-
-@pytest.mark.asyncio
-async def test_remediation_artifact_projection_keeps_metadata_when_body_is_unreadable() -> None:
-    created_at = datetime.now(UTC)
-    artifact_link = SimpleNamespace(
-        link_type="remediation.summary",
-        label="lifecycle summary",
-        created_at=created_at,
-    )
-    artifact = SimpleNamespace(
-        artifact_id="art_pending_summary",
-        status=TemporalArtifactStatus.PENDING_UPLOAD,
-        metadata_json={"phase": "verification"},
-        expires_at=None,
-    )
-    session = AsyncMock()
-    session.execute.return_value = SimpleNamespace(
-        all=lambda: [(artifact_link, artifact)]
-    )
-    artifact_service = SimpleNamespace(
-        read=AsyncMock(side_effect=TemporalArtifactStateError("artifact is not readable"))
-    )
-    link = SimpleNamespace(
-        remediation_workflow_id="mm:remediation-artifact",
-        remediation_run_id="run-remediation-artifact",
-    )
-
-    with patch.object(
-        executions_module,
-        "get_temporal_artifact_service",
-        return_value=artifact_service,
-    ):
-        await executions_module._attach_remediation_artifact_projection(
-            link,
-            session=session,
-            principal="operator-1",
-        )
-
-    assert link.lifecycle_artifacts == [
-        {
-            "artifactRef": "art_pending_summary",
-            "artifactType": "remediation.summary",
-            "status": "pending_upload",
-            "label": "lifecycle summary",
-            "createdAt": created_at,
-            "expiresAt": None,
-            "freshness": "durable",
-            "bounded": True,
-            "metadata": {"phase": "verification"},
-        }
-    ]
-    assert not hasattr(link, "lifecycle_summary")
+    service.assert_not_called()
+    assert not hasattr(link, "latest_action_request")
 
 
 def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
@@ -6490,7 +6353,7 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
                     "runtime": {"mode": "codex"},
                     "remediation": {
                         "target": {"workflowId": "mm:target-workflow"},
-                        "mode": "snapshot_then_follow",
+                        "mode": "snapshot",
                         "authorityMode": "observe_only",
                         "trigger": {"type": "manual"},
                     },
@@ -6504,7 +6367,7 @@ def test_create_task_shaped_execution_preserves_remediation_payload(
     kwargs = service.create_execution.call_args.kwargs
     assert kwargs["initial_parameters"]["workflow"]["remediation"] == {
         "target": {"workflowId": "mm:target-workflow"},
-        "mode": "snapshot_then_follow",
+        "mode": "snapshot",
         "authorityMode": "observe_only",
         "trigger": {"type": "manual"},
     }
@@ -6717,31 +6580,22 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
             remediation_run_id="run-remediation-1",
             target_workflow_id="mm:target-workflow",
             target_run_id="run-target",
+            # A link recorded before typed actions were retired stays readable
+            # with its historical values, and no approval or action surface.
             mode="snapshot_then_follow",
             authority_mode="approval_gated",
             status="awaiting_approval",
-            active_lock_scope="target_execution",
-            active_lock_holder="mm:remediation-1",
             latest_action_summary="Proposed session interrupt",
-            outcome=None,
-            verification_outcome=None,
             context_artifact_ref="art_context",
             created_at=now,
             updated_at=now,
         )
     ]
 
-    with (
-        patch.object(
-            executions_module,
-            "_attach_remediation_capability_projection",
-            new=AsyncMock(),
-        ),
-        patch.object(
-            executions_module,
-            "remediation_link_capabilities",
-            return_value=(),
-        ),
+    with patch.object(
+        executions_module,
+        "_attach_remediation_context_projection",
+        new=AsyncMock(),
     ):
         response = test_client.get(
             "/api/executions/mm:target-workflow/remediations",
@@ -6760,33 +6614,12 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
                 "mode": "snapshot_then_follow",
                 "authorityMode": "approval_gated",
                 "status": "awaiting_approval",
-                "activeLockScope": "target_execution",
-                "activeLockHolder": "mm:remediation-1",
                 "latestActionSummary": "Proposed session interrupt",
-                "deliveryStatus": None,
-                "verificationOutcome": None,
-                "resolution": None,
                 "contextArtifactRef": "art_context",
                 "selectedSteps": None,
                 "currentTargetState": None,
-                "allowedActions": [],
-                "actionCapabilities": [],
                 "evidenceDegraded": None,
                 "unavailableEvidenceClasses": None,
-                "liveObservation": None,
-                "lockOutcome": None,
-                "approvalState": {
-                    "requestId": "mm:remediation-1:approval",
-                    "actionKind": None,
-                    "riskTier": None,
-                    "preconditions": None,
-                    "blastRadius": None,
-                    "decision": "pending",
-                    "decisionActor": None,
-                    "decisionAt": None,
-                    "canDecide": True,
-                    "auditRef": None,
-                },
                 "checkpointBranches": [],
                 "createdAt": now.isoformat().replace("+00:00", "Z"),
                 "updatedAt": now.isoformat().replace("+00:00", "Z"),
@@ -6813,29 +6646,17 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
             mode="snapshot",
             authority_mode="observe_only",
             status="created",
-            active_lock_scope=None,
-            active_lock_holder=None,
             latest_action_summary=None,
-            outcome="applied",
-            verification_outcome="verified_resolved",
-            resolution="resolved",
             context_artifact_ref=None,
             created_at=now,
             updated_at=now,
         )
     ]
 
-    with (
-        patch.object(
-            executions_module,
-            "_attach_remediation_capability_projection",
-            new=AsyncMock(),
-        ),
-        patch.object(
-            executions_module,
-            "remediation_link_capabilities",
-            return_value=(),
-        ),
+    with patch.object(
+        executions_module,
+        "_attach_remediation_context_projection",
+        new=AsyncMock(),
     ):
         response = test_client.get(
             "/api/executions/mm:remediation-1/remediations",
@@ -6852,22 +6673,12 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         "mode": "snapshot",
         "authorityMode": "observe_only",
         "status": "created",
-        "activeLockScope": None,
-        "activeLockHolder": None,
         "latestActionSummary": None,
-        "deliveryStatus": "applied",
-        "verificationOutcome": "verified_resolved",
-        "resolution": "resolved",
         "contextArtifactRef": None,
         "selectedSteps": None,
         "currentTargetState": None,
-        "allowedActions": [],
-        "actionCapabilities": [],
         "evidenceDegraded": None,
         "unavailableEvidenceClasses": None,
-        "liveObservation": None,
-        "lockOutcome": None,
-        "approvalState": None,
         "checkpointBranches": [],
         "createdAt": now.isoformat().replace("+00:00", "Z"),
         "updatedAt": now.isoformat().replace("+00:00", "Z"),
@@ -6889,44 +6700,15 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
             remediation_run_id="run-remediation-rich",
             target_workflow_id="mm:target-rich",
             target_run_id="run-target-rich",
-            mode="snapshot_then_follow",
-            authority_mode="approval_gated",
-            status="awaiting_approval",
-            active_lock_scope="target_execution",
-            active_lock_holder="mm:remediation-rich",
-            latest_action_summary="Proposed session interrupt",
-            outcome="precondition_failed",
-            verification_outcome="still_failed",
+            mode="snapshot",
+            authority_mode="observe_only",
+            status="created",
+            latest_action_summary="Created checkpoint branch cbr-rich.",
             context_artifact_ref="art_context_rich",
             selected_steps=["collect-context", "repair-runtime"],
             current_target_state="awaiting_external",
-            allowed_actions=["inspect_context", "request_approval"],
             evidence_degraded=True,
             unavailable_evidence_classes=["runtime_stderr", "provider_snapshot"],
-            live_observation={
-                "status": "active",
-                "label": "Live observation active",
-                "sequenceCursor": "stdout:42",
-                "reconnectState": "reconnected",
-                "epoch": "run-target-rich:2",
-                "fallbackReason": "Durable context remains authoritative.",
-                "rawPath": "/var/lib/moonmind/raw-context.json",
-            },
-            lock_outcome={
-                "state": "conflict",
-                "holder": "mm:remediation-rich",
-                "releasedAt": None,
-            },
-            approval_state={
-                "requestId": "approval-rich",
-                "actionKind": "session_interrupt",
-                "riskTier": "high",
-                "preconditions": "Target run is still awaiting an external session.",
-                "blastRadius": "One managed runtime session.",
-                "decision": "pending",
-                "canDecide": True,
-                "auditRef": "audit-rich",
-            },
             checkpoint_branch_links=[
                 {
                     "workflowId": "mm:target-rich",
@@ -6992,31 +6774,15 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
                     "freshness": "durable",
                 }
             ],
-            latest_action_request={"actionKind": "session.interrupt"},
-            latest_action_result={"status": "precondition_failed"},
-            lifecycle_summary={"resolution": "operator_required"},
-            operator_controls={
-                "canCancel": True,
-                "canTakeOver": True,
-                "canResume": False,
-                "paused": False,
-            },
             created_at=now,
             updated_at=now,
         )
     ]
 
-    with (
-        patch.object(
-            executions_module,
-            "_attach_remediation_capability_projection",
-            new=AsyncMock(),
-        ),
-        patch.object(
-            executions_module,
-            "remediation_link_capabilities",
-            return_value=(),
-        ),
+    with patch.object(
+        executions_module,
+        "_attach_remediation_context_projection",
+        new=AsyncMock(),
     ):
         response = test_client.get(
             "/api/executions/mm:remediation-rich/remediations",
@@ -7026,49 +6792,30 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
     assert response.status_code == 200
     item = response.json()["items"][0]
     assert item["selectedSteps"] == ["collect-context", "repair-runtime"]
-    assert item["verificationOutcome"] == "still_failed"
+    assert item["latestActionSummary"] == "Created checkpoint branch cbr-rich."
     assert item["authoredContract"]["runtime"] == {"mode": "omnigent"}
     assert item["selectedStepEvidence"] == [{"logicalStepId": "collect-context"}]
     assert item["contextEvidenceAvailability"][0]["bounded"] is True
     assert item["diagnosisHints"] == ["Target session stopped responding."]
     assert item["lifecycleArtifacts"][0]["artifactType"] == "remediation.summary"
-    assert item["latestActionRequest"] == {"actionKind": "session.interrupt"}
-    assert item["latestActionResult"] == {"status": "precondition_failed"}
-    assert item["lifecycleSummary"] == {"resolution": "operator_required"}
-    assert item["operatorControls"]["canTakeOver"] is True
     assert item["currentTargetState"] == "awaiting_external"
-    assert item["allowedActions"] == []
-    assert item["actionCapabilities"] == []
     assert item["evidenceDegraded"] is True
     assert item["unavailableEvidenceClasses"] == [
         "runtime_stderr",
         "provider_snapshot",
     ]
-    assert item["liveObservation"] == {
-        "status": "active",
-        "label": "Live observation active",
-        "sequenceCursor": "stdout:42",
-        "reconnectState": "reconnected",
-        "epoch": "run-target-rich:2",
-        "fallbackReason": "Durable context remains authoritative.",
-    }
-    assert item["lockOutcome"] == {
-        "state": "conflict",
-        "holder": "mm:remediation-rich",
-        "releasedAt": None,
-    }
-    assert item["approvalState"] == {
-        "requestId": "approval-rich",
-        "actionKind": "session_interrupt",
-        "riskTier": "high",
-        "preconditions": "Target run is still awaiting an external session.",
-        "blastRadius": "One managed runtime session.",
-        "decision": "pending",
-        "decisionActor": None,
-        "decisionAt": None,
-        "canDecide": True,
-        "auditRef": "audit-rich",
-    }
+    for retired in (
+        "approvalState",
+        "actionCapabilities",
+        "allowedActions",
+        "operatorControls",
+        "lockOutcome",
+        "liveObservation",
+        "deliveryStatus",
+        "verificationOutcome",
+        "resolution",
+    ):
+        assert retired not in item
     assert item["checkpointBranches"] == [
         {
             "workflowId": "mm:target-rich",
@@ -7119,7 +6866,6 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
             "createdAt": None,
         }
     ]
-    assert "/var/lib/moonmind/raw-context.json" not in json.dumps(item)
     service.list_remediation_targets.assert_awaited_once_with("mm:remediation-rich")
     service.list_remediations_for_target.assert_not_called()
 
@@ -7139,59 +6885,20 @@ def test_list_remediations_rejects_unknown_direction(
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_remediation_direction"
 
-def test_record_remediation_approval_decision_calls_trusted_service(
+def test_remediation_approval_decision_route_is_retired(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, user = client
     service.describe_execution.return_value = _build_execution_record(
         owner_id=str(user.id)
     )
-    service.record_remediation_approval_decision.return_value = {
-        "accepted": True,
-        "workflowId": "mm:remediation-1",
-        "requestId": "approval-1",
-        "decision": "approved",
-    }
 
     response = test_client.post(
         "/api/executions/mm:remediation-1/remediation/approvals/approval-1",
         json={"decision": "approved", "comment": "Reviewed."},
     )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "accepted": True,
-        "workflowId": "mm:remediation-1",
-        "requestId": "approval-1",
-        "decision": "approved",
-    }
-    service.record_remediation_approval_decision.assert_awaited_once_with(
-        remediation_workflow_id="mm:remediation-1",
-        request_id="approval-1",
-        decision="approved",
-        comment="Reviewed.",
-        actor=user.email,
-        actor_can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
-    )
-
-def test_record_remediation_approval_decision_rejects_unknown_decision(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-) -> None:
-    test_client, service, user = client
-    service.describe_execution.return_value = _build_execution_record(
-        owner_id=str(user.id)
-    )
-
-    response = test_client.post(
-        "/api/executions/mm:remediation-1/remediation/approvals/approval-1",
-        json={"decision": "maybe"},
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == (
-        "invalid_remediation_approval_decision"
-    )
-    service.record_remediation_approval_decision.assert_not_awaited()
+    assert response.status_code in {404, 405}
 
 def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
