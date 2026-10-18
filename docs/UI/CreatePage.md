@@ -293,7 +293,7 @@ The Remediation Draft separates immutable target identity from repair intent. Th
 
 Draft bodies stay in `sessionStorage`. A non-sensitive presence marker only explains another-tab links. Schema version 1, `createdAt`, and the two-hour TTL remain the draft transport contract. Import is single-use: clear storage after complete successful validation/copy or explicit discard. Missing, malformed, expired, and cross-tab drafts have distinct errors and do not partially prefill. Discard removes storage and the `intent`/`draftId` query parameters.
 
-Submission uses ordinary `POST /api/executions` with canonical `task.remediation`. The server revalidates target visibility/current run, evidence, selected profiles and policy, repository/branch/publication, and durable bidirectional linkage. Stale target pins request a refreshed remediation draft. Failed-step recovery without reauthoring keeps immutable original intent; changing it requires the supported newly admitted path.
+Submission uses ordinary `POST /api/executions` with canonical `task.remediation`. The server revalidates target visibility/current run, evidence, selected profiles and policy, repository/branch/publication, and durable bidirectional linkage. Stale target pins request a refreshed remediation draft. Retry from a step keeps immutable original intent; changing it requires the supported newly admitted path.
 
 ## Draft Persistence and Historical Reconstruction
 

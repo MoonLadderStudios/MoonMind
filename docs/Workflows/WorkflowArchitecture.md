@@ -25,7 +25,7 @@ MoonMind.UserWorkflow is the normal durable execution type. The control plane su
 
 Image attachments have explicit objective or step targets. Presets are recursively compiled authoring objects, not live runtime catalog instructions. Authored input snapshots preserve task text, attachments, selected definition evidence, context, policy, and flattened-step provenance.
 
-The same architecture distinguishes full retry from failed-step recovery. Full retry starts the task again with confirmed or edited inputs under fresh admission. Failed-step Resume preserves original input and completed progress only when a durable ledger/checkpoint can restore it faithfully.
+The same architecture distinguishes rerun from retry from a step. Rerun starts the task again with confirmed or edited inputs under fresh admission. Retry from a step resets a closed run's Temporal history to a chosen step, so completed steps stay done and the chosen step runs again with the original input.
 
 Publication adds no second orchestrator: the existing compiler resolves one scope intent; UserWorkflow owns orchestration/verdict; trusted publishers or resolved Skills own declared effects; artifact/save owners preserve useful work independently of publication.
 
@@ -53,9 +53,9 @@ The authoritative authored snapshot, not a lossy output projection, reconstructs
 
 Instructions remain text, images remain structured references, and generated image context is a secondary artifact. Prompts explain authority but do not grant it, override explicit policy, or replace backend enforcement.
 
-### 3.6 Failed-step resume is not full rerun
+### 3.6 Retry from a step is not full rerun
 
-Resume retries the failed step with original inputs and proven completed prior work. It does not open a form or silently change instructions, steps, attachments, runtime, publishing, branches, dependencies, or definition evidence. Missing/inconsistent restoration makes Resume unavailable or explicitly blocked, not an implicit full rerun.
+Retry from a step runs the chosen step again with the original inputs and keeps the completed steps before it. It does not open a form or change instructions, steps, attachments, runtime, publishing, branches, dependencies, or definition evidence. When the history cannot be replayed on installed code, retry is refused, not turned into a full rerun.
 
 ### 3.7 One authored publication scope
 
@@ -123,9 +123,9 @@ Expose authorized previews/downloads and safe target/definition/policy explanati
 
 ### 5.7 Failed-workflow recovery orchestration
 
-Expose only backend-supported actions. Exact full retry, edited full retry through the shared form, and failed-step Resume remain distinct intentions; labels/routes and accepted lifecycle behavior are owned by WorkflowEditingSystem and the run-history contract.
+Expose only backend-supported actions. Exact full rerun, edited full retry through the shared form, and retry from a step remain distinct intentions; labels/routes and accepted lifecycle behavior are owned by WorkflowEditingSystem and the run-history contract.
 
-Resume requires the authoritative original snapshot; exact source workflowId/runId; the failed-step ledger; durable completed-step output refs; workspace/branch/commit or equivalent checkpoint immediately before the failed step; and matching plan identity. Missing, stale, unauthorized, or inconsistent evidence blocks before the step executes.
+Retry from a step requires the run the operator saw to still be the latest run, a retained Temporal history that replays on installed code, and a live issue claim when the run holds one. Anything else is refused before the reset.
 
 An active admitted scope and already-created children cannot be retargeted or receive broader publishing authority through an input patch at a nominal safe point. Material authority changes require a newly admitted path with lineage. Display/title and permitted non-authority updates keep their normal lifecycle.
 
@@ -144,7 +144,7 @@ interface WorkflowInputAttachmentRef {
 type AuthoredPublishSelection = "default" | "none" | "branch" | "pr" | "pr_with_merge_automation";
 type CompiledPublishMode = "none" | "branch" | "pr" | "auto";
 
-type WorkflowRecoveryKind = "exact_full_rerun" | "edited_full_retry" | "recover_from_failed_step";
+type WorkflowRecoveryKind = "exact_full_rerun" | "edited_full_retry";
 interface WorkflowRecoveryProvenance {
   kind: WorkflowRecoveryKind;
   sourceWorkflowId: string;
@@ -152,18 +152,9 @@ interface WorkflowRecoveryProvenance {
   requestedBy?: string;
   requestedAt?: string;
 }
-interface ResumeFromFailedStepRef {
-  kind: "recover_from_failed_step";
-  sourceWorkflowId: string;
-  sourceRunId: string;
-  failedStepId: string;
-  failedStepExecution?: number;
-  recoveryCheckpointRef: string;
-  taskInputSnapshotRef: string;
-  planRef?: string;
-  planDigest?: string;
-}
 ```
+
+Retry from a step needs no provenance record: the reset run keeps the workflow identity, and Temporal history links it to the failed run.
 
 Canonical Step Types and their Tool/Skill/Preset inputs come from StepTypes. Repository/source targets and the single applicable branch come from the repository/workspace contract, not a parallel string field in every step. Selected preset/Skill identity uses the providing slug/scope/selector contract plus content evidence, not another semantic-version selector.
 
@@ -175,7 +166,7 @@ New requests have one branch role in the canonical repository/source target. Leg
 
 Recovery provenance always includes exact source workflow/run. Checkpoint refs are execution-state evidence, not user-editable branch or publication overrides.
 
-## 7. Snapshot, full retry, and Resume architecture
+## 7. Snapshot, full retry, and retry from a step
 
 The snapshot preserves objective/step text and attachment refs, identity/order, runtime/profile, source/repository/branch, authored publication selection and input origin, selected preset/Skill evidence, include ancestry, provenance/detachment, and dependencies. Missing attachment/context/policy evidence is explicit degradation, not reconstructible from prose alone.
 
@@ -189,11 +180,9 @@ A change in Auto's selected definition/default is reviewed visibly. Explicit Non
 
 Reuse confirmed original authored input and pinned definition/policy meaning, revalidate current authority, and start from the beginning under the lifecycle owner's new-run contract. Do not re-execute already accepted external effects blindly: existing idempotency/reconciliation controls remain applicable. Exact input does not restore revoked credentials.
 
-### 7.3 Resume from failed step
+### 7.3 Retry from a step
 
-Pin source workflow/run, validate the checkpoint/plan, restore the state before the failed step, import completed prior rows and semantic outputs as preserved, retry the failed step as a new attempt, and execute later steps normally. Preserved rows link their source run/step/attempt and are never displayed as freshly executed.
-
-The checkpoint includes schema identity, source workflow/run, original input/plan refs/digest, failed step identity/order/attempt, preserved step output refs, and a workspace/checkpoint locator. Corrupt/incomplete/unauthorized or wrong-plan restoration blocks rather than falling back to full rerun.
+Reset the closed run's Temporal history to the workflow task that started the chosen step, after checking that the history replays on the installed code. Earlier steps keep their recorded results and the chosen step and later steps run again as new attempts under the same Workflow ID. Admission rules live in `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`.
 
 ## 8. Execution-plane responsibilities
 
@@ -217,15 +206,15 @@ AgentRun receives the prepared context for its step without broadening attachmen
 
 Per-PR head/base derivation is permitted through the declared target contract. An independent dependency edge is not inheritance. Coordinator-local None is not the child's policy. Static incompatibilities fail early; dynamic partial dispatch retains exact accepted IDs and errors.
 
-### 8.5 Recovery checkpoint responsibilities
+### 8.5 Checkpoint responsibilities
 
-Record reusable prepared inputs, completed step output refs, and appropriate state checkpoints at mutation boundaries. Writes are idempotent and large data is artifact-backed. A completed step without required recoverable outputs/state is not eligible for preserved Resume.
+Record reusable prepared inputs, completed step output refs, and appropriate state checkpoints at mutation boundaries. Writes are idempotent and large data is artifact-backed. Checkpoints restore a step's workspace inside a run and are failure evidence for remediation.
 
 Required useful work is saved before destructive cleanup under the repository/workspace contract. Artifact-backed saving can satisfy credentialless/None durability. None does not implicitly authorize a remote recovery push; an unqualified deployment rejects that incompatible new execution before work rather than deleting the sole copy or bypassing policy. Saved work never upgrades failed compute/publication.
 
-### 8.6 Resume execution responsibilities
+### 8.6 Retry responsibilities
 
-Validate exact source snapshot/plan and checkpoint, restore safely, inject preserved outputs, retry only the failed/new work, and produce fresh attempt evidence. Restoration failure never silently reexecutes prior steps or broadens publish/credential authority.
+The retry service checks the run, its issue claim, and replay compatibility before resetting it. The reset run replays earlier steps and runs the chosen step through the normal step path. A refused retry leaves the failed run untouched and never broadens publish or credential authority.
 
 ### 8.7 Publication and code handoffs
 
@@ -249,7 +238,7 @@ Prompts describe the compiled role: coordinator dispatch without local publishin
 
 The system preserves binary-free histories, explicit attachment targets, no silent attachment loss, text/image separation, snapshot durability, compile-time preset expansion, definition/provenance preservation, server policy, MoonMind-owned browser APIs, target-aware context, and no hidden retargeting.
 
-Recovery remains explicit: exact full retry, edited retry, and failed-step Resume are different intents. Resume keeps original input, requires durable prior work, never silently reexecutes preserved steps, and pins exact source workflow/run.
+Recovery remains explicit: exact rerun, edited rerun, and retry from a step are different intents. Retry keeps original input, never re-executes the steps before the chosen one, and acts only on the run the operator saw.
 
 Publication adds the following architectural invariants: one authored context/policy; default Auto distinct from Skill-owned Auto; explicit None preserved; nested coordinators forward frozen scope rather than local None; per-role authority and one effect owner; one new-write provider evidence schema with exact candidate/attempt proof; code handoffs separate from dependency completion; and save-before-cleanup without a prohibited recovery push.
 
@@ -257,7 +246,7 @@ Publication adds the following architectural invariants: one authored context/po
 
 ### 12.1 MoonMind.UserWorkflow
 
-The normal attachment/context-aware workflow owns its source, authored snapshot, step ledger, resolved scope, subordinate work, and evidence-derived completion. It can start from the beginning or restore a validated failed-step checkpoint under the lifecycle contract.
+The normal attachment/context-aware workflow owns its source, authored snapshot, step ledger, resolved scope, subordinate work, and evidence-derived completion. It can start from the beginning, and a failed run can be retried from a step under the lifecycle contract.
 
 ### 12.2 MoonMind.AgentRun
 
@@ -271,7 +260,7 @@ Other types can reuse infrastructure without redefining Create authoring. MergeA
 
 Details expose attachment metadata by target, relevant manifest/context refs, source/definition provenance, authored policy and effective explanation, local publication disposition, saved outputs, and child outcomes. Separate upload/validation/materialization/context errors and checkpoint validation/restore/output-injection/step failures.
 
-A resumed execution shows reused prior steps. A batch shows actual queued children separately from their completion/PR/merge state. A locally non-publishing coordinator does not appear to have disabled the user's PR batch. Verified saved or remote results survive auxiliary projection lag.
+A retried run shows its earlier steps with their recorded results. A batch shows actual queued children separately from their completion/PR/merge state. A locally non-publishing coordinator does not appear to have disabled the user's PR batch. Verified saved or remote results survive auxiliary projection lag.
 
 ## 14. Boundary with page-level and subsystem docs
 
@@ -283,4 +272,4 @@ These remain providing owners. This architecture does not create parallel APIs, 
 
 MoonMind's control plane is workflow-first, artifact-first, target-aware, and single-context. All producers pass the same definition/binding/publication compiler. Execution realizes role-appropriate actions without requiring duplicate user settings.
 
-Conformance exercises actual Create/Apply/Reapply/Submit/API/MCP/schedule/edit/rerun/Resume and child boundaries. It covers attachment targeting, pinned definitions, contextual versus authored inputs, explicit None, Auto resolution and retired fallback handling, non-publishing parents with publishing descendants, non-default bases and per-PR heads, unified provider evidence, candidate handoffs, idempotent effects, safe preservation, and honest historical reconstruction. A form or documentation update alone is not runtime or deployment conformance.
+Conformance exercises actual Create/Apply/Reapply/Submit/API/MCP/schedule/edit/rerun/retry and child boundaries. It covers attachment targeting, pinned definitions, contextual versus authored inputs, explicit None, Auto resolution and retired fallback handling, non-publishing parents with publishing descendants, non-default bases and per-PR heads, unified provider evidence, candidate handoffs, idempotent effects, safe preservation, and honest historical reconstruction. A form or documentation update alone is not runtime or deployment conformance.

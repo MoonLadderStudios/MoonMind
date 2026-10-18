@@ -217,7 +217,7 @@ publication authority independently.
 | Saved Work Branch | Remotely verified recovery branch shown to operators |
 | Output branch | Read-only projection of verified normal or recovery publication |
 
-Retry, step re-execution, failed-step recovery, checkpoint fork, turn, promotion,
+Rerun, retry from a step, step re-execution, checkpoint fork, turn, promotion,
 and publication remain distinct. Repository publication means a remote effect;
 local saved content and workflow promotion do not imply a push or merge.
 
