@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { skipToken, useQuery } from '@tanstack/react-query';
+import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
 import type { BootPayload } from '../../boot/parseBootPayload';
 import type { CollectionListDisplayMode } from '../../lib/collectionListDisplayMode';
@@ -10,6 +10,27 @@ import { CollectionWorkspace } from '../CollectionWorkspace';
 import { WorkflowWorkspaceSidebarPanel } from './WorkflowWorkspaceSidebar';
 
 type WorkflowDetailRowSource = Parameters<typeof workflowWorkspaceRowFromDetail>[0];
+
+/**
+ * Reads the detail snapshot that the (lazily loaded) detail page fetches and
+ * polls. A query observer here would replace that query's fetch options with
+ * the shell's, so later refetches (such as the invalidation after an action)
+ * would have nothing to run; a cache subscription only reads.
+ */
+function useCachedWorkflowDetail(
+  workflowId: string,
+  sourceTemporal: boolean,
+): WorkflowDetailRowSource | undefined {
+  const queryClient = useQueryClient();
+  const queryKey = workflowDetailQueryKey(workflowId, sourceTemporal);
+  const subscribe = useCallback(
+    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    [queryClient],
+  );
+  return useSyncExternalStore(subscribe, () =>
+    queryClient.getQueryData<WorkflowDetailRowSource>(queryKey),
+  );
+}
 
 /**
  * Desktop workspace frame (sidebar list + detail). It lives outside the
@@ -33,14 +54,9 @@ export function WorkflowWorkspaceShell({
     readDashboardPreferences().workflowListDisplayMode
   );
   const sourceTemporal = search.get('source') === 'temporal';
-  // The detail page fetches and polls this snapshot; the shell only observes
-  // the shared cache entry to pin the selected row in the sidebar.
-  const selectedWorkflowQuery = useQuery<WorkflowDetailRowSource>({
-    queryKey: workflowDetailQueryKey(workflowId, sourceTemporal),
-    queryFn: skipToken,
-  });
-  const pinnedCurrentRow = selectedWorkflowQuery.data
-    ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
+  const selectedWorkflow = useCachedWorkflowDetail(workflowId, sourceTemporal);
+  const pinnedCurrentRow = selectedWorkflow
+    ? workflowWorkspaceRowFromDetail(selectedWorkflow)
     : null;
 
   return (
