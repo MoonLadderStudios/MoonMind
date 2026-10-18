@@ -192,7 +192,7 @@ Rules:
 
 - use client route params for `workflowId` and `definitionId`;
 - use URL search params for shareable filters and view state only, written through the router (`navigate` or `navigateTo` with replace) so the shell and page agree on the location; a page that keeps filters in local state follows URL changes it did not make, such as the nav link;
-- a navigation to another path starts at the top of the window and a hash target scrolls into view, while Back/Forward keeps the browser's restoration; a route error clears when the path changes;
+- a navigation to another path starts at the top of the window and a hash target scrolls into view, including the fragment of a directly loaded URL once the lazy page renders it, while Back/Forward keeps the browser's restoration; a route error clears when the path or query changes;
 - do not serialize large or secret-bearing state into URLs;
 - use route loaders or query hooks for data, not server boot payloads;
 - use hard browser navigation only for external URLs, downloads, auth redirects, and non-dashboard resources.

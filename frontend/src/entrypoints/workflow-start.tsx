@@ -6350,6 +6350,12 @@ function WorkflowStartPageContent({
   const remediationDraftAppliedRef = useRef<string | null>(null);
   const routeGuardDirtyRef = useRef(false);
   const approvedNavigationHrefRef = useRef<string | null>(null);
+  // The URL this page last rendered. A history traversal has already changed
+  // window.location when its popstate arrives, so this is what to restore.
+  const renderedUrlRef = useRef("");
+  useEffect(() => {
+    renderedUrlRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  });
 
   useEffect(() => {
     const markDraftDirty = (event: Event) => {
@@ -6411,6 +6417,22 @@ function WorkflowStartPageContent({
       event.preventDefault();
       event.returnValue = "";
     };
+    // Back/Forward changes the mode or execution the editor follows, or leaves
+    // Create, so it passes the same guard. A declined traversal restores the
+    // rendered URL before the router renders the new one. Synthetic popstates
+    // announce in-app navigation that was already guarded.
+    const handleHistoryTraversal = (event: PopStateEvent) => {
+      const rendered = renderedUrlRef.current;
+      if (!event.isTrusted || !rendered) return;
+      const previous = new URL(rendered, window.location.href);
+      if (
+        previous.pathname === window.location.pathname &&
+        previous.search === window.location.search
+      ) return;
+      if (confirmDraftNavigation()) return;
+      window.history.pushState(window.history.state, "", rendered);
+      window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
+    };
     window.addEventListener(
       WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
       handleRouteChangeRequest,
@@ -6419,6 +6441,7 @@ function WorkflowStartPageContent({
     document.addEventListener("change", markDraftDirty);
     document.addEventListener("click", handleDocumentNavigation);
     window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("popstate", handleHistoryTraversal);
     return () => {
       window.removeEventListener(
         WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
@@ -6428,6 +6451,7 @@ function WorkflowStartPageContent({
       document.removeEventListener("change", markDraftDirty);
       document.removeEventListener("click", handleDocumentNavigation);
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("popstate", handleHistoryTraversal);
     };
   }, []);
 

@@ -887,6 +887,13 @@ class RepositoryConnectionService:
                 principal_scope=principal_scope,
                 action=verb,
             )
+            if record.lifecycle != lifecycle:
+                # A later change replaced this request's outcome; answering
+                # with the current record would report a different result.
+                raise RepositoryRouteError(
+                    REPOSITORY_ROUTE_CONFLICT,
+                    f"connection {verb} was superseded by a later change",
+                )
             return _record_to_connection(record)
         record = await self._get_record(connection_id)
         if record is None or record.tombstone:

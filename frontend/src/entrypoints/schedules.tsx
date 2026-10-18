@@ -1,7 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
-import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
+import { PageSizeSelector } from '../components/PageSizeSelector';
+import {
+  activeRecurringFilterEntries,
+  cleanCursor,
+  recurringListUrlQuery,
+  recurringListUrlStateFromSearch,
+  type RecurringFilterKey,
+  type RecurringFilters,
+  type RecurringSortDirection,
+  type RecurringSortKey,
+} from '../lib/recurringListQuery';
 import { DataTable } from '../components/tables/DataTable';
 import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { EntityDetailFrame } from '../components/EntityDetailFrame';
@@ -84,22 +94,6 @@ const ScheduleRunsResponseSchema = z.object({
 
 type Schedule = z.infer<typeof ScheduleSchema>;
 type ScheduleRun = z.infer<typeof ScheduleRunSchema>;
-type RecurringSortKey = 'updatedAt' | 'name' | 'state' | 'target' | 'repository' | 'cron' | 'timezone' | 'nextRunAt' | 'lastScheduledFor' | 'dispatch';
-type RecurringSortDirection = 'asc' | 'desc';
-type RecurringFilterKey = 'schedule' | 'state' | 'target' | 'repository' | 'cadence' | 'nextRun' | 'lastScheduled' | 'dispatch' | 'updated';
-
-type RecurringFilters = {
-  schedule: string;
-  state: string;
-  target: string;
-  repository: string;
-  cadence: string;
-  nextRun: string;
-  lastScheduled: string;
-  dispatch: string;
-  updated: string;
-};
-
 const EMPTY_RECURRING_FILTERS: RecurringFilters = {
   schedule: '',
   state: '',
@@ -234,54 +228,6 @@ function safeRecurringSearchParams(): URLSearchParams {
   return new URLSearchParams(window.location.search);
 }
 
-function cleanQueryText(value: string | null): string {
-  return String(value || '').trim().slice(0, 160);
-}
-
-function cleanCursor(value: string | null): string {
-  return String(value || '').trim().slice(0, 512);
-}
-
-function parseRecurringFilters(params: URLSearchParams): RecurringFilters {
-  return {
-    schedule: cleanQueryText(params.get('schedule')),
-    state: cleanQueryText(params.get('state')),
-    target: cleanQueryText(params.get('target')),
-    repository: cleanQueryText(params.get('repository')),
-    cadence: cleanQueryText(params.get('cadence')),
-    nextRun: cleanQueryText(params.get('nextRun')),
-    lastScheduled: cleanQueryText(params.get('lastScheduled')),
-    dispatch: cleanQueryText(params.get('dispatch')),
-    updated: cleanQueryText(params.get('updated')),
-  };
-}
-
-function parseRecurringSortKey(raw: string | null): RecurringSortKey {
-  const value = String(raw || '').trim();
-  return (
-    value === 'name'
-    || value === 'state'
-    || value === 'target'
-    || value === 'repository'
-    || value === 'cron'
-    || value === 'timezone'
-    || value === 'nextRunAt'
-    || value === 'lastScheduledFor'
-    || value === 'dispatch'
-    || value === 'updatedAt'
-  ) ? value : 'updatedAt';
-}
-
-function parseRecurringSortDirection(raw: string | null): RecurringSortDirection {
-  return String(raw || '').trim() === 'asc' ? 'asc' : 'desc';
-}
-
-function activeRecurringFilterEntries(filters: RecurringFilters): Array<[RecurringFilterKey, string]> {
-  return (Object.keys(RECURRING_FILTER_LABELS) as RecurringFilterKey[])
-    .map((key) => [key, filters[key].trim()] as [RecurringFilterKey, string])
-    .filter(([, value]) => Boolean(value));
-}
-
 function appendScheduleListParams(
   endpoint: string,
   filters: RecurringFilters,
@@ -325,39 +271,6 @@ function appendScheduleListParams(
   }
   const serialized = params.toString();
   return `${path}${serialized ? `?${serialized}` : ''}${hash ? `#${hash}` : ''}`;
-}
-
-type RecurringListUrlState = {
-  filters: RecurringFilters;
-  pageSize: number;
-  cursor: string;
-  sort: RecurringSortKey;
-  sortDir: RecurringSortDirection;
-};
-
-/** The table's shareable URL query; the shell reads it back to open the first visible row. */
-function recurringListUrlQuery({ filters, pageSize, cursor, sort, sortDir }: RecurringListUrlState): string {
-  const params = new URLSearchParams();
-  params.set('limit', String(pageSize));
-  params.set('sort', sort);
-  params.set('sortDir', sortDir);
-  if (cursor) {
-    params.set('cursor', cursor);
-  }
-  for (const [key, value] of activeRecurringFilterEntries(filters)) {
-    params.set(key, value);
-  }
-  return params.toString();
-}
-
-function recurringListUrlStateFromSearch(params: URLSearchParams): RecurringListUrlState {
-  return {
-    filters: parseRecurringFilters(params),
-    pageSize: parsePageSize(params.get('limit')),
-    cursor: cleanCursor(params.get('cursor')),
-    sort: parseRecurringSortKey(params.get('sort')),
-    sortDir: parseRecurringSortDirection(params.get('sortDir')),
-  };
 }
 
 function scheduleRouteDefinitionId(payload: BootPayload): string | null {
