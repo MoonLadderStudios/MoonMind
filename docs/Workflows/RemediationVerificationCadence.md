@@ -61,9 +61,11 @@ Progress uses the validated remaining-work/candidate evidence identity. Repeated
 
 ## 5. When immediate verification is still required
 
-Administrative effects on sessions, hosts, leases, locks, helpers, cleanup, target liveness, or repository publication require the relevant action verification. Destructive/high-risk actions and dependent repairs may require an intermediate health check or explicit full gate.
+Administrative effects on sessions, hosts, leases, locks, helpers, cleanup, target liveness, or repository publication retain their exact action/resource/postcondition verification. Destructive/high-risk or dependent repairs may require an intermediate health check or full gate. [Workflow Remediation §11.6.1](WorkflowRemediation.md#1161-trusted-post-action-verification-phase) owns action dispositions such as `verified_resolved`, `verified_no_change`, `still_failed`, `regressed`, `evidence_unavailable`, `approval_required`, `verification_failed`, and `canceled`.
 
-Use the exact action/resource/postcondition contract. A successful pause or lease reconciliation does not prove the original coding objective is completed. Do not replace deterministic authorization, side-effect reconciliation, or secret controls with an LLM verdict.
+Delivery, pending verification, operational postcondition, and objective repair are separate. Verify exact linked branch/recovery result identity without rewriting the historical source failure. A successful pause, lease reconciliation, or branch completion proves neither the coding objective nor separately requested publication/promotion. LLM verdicts cannot replace authorization, effect reconciliation, or secret controls.
+
+Long-running action verification persists under the existing action owner and resumes from authoritative results or bounded durable reconciliation. Short in-process polling, browser presence, or mutation redispatch cannot be the only completion path.
 
 ## 6. Recommended step labels
 
@@ -91,6 +93,10 @@ Record an explicit no-change/unsafe/blocked result when no candidate mutation wa
 
 Action verification uses its existing normalized action-outcome contract rather than overloading the full objective verdict. An adapter-returned success mapping is not a verification artifact.
 
+Publish immutable per-attempt evidence through the existing artifact owner. A convenience latest pointer refers to the latest accepted authoritative artifact under the correct candidate/attempt identity, not whichever artifact has the newest timestamp.
+
+A repeated artifact write reconciles committed bytes/digest. A changed payload under the same immutable identity is a conflict. Failure to generate a preview, timeline update, or optional report does not erase a committed valid candidate or cause compute to run again. Missing required output remains incomplete and needs explicit reconciliation.
+
 ## 8. Runtime state model
 
 Keep durable attempt state under the existing workflow/step owner. The lifecycle remains collecting evidence, diagnosing, acting, verifying, and a terminal resolution/escalation/failure, with explicit supported wait reasons.
@@ -103,11 +109,11 @@ Current controller `gateResultRef` and `remainingWorkRef` also replace inherited
 
 An Activity retry retries the same effect. A restore retry continues the same destination reservation. A semantic repair attempt gets a new Step Execution and increments its admitted attempt count. A verification-only retry reuses the candidate without running the repair again.
 
-## 9. Dashboard expectations
+## 9. Dashboard and API projection
 
-Show full verification as an attempt-level gate and targeted checks inside the attempt. Display current candidate, latest authoritative verification, addressed/deferred/unsafe/still-failing gap counts, attempt budget, waiting/escalation reason, and source/result links.
+Show full verification as the attempt-level gate, with targeted checks inside it. Project attempt/maximum, phase/wait/escalation, candidate identity/head version, latest authoritative verification, repair/verifier Step Executions, addressed/deferred/unsafe/failing gap counts, canonical verdict/scope/exclusions, budgets, eligible next actions, and remaining operator work. Link source and result; historical failure and verified linked repair can coexist.
 
-Pending verification is not repaired, failed, or no-change merely because a short polling window ended. Historical failure and verified linked repair can be shown together. A stale result from an earlier attempt cannot replace the selected current candidate or enable the wrong action.
+Pending verification does not become failed, repaired, or no-change when polling ends. Unavailable evidence remains unknown, not zero gaps or successful no-op. Phase comes from the existing owner, never parsed labels or UI selection. Authorization/cache keys include principal, source/result run, and attempt/candidate identity; stale projections cannot advance the loop or enable the wrong action.
 
 ## 10. Planner and orchestration contract
 
@@ -121,13 +127,7 @@ The planner schedules portable named remediation and verification Skills. It mus
 
 Generic Omnigent execution applies equally to each claimed harness. Preserve admitted Runtime + Profile and subordinate configuration/model/policy across an attempt. A new intended choice is explicit re-admission, not fallback because a provider is busy or a default changed. Session reuse is capability-dependent and independent of preserving workspace content.
 
-## 11. Attempt-scoped artifact requirements
-
-Publish immutable per-attempt evidence through the existing artifact owner. A convenience latest pointer refers to the latest accepted authoritative artifact under the correct candidate/attempt identity, not whichever artifact has the newest timestamp.
-
-A repeated artifact write reconciles committed bytes/digest. A changed payload under the same immutable identity is a conflict. Failure to generate a preview, timeline update, or optional report does not erase a committed valid candidate or cause compute to run again. Missing required output remains incomplete and needs explicit reconciliation.
-
-## 12. Preset and skill instruction requirements
+## 11. Preset and skill instruction requirements
 
 Use an explicitly named canonical remediation Skill, not `auto` selection that may resolve to an empty bundle. Supply the exact latest `gateResultRef` and `remainingWorkRef` as compact direct inputs. The trusted Activity materializes complete permitted bytes outside history and supplies readable `gateResultPath` and `remainingWorkPath` to the runtime.
 
@@ -137,14 +137,7 @@ Ready-workspace retries re-admit and project ordinary attachments as well as nam
 
 Instruct remediation to consume all safe current gaps, exercise the actual production boundary requested by the verifier, record per-gap decisions and targeted checks, and stop without mutation when the input verdict is terminal. A test-only dictionary, fabricated success field, or helper mock does not satisfy a requirement about real workflow/Activity/adapter/persistence wiring.
 
-Runtime prompt preparation forwards the existing workflow-owned remediation
-cadence (role, admitted attempt and maximum) and current candidate/verifier refs
-as compact JSON to the actual agent message, including explicit and
-artifact-backed prompts. This is context from the existing owner, not a second
-attempt ledger or new admission authority. Missing historical dependency-setup
-records alone do not block safe repository repairs. Skills honor supplied limits
-and known exhausted attempts without inventing a universal setup budget or
-requiring a separate trusted retained-attempt ledger before editing.
+The runtime context in section 8 reaches actual agent messages for both explicit and artifact-backed prompts, without a second attempt ledger. Missing historical dependency-setup records alone do not block safe repository repair. Honor supplied/exhausted limits without inventing a universal setup budget or requiring a separate retained-attempt ledger before editing.
 
 The resolved MoonSpec acceptance policy makes browser execution advisory by
 default, including for UI work. Browser availability, installation, screenshots,
@@ -158,7 +151,7 @@ collection under the existing owner.
 
 The full verifier checks the resulting whole candidate against the authoritative scope and publishes an attempt-bound result. Presets and schedules use the same contract, not independent loops with subtly different stopping or preservation rules.
 
-## 13. Continuation and terminal handling
+## 12. Continuation and terminal handling
 
 - `FULLY_IMPLEMENTED`: accept the verified scope, skip unused repair attempts, and permit only downstream handoffs whose own evidence/policy is satisfied.
 - `ADDITIONAL_WORK_NEEDED`: admit the next bounded attempt from the committed current candidate when safe.
@@ -172,21 +165,7 @@ Partial candidate capture, missing manifest, corrupted/denied content, save fail
 
 Continue-As-New carries the exact report, candidate head/version, attempt identities, budgets, active child/operation, approval/lock where applicable, pending verification, and finalization obligations. Recorded historical decisions remain replay-safe through explicit versioning.
 
-## 14. Immediate verification exceptions
-
-Targeted action verification remains mandatory where the action contract requires it. [Workflow Remediation §11.6.1](WorkflowRemediation.md#1161-trusted-post-action-verification-phase) owns `verified_resolved`, `verified_no_change`, `still_failed`, `regressed`, `evidence_unavailable`, `approval_required`, `verification_failed`, and `canceled`.
-
-Keep delivery, pending verification, operational postcondition, and objective repair separate. Verify a linked branch/recovery candidate and exact result identity without rewriting the source failure or requiring that historical row to become completed. A branch completing does not alone prove the objective or any separately requested publication/promotion.
-
-Long-running action verification persists a pending obligation under the existing orchestration/action owner and resumes on authoritative result evidence or bounded durable reconciliation. A short in-process poll, browser presence, or redispatch of the same mutation must not be the only way to finish verification.
-
-## 15. Dashboard and API projection
-
-Project attempt/max-attempts, current phase/wait, candidate identity and head version, latest authoritative verification ref, per-attempt repair/verifier Step Executions, gap/check counts, canonical verdict, scope/exclusions, next-action eligibility, budgets, and remaining operator work from the existing owner.
-
-Do not parse labels to infer phase or use UI selection as runtime authority. Authorization and cache keys include principal, source/result run, and attempt/candidate identity. Late projection updates cannot advance the canonical loop. Unavailable evidence stays unknown rather than fabricated zero gaps or a successful no-op.
-
-## 16. Test expectations
+## 13. Test expectations
 
 Required production-boundary tests must prove:
 

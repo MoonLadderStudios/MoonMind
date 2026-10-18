@@ -1,650 +1,170 @@
 # MoonMind Architecture
 
-**Document Class:** System Architecture View
-**Status:** Current architecture  
-**Updated:** 2026-10-16  
-**Audience:** Contributors, operators, runtime authors, integration authors, and dashboard developers  
-**Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtimes, managed sessions, Omnigent hosts, external agents, artifacts, provider profiles, and API-governed container jobs.
+MoonMind is a self-hosted, single-operator application for running agentic work.
+Temporal coordinates durable workflows; Omnigent runs the agents. MoonMind owns
+access, context, workspaces, saved results, and the browser controls around them.
 
-MoonMind is an open-source platform for orchestrating leading AI coding agents
-and automation systems while adding resilience, security, context delivery,
-provider-profile routing, durable workflows, and artifact-first observability.
-
-Omnigent is MoonMind's agent backend. Codex, Claude Code, and OpenCode
-harnesses run on Omnigent hosts behind one lifecycle while MoonMind keeps the
-workflow, policy, credential, artifact, and execution boundaries. Direct
-`codex_cli` and `claude_code` managed runtimes remain compatibility Backends
-offered under Advanced; direct Codex is also the workflow-scoped
-`MoonMind.AgentSession` implementation.
-
-> **Core rule:** Temporal is MoonMind's durable outer orchestrator. Workflow code
-> is deterministic and side-effect-free. Managed runtimes, container jobs,
-> external-agent calls, OAuth runners, database writes, artifact writes, network
-> calls, CLI invocation, and process supervision occur in Activities or external
-> service boundaries.
-
-> **Artifact rule:** Artifacts remain execution-centric evidence. Workflow,
-> step, run, session, and container-job UI views are projections over linked
-> artifacts and compact metadata; they do not create another durable source of
-> truth.
-
-> **Docker rule:** Agent runtimes do not receive a Docker socket. Containerized
-> repository work enters MoonMind through the API-owned
-> [`Docker Backend Service`](ManagedAgents/DockerBackendService.md), which uses one
-> deployment-selected daemon and a cross-workflow image cache.
-
-## Single-user application model
-
-MoonMind's target application architecture is single-user only. One operator
-controls an instance, and application configuration and resources belong to the
-instance rather than to application users. There are no application accounts,
-human roles, membership, or per-user resource scopes. A permanently seeded user
-or a renamed singleton principal is not the target model.
-
-Deployment admission and scoped machine authority remain separate security
-boundaries. Agents and workers do not inherit unrestricted operator access.
-Concurrent workflows, multiple provider profiles, and independent deployments
-remain supported without a shared human-identity service.
-
-The [Single-User Application Design](SingleUserApplicationDesign.md) defines the
-accepted desired behavior and data-preservation invariants. This system-wide
-application model supersedes conflicting account, role, and human-ownership
-targets in older authentication, settings, and preset documents. It does not
-supersede exact machine interfaces or weaken runtime, credential, browser,
-network, approval, or replay protections.
-
-This is architectural direction, not a claim that existing account-based code
-has been removed. Existing deployments retain their working protected access
-until the replacement is implemented and verified.
-
----
-
-## 1. Architecture at a glance
+## One workflow through the system
 
 ```mermaid
 flowchart LR
-  subgraph Clients["Clients and Agent Hosts"]
-    UI[Browser / Dashboard]
-    OMS[Omnigent Server]
-    OMH[Omnigent Host and Runners]
-    EXTCLIENT[Authenticated MCP / HTTP Clients]
-  end
-
-  subgraph APIPlane["MoonMind API Plane"]
-    API[MoonMind API]
-    MCP[MCP and HTTP Tool Surface]
-    DBS[Docker Backend Service]
-    CTX[Context / Retrieval APIs]
-  end
-
-  subgraph TemporalPlane["Temporal Service Plane"]
-    TS[Temporal Service]
-    WFQ[Workflow Task Queue]
-    AFQ[Activity Task Queues]
-  end
-
-  subgraph WorkflowPlane["Durable Workflow Executions"]
-    UW[MoonMind.UserWorkflow]
-    AR[MoonMind.AgentRun]
-    AS[MoonMind.AgentSession]
-    CJ[Container Job Workflow]
-    PPM[MoonMind.ProviderProfileManager]
-    OA[MoonMind.OAuthSession]
-    MR[MoonMind.ManagedSessionReconcile]
-  end
-
-  subgraph WorkerPlane["Worker Plane"]
-    WW[Workflow Worker]
-    AW[Artifacts Worker]
-    LW[LLM Worker]
-    SW[Sandbox Worker]
-    RW[Agent Runtime Worker]
-    IW[Integrations Worker]
-  end
-
-  subgraph RuntimePlane["Managed Runtime Plane"]
-    RSTRAT[Runtime Strategy Registry]
-    RLAUNCH[Managed Runtime Launcher]
-    RSUP[Managed Run / Session Supervisors]
-    CODEX[Codex CLI]
-    CLAUDE[Claude Code]
-  end
-
-  subgraph WorkloadPlane["Container Workload Plane"]
-    DPROXY[Docker Socket Proxy]
-    DHOST[Existing System Docker Daemon]
-    IMG[(Persistent Image Store)]
-    WC[Bounded Workload Containers]
-  end
-
-  subgraph IntegrationPlane["External Agent and Integration Plane"]
-    OCLAW[OpenClaw]
-    OTHER[Other External Systems]
-  end
-
-  subgraph DataPlane["Data Plane"]
-    PG[(Postgres)]
-    TPG[(Temporal Persistence)]
-    OBJ[(MinIO / Artifact Storage)]
-  end
-
-  UI --> API
-  OMS --> API
-  OMH --> OMS
-  OMH --> MCP
-  EXTCLIENT --> MCP
-  MCP --> API
-  API --> DBS
-  API --> CTX
-  API --> TS
-  API --> PG
-  API --> OBJ
-
-  TS --> WFQ
-  TS --> AFQ
-  TS --> TPG
-  WFQ --> WW
-  AFQ --> AW
-  AFQ --> LW
-  AFQ --> SW
-  AFQ --> RW
-  AFQ --> IW
-
-  WW --> UW
-  WW --> AR
-  WW --> AS
-  WW --> CJ
-  WW --> PPM
-  WW --> OA
-  WW --> MR
-
-  UW --> AR
-  UW --> AS
-  UW --> CJ
-  AR --> PPM
-
-  RW --> RSTRAT
-  RW --> RLAUNCH
-  RW --> RSUP
-  RSTRAT --> CODEX
-  RSTRAT --> CLAUDE
-  RLAUNCH --> CODEX
-  RLAUNCH --> CLAUDE
-  RSUP --> OBJ
-
-  DBS --> CJ
-  CJ --> DPROXY
-  DPROXY --> DHOST
-  DHOST --> IMG
-  DHOST --> WC
-  WC --> OBJ
-
-  RW --> OMS
-  IW --> OCLAW
-  IW --> OTHER
-  AW --> OBJ
-  AW --> PG
+  UI[Operator / dashboard] --> API[MoonMind API]
+  API --> T[Temporal workflow]
+  T --> A[Activities]
+  A --> O[Omnigent / agent harness]
+  O --> M[Authorized MoonMind tools]
+  M --> J[Container jobs / integrations]
+  A --> S[Saved artifacts and projections]
+  J --> S
+  S --> API
 ```
 
-Diagram rules:
-
-- Workflows do not talk directly to workers, Docker, containers, PTYs, storage,
-  databases, CLIs, or provider APIs.
-- Workflows schedule Activities, create child workflows, send Signals/Updates,
-  wait on durable timers, and write compact workflow metadata.
-- The API authenticates callers and starts or controls durable workflows.
-- Managed runtime components are Activity-owned implementation components, not
-  independent workflow peers.
-- The Docker Backend Service is API-owned; the long-running execution interval is
-  Temporal-owned; Docker side effects occur through trusted workers.
-- Omnigent and other agent hosts receive MCP tools, not Docker authority.
-
----
-
-## 2. Current runtime and integration matrix
-
-| Runtime or integration | Role | Maturity | Architectural boundary |
-|---|---|---|---|
-| Omnigent | Agent backend for Codex, Claude Code, and OpenCode harnesses | Default for agent steps | Admission compiles one execution plan; `integration.omnigent.*` activities run it on Omnigent hosts; runners call MoonMind through authenticated APIs and MCP tools |
-| `codex_cli` | Direct managed CLI and workflow-scoped session runtime | Compatibility Backend under Advanced | Codex App Server transport, session epochs, thread boundaries, artifact-backed continuity |
-| `claude_code` | Direct managed CLI runtime | Compatibility Backend under Advanced | Provider profiles, OAuth/API-key materialization, context delivery, runtime-specific hardening |
-| OpenClaw | External delegated agent (streaming gateway) | Optional; registered when configured | Adapter normalizes status and results into canonical agent contracts |
-| Docker Backend Service | API-owned workload service | Container-job interface over the existing Docker backend | Arbitrary permitted images, logical workspaces, Temporal durability, cross-workflow image reuse |
-
----
-
-## 3. Control plane
-
-The API service and dashboard provide the operator boundary. They:
-
-- create workflow executions;
-- validate and normalize runtime intent;
-- expose provider-profile, managed-secret, and deployment-access configuration;
-- serve artifact, log, and execution projections;
-- accept intervention and approval requests;
-- expose context and MCP surfaces;
-- authenticate and authorize container-job submissions;
-- resolve logical workspaces and registry-credential references.
-
-Workflow-owned lifecycle state changes go through Temporal Start, Signal, Update,
-Query, or idempotent projection Activities. The API must not become a competing
-workflow state machine.
-
-### 3.1 MCP and external-agent surface
-
-MoonMind exposes authenticated MCP tools for immediate service operations and
-submission-style workflows. Long-running work returns a durable identifier
-instead of holding an HTTP request open.
-
-Omnigent agents discover and call these tools through their normal MCP client.
-Agent bundles and runners do not receive deployment credentials merely because
-they can invoke a tool.
-
-### 3.2 Docker Backend Service
-
-The Docker Backend Service is part of the API subsystem. It owns:
-
-- caller authentication and authorization;
-- typed request validation;
-- logical workspace resolution;
-- backend selection from deployment configuration;
-- durable container-job creation;
-- status, logs, artifacts, and cancellation surfaces;
-- private-image authorization;
-- job ownership and labels;
-- image-retention policy inputs.
-
-Temporal owns the job's durable execution, timeout, cancellation, and terminal
-cleanup. A trusted Activity worker talks to the configured Docker endpoint.
-
-The current required backend is the existing system Docker daemon through
-MoonMind's configured proxy. The public job contract remains backend-neutral so
-an operator may later choose another Docker Engine endpoint without changing
-agent integrations.
-
----
-
-## 4. Temporal plane
-
-Temporal is the durable orchestration backbone. It owns:
-
-- workflow lifecycle and history;
-- retries and durable timers;
-- cancellation;
-- signals, updates, and queries;
-- child workflow relationships;
-- schedules;
-- workflow visibility.
-
-The Temporal Service stores and dispatches tasks; it does not execute MoonMind
-application code. Workers poll task queues and run registered workflow or
-Activity handlers.
-
-### 4.1 Workflow types
-
-Key workflow roles include:
-
-- `MoonMind.UserWorkflow`: user-submitted, step-ledger-owning Workflow Execution;
-- `MoonMind.AgentRun`: one true agent execution lifecycle;
-- `MoonMind.AgentSession`: workflow-scoped session entity;
-- container-job workflow: one bounded container execution lifecycle;
-- `MoonMind.ProviderProfileManager`: capacity and cooldown coordination;
-- `MoonMind.OAuthSession`: interactive authentication orchestration;
-- `MoonMind.ManagedSessionReconcile`: bounded session reconciliation;
-- merge automation workflows (`MoonMind.MergeAutomation`). There is no manifest-ingest workflow; existing manifest-ingest rows are readable only as replay/drain evidence.
-
-### 4.2 Workflow versus Activity authority
-
-Workflow code decides orchestration. Activities and external services own side
-effects such as:
-
-- launching or stopping processes and containers;
-- reading or writing files;
-- calling providers;
-- storing artifacts;
-- updating projections;
-- resolving credentials;
-- interacting with Docker.
-
-Payloads remain compact and non-sensitive. Large content travels by artifact
-reference.
-
----
-
-## 5. Workflow Execution and Step Execution
-
-`MoonMind.UserWorkflow` is the root Workflow Execution. It owns an ordered plan
-of Step Executions, compact status, cancellation propagation, and result
-finalization.
-
-A step chooses the execution primitive appropriate to its contract:
-
-- an ordinary Activity;
-- `MoonMind.AgentRun` for a true agent runtime;
-- a session-backed AgentRun using `MoonMind.AgentSession`;
-- a container-job workflow for bounded containerized work;
-- an integration Activity or child workflow.
-
-MoonMind does not define a separate product entity named Task. Temporal Tasks and
-provider-specific tasks remain qualified implementation concepts.
-
-Step completion is based on authoritative terminal evidence, not assistant prose,
-wrapper exit alone, filesystem timestamps, or raw container state.
-
----
-
-## 6. Managed runtime run plane
-
-The managed runtime run plane serves the direct compatibility Backends; ordinary
-agent work runs on Omnigent (§9). It is strategy-driven, and a managed run is a
-step-scoped CLI execution under `MoonMind.AgentRun`.
-
-It includes:
-
-- `ManagedRuntimeStrategy` selection;
-- runtime-specific command and environment shaping;
-- `ManagedRuntimeLauncher`;
-- `ManagedRunSupervisor`;
-- bounded process output capture;
-- artifact publication;
-- provider-profile lease management;
-- canonical `AgentRunStatus` and `AgentRunResult` production.
-
-Managed runtime images contain the agent runtime they execute. General MoonMind
-workers remain generic and do not embed every supported CLI.
-
-### 6.1 Provider profiles
-
-Provider Profiles bind:
-
-- runtime;
-- upstream provider;
-- credential source;
-- materialization mode;
-- model defaults;
-- slot and cooldown policy;
-- environment and file shaping;
-- routing metadata.
-
-Raw credentials are resolved only at controlled launch boundaries and are kept
-out of workflow history.
-
----
-
-## 7. Shared managed session plane
-
-A managed session is a workflow-scoped continuity environment for a
-session-capable runtime.
-
-`MoonMind.AgentSession` owns compact orchestration state. Agent Runtime Activities
-launch, resume, observe, control, and terminate the runtime-specific session
-container.
-
-The session plane owns:
-
-- `session_id` and `session_epoch`;
-- runtime-native container and thread bindings;
-- active-turn identity;
-- send, steer, interrupt, clear, and terminate controls;
-- continuity artifacts and normalized events;
-- compatibility and drift checks.
-
-The session container is a performance and continuity cache, not durable truth.
-Artifacts, bounded metadata, and execution projections remain authoritative.
-
-### 7.1 Containerized work from a session
-
-A session that needs a compiler SDK, test image, database, or other containerized
-tool calls the Docker Backend Service through MoonMind's tool boundary.
-
-The session does not receive a Docker CLI requirement, Docker socket, or
-`DOCKER_HOST`. It submits a typed image, command, resources, network policy, and
-logical workspace reference, then consumes durable job state and artifacts.
-
-Container jobs have independent identity and cleanup. Session clear/reset does
-not delete the shared image cache. Session termination cancels only jobs that are
-still owned by the terminating workflow according to explicit ownership rules.
-
----
-
-## 8. Docker workload plane
-
-The workload plane runs bounded non-agent containers for:
-
-- repository builds and tests;
-- linters and code generators;
-- .NET, Unreal, Node, Java, and other toolchains;
-- integration-test backing services with explicit TTL;
-- deployment-gated administrative or diagnostic operations.
-
-The core is workload-agnostic. An image and command are job data, not backend
-branches or worker-pool identities.
-
-### 8.1 Image reuse
-
-The selected Docker daemon owns the image store. A missing permitted image is
-pulled on demand under a per-image lock. Later workflows reuse the same digest.
-
-Workflow cleanup removes workload containers, writable layers, temporary
-networks, scratch state, and ephemeral registry configuration. It does not prune
-shared images. Image maintenance is deployment-level and protects images used by
-active containers.
-
-### 8.2 Workspace mounts
-
-Agents submit logical workspace references. MoonMind resolves those references
-to daemon-visible sources and validates containment and ownership. Caller-supplied
-host paths are rejected.
-
-A cheap visibility probe runs before an expensive missing-image acquisition.
-This ensures a 73 GB pull cannot begin for a job whose checkout is not visible to
-the daemon.
-
-### 8.3 Security
-
-Structured container requests apply:
-
-- no privileged mode;
-- dropped capabilities;
-- `no-new-privileges`;
-- no host PID, IPC, user, or network namespaces;
-- no Docker socket or data-root mounts;
-- no host-root bind;
-- bounded CPU, memory, shared memory, and timeout;
-- MoonMind-owned labels;
-- controlled network mode;
-- private-image authorization on every run.
-
-Raw Docker CLI execution is an explicitly gated internal escape hatch, not the
-normal agent interface.
-
----
-
-## 9. Omnigent agent backend
-
-Start at the [Omnigent module entrypoint](./Omnigent/README.md) for the
-startup path, limitations, and contract owners.
-
-Admission resolves the selected Harness and Provider Profile into one execution
-plan, and `MoonMind.AgentRun` runs it on an Omnigent host. Container work from
-an Omnigent agent crosses this boundary:
+1. The operator submits a task, repository, selected harness and Provider
+   Profile, and any publication choices. The API validates the request and
+   starts a durable workflow.
+2. `MoonMind.UserWorkflow` coordinates its steps, waits, retries, and
+   cancellation. Workflow code is deterministic: it schedules work rather than
+   directly calling providers, databases, Docker, or the filesystem.
+3. Activities resolve context, credentials, and workspaces and start the
+   appropriate execution. Ordinary agent work runs through `MoonMind.AgentRun`
+   on Omnigent; tool-only work can use an Activity or container job.
+4. The agent uses authorized tools to work on the task. Builds and tests that
+   need containers go through MoonMind's container-job API. The agent does not
+   receive the deployment's Docker socket.
+5. Outputs, diagnostics, and recoverable work are saved as artifacts. The API
+   and dashboard project workflow state and saved evidence into progress,
+   controls, logs, and results. Publishing a result is a separate authorized
+   operation; successful computation does not imply successful publication.
+
+For the exact registered workflow types and worker routes, use the
+[generated reference](Temporal/WorkflowTypeCatalogGenerated.md). It is generated
+from production registries rather than maintained as another list here.
+
+## Find the relevant explanation
+
+| Question | Start here |
+| --- | --- |
+| How does a workflow execute, retry, or recover? | [Execution model](Temporal/ManagedAndExternalAgentExecutionModel.md), [steps and checkpoints](Steps/StepExecutionsAndCheckpointing.md) |
+| How does MoonMind run an agent? | [Omnigent entry point](Omnigent/README.md) |
+| Where do workflow state and dashboard status come from? | [State and projections](Temporal/SourceOfTruthAndProjectionModel.md) |
+| How do credentials and provider selection work? | [Provider Profiles](Security/ProviderProfiles.md), [Secrets](Security/SecretsSystem.md) |
+| How are builds and tests isolated? | [Docker Backend Service](ManagedAgents/DockerBackendService.md) |
+| How are Skills resolved and delivered? | [Skill System](Steps/SkillSystem.md) |
+| How are results saved and published? | [Artifacts](Temporal/WorkflowArtifactSystemDesign.md), [publishing](Workflows/WorkflowPublishing.md) |
+| How do I diagnose a running or failed workflow? | [Workflow Console](UI/WorkflowConsoleArchitecture.md), [Live Logs](Observability/LiveLogs.md) |
+| What runs locally, and how is it updated? | [Service inventory](FirstRunServiceInventory.md), [Compose updates](Steps/DockerComposeUpdateSystem.md) |
+
+## Ownership and durable state
+
+| Component | Responsibility | Important boundary |
+| --- | --- | --- |
+| API and dashboard | Accept requests, enforce access, expose controls and results | They do not run a competing workflow state machine. |
+| Temporal workflows | Durable orchestration, timers, retries, cancellation, and child workflow relationships | Side effects run in Activities or external services. |
+| Workers and Activities | Execute side effects and integrations | An Activity retry must account for effects that may already have happened. |
+| Omnigent | Agent hosts, harnesses, sessions, and provider-native execution | MoonMind retains workflow, credential, workspace, and publication authority. |
+| PostgreSQL | Application settings, records, and durable projections | A projection does not replace Temporal's execution history. |
+| Artifact storage | Large outputs, logs, checkpoints, and result evidence | Workflow history carries compact references rather than large bodies or secrets. |
+| Docker backend | Bounded workload containers and shared image cache | Deployment-owned infrastructure is not agent-owned workspace state. |
+
+Temporal's service persists history and dispatches tasks. Workers poll queues
+and execute workflow or Activity handlers; the Temporal service does not execute
+MoonMind application code. Task queues route work internally and do not promise
+product-level FIFO ordering. See [worker topology](Temporal/ActivityCatalogAndWorkerTopology.md).
+
+## Recovery and results
+
+A workflow, a logical step, and an execution attempt are different identities.
+A retry can replace an interrupted attempt without repeating completed steps.
+Recovery uses verified checkpoints or admitted inputs, with unavailable recovery
+reported explicitly. The detailed support and compatibility conditions live in
+[execution and checkpointing](Steps/StepExecutionsAndCheckpointing.md).
+
+A live session or container is a continuity cache, not the only recoverable copy
+of work. Saved artifacts and durable metadata remain inspectable when the host
+or interactive connection is unavailable. Terminal outcomes come from execution
+evidence, not assistant prose, process presence, or a wrapper exit alone.
+
+Compute, saving, publication, and cleanup have separate outcomes. A publication
+failure must not hide saved work; cleanup must not remove its only recoverable
+copy. When an external operation's answer is lost, recovery first establishes
+what happened before repeating an effect. These distinctions explain why a
+single success/failure flag cannot describe the whole journey.
+
+<a id="single-user-application-model"></a>
+
+## Access and execution boundaries
+
+One operator controls an instance, with concurrent workflows and multiple
+provider or repository connections. Single-user operation does not grant agents
+unrestricted operator access. The [single-user design](SingleUserApplicationDesign.md)
+explains the target model and migration constraints; existing account-era access
+must remain protected until its replacement is implemented.
+
+Provider Profiles select execution credentials and defaults. Secrets remain
+references until the controlled launch boundary and stay out of workflow
+history. Repository access, model-provider credentials, artifact access, and
+publication authority are separate concerns.
+
+Containerized tools follow this path:
 
 ```text
-Omnigent agent
-    → authenticated MoonMind MCP tool
-    → Docker Backend Service
-    → Temporal container job
-    → configured Docker backend
+agent -> authenticated MoonMind tool -> Docker Backend Service
+      -> Temporal container job -> trusted worker -> configured Docker backend
 ```
 
-The Omnigent server, host, runner, and agent shell do not receive the Docker
-socket or deployment `DOCKER_HOST`.
+The API validates logical workspace references, resources, permitted images,
+and caller authority. Trusted workers operate Docker through the configured
+backend; agents do not receive a Docker socket, deployment credentials, or
+arbitrary host-path mounting authority. A socket proxy alone is not an
+agent sandbox. Network confinement also requires its own enforced boundary;
+see [Restricted Egress](Security/RestrictedEgress.md).
 
-An Omnigent session supplies its session identity as a logical workspace
-reference. MoonMind maps it to the authorized writable worktree, submits the job,
-and returns status and evidence through MCP.
+The deployment's image store is shared cache state. Workflow cleanup removes
+owned transient resources without pruning that cache or another workflow's
+resources. Workspace visibility is checked before expensive image acquisition,
+and private-image access is checked even if the image is already cached.
 
-This lets the same Omnigent agent request a .NET SDK container, an Unreal
-automation image, or another permitted runtime without an image-specific pool or
-infrastructure branch.
+## Context and observability
 
----
+MoonMind assembles bounded context from task intent, referenced documents,
+attachments, prior evidence, and resolved Skills. It is vector-free: ordinary
+execution has no MoonMind-managed vector database, embedding service, or
+semantic-retrieval index. Exact artifact/history reads are a different capability
+from semantic recall. See [context and memory](Memory/MemoryArchitecture.md).
 
-## 10. External agent systems
+Resolved Skills are execution inputs with durable references; their large bodies
+are materialized near the runtime. Native session context can improve continuity,
+but cannot be the sole basis for recovery.
 
-External delegated agents such as OpenClaw run outside MoonMind's execution
-envelope. MoonMind still owns:
+Logs, traces, and artifacts carry correlation identifiers for workflows, runs,
+steps, sessions, and jobs as applicable. The dashboard's live transport is a
+convenience: recorded diagnostics remain readable if live chat or streaming
+fails. Sensitive content is excluded or redacted at its owning boundaries.
 
-- durable orchestration;
-- status normalization;
-- artifacts and observability evidence;
-- cancellation semantics where supported;
-- operator presentation.
+## Compatibility paths
 
-Adapters normalize provider-specific payloads at the integration boundary and
-return canonical agent contracts. Workflow code does not reconstruct provider
-contracts ad hoc.
+Omnigent is the primary agent backend for Codex, Claude Code, and OpenCode.
+The [Omnigent support documentation](Omnigent/RuntimeProviderRollout.md) describes
+which combinations the deployment currently admits; installation is not proof
+that a journey has been qualified.
 
----
+Direct `codex_cli` and `claude_code` managed runtimes remain compatibility
+Backends under Advanced. Direct Codex also supplies the workflow-scoped
+`MoonMind.AgentSession` implementation. These paths have their own retained
+consumers and replay requirements; their existence does not establish a new
+parallel architecture to extend. See [managed agents](ManagedAgents/ManagedAgentArchitecture.md).
 
-## 11. Context, skills, and memory
+Optional external systems such as OpenClaw use adapters that normalize status,
+results, and supported cancellation into MoonMind's execution contracts. They
+run outside MoonMind's managed runtime envelope. See [external integrations](ExternalAgents/ExternalAgentIntegrationSystem.md).
 
-MoonMind is vector-free: it orchestrates agents and bounded authorized context. It assembles
-context from workflow intent, prior evidence, attachments, and resolved skills.
-Ordinary workflows and chat need no vector configuration: there is no
-MoonMind-managed vector database, embedding service, collection, or retrieval
-index, and explicit vector requirements are rejected before execution.
-Retained exact-context, artifact, and history reads are not equivalent to
-semantic recall.
+## Local deployment
 
-Resolved skill sets are immutable execution inputs. Compact references travel in
-workflow history; large skill bodies are materialized near the runtime through
-artifact-backed paths.
+Docker Compose runs the API/dashboard, Temporal, persistence, workers, artifact
+services, and configured agent infrastructure. The existing system Docker daemon
+can also serve container jobs through the trusted backend. There is no separate
+MoonMind daemon requirement.
 
-Managed sessions may keep native local context, but recovery and audit must not
-depend on it. Session summaries, checkpoints, and artifacts
-provide durable reconstruction inputs.
-
----
-
-## 12. Artifacts and observability
-
-Artifacts include:
-
-- prompts and context bundles;
-- stdout, stderr, and structured diagnostics;
-- diffs and generated files;
-- session summaries and reset boundaries;
-- container-job logs and test reports;
-- provider result payloads after normalization;
-- manifest and publication evidence.
-
-Live Logs presents a merged timeline of runtime output and system events. Live
-transport is optional; durable artifacts and compact observations are the source
-of truth.
-
-All observability carries workflow, run, step, session, job, and trace
-correlation identifiers where applicable. Secrets and unbounded content are
-excluded or redacted.
-
----
-
-## 13. Data plane
-
-- **Postgres** stores application metadata, settings, durable projections, and
-  operator-facing records. It does not replace Temporal history.
-- **Temporal persistence** is owned by the Temporal Service.
-- **MinIO or another artifact backend** stores immutable large evidence.
-- There is no MoonMind-managed vector service: no built-in vector database,
-  profile, extension, or index, and no implicit external replacement.
-- **Docker image storage** is deployment-owned cache state, not workflow truth.
-
-Retention policies are explicit and separate for workflow records, workspaces,
-artifacts, and Docker cache state.
-
----
-
-## 14. Security architecture
-
-MoonMind applies security at authority boundaries:
-
-- provider and registry credentials are references until execution;
-- managed runtimes receive only their approved credential material;
-- agents do not receive deployment Docker authority;
-- logical workspace resolution prevents arbitrary host mounts;
-- outbound actions may require scanning and approval;
-- runtime, container, and network policies fail closed;
-- owner labels and correlation metadata cannot be overridden by callers;
-- private-image access is checked even when an image is already cached;
-- administrative Docker operations remain separately gated.
-
-A Docker socket proxy is an infrastructure boundary for trusted MoonMind code,
-not an agent-facing sandbox by itself.
-
----
-
-## 15. Deployment topology
-
-The default local and self-hosted topology is Docker Compose. It includes:
-
-- MoonMind API and dashboard;
-- Temporal and PostgreSQL;
-- specialized worker fleets;
-- artifact services;
-- Omnigent server and optional host profiles;
-- a restricted Docker socket proxy for trusted MoonMind backend execution.
-
-The existing system Docker daemon is the current container-job backend. A
-separate MoonMind daemon is not required. Backend endpoint selection remains a
-narrow configuration seam so a future deployment can choose another Docker
-Engine endpoint without changing public tools.
-
----
-
-## 16. Stable architectural rules
-
-1. Temporal owns durable orchestration.
-2. Workflows are deterministic; Activities own side effects.
-3. Managed agent runs and managed sessions are distinct but share canonical
-   contracts.
-4. Session containers are continuity caches, not durable truth.
-5. Artifacts and bounded metadata are authoritative evidence.
-6. Provider Profiles own runtime/provider/credential launch intent.
-7. Managed sessions, workload containers, and auth containers use separate
-   identities and lifecycles.
-8. Agent runtimes request container jobs through MoonMind; they do not receive a
-   Docker socket.
-9. The Docker Backend Service is API-owned and Temporal-backed.
-10. One deployment-selected daemon supplies the cross-workflow image cache.
-11. Images are arbitrary permitted references acquired on demand.
-12. Job cleanup does not remove shared images.
-13. Workspace mounts are resolved from authenticated logical references.
-14. Omnigent uses the same MCP container-job tools as other agents.
-15. The workload core contains no .NET-, Unreal-, or other toolchain-specific
-    backend branches.
-16. New runtimes extend MoonMind through adapters and declared capabilities, not
-    parallel orchestration systems.
-17. The application is single-user only. Deployment admission and scoped machine
-    credentials replace human-account ownership, not execution safety boundaries.
-
----
-
-## 17. Canonical subsystem documents
-
-- [`SingleUserApplicationDesign.md`](SingleUserApplicationDesign.md): accepted
-  single-user application design and preservation of access and execution boundaries.
-- [`Temporal/TemporalArchitecture.md`](Temporal/TemporalArchitecture.md): Temporal
-  topology and workflow/Activity authority.
-- [`Temporal/ManagedAndExternalAgentExecutionModel.md`](Temporal/ManagedAndExternalAgentExecutionModel.md): true agent execution lifecycle and canonical contracts.
-- [`ManagedAgents/ManagedAgentArchitecture.md`](ManagedAgents/ManagedAgentArchitecture.md): managed-agent and managed-session subsystem.
-- [`ManagedAgents/CodexCliManagedSessions.md`](ManagedAgents/CodexCliManagedSessions.md): Codex session binding.
-- [`Observability/LiveLogs.md`](Observability/LiveLogs.md): session-aware log and
-  observability contract.
-- [`ManagedAgents/DockerBackendService.md`](ManagedAgents/DockerBackendService.md):
-  container-job API, backend, image cache, workspace, and cleanup contract.
-- [`Security/ProviderProfiles.md`](Security/ProviderProfiles.md): execution target
-  and credential selection.
-- [`Security/SecretsSystem.md`](Security/SecretsSystem.md): secret references,
-  storage, and materialization.
-- [`Steps/SkillSystem.md`](Steps/SkillSystem.md): skill resolution and immutable
-  materialization.
+The [service inventory](FirstRunServiceInventory.md) lists services and ports.
+The [deployment updater](Steps/DockerComposeUpdateSystem.md) owns upgrades,
+retained settings, interrupted-update recovery, and independent host-side repair.

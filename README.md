@@ -51,6 +51,9 @@ For optional settings, use [`.env-template`](.env-template). For startup checks 
 
 ## Architecture
 
+Start with [MoonMind Architecture](docs/MoonMindArchitecture.md) for a walkthrough
+of one workflow, component responsibilities, recovery, and links to deeper topics.
+
 - **MoonMind API and dashboard** accept work and expose controls and results.
 - **Temporal and workers** coordinate durable workflows and run their steps.
 - **Omnigent** manages agent hosts, harnesses, and sessions. Provider Profiles supply the selected connection and defaults.

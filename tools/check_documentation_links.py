@@ -5,13 +5,12 @@ The standalone CLI is advisory by default; required documentation unit tests
 also consume its findings. It validates *local* Markdown
 link targets under ``docs/`` so reviewers catch broken relative paths,
 images, reference-style links, and ``#anchor`` fragments without claiming the
-broader architecture checker (``tools/check_documentation_architecture.py``)
-catches rules it does not implement.
+any broader documentation policy checks.
 
 Scope (documented per MoonLadderStudios/MoonMind#3966):
 
 * Default scope is the canonical declarative set from
-  :func:`check_documentation_architecture.is_canonical_doc` (``docs/**.md``
+  :func:`documentation_files.is_canonical_doc` (``docs/**.md``
   minus ``docs/tmp``, ``docs/assets``, ``docs/ReleaseNotes``), further minus
   frozen review evidence that must not be edited in place:
   ``docs/DocsReview.md`` (2026-08-11 review snapshot) and
@@ -40,7 +39,7 @@ Finding rules (stable ids, ``advisory`` severity):
 * ``undefined-link-reference`` -- a ``[text][ref]`` / ``[ref][]`` usage has
   no ``[ref]: target`` definition.
 
-Usage mirrors the architecture checker::
+Usage::
 
     python tools/check_documentation_links.py                 # changed docs
     python tools/check_documentation_links.py --scope all     # canonical set
@@ -63,7 +62,7 @@ from typing import Iterable, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 try:
-    from check_documentation_architecture import is_canonical_doc
+    from documentation_files import is_canonical_doc
 except ImportError:  # pragma: no cover - fallback when tools/ is not on sys.path
     _ROOT = "docs"
     _EXCLUDED = ("docs/tmp", "docs/assets", "docs/ReleaseNotes")
