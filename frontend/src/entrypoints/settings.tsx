@@ -16,6 +16,8 @@ import {
 } from '../components/settings/OperationsSettingsSection';
 import {
   ALL_RUNTIMES_FILTER_VALUE,
+  fetchProviderProfiles,
+  PROVIDER_PROFILE_DRAFT_ID,
   PROVIDER_PROFILE_QUERY_KEY,
   ProviderProfilesManager,
   type ProviderProfile,
@@ -25,6 +27,7 @@ import {
   SettingsDraftGuardProvider,
   useSettingsDraftGuard,
 } from '../components/settings/SettingsDraftGuard';
+import { responseError } from '../lib/api/client';
 import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
@@ -173,7 +176,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
       const response = await fetch('/api/v1/secrets', {
         headers: { Accept: 'application/json' },
       });
-      if (!response.ok) throw new Error(`Failed to fetch secrets: ${response.statusText}`);
+      if (!response.ok) throw await responseError(response, 'Failed to fetch secrets');
       return response.json();
     },
     enabled: canReadSecretMetadata,
@@ -181,15 +184,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
 
   const providerProfilesQuery = useQuery<ProviderProfile[]>({
     queryKey: PROVIDER_PROFILE_QUERY_KEY,
-    queryFn: async () => {
-      const response = await fetch('/api/v1/provider-profiles', {
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to fetch provider profiles: ${response.statusText}`);
-      }
-      return response.json();
-    },
+    queryFn: fetchProviderProfiles,
     enabled: canReadProviderProfiles,
   });
 
@@ -230,7 +225,9 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
         return next;
       });
       setNotice(null);
-    }, 'Change the Harness filter? Your unsaved Provider Profile draft will be discarded.');
+    }, 'Change the Harness filter? Your unsaved Provider Profile draft will be discarded.', [
+      PROVIDER_PROFILE_DRAFT_ID,
+    ]);
   };
 
   return (
