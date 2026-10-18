@@ -372,3 +372,105 @@ describe('workflow detail elapsed time', () => {
     expect(screen.getByText('1m 0s')).toBeTruthy();
   });
 });
+
+describe('workflow detail status vocabularies', () => {
+  function unknownStatusWarnings(warn: MockInstance) {
+    return warn.mock.calls.filter(([message]) => /^Unknown .*status/.test(String(message)));
+  }
+
+  it('labels checkpoint branch, branch turn and step check statuses without warnings', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    window.history.pushState({}, '', '/workflows/test-123/steps?source=temporal');
+    const snapshot = {
+      ...stepsSnapshot,
+      steps: stepsSnapshot.steps.map((step) => (
+        step.logicalStepId === 'apply'
+          ? {
+            ...step,
+            stateCheckpointRef: 'artifact://checkpoint-apply',
+            checks: [
+              { kind: 'approval_policy', status: 'passed', summary: null, retryCount: 0, artifactRef: null },
+              { kind: 'moonspec_gate_contract', status: 'inconclusive', summary: null, retryCount: 0, artifactRef: null },
+            ],
+          }
+          : step
+      )),
+    };
+    const branch = (branchId: string, label: string, state: string) => ({
+      branchId,
+      workflowId: 'test-123',
+      sourceRunId: '02-run',
+      logicalStepId: 'apply',
+      sourceExecutionOrdinal: 1,
+      sourceCheckpointBoundary: 'after_execution',
+      sourceCheckpointRef: 'artifact://checkpoint-apply',
+      label,
+      state,
+      workspacePolicy: 'apply_previous_execution_diff_to_clean_baseline',
+      runtimeContextPolicy: 'fresh_agent_run',
+      artifactRefs: {},
+      createdAt: '2026-04-09T00:01:00Z',
+      updatedAt: '2026-04-09T00:02:00Z',
+    });
+    routeFetch({
+      [DETAIL_URL]: () => jsonResponse({ ...baseExecution, stepsHref: STEPS_URL }),
+      [STEPS_URL]: () => jsonResponse(snapshot),
+      '/api/executions/test-123/checkpoint-branches': () => jsonResponse({
+        items: [branch('branch-a', 'Promotable branch', 'promotable'), branch('branch-b', 'Active branch', 'active')],
+      }),
+      '/api/executions/test-123/checkpoint-branches/branch-a/turns': () => jsonResponse({
+        items: [{
+          branchTurnId: 'turn-a-1',
+          branchId: 'branch-a',
+          instructionRef: 'art-instructions-a',
+          instructionDigest: 'sha256:a',
+          sourceCheckpointRef: 'artifact://checkpoint-apply',
+          idempotencyKey: 'idem-turn-a',
+          status: 'succeeded',
+          createdAt: '2026-04-09T00:01:00Z',
+          updatedAt: '2026-04-09T00:02:00Z',
+        }],
+      }),
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={detailPayload()} />);
+
+    expect(await screen.findByText('Promotable')).toBeTruthy();
+    expect(screen.getByText('Active')).toBeTruthy();
+    expect(await screen.findByText('Succeeded')).toBeTruthy();
+    expect(screen.getByText('approval policy: Passed')).toBeTruthy();
+    expect(screen.getByText('moonspec gate contract: Inconclusive')).toBeTruthy();
+    expect(unknownStatusWarnings(warn)).toEqual([]);
+  });
+
+  it('labels prerequisite and dependent outcomes without warnings', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    window.history.pushState({}, '', '/workflows/test-123/overview?source=temporal');
+    routeFetch({
+      [DETAIL_URL]: () => jsonResponse({
+        ...baseExecution,
+        hasDependencies: true,
+        dependsOn: ['dep-1', 'dep-2', 'dep-3'],
+        prerequisites: [
+          { workflowId: 'dep-1', title: 'Timed out prerequisite', state: 'failed' },
+          { workflowId: 'dep-2', title: 'Bypassed prerequisite', state: 'executing' },
+          { workflowId: 'dep-3', title: 'Terminated prerequisite', state: 'canceled' },
+        ],
+        dependencyOutcomes: [
+          { workflowId: 'dep-1', terminalState: 'timed_out', resolution: 'waiting_for_successful_rerun', failureCount: 1 },
+          { workflowId: 'dep-2', terminalState: 'bypassed' },
+          { workflowId: 'dep-3', terminalState: 'terminated' },
+        ],
+        dependents: [{ workflowId: 'child-1', title: 'Downstream run', state: null }],
+      }),
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={detailPayload()} />);
+
+    expect(await screen.findByText('Waiting for rerun')).toBeTruthy();
+    expect(screen.getByText('Bypassed')).toBeTruthy();
+    expect(screen.getByText('Terminated')).toBeTruthy();
+    expect(screen.getByText('Unknown')).toBeTruthy();
+    expect(unknownStatusWarnings(warn)).toEqual([]);
+  });
+});
