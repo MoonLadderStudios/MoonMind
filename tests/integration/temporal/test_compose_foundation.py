@@ -16,9 +16,10 @@ MOUNTED_TOOL_PATH = (
 # Shared static-host image expression (MoonLadderStudios/MoonMind#3834): both
 # static rows and both init services must reference this exact string.
 SHARED_STATIC_HOST_IMAGE = (
-    "${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-"
+    "${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE_REF:-"
+    "${OMNIGENT_SHARED_HOST_IMAGE:-"
     "ghcr.io/moonladderstudios/omnigent-host-moonmind}:"
-    "${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}"
+    "${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}}"
 )
 GENERIC_STATIC_ENTRYPOINT = ["/opt/moonmind/start-omnigent-host.sh"]
 GENERIC_STATIC_HEALTHCHECK = {
