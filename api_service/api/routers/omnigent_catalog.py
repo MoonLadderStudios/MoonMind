@@ -387,8 +387,13 @@ _REASONS: dict[str, tuple[str, str]] = {
         "deployment policy reconciliation completes.",
         "/settings#omnigent",
     ),
+    # Also reported while the agent runtime worker is not ready: that worker
+    # proves the enforced egress networks, so their absence is not yet a
+    # network configuration problem.
     "on_demand_backend_unavailable": (
-        "Enable the trusted container backend and worker route.",
+        "The agent runtime worker or trusted container backend is not ready. "
+        "MoonMind retries automatically; if this persists, check that the "
+        "container backend is enabled and the agent runtime worker is running.",
         "/settings#system",
     ),
     "static_host_not_ready": (
@@ -1390,10 +1395,16 @@ async def get_omnigent_codex_catalog_readiness(
             if (
                 not policy.enforced_egress
                 or not policy.network_ref
-                or policy.network_ref not in live_readiness.enforced_network_refs
+                or (
+                    live_readiness.backend_ready
+                    and policy.network_ref not in live_readiness.enforced_network_refs
+                )
             ):
                 policy_reasons.append(_reason("network_policy_unavailable"))
-            if policy.host_mode == "on_demand_docker" and not backend_ready:
+            if not backend_ready and (
+                policy.host_mode == "on_demand_docker"
+                or not live_readiness.backend_ready
+            ):
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
             if (
                 policy.host_mode == "static_compose"
@@ -1432,14 +1443,16 @@ async def get_omnigent_codex_catalog_readiness(
                 for field in ("serverImageRef", "hostImageRef")
             ):
                 policy_reasons.append(_reason("immutable_image_unavailable"))
-            if (
+            if live_readiness.backend_ready and (
                 network.get("attachmentRef") not in live_readiness.enforced_network_refs
                 or network.get("egressProfileRef")
                 not in live_readiness.enforced_egress_profile_refs
             ):
                 policy_reasons.append(_reason("network_policy_unavailable"))
             host_mode = str(host.get("mode") or "")
-            if host_mode == "on_demand_docker" and not backend_ready:
+            if not backend_ready and (
+                host_mode == "on_demand_docker" or not live_readiness.backend_ready
+            ):
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
             if (
                 host_mode == "static_compose"

@@ -768,6 +768,40 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
     assert "only writer recreated" in result["attempts"][0]["error"]
 
 
+def test_exhausted_apply_records_resumed_single_image_consumers(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    services = ["temporal-worker-agent-runtime", "temporal-worker-artifacts", "postgres", "minio"]
+    op = _begin_op(record, store, {"project": "moonmind-test",
+        "projectDir": str(tmp_path), "composeFiles": ["docker-compose.yaml"],
+        "services": services})
+    store.record_journal_transition(op["operationId"], {"sourceImages": ["sha256:source"]})
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if "up" in args and "--no-recreate" not in args:
+                return {"exit": 1, "output": "container moonmind-api-1 is unhealthy"}
+            return {"exit": 0, "output": ""}
+
+    def helper(store, operation, **kwargs):
+        if kwargs["phase"] == "journal-prepare":
+            return {"status": "prepared"}
+        return {"status": "resumed", "consumers": ["writer", "sweeper"],
+                "image": "sha256:desired"}
+
+    monkeypatch.setattr(server.engine, "subprocess_runner", Runner)
+    monkeypatch.setattr(server, "run_omnigent_step", helper)
+    result = server._apply_recording_failure(store, op["operationId"],
+        lambda operation: server.production_apply(store, operation))
+    assert result["status"] == "failed"
+    assert result["autoAttemptsExhausted"] is True
+    assert result["reportingFailures"] == []
+    assert result["journalTransition"]["receipt"]["status"] == "resumed"
+
+
 def test_journal_oneoff_runs_recorded_source_with_controller_transport(
     controller_path, tmp_path
 ):

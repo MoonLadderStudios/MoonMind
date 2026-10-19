@@ -2034,6 +2034,24 @@ def test_catalog_fails_closed_on_live_service_readiness(
     assert expected in {reason["code"] for reason in body["gateReasons"]}
 
 
+def test_catalog_blames_unready_worker_not_egress_configuration(monkeypatch):
+    # The agent runtime worker reports the enforced networks. While it is
+    # down they are unknown, not misconfigured: report a recoverable worker
+    # reason so the start page keeps polling instead of asking for config.
+    app = _app(monkeypatch, session=_Session([_profile()]))
+
+    async def readiness():
+        return catalog.LiveDeploymentReadiness(endpoint_ready=True, backend_ready=False)
+
+    monkeypatch.setattr(catalog, "_live_deployment_readiness", readiness)
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    codes = {reason["code"] for reason in body["gateReasons"]}
+    assert body["available"] is False
+    assert "on_demand_backend_unavailable" in codes
+    assert "network_policy_unavailable" not in codes
+
+
 def test_catalog_reports_stale_persisted_observation_without_blocking_launch(
     monkeypatch,
 ):
