@@ -803,6 +803,13 @@ bridge session remain recovery data and are excluded from expiry and destructive
 deletion. Once that session is terminal, ordinary retention applies. Pins and
 live use claims continue to protect all artifact classes.
 
+Read-use observations isolate optional claim writes in savepoints. A recoverable
+database write failure preserves the caller's work and artifact data; failed
+release leaves the committed claim protected until its TTL. Connection loss,
+outer-transaction failure and transaction-control errors propagate rather than
+returning bytes with an unusable session. Successful observations retain their
+existing durable commit.
+
 Omnigent commits each complete replacement journal pair before reclaiming its
 superseded numbered prefixes. The replacement retains the accumulated events;
 the existing artifact service owns tombstones, physical deletion and persisted
