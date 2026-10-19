@@ -777,6 +777,7 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
     try:
         for key, value in {
             "OMNIGENT_ENABLED": "1",
+            "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "false",
             "OMNIGENT_SERVER_URL": running.base_url,
             "MOONMIND_OMNIGENT_HOST_SERVER_URL": running.base_url,
             "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": "codex-journey-owner",

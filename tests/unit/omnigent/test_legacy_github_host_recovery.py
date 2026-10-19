@@ -481,6 +481,15 @@ async def test_turn_reactivation_during_capture_retains_host_and_save(
     tmp_path, monkeypatch
 ):
     fixture = await _recovery_fixture(tmp_path, monkeypatch)
+    saved_indexes = []
+    write = fixture.artifacts.write_bytes
+
+    async def record_write(**kwargs):
+        if kwargs.get("name") == "saved_work_manifest":
+            saved_indexes.append(kwargs)
+        return await write(**kwargs)
+
+    monkeypatch.setattr(fixture.artifacts, "write_bytes", record_write)
 
     async def reactivate(phase, checkpoint):
         if phase == "waiting" and checkpoint:
@@ -494,6 +503,7 @@ async def test_turn_reactivation_during_capture_retains_host_and_save(
     assert fixture.state["running"] and fixture.state["present"]
     assert ("docker", "stop") not in fixture.state["events"]
     assert fixture.row.metadata_["githubCredentialRecovery"]["checkpoint"]["archiveRef"]
+    assert saved_indexes == []
 
 
 @pytest.mark.asyncio
@@ -819,15 +829,27 @@ async def test_uncertain_stop_retry_saves_last_write_before_recreation(
     import tarfile
 
     fixture = await _recovery_fixture(tmp_path, monkeypatch)
+    saved_indexes = []
+    write = fixture.artifacts.write_bytes
+
+    async def record_write(**kwargs):
+        if kwargs.get("name") == "saved_work_manifest":
+            saved_indexes.append(kwargs)
+        return await write(**kwargs)
+
+    monkeypatch.setattr(fixture.artifacts, "write_bytes", record_write)
     fixture.state["stop_write"] = "last write while stop settled\n"
     fixture.state["stop_error"] = RuntimeError("Docker transport response lost")
     with pytest.raises(OmnigentOAuthHostError):
         await fixture.new_runtime()._launch_on_demand(**fixture.args)
     assert fixture.state["present"] and not fixture.state["running"]
     assert ("docker", "rm") not in fixture.state["events"]
+    assert saved_indexes == []
     fixture.state["stop_error"] = None
     await fixture.new_runtime()._launch_on_demand(**fixture.args)
+    assert len(saved_indexes) == 1
     saved = fixture.row.metadata_["githubCredentialRecovery"]["checkpoint"]
+    assert saved["savedWorkRef"]
     with tarfile.open(
         fileobj=io.BytesIO(await fixture.artifacts.read_bytes(saved["archiveRef"]))
     ) as archive:

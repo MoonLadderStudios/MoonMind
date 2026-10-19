@@ -687,9 +687,11 @@ class TemporalExecutionService:
         )
 
     async def _query_step_ledger_rows(
-        self, workflow_id: str
+        self, workflow_id: str, run_id: str | None
     ) -> list[Mapping[str, Any]]:
-        handle = await self._client_adapter.get_workflow_handle(workflow_id)
+        handle = await self._client_adapter.get_workflow_handle(
+            workflow_id, run_id=run_id
+        )
         payload = await asyncio.wait_for(
             handle.query("get_step_ledger"),
             timeout=_REMEDIATION_STEP_LEDGER_QUERY_TIMEOUT_SECONDS,
@@ -3394,8 +3396,10 @@ class TemporalExecutionService:
 
         from moonmind.workflows.temporal.retry_from_step import (
             RetryFromStepUnavailable,
+            accepted_retry_step,
             plan_retry_from_step,
             replay_failure_before_reset,
+            retry_reset_reason,
         )
 
         reject_historical_control(record)
@@ -3408,8 +3412,11 @@ class TemporalExecutionService:
             cached = record.last_update_response
             if isinstance(cached, dict) and cached.get("retryFromStep"):
                 return dict(cached)
-        source_run_id = str(record.run_id or "").strip()
-        if expected_run_id and expected_run_id != source_run_id:
+        record_run_id = str(record.run_id or "").strip()
+        source_run_id = str(expected_run_id or "").strip() or record_run_id
+        # A run id that moved on may be this request's own retry, accepted by
+        # Temporal before its response was saved; only that is recovered.
+        if source_run_id != record_run_id and not idempotency_key:
             raise TemporalExecutionTargetRunChangedError(
                 "The run changed before the retry was requested; reload the workflow."
             )
@@ -3422,35 +3429,82 @@ class TemporalExecutionService:
                 "history_unavailable",
                 "Temporal could not describe this run; retry when it is reachable.",
             ) from exc
-        if str(description.run_id or "") != source_run_id:
-            raise TemporalExecutionTargetRunChangedError(
-                "A newer run of this workflow exists; reload the workflow."
-            )
-        if description.status not in {
-            WorkflowExecutionStatus.FAILED,
-            WorkflowExecutionStatus.CANCELED,
-            WorkflowExecutionStatus.TERMINATED,
-            WorkflowExecutionStatus.TIMED_OUT,
-        }:
-            raise TemporalExecutionRetryUnavailableError(
-                "run_not_failed",
-                "Only a failed, canceled, terminated, or timed-out run can be retried.",
-            )
-        if getattr(description, "parent_id", None):
-            raise TemporalExecutionRetryUnavailableError(
-                "child_workflow",
-                "This run belongs to a parent workflow, which owns its retries.",
-            )
+        current_run_id = str(description.run_id or "")
+        successor_run_id = (
+            current_run_id
+            if current_run_id != source_run_id or source_run_id != record_run_id
+            else None
+        )
+        if successor_run_id is None:
+            if description.status not in {
+                WorkflowExecutionStatus.FAILED,
+                WorkflowExecutionStatus.CANCELED,
+                WorkflowExecutionStatus.TERMINATED,
+                WorkflowExecutionStatus.TIMED_OUT,
+            }:
+                raise TemporalExecutionRetryUnavailableError(
+                    "run_not_failed",
+                    "Only a failed, canceled, terminated, or timed-out run can be "
+                    "retried.",
+                )
+            if getattr(description, "parent_id", None):
+                raise TemporalExecutionRetryUnavailableError(
+                    "child_workflow",
+                    "This run belongs to a parent workflow, which owns its retries.",
+                )
         try:
             history = await self._client_adapter.fetch_workflow_history(
                 record.workflow_id, run_id=source_run_id
             )
         except Exception as exc:
+            if successor_run_id is not None:
+                raise TemporalExecutionTargetRunChangedError(
+                    "A newer run of this workflow exists; reload the workflow."
+                ) from exc
             raise TemporalExecutionRetryUnavailableError(
                 "history_unavailable",
                 "The run's Temporal history is unavailable, so it cannot be retried "
                 "from a step; rerun it instead.",
             ) from exc
+        decode_memo_value = (
+            MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payload
+        )
+        if successor_run_id is not None:
+            accepted = None
+            if current_run_id and current_run_id != source_run_id:
+                try:
+                    successor = await self._client_adapter.fetch_workflow_history(
+                        record.workflow_id, run_id=current_run_id
+                    )
+                except Exception:
+                    successor = None
+                if successor is not None:
+                    accepted = accepted_retry_step(
+                        successor_events=successor.events,
+                        source_events=history.events,
+                        ledger_rows=ledger_rows,
+                        source_run_id=source_run_id,
+                        request_id=idempotency_key,
+                        decode_memo_value=decode_memo_value,
+                    )
+            if accepted is None:
+                raise TemporalExecutionTargetRunChangedError(
+                    "A newer run of this workflow exists; reload the workflow."
+                )
+            logger.info(
+                "Retry %s of %s was accepted as run %s before its response was saved",
+                idempotency_key,
+                record.workflow_id,
+                current_run_id,
+            )
+            return await self._save_retry_response(
+                record,
+                idempotency_key=idempotency_key,
+                new_run_id=current_run_id,
+                source_run_id=source_run_id,
+                step_id=accepted.logical_step_id,
+                title=accepted.title,
+            )
         memo = dict(record.memo or {})
         finish_summary = getattr(record, "finish_summary_json", None)
         if not isinstance(finish_summary, Mapping):
@@ -3467,7 +3521,7 @@ class TemporalExecutionService:
             plan = plan_retry_from_step(
                 events=history.events,
                 ledger_rows=ledger_rows,
-                decode_memo_value=MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payload,
+                decode_memo_value=decode_memo_value,
                 requested_step_id=step_id,
                 failed_step_id=failed_step_id,
             )
@@ -3493,21 +3547,37 @@ class TemporalExecutionService:
             record.workflow_id,
             run_id=source_run_id,
             workflow_task_finish_event_id=plan.reset_event_id,
-            reason=f"MoonMind retry from step {plan.logical_step_id}",
+            reason=retry_reset_reason(plan.logical_step_id, idempotency_key),
             request_id=idempotency_key,
         )
+        return await self._save_retry_response(
+            record,
+            idempotency_key=idempotency_key,
+            new_run_id=new_run_id,
+            source_run_id=source_run_id,
+            step_id=plan.logical_step_id,
+            title=plan.title,
+        )
+
+    async def _save_retry_response(
+        self,
+        record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+        *,
+        idempotency_key: str,
+        new_run_id: str,
+        source_run_id: str,
+        step_id: str,
+        title: str | None,
+    ) -> dict[str, Any]:
         response = {
             "accepted": True,
             "retryFromStep": True,
             "workflowId": record.workflow_id,
             "runId": new_run_id,
             "sourceRunId": source_run_id,
-            "stepId": plan.logical_step_id,
-            "stepTitle": plan.title,
-            "message": (
-                f"Retrying from {plan.title or plan.logical_step_id}; "
-                "earlier steps are kept."
-            ),
+            "stepId": step_id,
+            "stepTitle": title,
+            "message": f"Retrying from {title or step_id}; earlier steps are kept.",
         }
         if idempotency_key:
             record.last_update_idempotency_key = idempotency_key

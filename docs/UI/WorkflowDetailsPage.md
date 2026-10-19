@@ -203,7 +203,7 @@ The **Retry from failed step** action and the **Retry** panel are present when `
 Retry behavior:
 
 - Does not open an editing form and keeps the original input, plan, and execution choices.
-- Restarts the failed step by default. The panel's **Restart from** selector can choose an earlier step that started; its button then reads **Retry from selected step**.
+- Restarts the earliest failed step by default. The panel's **Restart from** selector can choose an earlier step that started; its button then reads **Retry from selected step**.
 - Sends `POST /api/executions/{workflowId}/retry-from-step` with the run the page shows as `sourceRunId`.
 - Keeps the `workflowId`, so the page follows the Workflow to its new run. Earlier steps keep their results.
 - Shows the backend's reason when retry is refused, such as a released issue claim or a history that no longer replays on the installed MoonMind version.

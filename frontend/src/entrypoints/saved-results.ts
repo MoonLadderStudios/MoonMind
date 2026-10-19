@@ -387,18 +387,27 @@ export function defaultSavedWorkDestination(
   execution: SavedResultExecutionLike,
   workflowId: string,
   allowedModes: readonly SavedWorkObjective[] = SAVED_WORK_OBJECTIVES,
+  entry?: SavedResultEntry,
 ): SavedWorkDestinationDraft {
   // Derive the destination the execution already determines; the operator
   // edits it through the form rather than declaring it from scratch.
   const fields = execution as Record<string, unknown>;
   const publishMode = text(fields.publishMode ?? fields.publish_mode).toLowerCase();
   const objective: SavedWorkObjective = publishMode === 'branch' ? 'branch' : 'pr';
+  // Generic saved work has a snapshot but no recorded Git baseline. Only
+  // default to replaying a delta when the selected save actually provides it.
+  const unit = entry?.savedWork;
+  const hasUsableDelta = unit?.formats.some(
+    (claim) => claim.format === 'exact_baseline_delta' && USABLE_FORMAT_STATUSES.has(claim.status),
+  ) && unit.parts.some(
+    (part) => part.role === 'delta' && part.present && part.complete && !part.expired && !part.restricted,
+  );
   return {
     repository: text(fields.repository),
     objective: allowedModes.includes(objective) ? objective : allowedModes[0] ?? objective,
     baseBranch: text(fields.startingBranch ?? fields.starting_branch),
     headBranch: `saved-work/${branchSlug(workflowId) || 'result'}`,
-    strategy: 'baseline_delta',
+    strategy: hasUsableDelta ? 'baseline_delta' : 'additive_import',
     pullRequestTitle: '',
   };
 }

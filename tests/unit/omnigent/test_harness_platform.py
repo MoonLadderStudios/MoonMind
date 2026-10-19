@@ -1172,8 +1172,13 @@ def test_quarantined_harness_no_credentials():
 
 
 # AC 23: Existing Codex workflows continue through current realizer without reduced behavior
-def test_codex_continuity_preserved():
-    # Codex profile should compile with codex-profile-bound@1 realizer and still work
+@pytest.mark.parametrize("legacy_default", [False, True])
+def test_codex_continuity_preserved(monkeypatch, legacy_default):
+    # The old Profile format remains usable under either supported selection.
+    if legacy_default:
+        monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    else:
+        monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", raising=False)
     catalog = make_catalog()
     profile_v1 = {
         "endpointRef": "default",
@@ -1233,7 +1238,9 @@ def test_codex_continuity_preserved():
         model_route_ref="openai",
         model_normalized_options={},
     )
-    assert envelope.payload.executionRealizerRef == "codex-profile-bound@1"
+    assert envelope.payload.executionRealizerRef == (
+        "codex-profile-bound@1" if legacy_default else "generic-omnigent-host@1"
+    )
     assert envelope.payload.harnessId == "codex-native"
 
 

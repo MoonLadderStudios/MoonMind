@@ -67,6 +67,8 @@ INTEGRATION_LANE_EXACT = {
     "tools/first_run_journey_3938.sh": JOURNEY_LANES,
     "tools/single_user_journey_checks.py": JOURNEY_LANES,
     "tools/single_user_journey_browser.mjs": JOURNEY_LANES,
+    "tools/single_user_journey_provider.py": ("fresh-journey", "upgrade-journey"),
+    "tools/single_user_journey_cutover.py": ("upgrade-journey",),
 }
 OWNERSHIP_FULL_EXACT = {
     "tools/verify_test_shard_ownership.py",
@@ -235,6 +237,8 @@ INTEGRATION_CI_EXACT = {
     # the served dashboard) must select that job.
     "tools/first_run_journey_3938.sh",
     "tools/single_user_journey_checks.py",
+    "tools/single_user_journey_provider.py",
+    "tools/single_user_journey_cutover.py",
     "tools/single_user_journey_browser.mjs",
     "api_service/api/routers/executions.py",
     "api_service/api/routers/temporal_artifacts.py",

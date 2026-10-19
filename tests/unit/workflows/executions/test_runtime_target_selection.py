@@ -60,7 +60,7 @@ def _settings(default_runtime: str = "omnigent") -> SimpleNamespace:
 
 @pytest.mark.parametrize("surface", _REQUIRED_SURFACES)
 def test_every_authoring_surface_receives_the_same_promoted_default(surface):
-    policy = _policy({_CODEX_GATE: "true"})
+    policy = _policy()
     selection = resolve_runtime_target_selection(
         surface=surface, workflow_settings=_settings(), policy=policy
     )
@@ -184,9 +184,9 @@ def test_unknown_surface_fails_fast():
 
 
 def test_default_follows_the_rollout_policy_not_a_literal():
-    # Before Codex generic promotion the legacy profile-bound row is the
-    # promoted Omnigent target, so the canonical runtime id is still omnigent.
-    unpromoted = _policy({})
+    # Explicit compatibility policy selects the legacy row without changing
+    # the canonical Omnigent runtime identity.
+    unpromoted = _policy({_CODEX_GATE: "false"})
     assert resolve_default_runtime_id(policy=unpromoted) == "omnigent"
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create, policy=unpromoted
@@ -260,7 +260,7 @@ def test_authored_runtime_wins_over_the_profile_route():
 
 
 def test_claude_and_opencode_promotion_is_independent():
-    policy = _policy({_CLAUDE_GATE: "true"})
+    policy = _policy({_CLAUDE_GATE: "true", _CODEX_GATE: "false"})
     catalog = resolve_runtime_target_catalog(policy=policy)
     states = {view.target_id: view.rollout_state for view in catalog}
     assert states["claude.generic-omnigent"] is RolloutState.explicit_only

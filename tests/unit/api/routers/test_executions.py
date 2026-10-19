@@ -17553,6 +17553,20 @@ def test_retry_from_step_capability_is_withheld_with_a_reason(
     assert actions["disabledReasons"]["canRetryFromStep"] == reason
 
 
+def test_retry_from_step_capability_follows_the_submission_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retry route requires submission, so the capability must not offer it."""
+
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", False)
+    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+
+    actions = _serialize_execution(record).actions.model_dump(by_alias=True)
+
+    assert actions["canRetryFromStep"] is False
+    assert actions["disabledReasons"]["canRetryFromStep"] == "temporal_submit_disabled"
+
+
 def _retry_route_app(mock_service: AsyncMock) -> tuple[FastAPI, AsyncMock]:
     app = FastAPI()
     app.include_router(router)

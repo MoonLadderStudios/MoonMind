@@ -2695,6 +2695,87 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByText('Retrying from Plan work; earlier steps are kept.')).toBeTruthy();
   });
 
+  it.each([
+    {
+      // The run started 'verify' (Temporal history records it) but failed
+      // before the ledger set startedAt.
+      name: 'offers a failed step the ledger never marked started',
+      statuses: { plan: 'completed', apply: 'completed', verify: 'failed' },
+      verifyStartedAt: null,
+      options: ['plan', 'apply', 'verify'],
+      selected: 'verify',
+    },
+    {
+      // A reset after the earlier failure would replay it.
+      name: 'defaults to the earliest failure when the plan continued past it',
+      statuses: { plan: 'failed', apply: 'completed', verify: 'failed' },
+      verifyStartedAt: '2026-04-09T00:00:04Z',
+      options: ['plan'],
+      selected: 'plan',
+    },
+  ])('retry panel $name', async ({ statuses, verifyStartedAt, options, selected }) => {
+    window.history.pushState({}, 'Retry Panel Test', '/workflows/test-123/steps?source=temporal');
+    const failedStepsSnapshot = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) => ({
+        ...step,
+        status: statuses[step.logicalStepId as keyof typeof statuses],
+        startedAt: step.logicalStepId === 'verify' ? verifyStartedAt : step.startedAt,
+      })),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Retry task',
+      summary: 'Needs a retry',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      retryFromStep: { available: true, failedStepId: 'verify', sourceRunId: '02-run' },
+      actions: { canRetryFromStep: true },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => failedStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(
+      <WorkflowDetailPage
+        payload={{
+          page: 'workflow-detail',
+          apiBase: '/api',
+          initialData: {
+            dashboardConfig: {
+              pollIntervalsMs: { detail: 1 },
+              features: { temporalDashboard: { actionsEnabled: true } },
+            },
+          },
+        }}
+      />,
+    );
+
+    const select = (await screen.findByLabelText('Restart from')) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(Array.from(select.options).map((option) => option.value)).toEqual(options);
+    });
+    expect(select.value).toBe(selected);
+  });
+
   it('MM-801 renders Execution as the focused step ledger and run history route', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     mockWorkflowDetailSubrouteFetch();

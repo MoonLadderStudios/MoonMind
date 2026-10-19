@@ -58,6 +58,9 @@ from moonmind.omnigent.harness_platform.support import KNOWN_REALIZERS
 from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.realizers.turn_delivery import canonical_turn_source
+from moonmind.omnigent.runtime_provider_rollout import (
+    default_runtime_provider_rollout_policy,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
@@ -117,7 +120,7 @@ async def turn_commands(session_factory):
 
 
 def _codex_execution_plan():
-    """Compile the same immutable plan the trusted planner produces for Codex."""
+    """Compile retained profile-bound authority for the realizer exercised here."""
 
     digest = "sha256:" + "e" * 64
     catalog = create_catalog_snapshot(
@@ -254,6 +257,11 @@ def _codex_execution_plan():
         model_effort=None,
         model_route_ref="openai",
         model_normalized_options={},
+        # Only admission selects compatibility; later dispatch uses the recorded
+        # plan without changing the ordinary generic default for other tests.
+        rollout_policy=default_runtime_provider_rollout_policy(
+            env={"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "false"}
+        ),
     )
     assert plan.payload.executionRealizerRef == CodexProfileBoundRealizer.ref
     return plan
