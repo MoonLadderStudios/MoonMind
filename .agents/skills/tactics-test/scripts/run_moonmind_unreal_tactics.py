@@ -55,10 +55,9 @@ _NO_TESTS_PATTERN = re.compile(
 _FAILED_TEST_PATTERN = re.compile(r"Test Completed\. Result=\{Fail", re.IGNORECASE)
 
 
-def _test_log_outcome(log_path: Path) -> tuple[str, str]:
+def _test_log_outcome(text: str) -> tuple[str, str]:
     """Classify a zero-exit test phase from its log; exit 0 alone is not success."""
 
-    text = log_path.read_text(encoding="utf-8", errors="replace")
     if _FAILED_TEST_PATTERN.search(text):
         return "fail", "Automation test reported a failed result"
     if _NO_TESTS_PATTERN.search(text):
@@ -210,7 +209,13 @@ def _source_state(repo: Path, results_dir: Path, gate_path: Path) -> str | None:
         return None
 
 
-def _outcome(result: dict[str, Any], phase: str, log_path: Path) -> tuple[str, str]:
+def _outcome(
+    result: dict[str, Any],
+    phase: str,
+    log_path: Path,
+    *,
+    output_relative_path: str | None = None,
+) -> tuple[str, str]:
     if not result.get("job_id"):
         return "incomplete", "No authoritative container-job receipt is available"
     state = result.get("state")
@@ -224,7 +229,32 @@ def _outcome(result: dict[str, Any], phase: str, log_path: Path) -> tuple[str, s
     if not log_path.is_file():
         return "incomplete", f"{phase.title()} log evidence is unavailable"
     if phase == "test":
-        return _test_log_outcome(log_path)
+        artifacts = [
+            artifact
+            for artifact in result.get("artifacts", [])
+            if artifact.get("name") == "test-log"
+            and artifact.get("relativePath") == output_relative_path
+            and artifact.get("collectionStatus") == "collected"
+            and artifact.get("artifactRef")
+            and re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256") or "")
+        ]
+        if len(artifacts) != 1:
+            detail = (
+                result.get("artifact_error") or "collected test-log hash is unavailable"
+            )
+            return (
+                "incomplete",
+                f"Test artifact integrity evidence is unavailable: {detail}",
+            )
+        # Classify exactly the bytes checked against the owner-held manifest,
+        # not a second read of the mutable workspace file.
+        payload = log_path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != artifacts[0]["sha256"]:
+            return (
+                "incomplete",
+                "Test log integrity mismatch with the job's collected artifact",
+            )
+        return _test_log_outcome(payload.decode("utf-8", errors="replace"))
     return "pass", ""
 
 
@@ -317,7 +347,7 @@ def main() -> int:
         if not results_dir.is_relative_to((repo / results_subdir).resolve()):
             raise ValueError("--resume must name this repository's results directory")
         previous = json.loads((results_dir / "gate.json").read_text(encoding="utf-8"))
-        run_id = previous["runId"]
+        run_id = previous.get("runId")
     gate: dict[str, Any] = {
         "status": "INCOMPLETE",
         "reason": "Run started; no terminal result recorded",
@@ -341,6 +371,10 @@ def main() -> int:
         # gate and logs rather than modifying old timestamped evidence.
         gate_path.parent.mkdir(parents=True, exist_ok=True)
         _write_gate(gate_path, gate)
+    if args.resume:
+        identity = re.fullmatch(r"\d{8}T\d{6}Z-([0-9a-f]{32})", results_dir.name)
+        if identity is None or run_id != identity.group(1):
+            raise ValueError("Resume run identity does not match the results directory")
     if not repo.is_relative_to(root):
         raise ValueError(f"--repo is outside the admitted managed workspace: {root}")
     uproject = _relative_path(args.uproject, field="--uproject")
@@ -367,9 +401,6 @@ def main() -> int:
             "Resume candidate does not match current source, session, "
             "or requested phases/options; start a new run"
         )
-    if args.resume:
-        gate.update(previous)
-        gate.update(status="INCOMPLETE", reason="Resuming current run evidence")
     gate["candidate"] = candidate
     for phase in ("build", "test"):
         if phase not in specs:
@@ -396,34 +427,28 @@ def main() -> int:
         if phase not in specs:
             gate[f"{phase}Status"] = "skipped"
             continue
-        result: dict[str, Any] = {}
-        old_log = previous.get(f"{phase}Log")
-        old_result = previous.get(f"{phase}Result")
-        if old_log and old_result:
-            try:
-                result = json.loads(Path(old_result).read_text(encoding="utf-8"))
-                status, reason = _outcome(result, phase, Path(old_log))
-            except (OSError, ValueError):
-                status = "incomplete"
-        else:
-            status = "incomplete"
-        if status == "incomplete":
-            log_path = (
-                test_log
-                if phase == "test"
-                else results_dir / f"build-{uuid4().hex}.log"
-            )
-            result_path = results_dir / f"{phase}-{uuid4().hex}.result.json"
-            result = _run_job(
-                specs[phase],
-                request_id=f"tactics-{phase}-{run_id}",
-                log_path=log_path,
-                dry_run=False,
-            )
-            _write_gate(result_path, result)
-            status, reason = _outcome(result, phase, log_path)
-        else:
-            log_path, result_path = Path(old_log), Path(old_result)
+        # The local gate and saved observations are navigation aids, not an
+        # authority for execution or artifact integrity. Reconcile through the
+        # existing job owner on every resume; its request ID prevents reruns.
+        log_path = (
+            test_log if phase == "test" else results_dir / f"build-{uuid4().hex}.log"
+        )
+        result_path = results_dir / f"{phase}-{uuid4().hex}.result.json"
+        result = _run_job(
+            specs[phase],
+            request_id=f"tactics-{phase}-{run_id}",
+            log_path=log_path,
+            dry_run=False,
+        )
+        _write_gate(result_path, result)
+        status, reason = _outcome(
+            result,
+            phase,
+            log_path,
+            output_relative_path=(
+                specs[phase]["outputs"][0]["relativePath"] if phase == "test" else None
+            ),
+        )
         gate[f"{phase}Status"] = status
         gate[f"{phase}Log"] = str(log_path)
         gate[f"{phase}Result"] = str(result_path)

@@ -18,6 +18,7 @@ Documentation wording itself is reviewed, not unit tested.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -99,6 +100,15 @@ def test_managed_gate_omits_skipped_phase_logs(tmp_path: Path, monkeypatch) -> N
                 "artifacts_ref": "artifact:outputs",
                 "log_tail": [line],
                 "log_error": None,
+                "artifacts": [
+                    {
+                        **output,
+                        "artifactRef": "artifact:test-log",
+                        "collectionStatus": "collected",
+                        "sha256": hashlib.sha256(Path(log_path).read_bytes()).hexdigest(),
+                    }
+                    for output in spec.get("outputs", [])
+                ],
             }
 
         module._run_job = _fake_run_job  # type: ignore[attr-defined]
