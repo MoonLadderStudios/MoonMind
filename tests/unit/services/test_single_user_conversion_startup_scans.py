@@ -18,6 +18,7 @@ from api_service.db.models import (
     User,
 )
 from api_service.services import single_user_conversion as conversion
+from moonmind.config.settings import settings
 from moonmind.security import auth_modes_4120
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -248,8 +249,9 @@ async def test_uncertified_completion_does_not_bypass_inventory(
 
 
 @pytest.mark.parametrize("interrupt_repair", [False, True])
-async def test_default_repairs_uncertified_completion_atomically(
-    tmp_path, monkeypatch, interrupt_repair,
+@pytest.mark.parametrize("certified", [False, True])
+async def test_default_repairs_pending_recovery_atomically(
+    tmp_path, monkeypatch, interrupt_repair, certified,
 ):
     monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
 
@@ -269,15 +271,21 @@ async def test_default_repairs_uncertified_completion_atomically(
             noop = AsyncMock(return_value={"recovery_grants": 0, "preserved": 1})
             custom = {**conversion.DEFAULT_SUBSYSTEM_TRANSFORMS, "artifacts": noop}
             first = await conversion.run_guarded_upgrade(
-                session, operator_authorized=True, transforms=custom,
+                session, operator_authorized=True,
+                transforms=None if certified else custom,
             )
             assert first.published
+            if certified:
+                artifact = await session.get(TemporalArtifact, artifact_id)
+                assert artifact.operator_recovery_granted is True
+                artifact.operator_recovery_granted = False
+                await session.commit()
             # Generic explicit custom replay remains idempotent.
             custom_replay = await conversion.run_guarded_upgrade(
                 session, operator_authorized=True, transforms=custom,
             )
             assert custom_replay.digest == first.digest
-            noop.assert_awaited_once()
+            assert noop.await_count == (0 if certified else 1)
             artifact = await session.get(TemporalArtifact, artifact_id)
             assert not artifact.operator_recovery_granted
             with pytest.raises(TemporalArtifactAuthorizationError):
@@ -289,24 +297,23 @@ async def test_default_repairs_uncertified_completion_atomically(
             ).scalar_one()
             original_id = row.id
             original_result = deepcopy(row.result_json)
-            assert not original_result.get("production_transforms_completed")
+            assert bool(original_result.get("production_transforms_completed")) is certified
 
         if interrupt_repair:
             async with maker() as interrupted:
                 engine = interrupted.get_bind()
 
-                def fail_publication(_conn, _cursor, statement, *_args):
-                    if statement.startswith("UPDATE single_user_conversion_runs"):
-                        raise RuntimeError("interrupted repair publication")
+                def fail_publication(_conn):
+                    raise RuntimeError("interrupted repair publication")
 
-                event.listen(engine, "before_cursor_execute", fail_publication)
+                event.listen(engine, "commit", fail_publication)
                 try:
                     with pytest.raises(RuntimeError, match="repair publication"):
                         await conversion.run_guarded_upgrade(
                             interrupted, operator_authorized=True,
                         )
                 finally:
-                    event.remove(engine, "before_cursor_execute", fail_publication)
+                    event.remove(engine, "commit", fail_publication)
             async with maker() as unchanged:
                 artifact = await unchanged.get(TemporalArtifact, artifact_id)
                 assert artifact.operator_recovery_granted is False
@@ -350,8 +357,11 @@ async def test_default_repairs_uncertified_completion_atomically(
             collect.assert_not_awaited()
 
 
-async def test_startup_replay_does_not_grant_new_historical_artifact(
-    tmp_path, monkeypatch,
+@pytest.mark.parametrize(
+    "mode, default_id", [("disabled", "other"), ("oidc", "owner"), ("disabled", "invalid")],
+)
+async def test_startup_converts_later_eligible_artifact(
+    tmp_path, monkeypatch, mode, default_id,
 ):
     monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
     async with database(tmp_path) as maker:
@@ -375,16 +385,132 @@ async def test_startup_replay_does_not_grant_new_historical_artifact(
                 content_type="application/octet-stream",
             )
             new_id = new.artifact_id
+            assert new.operator_recovery_granted is False
+        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", mode)
+        monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", {
+            "owner": owner, "other": str(uuid4()), "invalid": "invalid-uuid",
+        }[default_id])
+        collect = AsyncMock(wraps=conversion.collect_inventory)
+        monkeypatch.setattr(conversion, "collect_inventory", collect)
+        async with maker() as inspected:
+            guard = await conversion.startup_guard_decision(inspected)
+            assert guard.eligible
+            assert collect.await_count == 1
+            row = await inspected.get(TemporalArtifact, new_id)
+            assert row.operator_recovery_granted is False
         async with maker() as restarted:
+            collect.reset_mock()
             again = await conversion.run_guarded_upgrade(
                 restarted, operator_authorized=True,
             )
-            assert again.digest == first.digest
+            assert again.published
+            assert again.digest != first.digest
+            assert collect.await_count == 2
             row = await restarted.get(TemporalArtifact, new_id)
-            assert row.operator_recovery_granted is False
+            assert row.operator_recovery_granted is True
             artifacts = TemporalArtifactService(
                 TemporalArtifactRepository(restarted),
                 store=LocalTemporalArtifactStore(tmp_path / "bytes"),
             )
-            with pytest.raises(TemporalArtifactAuthorizationError):
-                await artifacts.read(artifact_id=new_id, principal="operator")
+            assert (await artifacts.read(
+                artifact_id=new_id, principal="operator",
+            ))[1] == b"later bytes"
+        async with maker() as unchanged:
+            collect.reset_mock()
+            assert (await conversion.run_guarded_upgrade(
+                unchanged, operator_authorized=True,
+            )).published
+            collect.assert_not_awaited()
+
+
+@pytest.mark.parametrize("owner", [
+    None, "unknown_uuid", "another_user", "malformed", "service:",
+    "service:\t", "service:\u00a0", "SERVICE:agent",
+])
+async def test_later_unattributed_artifact_refuses_without_grant(
+    tmp_path, monkeypatch, owner,
+):
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            old_id, _owner = await seed(session)
+            first = await conversion.run_guarded_upgrade(
+                session, operator_authorized=True,
+            )
+            assert first.published
+        async with maker() as writer:
+            if owner in {"unknown_uuid", "another_user"}:
+                if owner == "another_user":
+                    other = User(id=uuid4(), email="another@example.invalid")
+                    writer.add(other)
+                    owner = str(other.id)
+                else:
+                    owner = str(uuid4())
+            new = TemporalArtifact(
+                artifact_id=f"pending-{uuid4().hex}", storage_key="pending-key",
+                created_by_principal=owner,
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            )
+            writer.add(new)
+            await writer.commit()
+            new_id = new.artifact_id
+        async with maker() as restarted:
+            result = await conversion.run_guarded_upgrade(
+                restarted, operator_authorized=True,
+            )
+            assert result.published is False
+            assert result.decision.eligible is False
+            assert (await restarted.get(TemporalArtifact, new_id)).operator_recovery_granted is False
+            assert (await restarted.get(TemporalArtifact, old_id)).operator_recovery_granted is True
+            rows = (await restarted.execute(select(conversion.SingleUserConversionRun))).scalars().all()
+            assert [row.preflight_digest for row in rows] == [first.digest]
+
+
+async def test_disabled_direct_owner_and_machines_use_bounded_probe(
+    tmp_path, monkeypatch,
+):
+    default_id = str(uuid4())
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", default_id)
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            assert (await conversion.run_guarded_upgrade(
+                session, operator_authorized=True,
+            )).published
+        async with maker() as writer:
+            # No User row is needed for the disabled request creator's direct access.
+            owners = [default_id, "operator", "system", "agent_workflow", "agent_runtime",
+                      "service:agent", "workflow:run", "system:task", " \tservice:agent\n"]
+            for index, owner in enumerate(owners):
+                writer.add(TemporalArtifact(
+                    artifact_id=f"later-{index}", storage_key=f"later-key-{index}",
+                    created_by_principal=owner,
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                ))
+            await writer.commit()
+        async with maker() as restarted:
+            collect = AsyncMock(side_effect=AssertionError("history must not be rescanned"))
+            monkeypatch.setattr(conversion, "collect_inventory", collect)
+            queries = []
+
+            def capture_query(_conn, _cursor, statement, _parameters, context, _many):
+                if statement.startswith("SELECT"):
+                    queries.append((statement, context.compiled.statement))
+
+            engine = restarted.get_bind()
+            event.listen(engine, "before_cursor_execute", capture_query)
+            try:
+                assert (await conversion.run_guarded_upgrade(
+                    restarted, operator_authorized=True,
+                )).published
+                assert (await conversion.startup_guard_decision(restarted)).eligible
+            finally:
+                event.remove(engine, "before_cursor_execute", capture_query)
+            collect.assert_not_awaited()
+            artifact_queries = [query for sql, query in queries if "FROM temporal_artifacts" in sql]
+            assert len(artifact_queries) == 2
+            for query in artifact_queries:
+                assert list(query.selected_columns.keys()) == ["artifact_id"]
+                assert query._limit_clause.value == 1
+            assert not any("FROM temporal_artifact_" in sql for sql, _query in queries)
+            assert (await restarted.get(TemporalArtifact, "later-0")).operator_recovery_granted is False

@@ -655,6 +655,68 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         again = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
         assert again.published
 
+    # The prerequisite can first run while OIDC still admits ordinary writes.
+    # Later historical human resources need current guarded proof at cutover.
+    later = {}
+    later_human_id = None
+    async with pg_maker() as writer:
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(writer), store=store)
+        for principal in (owner, "service:producer"):
+            row, _ = await artifacts.create(
+                principal=principal, redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                content_type="application/octet-stream",
+            )
+            row = await artifacts.write_complete(
+                artifact_id=row.artifact_id, principal=principal,
+                payload=b"post-completion postgres bytes", content_type="application/octet-stream",
+            )
+            later[principal] = {row.artifact_id, row.metadata_json["preview_artifact_id"]}
+            if principal == owner:
+                later_human_id = row.artifact_id
+            assert row.operator_recovery_granted is False
+
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    async with pg_maker() as restarted:
+        converted = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
+        assert converted.published
+        assert converted.digest != result.digest
+        retained = (await restarted.execute(select(TemporalArtifact))).scalars().all()
+        assert {row.artifact_id for row in retained if row.operator_recovery_granted} == {
+            artifact_id, preview_id, *later[owner]}
+        assert {row.artifact_id for row in retained if not row.operator_recovery_granted} == later["service:producer"]
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
+        row, payload = await artifacts.read(artifact_id=later_human_id, principal="operator")
+        assert payload == b"post-completion postgres bytes"
+        assert row.created_by_principal == owner
+
+    async with pg_maker() as restarted:
+        async def must_not_inventory(*_args, **_kwargs):
+            raise AssertionError("unchanged machine-only pending rows must not reload history")
+
+        with monkeypatch.context() as unchanged:
+            unchanged.setattr(suc, "collect_inventory", must_not_inventory)
+            assert (await suc.run_guarded_upgrade(restarted, operator_authorized=True)).published
+            assert (await suc.startup_guard_decision(restarted)).eligible
+
+    for malformed in ("service:\t", "SERVICE:agent"):
+        # The SQL probe must not mistake empty suffixes or case variants for
+        # established machines on PostgreSQL. Current attribution refuses.
+        async with pg_maker() as writer:
+            writer.add(TemporalArtifact(artifact_id="ambiguous-later", storage_key="ambiguous",
+                created_by_principal=malformed))
+            await writer.commit()
+        async with pg_maker() as restarted:
+            refused = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
+            assert not refused.published
+            assert refused.decision.reason_code == "inventory_unavailable"
+            ambiguous = await restarted.get(TemporalArtifact, "ambiguous-later")
+            assert ambiguous.created_by_principal == malformed
+            assert ambiguous.operator_recovery_granted is False
+            # Isolate the second malformed fixture without modifying any of
+            # the retained human or machine rows checked above.
+            await restarted.delete(ambiguous)
+            await restarted.commit()
+
 
 @pytest.mark.asyncio
 async def test_postgres_artifact_conversion_rollback_and_old_ledger(pg_maker, monkeypatch):

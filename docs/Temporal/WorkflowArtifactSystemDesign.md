@@ -549,9 +549,15 @@ artifact mutation when those transforms are absent. Historical links without a
 live execution remain intact and do not invalidate independently proven creator
 attribution. Schema installation itself grants no recovery access. Once recovery grants
 exist, schema downgrade refuses rather than silently losing them; repair forward.
-Default restarts replay certified production completion without rescanning
-retained history or granting recovery to later artifacts. Explicit preflight and
-apply still inspect current source evidence under the conversion guard.
+Default restarts probe for outstanding human or ambiguous artifact creators
+before replaying certified completion. Later artifacts, including OIDC writes
+before an account-free switch, require current guarded attribution and atomic
+conversion. The probe never grants access. Established machine owners and the
+exact disabled-mode creator who already has owner access need no new recovery
+grant. With no pending recovery, startup avoids loading retained histories into
+Python; the bounded-result SQL probe may still scan the artifact table.
+Explicit preflight and apply inspect current source evidence, and unresolved
+aliases or unsupported live parents still require their existing dispositions.
 
 ---
 

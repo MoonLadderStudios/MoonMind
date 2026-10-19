@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, UniqueConstraint, and_, cast, func, select, text
+from sqlalchemy import String, UniqueConstraint, and_, cast, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -399,12 +399,76 @@ _ARTIFACT_EVIDENCE_TABLES = (
 )
 
 
+_ARTIFACT_MACHINE_PRINCIPALS = ("operator", "system", "agent_workflow", "agent_runtime")
+_ARTIFACT_MACHINE_PREFIXES = ("service:", "workflow:", "system:")
+# SQL's default space-only trim would mistake a whitespace-only suffix for a
+# machine identity. Match Python str.strip across SQLite and PostgreSQL.
+_PRINCIPAL_WHITESPACE = (
+    "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
+
+
 def _is_artifact_machine_principal(raw: Any) -> bool:
     value = str(raw or "").strip()
-    return value in {"operator", "system", "agent_workflow", "agent_runtime"} or any(
+    return value in _ARTIFACT_MACHINE_PRINCIPALS or any(
         value.startswith(prefix) and bool(value[len(prefix):].strip())
-        for prefix in ("service:", "workflow:", "system:")
+        for prefix in _ARTIFACT_MACHINE_PREFIXES
     )
+
+
+async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
+    """Probe for work without loading artifact rows or retained child content.
+
+    This only selects at most one ID; a no-match query can still scan the
+    table. Unknown, null and malformed owners require authoritative inspection.
+    The probe never supplies attribution or grants recovery.
+    """
+    from api_service.db.models import TemporalArtifact
+    from moonmind.config.settings import settings
+    from moonmind.security.auth_modes_4120 import is_disabled_local_mode
+
+    def stripped(value):
+        return func.ltrim(
+            func.rtrim(value, _PRINCIPAL_WHITESPACE), _PRINCIPAL_WHITESPACE,
+        )
+
+    creator = func.coalesce(TemporalArtifact.created_by_principal, "")
+    normalized = stripped(creator)
+    no_recovery_needed = or_(
+        normalized.in_(_ARTIFACT_MACHINE_PRINCIPALS),
+        *(and_(
+            # LIKE would treat uppercase prefixes as machines on SQLite.
+            func.substr(normalized, 1, len(prefix)) == prefix,
+            stripped(func.substr(normalized, len(prefix) + 1)) != "",
+        ) for prefix in _ARTIFACT_MACHINE_PREFIXES),
+    )
+    if is_disabled_local_mode():
+        default_owner = _looks_like_uuid(
+            settings.oidc.DEFAULT_USER_ID or DEPLOYMENT_SUBJECT_ID
+        )
+        if default_owner is not None:
+            # The unchanged raw-owner equality already admits this exact
+            # disabled request creator, even without a retained User row.
+            no_recovery_needed = or_(no_recovery_needed, creator == default_owner)
+    try:
+        async with session.begin_nested():
+            pending = (
+                await session.execute(
+                    select(TemporalArtifact.artifact_id)
+                    .where(
+                        TemporalArtifact.operator_recovery_granted.is_not(True),
+                        ~no_recovery_needed,
+                    )
+                    .limit(1)
+                )
+            ).scalars().first()
+    except Exception as exc:
+        if _is_absent_table_error(exc):
+            return False
+        raise
+    return pending is not None
 
 
 async def _lock_conversion_evidence(session: AsyncSession) -> None:
@@ -1108,8 +1172,8 @@ async def _completed_production_result(session: AsyncSession) -> ApplyResult | N
 
     The marker is committed only after the exact production transforms run.
     Generic completion rows, custom transforms and older revisions cannot
-    establish that artifact recovery was converted. This replays a past
-    cutover; it never grants recovery to resources added after that cutover.
+    establish that artifact recovery was converted. Outstanding recovery
+    work requires a new authoritative preflight and locked apply instead.
     """
     ledger_cls = _ledger_class()
     stored = ledger_cls.result_json
@@ -1144,6 +1208,8 @@ async def _completed_production_result(session: AsyncSession) -> ApplyResult | N
         return None
     result = dict(row.result_json)
     if not _is_production_completion(result):
+        return None
+    if await _has_pending_artifact_recovery(session):
         return None
     return _replay_stored_result(
         row.preflight_digest,
@@ -1214,8 +1280,8 @@ async def apply_conversion(
     without the claim it fails closed with
     :class:`ConcurrentConversionError` rather than stealing a live writer.
     Custom reruns with the same digest replay the recorded result. The
-    exact production transforms repair an uncertified completion in place,
-    atomically with their effects, rather than replaying an unproven cutover.
+    exact production transforms repair uncertified or pending recovery in
+    place, atomically with their effects, rather than replaying an old cutover.
     """
     if not operator_authorized:
         raise ConversionAuthorizationError(
@@ -1288,13 +1354,16 @@ async def apply_conversion(
             if existing is not None:
                 if str(getattr(existing, "status", "")) == "complete":
                     stored = dict(getattr(existing, "result_json", None) or {})
-                    if not production_transforms or _is_production_completion(stored):
+                    if not production_transforms or (
+                        _is_production_completion(stored)
+                        and not await _has_pending_artifact_recovery(session)
+                    ):
                         return _replay_stored_result(
                             preflight_result.digest, decision, stored
                         )
-                    # An uncertified completion can come from custom/no-op
-                    # transforms. Under the locked, current eligibility proof,
-                    # run the real defaults before replacing that old result.
+                    # Custom/no-op completion or a cleared recovery grant
+                    # requires real defaults under current locked eligibility.
+                    # Replace the old result only together with those effects.
                 elif claimed is True:
                     # We hold the conversion-wide claim, so no live writer
                     # can own this row: it is a stale remnant of an older
@@ -1374,7 +1443,10 @@ async def apply_conversion(
                     getattr(raced, "status", "")
                 ) == "complete":
                     stored = dict(getattr(raced, "result_json", None) or {})
-                    if not production_transforms or _is_production_completion(stored):
+                    if not production_transforms or (
+                        _is_production_completion(stored)
+                        and not await _has_pending_artifact_recovery(session)
+                    ):
                         return _replay_stored_result(
                             preflight_result.digest, decision, stored
                         )
@@ -1621,8 +1693,8 @@ async def run_guarded_upgrade(
 
     New candidates capture a consistent preflight, then apply it with real
     subsystem transforms through versioned migration 386 + ledger idempotency.
-    Default restarts reuse certified current production completion without
-    rescanning retained history. Explicit evidence or transforms always take
+    Default restarts probe for outstanding artifact recovery before reusing
+    certified completion without loading history. Explicit evidence or transforms take
     the authoritative preflight/apply path.
     Alembic revision 386 creates only the ledger table and never applies a
     destructive conversion as a schema-upgrade side effect; CLI, worker, and
