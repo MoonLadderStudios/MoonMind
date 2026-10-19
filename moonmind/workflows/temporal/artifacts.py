@@ -1997,6 +1997,7 @@ class TemporalArtifactService:
         *,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
     ) -> bool:
         if self._is_quarantined(artifact):
             # Quarantined bytes are never served raw, even to the owner or
@@ -2013,7 +2014,13 @@ class TemporalArtifactService:
         candidates = self._read_candidates(principal, admitted_principal)
         if owner and owner in candidates:
             return True
-        # No blanket service-principal bypass for quarantined bytes.
+        # HTTP operator recovery is access-only: unlike admitted_principal it
+        # never replaces the owner of observed claims or quota accounting.
+        if ("operator" in candidates or recovery_principal == "operator") and getattr(
+            artifact, "operator_recovery_granted", False
+        ):
+            return True
+        # No blanket service-principal bypass for restricted bytes.
         return False
 
     def _assert_raw_access(
@@ -2037,9 +2044,12 @@ class TemporalArtifactService:
         *,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
     ) -> None:
+        self._assert_not_quarantined(artifact)
         if self._raw_access_allowed(
-            artifact, principal=principal, admitted_principal=admitted_principal
+            artifact, principal=principal, admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal
         ):
             return
         candidates = self._read_candidates(principal, admitted_principal)
@@ -2061,9 +2071,13 @@ class TemporalArtifactService:
         *,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
     ) -> bool:
+        if self._is_quarantined(artifact):
+            return False
         if self._raw_access_allowed(
-            artifact, principal=principal, admitted_principal=admitted_principal
+            artifact, principal=principal, admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal
         ):
             return True
         candidates = self._read_candidates(principal, admitted_principal)
@@ -3181,6 +3195,7 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
         allow_restricted_raw: bool = False,
     ) -> tuple[db_models.TemporalArtifact, bytes]:
         """Read bytes under the uniform saved-work owner policy (#4017 impl-06).
@@ -3190,6 +3205,10 @@ class TemporalArtifactService:
         this raw surface even to the owner or an admitted scope; use the
         preview/diagnostics path instead. A bare ``service:`` principal
         without ``admitted_principal`` is denied.
+
+        ``recovery_principal`` carries trusted HTTP admission only to the
+        protected conversion grant; it is never a request payload field or
+        an alternative delegation/consumer-accounting scope.
         """
         artifact = await self._repository.get_artifact(artifact_id)
         await self._assert_artifact_read_access(
@@ -3200,7 +3219,8 @@ class TemporalArtifactService:
         _ = allow_restricted_raw
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
+            artifact, principal=principal, admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal
         )
         observed_request_id = await self._observe_consumer_use(
             artifact_id=artifact.artifact_id,
@@ -3235,6 +3255,7 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
         allow_restricted_raw: bool = False,
         chunk_size: int = _STREAM_CHUNK_BYTES,
     ) -> tuple[db_models.TemporalArtifact, Iterable[bytes]]:
@@ -3247,7 +3268,8 @@ class TemporalArtifactService:
         _ = allow_restricted_raw
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
+            artifact, principal=principal, admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal
         )
         await self._observe_consumer_use(
             artifact_id=artifact.artifact_id,
@@ -3268,6 +3290,7 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
         allow_restricted_raw: bool = False,
     ) -> tuple[db_models.TemporalArtifact, Path]:
         artifact = await self._repository.get_artifact(artifact_id)
@@ -3279,7 +3302,8 @@ class TemporalArtifactService:
         _ = allow_restricted_raw
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
+            artifact, principal=principal, admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal
         )
         observed_request_id = await self._observe_consumer_use(
             artifact_id=artifact.artifact_id,
@@ -3316,6 +3340,7 @@ class TemporalArtifactService:
         artifact: db_models.TemporalArtifact,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
     ) -> ArtifactReadPolicy:
         metadata = dict(artifact.metadata_json or {})
         preview_ref: ArtifactRef | None = None
@@ -3331,7 +3356,8 @@ class TemporalArtifactService:
                 preview_ref = build_artifact_ref(preview_artifact)
 
         raw_access_allowed = await self._artifact_raw_access_allowed(
-            artifact, principal=principal, admitted_principal=admitted_principal
+            artifact, principal=principal, admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal
         )
         default_read_ref = (
             preview_ref
@@ -3350,6 +3376,7 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
     ) -> tuple[
         db_models.TemporalArtifact,
         list[db_models.TemporalArtifactLink],
@@ -3366,6 +3393,7 @@ class TemporalArtifactService:
             artifact=artifact,
             principal=principal,
             admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal,
         )
         return artifact, links, pinned is not None, read_policy
 
@@ -3442,6 +3470,7 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         admitted_principal: str | None = None,
+        recovery_principal: str | None = None,
         use_ttl_seconds: int | None = None,
     ) -> tuple[db_models.TemporalArtifact, datetime, str]:
         artifact = await self._repository.get_artifact(artifact_id)
@@ -3452,7 +3481,8 @@ class TemporalArtifactService:
             raise TemporalArtifactStateError("artifact is not readable")
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
+            artifact, principal=principal, admitted_principal=admitted_principal,
+            recovery_principal=recovery_principal
         )
 
         # Bound signed-download validity by artifact/use/security policy
