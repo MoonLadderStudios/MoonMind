@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 import typer
@@ -69,6 +71,13 @@ def _print_container_job_result(result: ContainerJobResult) -> None:
             fg=typer.colors.YELLOW,
             err=True,
         )
+    if result.artifact_error:
+        typer.secho(
+            "Warning: output artifacts could not be read: "
+            + redact_sensitive_text(result.artifact_error),
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     failure_detail = ""
     if result.failure_class:
         failure_detail += f", failureClass={result.failure_class}"
@@ -104,6 +113,9 @@ def container_run(
         readable=True,
         help="JSON file containing ContainerJobSpec workload fields.",
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the ContainerJobResult as JSON."
+    ),
     request_id: str | None = typer.Option(
         None,
         "--request-id",
@@ -118,7 +130,17 @@ def container_run(
     except ContainerJobCliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
-    _print_container_job_result(result)
+    if as_json:
+        payload = asdict(result)
+        for field in ("message", "log_error", "artifact_error"):
+            if payload[field]:
+                payload[field] = redact_sensitive_text(payload[field])
+        payload["log_tail"] = [redact_sensitive_text(line) for line in result.log_tail]
+        typer.echo(json.dumps(payload))
+        if result.state != "succeeded" or result.exit_code not in {None, 0}:
+            raise typer.Exit(code=1)
+    else:
+        _print_container_job_result(result)
 
 
 @container_app.command(
