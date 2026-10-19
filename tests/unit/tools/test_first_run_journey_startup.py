@@ -49,7 +49,10 @@ footprint = config.get("footprint", {}).get(phase, {})
 if args[:1] != ["compose"]:
     with calls.with_suffix(".host.jsonl").open("a") as output:
         output.write(json.dumps(args) + "\n")
-    print(footprint.get(args[0], ""))
+    if args[:2] == ["image", "inspect"]:
+        print("sha256:" + "a" * 64)
+    else:
+        print(footprint.get(args[0], ""))
     raise SystemExit(footprint.get("host_status", 0))
 previous = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 directory = Path(args[args.index("--project-directory") + 1])
@@ -64,6 +67,8 @@ entry = {
     "attempt": attempt, "status": status,
     "env_exists": (Path(os.environ["STARTUP_TEST_REPO"]) / ".env").exists(),
     "credentials": [key for key in config["credential_keys"] if key in os.environ],
+    "workspace_volume": os.environ.get("MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"),
+    "control_network": os.environ.get("MOONMIND_CONTROL_PLANE_NETWORK"),
 }
 with calls.open("a") as output:
     output.write(json.dumps(entry) + "\n")
@@ -176,6 +181,17 @@ def journey(tmp_path: Path) -> Journey:
     tools.mkdir(parents=True)
     (tools / SCRIPT.name).write_text(SCRIPT.read_text())
     (tools / "single_user_journey_checks.py").write_text(API_COUNTERPART)
+    (tools / "single_user_journey_cutover.py").write_text(
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "config = json.loads(Path(os.environ['STARTUP_TEST_CONFIG']).read_text())\n"
+        "calls = Path(os.environ['STARTUP_TEST_API_CALLS']).read_text()\n"
+        "result = {'passed': not config.get('cutover_failure'), 'args': args, "
+        "'candidate_work_started': 'after-upgrade' in calls}\n"
+        "Path(args[args.index('--receipt-file') + 1]).write_text(json.dumps(result))\n"
+        "raise SystemExit(0 if result['passed'] else 1)\n"
+    )
     (tools / "single_user_journey_browser.mjs").write_text(
         "// External browser counterpart.\n"
     )
@@ -398,6 +414,8 @@ def test_successful_startup_preserves_complete_fresh_journey_and_cleanup(
         "credential",
         "verify",
         "release",
+        "generate",
+        "generated_verify",
     ]
     assert any(call["command"][:1] == ["restart"] for call in journey.calls())
     output = _startup_log(journey, "fresh", "candidate", 1)
@@ -542,3 +560,72 @@ def test_unobserved_worker_processes_are_unavailable_not_zero(
     assert f"compose top exit_status={status}" in text
     if stderr:
         assert stderr in text
+
+
+def test_generated_execution_uses_only_project_owned_storage_and_cleans_before_download(
+    journey,
+):
+    journey.env["MOONMIND_AGENT_WORKSPACES_VOLUME_NAME"] = "caller-workspaces"
+    journey.env["MOONMIND_CONTROL_PLANE_NETWORK"] = "caller-control"
+    result = journey.run(candidate_statuses=[0], lines=1)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = journey.calls()
+    assert all(
+        call["workspace_volume"] == "moonmind-test-startup-unit-agent-workspaces"
+        for call in calls
+    )
+    assert all(
+        call["control_network"] == "moonmind-test-startup-unit_control-plane-network"
+        for call in calls
+    )
+    assert any(
+        "cleanup" in call["command"] and "exec" in call["command"] for call in calls
+    )
+    phases = [json.loads(line) for line in journey.api_calls.read_text().splitlines()]
+    assert phases[-2][0] == "generate"
+    assert phases[-1][0] == "generated_verify" and "--cleanup-receipt" in phases[-1]
+    assert calls[0]["directory"] != str(journey.repo)
+    journey.assert_cleaned()
+
+
+@pytest.mark.parametrize("blocked", ["logs", "state"])
+def test_early_log_setup_failure_restores_callers_environment(journey, blocked):
+    if blocked == "logs":
+        journey.logs.write_text("caller-owned file")
+    else:
+        (journey.logs / "fresh").mkdir(parents=True)
+        (journey.logs / "fresh/state").write_text("caller-owned file")
+    result = journey.run()
+    assert result.returncode != 0
+    assert (journey.repo / ".env").read_text() == "CALLER_ENV=must-survive\n"
+    assert "unbound variable" not in result.stderr
+
+
+def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> None:
+    result = journey.run(upgrade=True, lines=1)
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(
+        (journey.logs / "upgrade/state/routing-cutover.json").read_text()
+    )
+    assert receipt["passed"]
+    args = receipt["args"]
+    assert args[args.index("--project") + 1] == "moonmind-test-startup-unit"
+    assert args[args.index("--image") + 1] == "sha256:" + "a" * 64
+    files = [args[index + 1] for index, item in enumerate(args) if item == "-f"]
+    assert len(files) == 2
+    assert files[0].endswith("/docker-compose.yaml")
+    assert files[1].endswith("/isolation.json")
+    assert not receipt["candidate_work_started"]
+    journey.assert_cleaned()
+
+
+def test_upgrade_routing_failure_stops_candidate_work(journey: Journey) -> None:
+    result = journey.run(upgrade=True, cutover_failure=True, lines=1)
+    assert result.returncode != 0
+    receipt = json.loads(
+        (journey.logs / "upgrade/state/routing-cutover.json").read_text()
+    )
+    assert not receipt["passed"]
+    calls = journey.api_calls.read_text()
+    assert "after-upgrade" not in calls
+    journey.assert_cleaned()
