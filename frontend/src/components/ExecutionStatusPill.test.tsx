@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -68,6 +68,25 @@ describe('ExecutionStatusPill', () => {
     expect(screen.getByText('Checking').className).toContain('status-running');
     expect(screen.getByText('Succeeded').className).toContain('status-completed');
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('names the executing shimmer pill with real label text, not an aria-label on a generic span', () => {
+    const { container } = render(<ExecutionStatusPill status="executing" />);
+
+    const pill = container.querySelector<HTMLElement>('[data-effect="shimmer-sweep"]');
+    expect(pill).not.toBeNull();
+    expect(pill!.dataset.state).toBe('executing');
+    expect(pill!.hasAttribute('aria-label')).toBe(false);
+
+    // The label is one text node the accessibility tree and clipboard get.
+    const label = within(pill!).getByText('Executing');
+    expect(label.closest('[aria-hidden="true"]')).toBeNull();
+
+    // The per-letter wave stays decorative and hidden from assistive technology.
+    const wave = pill!.querySelector<HTMLElement>('.status-letter-wave');
+    expect(wave?.getAttribute('aria-hidden')).toBe('true');
+    expect(wave?.dataset.label).toBe('Executing');
+    expect(wave?.querySelectorAll('.status-letter-wave__glyph')).toHaveLength('Executing'.length);
   });
 });
 

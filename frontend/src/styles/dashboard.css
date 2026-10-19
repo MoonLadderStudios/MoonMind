@@ -5,8 +5,9 @@
 
 /* Keep the dashboard's own base styles: intentionally do not import Preflight. */
 /* Utilities stay unlayered alongside the existing dashboard rules so specific
- * utility classes continue to override generic element defaults. */
-@custom-variant hover (&:hover);
+ * utility classes continue to override generic element defaults. Tailwind's
+ * default hover variant is kept: it only applies under (hover: hover), so a tap
+ * on a touch screen does not leave a sticky hover state. */
 
 :root {
   color-scheme: light;
@@ -22,10 +23,28 @@
   --mm-ok: 34 197 94;
   --mm-warn: 245 158 11;
   --mm-status-waiting: 146 64 14;
-  --mm-status-queued: 124 58 237;
-  --mm-status-setup: 37 99 235;
+  --mm-status-queued: 109 40 217;
+  --mm-status-setup: 29 78 216;
   --mm-danger: 244 63 94;
-  --mm-action-primary: 21 147 118;
+  /* Text on light status tints: the bright accent/ok/warn/danger tokens fall
+   * below 4.5:1 on white, so text uses darker shades in light theme. */
+  --mm-running-text: 21 94 117;
+  --mm-ok-text: 22 101 52;
+  --mm-warn-text: 146 64 14;
+  --mm-danger-text: 190 18 60;
+  /* Focus indicator: at least 3:1 against the page in both themes. */
+  --mm-focus-ring: 109 40 217;
+  /* Filled button colours keep white text at 4.5:1 or more in both themes. */
+  --mm-button-radius: 999px;
+  --mm-button-primary-bg: rgb(130 72 246);
+  --mm-button-primary-bg-hover: rgb(124 58 237);
+  --mm-button-primary-bg-active: rgb(109 40 217);
+  --mm-button-danger-bg: rgb(190 18 60);
+  --mm-button-danger-bg-hover: rgb(159 18 57);
+  --mm-button-danger-bg-active: rgb(136 19 55);
+  --mm-button-selected-bg: color-mix(in srgb, rgb(var(--mm-accent)) 12%, rgb(var(--mm-panel)));
+  --mm-button-selected-fg: rgb(91 33 182);
+  --mm-button-selected-border: rgb(var(--mm-accent));
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
   /* Highlight-edge treatment, liquid-glass style. The edge light is a masked
    * gradient ring (--mm-highlight-edge-ring, applied via pseudo-element):
@@ -66,10 +85,11 @@
     inset 0 -1px 0 rgb(255 255 255 / 0.08),
     0 24px 70px -28px rgb(0 0 0 / 0.58),
     0 0 0 1px rgb(0 0 0 / 0.18);
-  --mm-control-hover-scale: 1.018;
-  --mm-control-press-scale: 0.988;
   --mm-control-transition: transform 150ms cubic-bezier(.2,.8,.2,1), box-shadow 150ms ease, border-color 150ms ease, background 150ms ease, filter 150ms ease;
-  --mm-control-focus-ring: 0 0 0 2px rgb(var(--mm-accent-2) / 0.82), 0 0 0 4px rgb(var(--mm-accent-2) / 0.18);
+  /* For composite controls whose focused element is visually hidden (for
+   * example a radio inside a segmented-control label); everything else uses
+   * the shared :focus-visible outline. */
+  --mm-control-focus-ring: 0 0 0 2px rgb(var(--mm-focus-ring));
   --mm-control-disabled-opacity: 0.48;
   --mm-control-shell: rgb(var(--mm-panel) / 0.78);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
@@ -78,7 +98,7 @@
   --mm-mobile-nav-border: rgb(var(--mm-accent) / 0.35);
   --mm-mobile-nav-edge: var(--mm-glass-edge);
   --mm-mobile-nav-shadow: 0 20px 50px rgb(0 0 0 / 0.26);
-  --mm-mobile-nav-text: rgb(var(--mm-muted) / 0.86);
+  --mm-mobile-nav-text: rgb(var(--mm-muted));
   --mm-mobile-nav-hover: rgb(var(--mm-accent) / 0.12);
   --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.30);
   --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.10);
@@ -112,6 +132,9 @@
   --mm-executing-letter-sweep-start-ratio: 0.2;
   --mm-executing-letter-sweep-travel-ratio: 0.18;
   --mm-executing-letter-sweep-direction: 1;
+  /* Brightening the moving light helps on dark pills but washes out the
+   * darker light-theme pill text, so light theme leaves it unfiltered. */
+  --mm-executing-letter-overlay-filter: none;
   --workflow-list-header-row-height: 2.75rem;
   --workflow-list-body-row-height: 4rem;
   --workflow-list-compact-body-row-height: 3rem;
@@ -145,7 +168,14 @@
   --mm-status-queued: 167 139 250;
   --mm-status-setup: 96 165 250;
   --mm-danger: 251 113 133;
-  --mm-action-primary: 26 153 123;
+  --mm-running-text: 125 249 255;
+  --mm-ok-text: 74 222 128;
+  --mm-warn-text: 251 191 36;
+  --mm-danger-text: 251 113 133;
+  --mm-focus-ring: 125 249 255;
+  --mm-executing-letter-overlay-filter: brightness(1.35);
+  --mm-button-selected-bg: color-mix(in srgb, rgb(var(--mm-accent)) 24%, rgb(var(--mm-panel)));
+  --mm-button-selected-fg: rgb(196 181 253);
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
   --mm-atmosphere-violet: radial-gradient(circle at 12% -6%, rgb(var(--mm-accent) / 0.36), transparent 46%);
   --mm-atmosphere-cyan: radial-gradient(circle at 95% -8%, rgb(var(--mm-accent-2) / 0.22), transparent 44%);
@@ -166,7 +196,7 @@
   --mm-control-border: rgb(var(--mm-border) / 0.76);
   --mm-mobile-nav-edge: var(--mm-glass-edge);
   --mm-mobile-nav-shadow: 0 20px 50px rgb(0 0 0 / 0.45);
-  --mm-mobile-nav-text: rgb(var(--mm-muted) / 0.78);
+  --mm-mobile-nav-text: rgb(var(--mm-muted));
   --mm-mobile-nav-hover: rgb(var(--mm-accent) / 0.12);
   --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.34);
   --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.12);
@@ -330,10 +360,16 @@ samp {
   text-decoration: none;
 }
 
-.masthead-brand:hover,
 .masthead-brand:focus-visible {
   color: rgb(var(--mm-ink));
   text-decoration: none;
+}
+
+@media (hover: hover) {
+  .masthead-brand:hover {
+    color: rgb(var(--mm-ink));
+    text-decoration: none;
+  }
 }
 
 .masthead-logo {
@@ -353,6 +389,10 @@ samp {
 }
 
 .masthead-brand-moon {
+  color: rgb(var(--mm-ink));
+}
+
+.dark .masthead-brand-moon {
   color: rgb(255 255 255);
 }
 
@@ -438,7 +478,6 @@ samp {
   filter: none;
 }
 
-.workflow-list-display-option:hover,
 .workflow-list-display-option:focus-visible {
   border-color: rgb(var(--mm-accent-2) / 0.72);
   background: rgb(var(--mm-accent-2) / 0.1);
@@ -447,9 +486,14 @@ samp {
   filter: none;
 }
 
-.workflow-list-display-option:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
+@media (hover: hover) {
+  .workflow-list-display-option:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent-2) / 0.72);
+    background: rgb(var(--mm-accent-2) / 0.1);
+    color: rgb(var(--mm-ink));
+    transform: none;
+    filter: none;
+  }
 }
 
 /* The sliding thumb on the control's ::before carries the selected fill and
@@ -459,10 +503,12 @@ samp {
   color: rgb(var(--mm-accent));
 }
 
-.workflow-list-display-option--selected:hover,
-.workflow-list-display-option[aria-checked="true"]:hover {
-  border-color: rgb(var(--mm-accent-2) / 0.72);
-  background: rgb(var(--mm-accent-2) / 0.1);
+@media (hover: hover) {
+  .workflow-list-display-option--selected:hover:where(:not(:disabled, [aria-disabled="true"])),
+  .workflow-list-display-option[aria-checked="true"]:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent-2) / 0.72);
+    background: rgb(var(--mm-accent-2) / 0.1);
+  }
 }
 
 .workflow-list-display-option svg {
@@ -526,11 +572,6 @@ samp {
 
 .dark .version-badge-value {
   color: #fff;
-}
-
-.theme-toggle {
-  min-width: 8.5rem;
-  white-space: nowrap;
 }
 
 .eyebrow {
@@ -659,10 +700,16 @@ h1 {
   display: none;
 }
 
-.nav-hamburger:hover,
 .nav-hamburger[aria-expanded="true"] {
   border-color: rgb(var(--mm-accent));
   background: rgb(var(--mm-accent) / 0.14);
+}
+
+@media (hover: hover) {
+  .nav-hamburger:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent));
+    background: rgb(var(--mm-accent) / 0.14);
+  }
 }
 
 .nav-hamburger-icon {
@@ -722,10 +769,10 @@ h1 {
 
 /* Hovered nav buttons brighten, grow slightly, and swap the purple under-glow
  * for light blue — matching the System trigger's hover feel. */
-.route-nav-primary a:hover {
-  box-shadow: var(--mm-shadow-highlight-edge-hover);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
+@media (hover: hover) {
+  .route-nav-primary a:hover {
+    box-shadow: var(--mm-shadow-highlight-edge-hover);
+  }
 }
 
 /* Diagonal liquid-glass edge: a 1px gradient ring drawn on a pseudo-element
@@ -768,9 +815,11 @@ h1 {
   transition: background 130ms ease;
 }
 
-.route-nav a:hover {
-  background: rgb(var(--mm-ink) / 0.06);
-  color: rgb(var(--mm-ink));
+@media (hover: hover) {
+  .route-nav a:hover {
+    background: rgb(var(--mm-ink) / 0.06);
+    color: rgb(var(--mm-ink));
+  }
 }
 
 .route-nav a.active {
@@ -782,13 +831,10 @@ h1 {
   background: rgb(var(--mm-accent));
 }
 
-.route-nav a.active:hover {
-  background: rgb(var(--mm-ink) / 0.06);
-}
-
-.route-nav a:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
+@media (hover: hover) {
+  .route-nav a.active:hover {
+    background: rgb(var(--mm-ink) / 0.06);
+  }
 }
 
 .dashboard-system-menu {
@@ -819,18 +865,21 @@ h1 {
 /* The open and hover states share the highlighted surface and cyan under-glow.
  * Stating box-shadow here also keeps the global button:hover rule (ring + wide
  * purple glow, for filled CTAs) from leaking onto the trigger. */
-.dashboard-system-trigger:hover,
 .dashboard-system-trigger[aria-expanded="true"] {
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
   box-shadow: var(--mm-shadow-highlight-edge-hover);
 }
 
-/* Keep hover-only motion and brightening out of the persistent open state. */
-.dashboard-system-trigger:hover {
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
+@media (hover: hover) {
+  .dashboard-system-trigger:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-ink) / 0.06);
+    color: rgb(var(--mm-ink));
+    box-shadow: var(--mm-shadow-highlight-edge-hover);
+  }
 }
+
+/* Keep hover-only motion and brightening out of the persistent open state. */
 
 .dashboard-system-trigger.active {
   color: rgb(var(--mm-ink));
@@ -845,12 +894,6 @@ h1 {
   bottom: calc(-1 * var(--masthead-padding-block-end));
   height: 3px;
   background: rgb(var(--mm-accent));
-}
-
-.dashboard-system-trigger:focus-visible,
-.dashboard-system-popover a:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .dashboard-system-popover {
@@ -925,15 +968,6 @@ h1 {
   color: rgb(var(--mm-ink));
   background: rgb(var(--mm-accent) / 0.12);
   box-shadow: inset 3px 0 0 rgb(var(--mm-accent));
-}
-
-/* The active-row rule above shares specificity with the earlier
- * `.dashboard-system-popover a:focus-visible` rule, so on the currently active
- * destination it would otherwise clobber the focus ring and leave keyboard
- * users without a distinct focus indicator. Combine both here so the focused
- * active row keeps its selected-row accent and regains the focus ring. */
-.dashboard-system-popover a.active:focus-visible {
-  box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));
 }
 
 .dashboard-system-inline {
@@ -1183,26 +1217,21 @@ h1 {
   box-shadow: none;
 }
 
-.table-sort-button:hover {
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-  color: rgb(var(--mm-accent));
-  transform: none;
-  filter: none;
+@media (hover: hover) {
+  .table-sort-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    color: rgb(var(--mm-accent));
+  }
 }
 
 .table-sort-button:focus-visible,
-.table-sort-button:active,
-.table-sort-button.is-clicked {
+.table-sort-button:active {
   background: transparent;
   border: 0;
   box-shadow: none;
   color: rgb(var(--mm-accent));
-  transform: none;
-  filter: none;
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .workflow-list-header-cell {
@@ -1268,6 +1297,7 @@ h1 {
   justify-content: center;
   width: 2rem;
   height: 2rem;
+  min-height: 0;
   padding: 0;
   font-size: 1.1rem;
   line-height: 1;
@@ -1363,12 +1393,20 @@ h1 {
   transform: none;
 }
 
-.workflow-list-filter-section .workflow-list-filter-control:hover,
 .workflow-list-filter-section .workflow-list-filter-control:focus-within {
   border: 0;
   background: transparent;
   box-shadow: none;
   transform: none;
+}
+
+@media (hover: hover) {
+  .workflow-list-filter-section .workflow-list-filter-control:hover {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
 }
 
 .workflow-list-filter-section .workflow-list-filter-control label {
@@ -1444,7 +1482,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
+  width: 1.65rem;
   height: 2rem;
   padding: 0;
   border: 1px solid transparent;
@@ -1455,16 +1493,23 @@ h1 {
   cursor: pointer;
 }
 
-.workflow-list-column-filter-button:hover,
-.workflow-list-column-filter-button:focus-visible,
-.workflow-list-column-filter-button[aria-expanded="true"],
+/* Separate cues: hover is a faint tint, keyboard focus is the shared outline,
+ * an open popover outlines the trigger, and an applied filter fills it. */
+@media (hover: hover) {
+  .workflow-list-column-filter-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-accent) / 0.08);
+    color: rgb(var(--mm-ink));
+  }
+}
+
+.workflow-list-column-filter-button[aria-expanded="true"] {
+  border-color: rgb(var(--mm-accent));
+  color: rgb(var(--mm-ink));
+}
+
 .workflow-list-column-filter-button.is-active {
-  border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
+  background: rgb(var(--mm-accent) / 0.16);
+  color: var(--mm-button-selected-fg);
 }
 
 .workflow-list-column-filter-icon {
@@ -1508,7 +1553,6 @@ h1 {
  * `.workflow-list-filter-section .workflow-list-filter-control` treatment.
  */
 .workflow-list-column-filter-popover .workflow-list-filter-control,
-.workflow-list-column-filter-popover .workflow-list-filter-control:hover,
 .workflow-list-column-filter-popover .workflow-list-filter-control:focus-within {
   display: grid;
   gap: 0.65rem;
@@ -1519,6 +1563,20 @@ h1 {
   background: transparent;
   box-shadow: none;
   transform: none;
+}
+
+@media (hover: hover) {
+  .workflow-list-column-filter-popover .workflow-list-filter-control:hover {
+    display: grid;
+    gap: 0.65rem;
+    align-items: stretch;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
 }
 
 .workflow-list-column-filter-popover .workflow-list-filter-control label {
@@ -1593,9 +1651,14 @@ h1 {
   line-height: 1;
 }
 
-.workflow-list-pill-remove:hover:not(:disabled),
 .workflow-list-pill-remove:focus-visible {
   background: rgb(var(--mm-accent) / 0.35);
+}
+
+@media (hover: hover) {
+  .workflow-list-pill-remove:hover:not(:disabled) {
+    background: rgb(var(--mm-accent) / 0.35);
+  }
 }
 
 .workflow-list-pill-remove:disabled {
@@ -1872,17 +1935,17 @@ h1 {
 
 .index-health-status--green {
   background: rgb(var(--mm-ok) / 0.12);
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-ok-text));
 }
 
 .index-health-status--yellow {
   background: rgb(var(--mm-warn) / 0.14);
-  color: rgb(var(--mm-warn));
+  color: rgb(var(--mm-warn-text));
 }
 
 .index-health-status--red {
   background: rgb(var(--mm-danger) / 0.12);
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 .index-health-empty {
@@ -1991,10 +2054,16 @@ h1 {
   border-bottom: 2px solid transparent;
 }
 
-.entity-detail-frame__tabs a:hover,
 .entity-detail-frame__tabs a:focus-visible {
   color: rgb(var(--mm-ink));
   border-bottom-color: currentColor;
+}
+
+@media (hover: hover) {
+  .entity-detail-frame__tabs a:hover {
+    color: rgb(var(--mm-ink));
+    border-bottom-color: currentColor;
+  }
 }
 
 .schedules-toolbar {
@@ -2084,8 +2153,10 @@ h1 {
   text-decoration: none;
 }
 
-.schedules-detail-page .page-meta a:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .schedules-detail-page .page-meta a:hover {
+    text-decoration: underline;
+  }
 }
 
 .schedules-detail-grid {
@@ -2241,9 +2312,11 @@ h1 {
   text-decoration: none;
 }
 
-.schedules-primary-cell a:hover {
-  color: rgb(var(--mm-accent));
-  text-decoration: underline;
+@media (hover: hover) {
+  .schedules-primary-cell a:hover {
+    color: rgb(var(--mm-accent));
+    text-decoration: underline;
+  }
 }
 
 .schedules-primary-cell span,
@@ -2268,10 +2341,13 @@ h1 {
   justify-content: flex-end;
 }
 
-.schedules-row-actions .secondary {
-  padding: 0.2rem 0.55rem;
-  font-size: 0.78rem;
+.schedules-row-actions .button {
   white-space: nowrap;
+}
+
+.schedules-row-actions > .small {
+  flex-basis: 100%;
+  text-align: right;
 }
 
 .schedules-state {
@@ -2333,8 +2409,10 @@ h1 {
   text-decoration: none;
 }
 
-.schedules-detail-title a:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .schedules-detail-title a:hover {
+    text-decoration: underline;
+  }
 }
 
 .schedules-detail-grid {
@@ -2472,17 +2550,23 @@ h1 {
   box-shadow: inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.workflow-list-filter-trigger:hover,
-.workflow-list-filter-trigger:focus-visible,
-.workflow-list-filter-trigger[aria-expanded="true"],
+/* Separate cues: hover tints, keyboard focus is the shared outline, an open
+ * drawer rings the trigger, and applied filters fill it. */
+@media (hover: hover) {
+  .workflow-list-filter-trigger:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: var(--mm-control-shell-hover);
+    border-color: rgb(var(--mm-accent) / 0.45);
+  }
+}
+
+.workflow-list-filter-trigger[aria-expanded="true"] {
+  border-color: rgb(var(--mm-accent));
+  box-shadow: inset 0 0 0 1px rgb(var(--mm-accent));
+}
+
 .workflow-list-filter-trigger.is-active {
-  background: var(--mm-control-shell-hover);
-  background-image: none;
-  border-color: rgb(var(--mm-accent) / 0.7);
-  color: rgb(var(--mm-ink));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
+  background: rgb(var(--mm-accent) / 0.14);
+  color: var(--mm-button-selected-fg);
 }
 
 .workflow-list-filter-trigger-icon {
@@ -2563,9 +2647,7 @@ h1 {
   font-weight: 700;
 }
 
-.workflow-list-filter-chip:has(.workflow-list-filter-chip-open:hover),
 .workflow-list-filter-chip:has(.workflow-list-filter-chip-open:focus-visible),
-.workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:hover),
 .workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:focus-visible) {
   border-color: rgb(var(--mm-accent) / 0.7);
   background: rgb(var(--mm-accent) / 0.08);
@@ -2577,11 +2659,30 @@ h1 {
     inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.workflow-list-filter-chip-remove:hover,
+@media (hover: hover) {
+  .workflow-list-filter-chip:has(.workflow-list-filter-chip-open:hover:where(:not(:disabled, [aria-disabled="true"]))),
+  .workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"]))) {
+    border-color: rgb(var(--mm-accent) / 0.7);
+    background: rgb(var(--mm-accent) / 0.08);
+    color: rgb(var(--mm-ink));
+    transform: translateY(-1px);
+    filter: none;
+    box-shadow:
+      0 0 0 2px rgb(var(--mm-accent) / 0.16),
+      inset 0 1px 0 var(--mm-glass-edge);
+  }
+}
+
 .workflow-list-filter-chip-remove:focus-visible {
   background: rgb(var(--mm-accent) / 0.14);
   color: rgb(var(--mm-accent));
-  outline: none;
+}
+
+@media (hover: hover) {
+  .workflow-list-filter-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-accent) / 0.14);
+    color: rgb(var(--mm-accent));
+  }
 }
 
 .workflow-list-filter-chip strong {
@@ -2620,8 +2721,10 @@ tbody tr:nth-child(2n) {
   background: rgb(var(--mm-panel) / 0.76);
 }
 
-tbody tr:hover {
-  background: rgb(var(--mm-accent) / 0.08);
+@media (hover: hover) {
+  tbody tr:hover {
+    background: rgb(var(--mm-accent) / 0.08);
+  }
 }
 
 .dark table {
@@ -2638,13 +2741,15 @@ tbody tr:hover {
   background: rgb(var(--mm-panel) / 0.76);
 }
 
-.dark tbody tr:hover {
-  background: rgb(var(--mm-accent) / 0.18);
-}
+@media (hover: hover) {
+  .dark tbody tr:hover {
+    background: rgb(var(--mm-accent) / 0.18);
+  }
 
-.dark .workflow-list-data-slab tbody tr:nth-child(2n):not(:hover),
-.workflow-list-data-slab tbody tr:nth-child(2n):not(:hover) {
-  background: transparent;
+  .dark .workflow-list-data-slab tbody tr:nth-child(2n):not(:hover),
+  .workflow-list-data-slab tbody tr:nth-child(2n):not(:hover) {
+    background: transparent;
+  }
 }
 
 .queue-layouts {
@@ -3005,15 +3110,18 @@ tbody tr:hover {
   cursor: pointer;
 }
 
-.workflow-list-view-options-trigger--icon:hover,
-.workflow-list-view-options-trigger--icon:focus-visible,
+/* Separate cues: hover is a faint tint, keyboard focus is the shared outline,
+ * an open popover outlines the trigger, and an applied filter fills it. */
+@media (hover: hover) {
+  .workflow-list-view-options-trigger--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-accent) / 0.08);
+    color: rgb(var(--mm-ink));
+  }
+}
+
 .workflow-list-view-options-trigger--icon[aria-expanded="true"] {
-  border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
+  border-color: rgb(var(--mm-accent));
+  color: rgb(var(--mm-ink));
 }
 
 .workflow-list-view-options-icon {
@@ -3046,16 +3154,23 @@ tbody tr:hover {
   cursor: pointer;
 }
 
-.workflow-list-advanced-filters-trigger:hover,
-.workflow-list-advanced-filters-trigger:focus-visible,
-.workflow-list-advanced-filters-trigger[aria-expanded="true"],
+/* Separate cues: hover is a faint tint, keyboard focus is the shared outline,
+ * an open popover outlines the trigger, and an applied filter fills it. */
+@media (hover: hover) {
+  .workflow-list-advanced-filters-trigger:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-accent) / 0.08);
+    color: rgb(var(--mm-ink));
+  }
+}
+
+.workflow-list-advanced-filters-trigger[aria-expanded="true"] {
+  border-color: rgb(var(--mm-accent));
+  color: rgb(var(--mm-ink));
+}
+
 .workflow-list-advanced-filters-trigger.is-active {
-  border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
+  background: rgb(var(--mm-accent) / 0.16);
+  color: var(--mm-button-selected-fg);
 }
 
 .workflow-list-advanced-filters-icon {
@@ -3131,8 +3246,10 @@ tbody tr:hover {
   -webkit-line-clamp: 2;
 }
 
-.workflow-list-row-title:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .workflow-list-row-title:hover {
+    text-decoration: underline;
+  }
 }
 
 .workflow-list-status-supplement {
@@ -3298,9 +3415,14 @@ tbody tr:hover {
     overflow: hidden;
   }
 
-  .stacked-records tbody tr:nth-child(2n),
-  .stacked-records tbody tr:hover {
+  .stacked-records tbody tr:nth-child(2n) {
     background: rgb(var(--mm-panel) / 0.78);
+  }
+
+  @media (hover: hover) {
+    .stacked-records tbody tr:hover {
+      background: rgb(var(--mm-panel) / 0.78);
+    }
   }
 
   .stacked-records td {
@@ -3422,8 +3544,10 @@ tbody tr:hover {
   overflow-wrap: break-word;
 }
 
-.queue-card-title:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .queue-card-title:hover {
+    text-decoration: underline;
+  }
 }
 
 .queue-card-meta {
@@ -3661,7 +3785,7 @@ tbody tr:hover {
 
 .status-running,
 .status-running.is-executing {
-  color: rgb(var(--mm-accent-2));
+  color: rgb(var(--mm-running-text));
   background: rgb(var(--mm-accent-2) / 0.14);
   border-color: rgb(var(--mm-accent-2) / 0.55);
 }
@@ -3696,13 +3820,13 @@ tbody tr:hover {
 
 .status-succeeded,
 .status-completed {
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-ok-text));
   background: rgb(var(--mm-ok) / 0.14);
   border-color: rgb(var(--mm-ok) / 0.55);
 }
 
 .status-failed {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
   background: rgb(var(--mm-danger) / 0.14);
   border-color: rgb(var(--mm-danger) / 0.55);
 }
@@ -3836,6 +3960,10 @@ tbody tr:hover {
   align-items: center;
   color: inherit;
   white-space: pre;
+  /* The per-letter glyphs are decoration; copying the pill yields the
+   * screen-reader text beside them instead of one letter per line. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .status[data-effect="shimmer-sweep"] .status-letter-wave,
@@ -3862,7 +3990,7 @@ tbody tr:hover {
   -webkit-background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  filter: brightness(1.35);
+  filter: var(--mm-executing-letter-overlay-filter);
   mix-blend-mode: plus-lighter;
 }
 
@@ -4007,7 +4135,7 @@ tbody tr:hover {
 .notice.error {
   border-color: rgb(var(--mm-danger) / 0.5);
   background: rgb(var(--mm-danger) / 0.08);
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 @media (max-width: 1180px) {
@@ -4065,10 +4193,16 @@ tbody tr:hover {
     text-decoration: none;
   }
 
-  .schedules-mobile-card-link:hover,
   .schedules-mobile-card-link:focus-visible {
     color: rgb(var(--mm-accent));
     text-decoration: underline;
+  }
+
+  @media (hover: hover) {
+    .schedules-mobile-card-link:hover {
+      color: rgb(var(--mm-accent));
+      text-decoration: underline;
+    }
   }
 
   .schedules-mobile-card-title {
@@ -4116,13 +4250,104 @@ tbody tr:hover {
 .notice.ok {
   border-color: rgb(var(--mm-ok) / 0.5);
   background: rgb(var(--mm-ok) / 0.08);
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-ok-text));
 }
 
 .notice.pending {
   border-color: rgb(var(--mm-warn) / 0.5);
   background: rgb(var(--mm-warn) / 0.1);
-  color: rgb(var(--mm-warn));
+  color: rgb(var(--mm-warn-text));
+}
+
+.notice.warning {
+  border-color: rgb(var(--mm-warn) / 0.55);
+  background: rgb(var(--mm-warn) / 0.1);
+  color: rgb(var(--mm-warn-text));
+}
+
+.notice.subtle {
+  border-color: rgb(var(--mm-border) / 0.7);
+  background: transparent;
+  box-shadow: none;
+  color: rgb(var(--mm-muted));
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 999px;
+  background: rgb(var(--mm-muted) / 0.1);
+  color: rgb(var(--mm-muted));
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-success {
+  border-color: rgb(var(--mm-ok) / 0.5);
+  background: rgb(var(--mm-ok) / 0.12);
+  color: rgb(var(--mm-ok-text));
+}
+
+.badge-warning {
+  border-color: rgb(var(--mm-warn) / 0.55);
+  background: rgb(var(--mm-warn) / 0.12);
+  color: rgb(var(--mm-warn-text));
+}
+
+.badge-error {
+  border-color: rgb(var(--mm-danger) / 0.5);
+  background: rgb(var(--mm-danger) / 0.1);
+  color: rgb(var(--mm-danger-text));
+}
+
+.field-hint {
+  color: rgb(var(--mm-muted));
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+/* A group of adjacent buttons or button-styled links. */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Term/value facts rendered as <dl> > <div> > <dt> + <dd>. */
+.td-facts-grid,
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  gap: 0.35rem 1.25rem;
+  margin: 0;
+}
+
+.td-facts-grid > div,
+.details-grid > div {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.td-facts-grid dt,
+.details-grid dt {
+  margin: 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.td-facts-grid dd,
+.details-grid dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
 }
 
 .dashboard-dialog-backdrop {
@@ -4194,6 +4419,7 @@ tbody tr:hover {
   width: 2rem;
   min-width: 2rem;
   height: 2rem;
+  min-height: 0;
   padding: 0;
   border-radius: 0.45rem;
 }
@@ -4243,10 +4469,6 @@ tbody tr:hover {
   gap: 0.55rem;
 }
 
-.dashboard-dialog-danger {
-  background: rgb(var(--mm-danger));
-}
-
 .schedule-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4269,12 +4491,19 @@ tbody tr:hover {
   box-shadow: 0 18px 44px -34px rgb(var(--mm-ink) / 0.5);
 }
 
-.schedule-summary-tile:hover,
 .schedule-summary-tile:focus-visible,
 .schedule-summary-tile.active {
   border-color: rgb(var(--mm-accent) / 0.58);
   background: rgb(var(--mm-accent) / 0.08);
   transform: none;
+}
+
+@media (hover: hover) {
+  .schedule-summary-tile:hover {
+    border-color: rgb(var(--mm-accent) / 0.58);
+    background: rgb(var(--mm-accent) / 0.08);
+    transform: none;
+  }
 }
 
 .schedule-summary-value {
@@ -4304,7 +4533,7 @@ tbody tr:hover {
 }
 
 .schedule-dispatch-error {
-  color: rgb(var(--mm-danger)) !important;
+  color: rgb(var(--mm-danger-text)) !important;
 }
 
 .schedule-actions {
@@ -4406,8 +4635,6 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
   border-color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
-  outline: none;
 }
 
 input::placeholder,
@@ -4424,12 +4651,6 @@ textarea::placeholder {
   color: rgb(var(--mm-ink));
 }
 
-.dark input:focus-visible,
-.dark select:focus-visible,
-.dark textarea:focus-visible {
-  box-shadow: var(--mm-control-focus-ring);
-}
-
 @media (forced-colors: active) {
   input:focus,
   select:focus,
@@ -4444,204 +4665,144 @@ textarea {
   resize: vertical;
 }
 
-button {
-  width: fit-content;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0.52rem 0.9rem;
-  font-weight: 700;
-  background: rgb(var(--mm-accent));
-  color: #fff;
-  cursor: pointer;
-  transition: var(--mm-control-transition);
+/* Neutral reset. Preflight is not imported, so give every <button> a quiet
+ * baseline here; the shared Button variants (.button) and component classes
+ * opt into a look. Layered so any unlayered component rule or utility wins. */
+@layer base {
+  button {
+    width: fit-content;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
 }
 
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)) {
-  border-color: rgb(255 255 255 / 0.52);
-  color: #fff;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
+/* Shared Button variants (components/dashboard/Button.tsx). A variant only
+ * sets tokens; the base rule and the shared states consume them. Hover is a
+ * small tint, press is darker with an inset shadow (never brighter than
+ * hover), focus is the shared :focus-visible outline, and disabled buttons do
+ * not react. Layered so bespoke component classes (for example
+ * .td-workflow-actions-trigger-compact) can adjust geometry. */
+@layer components {
+  .button {
+    --button-bg: var(--mm-button-primary-bg);
+    --button-bg-hover: var(--mm-button-primary-bg-hover);
+    --button-bg-active: var(--mm-button-primary-bg-active);
+    --button-fg: rgb(255 255 255);
+    --button-border: transparent;
+    --button-border-hover: transparent;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    width: fit-content;
+    min-height: 2.25rem;
+    padding: 0.45rem 0.9rem;
+    border: 1px solid var(--button-border);
+    border-radius: var(--mm-button-radius);
+    background: var(--button-bg);
+    color: var(--button-fg);
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  }
+
+  .button--secondary {
+    --button-bg: rgb(var(--mm-panel));
+    --button-bg-hover: color-mix(in srgb, rgb(var(--mm-accent)) 8%, rgb(var(--mm-panel)));
+    --button-bg-active: color-mix(in srgb, rgb(var(--mm-accent)) 16%, rgb(var(--mm-panel)));
+    --button-fg: rgb(var(--mm-ink));
+    --button-border: rgb(var(--mm-border));
+    --button-border-hover: rgb(var(--mm-accent) / 0.6);
+  }
+
+  .button--ghost,
+  .button--icon {
+    --button-bg: transparent;
+    --button-bg-hover: rgb(var(--mm-accent) / 0.08);
+    --button-bg-active: rgb(var(--mm-accent) / 0.16);
+    --button-fg: rgb(var(--mm-ink));
+  }
+
+  .button--danger {
+    --button-bg: var(--mm-button-danger-bg);
+    --button-bg-hover: var(--mm-button-danger-bg-hover);
+    --button-bg-active: var(--mm-button-danger-bg-active);
+  }
+
+  .button--icon {
+    min-width: 2.25rem;
+    padding: 0.4rem;
+    border-radius: 0.6rem;
+  }
+
+  .button--sm {
+    min-height: 1.85rem;
+    padding: 0.25rem 0.65rem;
+    font-size: 0.8rem;
+  }
+
+  .button--icon.button--sm {
+    min-width: 1.85rem;
+    padding: 0.25rem;
+  }
+
+  .button svg {
+    flex: 0 0 auto;
+    width: 1.1em;
+    height: 1.1em;
+  }
+
+  @media (hover: hover) {
+    .button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+      background: var(--button-bg-hover);
+      border-color: var(--button-border-hover);
+    }
+  }
+
+  .button:active:where(:not(:disabled, [aria-disabled="true"])) {
+    background: var(--button-bg-active);
+    box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.24);
+  }
+
+  .button[aria-pressed="true"],
+  .button.active {
+    --button-bg: var(--mm-button-selected-bg);
+    --button-bg-hover: var(--mm-button-selected-bg);
+    --button-fg: var(--mm-button-selected-fg);
+    --button-border: var(--mm-button-selected-border);
+    --button-border-hover: var(--mm-button-selected-border);
+
+    box-shadow: inset 0 0 0 1px var(--mm-button-selected-border);
+  }
+
+  .button:disabled,
+  .button[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: var(--mm-control-disabled-opacity);
+  }
 }
 
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 0.82);
-  /* Filled CTAs keep their own hover shadow (ring + wide glow): the shared
-   * highlight-edge token is side-open by design, but a hovered solid button
-   * still wants its full outline pop. */
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26), 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-button:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)).is-clicked {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.4),
-    0 0 0 2px rgb(255 255 255 / 0.84),
-    0 0 16px 1px rgb(var(--mm-accent) / 0.82);
-  border-color: rgb(255 255 255 / 1);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.22) saturate(1.14);
-}
-
-button.secondary {
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-border));
-}
-
-button.secondary:hover {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
-  transform: scale(var(--mm-control-hover-scale));
-}
-
-button.workflow-list-filter-chip-open,
-button.workflow-list-filter-chip-remove,
-button.workflow-list-column-filter-button,
-button.workflow-list-view-options-trigger--icon,
-button.workflow-list-advanced-filters-trigger {
-  background-image: none;
-  transform: none;
-  filter: none;
-}
-
-button.workflow-list-column-filter-button {
-  width: 1.65rem;
-  border-color: transparent;
-  background: transparent;
-  color: rgb(var(--mm-muted));
-  box-shadow: none;
-}
-
-button.workflow-list-column-filter-button:hover,
-button.workflow-list-column-filter-button:focus-visible,
-button.workflow-list-column-filter-button[aria-expanded="true"],
-button.workflow-list-column-filter-button.is-active {
-  border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
-}
-
-.button {
-  display: inline-block;
-  text-decoration: none;
-  width: fit-content;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0.52rem 0.9rem;
-  font-weight: 700;
-  background: rgb(var(--mm-accent));
-  color: #fff;
-  cursor: pointer;
-  transition: var(--mm-control-transition);
-}
-
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)) {
-  border-color: rgb(255 255 255 / 0.52);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
-}
-
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 0.82);
-  /* Filled CTAs keep their own hover shadow (ring + wide glow): the shared
-   * highlight-edge token is side-open by design, but a hovered solid button
-   * still wants its full outline pop. */
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26), 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-.button:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active,
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)).is-clicked {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.4),
-    0 0 0 2px rgb(255 255 255 / 0.84),
-    0 0 16px 1px rgb(var(--mm-accent) / 0.82);
-  border-color: rgb(255 255 255 / 1);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.22) saturate(1.14);
-}
-
-.button.secondary {
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-border));
-}
-
-.button.secondary:hover {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
-  transform: scale(var(--mm-control-hover-scale));
-}
-
-button:disabled,
-button:disabled:hover,
-button.secondary:disabled,
-button.secondary:disabled:hover,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled:hover,
-.button[aria-disabled="true"],
-.button[aria-disabled="true"]:hover,
-.button.secondary[aria-disabled="true"],
-.button.secondary[aria-disabled="true"]:hover,
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"],
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"]:hover {
-  cursor: not-allowed;
-  opacity: var(--mm-control-disabled-opacity);
-  transform: none;
-  filter: none;
-  box-shadow: none;
-}
-
-.queue-action,
 .queue-submit-primary {
-  --queue-action-color: var(--mm-action-primary);
-  background-color: rgb(var(--queue-action-color));
-  background-image: linear-gradient(
-    100deg,
-    color-mix(in srgb, rgb(var(--queue-action-color)) 72%, rgb(var(--mm-accent-2))) 0%,
-    rgb(var(--queue-action-color)) 58%,
-    color-mix(in srgb, rgb(var(--queue-action-color)) 88%, white) 100%
-  );
+  background-color: rgb(var(--mm-accent));
   color: #fff;
   font-weight: 400;
-  border: 1px solid rgb(255 255 255 / 0.58);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 24px -14px rgb(var(--queue-action-color) / 0.84);
+  border: 1px solid transparent;
+  border-radius: var(--mm-button-radius);
+  padding: 0.52rem 0.9rem;
+  transition: var(--mm-control-transition);
 }
 
 .queue-submit-primary--with-arrow {
@@ -4672,48 +4833,21 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-linejoin: round;
 }
 
-.queue-action:hover,
-.queue-submit-primary:hover {
-  background-image: linear-gradient(
-    150deg,
-    rgb(var(--queue-action-color) / 1) 0%,
-    rgb(var(--queue-action-color) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 0.86);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.28),
-    0 0 0 1px rgb(255 255 255 / 0.36),
-    0 18px 34px -16px rgb(var(--queue-action-color) / 0.95);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
+@media (hover: hover) {
+  .queue-submit-primary:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background-color: var(--mm-button-primary-bg-hover);
+  }
 }
 
-.queue-action:focus-visible,
-.queue-submit-primary:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
+.queue-submit-primary:active:where(:not(:disabled, [aria-disabled="true"])) {
+  background-color: var(--mm-button-primary-bg-active);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.24);
 }
 
-.queue-action:active,
-.queue-submit-primary:active,
-.queue-action.is-clicked,
-.queue-submit-primary.is-clicked {
-  background-image: linear-gradient(
-    150deg,
-    rgb(var(--queue-action-color) / 1) 0%,
-    rgb(var(--queue-action-color) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 1);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 0 0 2px rgb(255 255 255 / 0.84),
-    0 0 16px 1px rgb(var(--queue-action-color) / 0.82);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.22) saturate(1.14);
-}
-
-.queue-action-danger {
-  --queue-action-color: var(--mm-danger);
+.queue-submit-primary:disabled,
+.queue-submit-primary[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: var(--mm-control-disabled-opacity);
 }
 
 /* ── Step timeline ─────────────────────────────────────── */
@@ -4766,13 +4900,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .step-tl-icon.status-completed {
   border-color: rgb(var(--mm-ok) / 0.7);
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-ok-text));
   background: rgb(var(--mm-ok) / 0.12);
 }
 
 .step-tl-icon.status-failed {
   border-color: rgb(var(--mm-danger) / 0.7);
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
   background: rgb(var(--mm-danger) / 0.12);
 }
 
@@ -4785,7 +4919,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .step-tl-icon.status-running,
 .step-tl-icon.status-awaiting-external {
   border-color: rgb(var(--mm-accent-2) / 0.7);
-  color: rgb(var(--mm-accent-2));
+  color: rgb(var(--mm-running-text));
   background: rgb(var(--mm-accent-2) / 0.12);
   animation: step-pulse 1.8s ease-in-out infinite;
 }
@@ -4832,14 +4966,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: background 0.15s;
 }
 
-.step-tl-toggle:hover,
 .step-tl-toggle:focus-visible {
   background: rgb(var(--mm-ink) / 0.045);
 }
 
-.dark .step-tl-toggle:hover,
+@media (hover: hover) {
+  .step-tl-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-ink) / 0.045);
+  }
+}
+
 .dark .step-tl-toggle:focus-visible {
   background: rgb(var(--mm-ink) / 0.07);
+}
+
+@media (hover: hover) {
+  .dark .step-tl-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-ink) / 0.07);
+  }
 }
 
 .step-tl-header {
@@ -5075,7 +5219,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .step-tl-error {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 .step-detail-list {
@@ -5131,7 +5275,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding: 0.12rem 0.48rem;
   border: 1px solid rgb(var(--mm-warn) / 0.5);
   background: rgb(var(--mm-warn) / 0.14);
-  color: rgb(var(--mm-warn));
+  color: rgb(var(--mm-warn-text));
   font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.01em;
@@ -5737,14 +5881,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .live-logs-artifact-link:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-.live-logs-artifact-link:hover,
-.live-logs-artifact-link:focus-visible {
   background: rgb(255 255 255 / 0.12);
   border-color: rgb(255 255 255 / 0.28);
+}
+
+@media (hover: hover) {
+  .live-logs-artifact-link:hover {
+    background: rgb(255 255 255 / 0.12);
+    border-color: rgb(255 255 255 / 0.28);
+  }
 }
 
 .step-check-details {
@@ -5851,7 +5996,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-context-menu-title {
   margin: 0.1rem 0.4rem 0.2rem;
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   font-size: 0.88rem;
   font-weight: 750;
 }
@@ -5880,14 +6025,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: none;
   border-radius: 7px;
   background: transparent;
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   font-size: 0.88rem;
   text-align: left;
 }
 
-.queue-step-context-menu-item:hover:not(:disabled),
 .queue-step-context-menu-item:focus-visible:not(:disabled) {
   background: rgb(var(--mm-accent) / 0.12);
+}
+
+@media (hover: hover) {
+  .queue-step-context-menu-item:hover:not(:disabled) {
+    background: rgb(var(--mm-accent) / 0.12);
+  }
 }
 
 .queue-step-context-menu-item:disabled {
@@ -5900,7 +6050,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-context-menu-capability-token {
   color: rgb(var(--mm-muted));
-  font-family: var(--mm-mono, ui-monospace, monospace);
+  font-family: var(--mm-font-mono);
   font-size: 0.78rem;
 }
 
@@ -5948,10 +6098,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   cursor: pointer;
 }
 
-.queue-step-capability-chip-lock:hover,
 .queue-step-capability-chip-lock:focus-visible {
-  color: rgb(var(--mm-text));
-  outline: none;
+  color: rgb(var(--mm-ink));
+}
+
+@media (hover: hover) {
+  .queue-step-capability-chip-lock:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    color: rgb(var(--mm-ink));
+  }
 }
 
 .queue-step-capability-chip-popover {
@@ -5964,7 +6118,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border));
   border-radius: 8px;
   background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.16);
   font-size: 0.78rem;
   line-height: 1.35;
@@ -5979,7 +6133,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border));
   border-radius: 8px;
   background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1;
@@ -5987,14 +6141,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-attachment-add-button:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-.queue-step-attachment-add-button:hover,
-.queue-step-attachment-add-button:focus-visible {
   border-color: rgb(var(--mm-accent));
   background: rgb(var(--mm-accent) / 0.12);
+}
+
+@media (hover: hover) {
+  .queue-step-attachment-add-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent));
+    background: rgb(var(--mm-accent) / 0.12);
+  }
 }
 
 .queue-step-attachments-list {
@@ -6047,9 +6202,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   cursor: pointer;
 }
 
-.queue-step-context-chip-action:hover,
 .queue-step-context-chip-action:focus-visible {
   text-decoration: underline;
+}
+
+@media (hover: hover) {
+  .queue-step-context-chip-action:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    text-decoration: underline;
+  }
 }
 
 .queue-step-attachment-chip-remove {
@@ -6203,8 +6363,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 0;
 }
 
-.attachment-thumbnail:hover {
-  border-color: rgb(var(--mm-accent));
+@media (hover: hover) {
+  .attachment-thumbnail:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent));
+  }
 }
 
 .attachment-thumbnail-image {
@@ -6266,9 +6428,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   text-decoration: none;
 }
 
-.attachment-lightbox-download:hover,
 .attachment-lightbox-download:focus-visible {
   text-decoration: underline;
+}
+
+@media (hover: hover) {
+  .attachment-lightbox-download:hover {
+    text-decoration: underline;
+  }
 }
 
 .attachment-lightbox-close {
@@ -6290,8 +6457,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 1;
 }
 
-.attachment-lightbox-close:hover {
-  border-color: rgb(var(--mm-accent));
+@media (hover: hover) {
+  .attachment-lightbox-close:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent));
+  }
 }
 
 /* MM-1138 Q3: one canonical segmented-control system with two intensity tiers.
@@ -6471,19 +6640,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: var(--mm-control-transition);
 }
 
-.segmented-control[data-intensity="quiet"] .segmented-control-item:hover,
 .segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible,
 .segmented-control[data-intensity="quiet"] .segmented-control-item[aria-current="page"] {
   color: rgb(var(--mm-ink));
 }
 
-.segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
+@media (hover: hover) {
+  .segmented-control[data-intensity="quiet"] .segmented-control-item:hover {
+    color: rgb(var(--mm-ink));
+  }
 
-.segmented-control[data-intensity="loud"] .segmented-control-item:hover:not(:has(input:checked)) {
-  color: rgb(var(--mm-accent));
+  .segmented-control[data-intensity="loud"] .segmented-control-item:hover:not(:has(input:checked)) {
+    color: rgb(var(--mm-accent));
+  }
 }
 
 .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
@@ -6615,17 +6784,22 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   -webkit-tap-highlight-color: transparent;
 }
 
-.skill-combobox-toggle:hover,
 .skill-combobox-toggle:focus,
 .skill-combobox-toggle:focus-visible,
-.skill-combobox-toggle:active,
-.skill-combobox-toggle.is-clicked {
+.skill-combobox-toggle:active {
   background: none;
   border-color: transparent;
   box-shadow: none;
   color: rgb(var(--mm-muted));
-  transform: none;
-  filter: none;
+}
+
+@media (hover: hover) {
+  .skill-combobox-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: none;
+    border-color: transparent;
+    box-shadow: none;
+    color: rgb(var(--mm-muted));
+  }
 }
 
 .skill-combobox-toggle[aria-expanded="true"] svg {
@@ -6673,9 +6847,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   align-items: center;
 }
 
-.skill-combobox-option[data-highlighted="true"],
-.skill-combobox-option:hover {
+.skill-combobox-option[data-highlighted="true"] {
   background: rgb(var(--mm-accent) / 0.18);
+}
+
+@media (hover: hover) {
+  .skill-combobox-option:hover {
+    background: rgb(var(--mm-accent) / 0.18);
+  }
 }
 
 .skill-combobox-option[aria-selected="true"] {
@@ -6706,30 +6885,31 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.5rem;
   justify-content: center;
   min-height: 3rem;
+  padding: 0.52rem 0.9rem;
+  font-weight: 600;
   transition: var(--mm-control-transition);
   width: 100%;
 }
 
-.queue-step-extension-button:hover {
-  background-image: linear-gradient(
-    180deg,
-    rgb(var(--mm-panel) / 0.9) 0%,
-    rgb(var(--mm-accent) / 0.1) 100%
-  );
-  border-color: rgb(var(--mm-accent) / 0.72);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 10px 24px -20px rgb(var(--mm-accent) / 0.86);
-  color: rgb(var(--mm-ink));
-  transform: scale(var(--mm-control-hover-scale));
+@media (hover: hover) {
+  .queue-step-extension-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background-image: linear-gradient(
+      180deg,
+      rgb(var(--mm-panel) / 0.9) 0%,
+      rgb(var(--mm-accent) / 0.1) 100%
+    );
+    border-color: rgb(var(--mm-accent) / 0.72);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.42),
+      0 10px 24px -20px rgb(var(--mm-accent) / 0.86);
+    color: rgb(var(--mm-ink));
+  }
 }
 
-.queue-step-extension-button:active,
-.queue-step-extension-button.is-clicked {
+.queue-step-extension-button:active {
   background: rgb(var(--mm-accent) / 0.12);
   border-color: rgb(var(--mm-accent));
   box-shadow: inset 0 1px 2px rgb(var(--mm-ink) / 0.12);
-  transform: scale(var(--mm-control-press-scale));
 }
 
 .queue-step-extension-plus {
@@ -6746,8 +6926,30 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-inline-selector {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.queue-inline-selector-label {
+  display: block;
+  padding-inline-start: 0.35rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.queue-inline-selector-control {
   position: relative;
   min-width: 0;
+}
+
+/* A field whose label and control sit side by side with status messages kept
+ * outside the label (so the label names exactly one control). */
+.queue-labeled-field {
+  display: grid;
+  gap: 0.35rem;
 }
 
 .queue-inline-selector svg {
@@ -6774,7 +6976,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* The branch cell keeps the floating row contract (repo, branch, publish,
  * submit) at every breakpoint. */
-.queue-inline-selector--branch {
+.queue-inline-selector--branch .queue-inline-selector-control {
   display: flex;
   gap: 0.4rem;
   align-items: center;
@@ -6890,7 +7092,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     minmax(8rem, 1fr)
     auto;
   gap: 0.5rem;
-  align-items: center;
+  align-items: end;
   justify-content: stretch;
 }
 
@@ -6919,13 +7121,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-radius: 999px;
   flex: 0 0 auto;
   white-space: nowrap;
-  border: 2px solid rgb(var(--mm-action-primary) / 0.85);
+  border: 2px solid rgb(var(--mm-accent) / 0.85);
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.22),
     0 0 0 1px rgb(255 255 255 / 0.38),
     0 0 12px 2px rgb(var(--mm-accent-2) / 0.26),
     0 0 34px -4px rgb(var(--mm-accent-2) / 0.36),
-    0 12px 26px -16px rgb(var(--mm-action-primary) / 0.78);
+    0 12px 26px -16px rgb(var(--mm-accent) / 0.78);
   transition:
     box-shadow 240ms ease-out,
     border-color 240ms ease-out,
@@ -6970,35 +7172,31 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transform: scale(0.6);
 }
 
-.queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover
-  .queue-submit-primary-arrow
-  svg {
-  animation: queue-submit-primary-arrow-cycle 460ms cubic-bezier(0.33, 0, 0.2, 1) both;
-}
+@media (hover: hover) {
+  .queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover
+    .queue-submit-primary-arrow
+    svg {
+    animation: queue-submit-primary-arrow-cycle 460ms cubic-bezier(0.33, 0, 0.2, 1) both;
+  }
 
-.queue-submit-primary--icon:hover {
-  border-color: rgb(var(--mm-action-primary));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.3),
-    0 0 0 1px rgb(255 255 255 / 0.5),
-    0 0 32px 2px rgb(var(--mm-accent-2) / 0.36),
-    0 0 62px -2px rgb(var(--mm-accent-2) / 0.24),
-    0 18px 40px -16px rgb(var(--mm-action-primary) / 0.88);
+  .queue-submit-primary--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent));
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.3),
+      0 0 0 1px rgb(255 255 255 / 0.5),
+      0 0 32px 2px rgb(var(--mm-accent-2) / 0.36),
+      0 0 62px -2px rgb(var(--mm-accent-2) / 0.24),
+      0 18px 40px -16px rgb(var(--mm-accent) / 0.88);
+  }
 }
 
 .queue-submit-primary--icon:focus-visible {
-  border-color: rgb(var(--mm-action-primary));
+  border-color: rgb(var(--mm-accent));
 }
 
-.queue-submit-primary--icon:active,
-.queue-submit-primary--icon.is-clicked {
-  border-color: rgb(var(--mm-action-primary));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.34),
-    0 0 0 1px rgb(255 255 255 / 0.54),
-    0 0 38px 3px rgb(var(--mm-accent-2) / 0.42),
-    0 0 72px -2px rgb(var(--mm-accent-2) / 0.28),
-    0 0 16px 1px rgb(var(--mm-action-primary) / 0.68);
+.queue-submit-primary--icon:active:where(:not(:disabled, [aria-disabled="true"])) {
+  border-color: rgb(var(--mm-accent));
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.24);
 }
 
 .queue-submit-primary--icon.queue-submit-primary--arrow-exit
@@ -7012,10 +7210,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-submit-primary--icon.queue-submit-primary--arrow-exit {
-  background-color: rgb(var(--mm-action-primary) / 0.12);
+  background-color: rgb(var(--mm-accent) / 0.12);
   background-image: none;
-  color: rgb(var(--mm-action-primary));
-  border-color: rgb(var(--mm-action-primary));
+  color: rgb(var(--mm-accent));
+  border-color: rgb(var(--mm-accent));
 }
 
 @keyframes queue-submit-primary-arrow-cycle {
@@ -7064,29 +7262,29 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   inset: -1.35rem;
   border-radius: inherit;
   pointer-events: none;
-  border: 2px solid rgb(var(--mm-action-primary) / 0.92);
+  border: 2px solid rgb(var(--mm-accent) / 0.92);
   background:
     radial-gradient(
       circle at center,
-      rgb(var(--mm-action-primary) / 0) 62%,
-      rgb(var(--mm-action-primary) / 0.44) 62%,
-      rgb(var(--mm-action-primary) / 0.76) 72%,
-      rgb(var(--mm-action-primary) / 0.92) 77%,
-      rgb(var(--mm-action-primary) / 0) 77%
+      rgb(var(--mm-accent) / 0) 62%,
+      rgb(var(--mm-accent) / 0.44) 62%,
+      rgb(var(--mm-accent) / 0.76) 72%,
+      rgb(var(--mm-accent) / 0.92) 77%,
+      rgb(var(--mm-accent) / 0) 77%
     ),
     radial-gradient(
       circle at center,
       rgb(255 255 255 / 0.22) 0%,
-      rgb(var(--mm-action-primary) / 0.08) 28%,
-      rgb(var(--mm-action-primary) / 0.5) 41%,
-      rgb(var(--mm-action-primary) / 0.28) 54%,
-      rgb(var(--mm-action-primary) / 0.16) 68%,
-      rgb(var(--mm-action-primary) / 0) 100%
+      rgb(var(--mm-accent) / 0.08) 28%,
+      rgb(var(--mm-accent) / 0.5) 41%,
+      rgb(var(--mm-accent) / 0.28) 54%,
+      rgb(var(--mm-accent) / 0.16) 68%,
+      rgb(var(--mm-accent) / 0) 100%
     );
   box-shadow:
-    0 0 0 1px rgb(var(--mm-action-primary) / 0.64),
-    0 0 22px 3px rgb(var(--mm-action-primary) / 0.52),
-    0 0 38px 8px rgb(var(--mm-action-primary) / 0.28);
+    0 0 0 1px rgb(var(--mm-accent) / 0.64),
+    0 0 22px 3px rgb(var(--mm-accent) / 0.52),
+    0 0 38px 8px rgb(var(--mm-accent) / 0.28);
   filter: none;
   transform-origin: center;
   animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
@@ -7216,7 +7414,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .oauth-terminal-status {
-  border: 1px solid var(--mm-border, #cbd5e1);
+  border: 1px solid rgb(var(--mm-border));
   border-radius: 8px;
   padding: 6px 10px;
 }
@@ -7265,13 +7463,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .oauth-terminal-finalize-result--success {
   background: rgb(var(--mm-ok) / 0.12);
   border: 1px solid rgb(var(--mm-ok) / 0.5);
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-ok-text));
 }
 
 .oauth-terminal-finalize-result--error {
   background: rgb(var(--mm-danger) / 0.12);
   border: 1px solid rgb(var(--mm-danger) / 0.5);
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 .oauth-terminal-paste-box {
@@ -7353,10 +7551,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
-.oauth-terminal-paste-controls > .primary {
-  justify-self: start;
-}
-
 .oauth-terminal-surface {
   background: #111827;
   border-radius: 8px;
@@ -7386,7 +7580,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: transparent;
   border: 0;
   border-radius: 6px;
-  color: rgb(var(--mm-text, 15 23 42));
+  color: rgb(var(--mm-ink));
   cursor: pointer;
   display: block;
   font: inherit;
@@ -7395,10 +7589,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 100%;
 }
 
-.oauth-terminal-context-menu button:hover,
 .oauth-terminal-context-menu button:focus-visible {
-  background: rgb(var(--mm-hover, 241 245 249));
-  outline: none;
+  background: rgb(var(--mm-accent) / 0.1);
+}
+
+@media (hover: hover) {
+  .oauth-terminal-context-menu button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-accent) / 0.1);
+  }
 }
 
 .queue-dialog-backdrop {
@@ -7439,20 +7637,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-left: auto;
 }
 
-/*
- * MM-937: The step header controls are right-aligned (margin-left: auto), so the
- * trailing control sits flush against the steps container's edge. Their hover and
- * press scale (var(--mm-control-hover-scale) / var(--mm-control-press-scale))
- * scales from the center by default, which grows the trailing control outward and
- * lets a step spill past the edge of its container when hovered. Anchor only the
- * trailing control's scale to its right edge so it grows inward and stays
- * contained, without clipping overflow (the step context-menu popover relies on
- * visible overflow). The leading controls keep their natural center scaling.
- */
-.queue-step-controls .queue-step-icon-button:last-child {
-  transform-origin: right center;
-}
-
 .queue-step-icon-button {
   width: 2.35rem;
   height: 2.35rem;
@@ -7479,59 +7663,42 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-linejoin: round;
 }
 
-.queue-step-icon-button:hover {
-  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.35), rgb(var(--mm-accent-2) / 0.25));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-accent));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
+@media (hover: hover) {
+  .queue-step-icon-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.35), rgb(var(--mm-accent-2) / 0.25));
+    color: rgb(var(--mm-ink));
+    border-color: rgb(var(--mm-accent));
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
+  }
 }
 
-.queue-step-icon-button:active,
-.queue-step-icon-button.is-clicked {
-  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.5), rgb(var(--mm-accent-2) / 0.4));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 0 0 1px rgb(255 255 255 / 0.56),
-    0 0 14px 1px rgb(var(--mm-accent) / 0.76);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.2) saturate(1.12);
+.queue-step-icon-button:active:where(:not(:disabled)) {
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.28);
 }
 
 .queue-step-icon-button.destructive {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
   border-color: rgb(var(--mm-danger) / 0.7);
 }
 
-.queue-step-icon-button.destructive:hover {
-  background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.25), rgb(var(--mm-accent-warm) / 0.2));
-  border-color: rgb(var(--mm-danger));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-danger) / 0.75);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
+@media (hover: hover) {
+  .queue-step-icon-button.destructive:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.25), rgb(var(--mm-accent-warm) / 0.2));
+    border-color: rgb(var(--mm-danger));
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-danger) / 0.75);
+  }
 }
 
-.queue-step-icon-button.destructive:active,
-.queue-step-icon-button.destructive.is-clicked {
-  background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.4), rgb(var(--mm-accent-warm) / 0.35));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 0 0 1px rgb(255 255 255 / 0.56),
-    0 0 14px 1px rgb(var(--mm-danger) / 0.76);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.2) saturate(1.12);
+.queue-step-icon-button.destructive:active:where(:not(:disabled)) {
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.28);
 }
 
-.queue-step-icon-button:disabled,
-.queue-step-icon-button:disabled:hover {
+.queue-step-icon-button:disabled {
   opacity: var(--mm-control-disabled-opacity);
   cursor: not-allowed;
   background: rgb(var(--mm-panel) / 0.4);
   border-color: rgb(var(--mm-border) / 0.4);
   box-shadow: none;
-  transform: none;
-  filter: none;
 }
 
 .queue-step-capability-chip .queue-step-capability-chip-remove,
@@ -7555,18 +7722,20 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-width: 2;
 }
 
-.queue-step-capability-chip .queue-step-capability-chip-remove:hover,
 .queue-step-capability-chip .queue-step-capability-chip-remove:active,
-.queue-step-capability-chip .queue-step-capability-chip-remove.is-clicked,
-.queue-step-attachment-chip .queue-step-attachment-chip-remove:hover,
-.queue-step-attachment-chip .queue-step-attachment-chip-remove:active,
-.queue-step-attachment-chip .queue-step-attachment-chip-remove.is-clicked {
+.queue-step-attachment-chip .queue-step-attachment-chip-remove:active {
   background: transparent;
-  background-image: none;
   border: none;
   box-shadow: none;
-  transform: none;
-  filter: none;
+}
+
+@media (hover: hover) {
+  .queue-step-capability-chip .queue-step-capability-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"])),
+  .queue-step-attachment-chip .queue-step-attachment-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
 }
 
 .sr-only {
@@ -7622,7 +7791,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .chat-session-message-error {
   margin-top: 0.35rem;
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
   font-size: 0.84rem;
 }
 
@@ -7692,16 +7861,20 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-width: 2;
 }
 
-.queue-info-toggle:hover,
-.queue-info-toggle:active,
-.queue-info-toggle.is-clicked {
+.queue-info-toggle:active {
   border: none;
   background: none;
-  background-image: none;
   box-shadow: none;
-  transform: none;
-  filter: none;
   color: rgb(var(--mm-ink));
+}
+
+@media (hover: hover) {
+  .queue-info-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border: none;
+    background: none;
+    box-shadow: none;
+    color: rgb(var(--mm-ink));
+  }
 }
 
 .queue-info-tooltip {
@@ -7722,7 +7895,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border, 220 220 220));
   border-radius: 0.5rem;
   background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.12);
   opacity: 0;
   visibility: hidden;
@@ -7734,12 +7907,19 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.4rem;
 }
 
-.queue-info-tooltip:hover .queue-info-tooltip-panel,
 .queue-info-tooltip:focus-within .queue-info-tooltip-panel,
 .queue-info-tooltip--visible .queue-info-tooltip-panel {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .queue-info-tooltip:hover .queue-info-tooltip-panel {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
 }
 
 .queue-info-tooltip--dismissed .queue-info-tooltip-panel {
@@ -7879,16 +8059,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: var(--mm-control-transition);
 }
 
-.queue-inline-filter:hover {
-  background: var(--mm-control-shell-hover);
-  border-color: rgb(var(--mm-accent) / 0.72);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.24), 0 10px 24px -20px rgb(var(--mm-accent) / 0.7);
-  transform: scale(var(--mm-control-hover-scale));
+@media (hover: hover) {
+  .queue-inline-filter:hover {
+    background: var(--mm-control-shell-hover);
+    border-color: rgb(var(--mm-accent) / 0.72);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.24), 0 10px 24px -20px rgb(var(--mm-accent) / 0.7);
+  }
 }
 
 .queue-inline-filter:focus-within {
-  border-color: rgb(var(--mm-accent-2) / 0.9);
-  box-shadow: var(--mm-control-focus-ring);
+  border-color: rgb(var(--mm-accent));
 }
 
 .queue-inline-filter:has(select:disabled) {
@@ -7967,7 +8147,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 @media (prefers-reduced-motion: reduce) {
   button,
   .button,
-  .queue-action,
   .queue-submit-primary,
   .queue-step-icon-button,
   .queue-step-extension-button,
@@ -7977,18 +8156,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     transition-duration: 0s !important;
     animation-duration: 0s !important;
     transform: none !important;
-  }
-}
-
-@media (forced-colors: active) {
-  button:focus-visible,
-  .button:focus-visible,
-  .route-nav a:focus-visible,
-  .live-logs-artifact-link:focus-visible,
-  .queue-action:focus-visible,
-  .queue-submit-primary:focus-visible {
-    outline: 2px solid ButtonText;
-    outline-offset: 2px;
   }
 }
 
@@ -8109,7 +8276,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     gap: 0.75rem;
     min-height: 3.25rem;
     padding: 0 1rem;
-    color: rgb(var(--mm-muted) / 0.78);
+    color: rgb(var(--mm-muted));
   }
 
   /* The collapsed nav renders flat menu rows: drop the desktop liquid-glass
@@ -8118,22 +8285,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     content: none;
   }
 
-  .route-nav a:hover {
-    color: white;
-    background: var(--mm-mobile-nav-hover);
-    box-shadow: none;
-    transform: none;
+  @media (hover: hover) {
+    .route-nav a:hover {
+      color: rgb(var(--mm-ink));
+      background: var(--mm-mobile-nav-hover);
+      box-shadow: none;
+      transform: none;
+    }
   }
 
   .route-nav a:focus-visible {
-    color: white;
+    color: rgb(var(--mm-ink));
     background: var(--mm-mobile-nav-hover);
-    box-shadow: var(--mm-control-focus-ring);
     transform: none;
   }
 
   .route-nav a.active {
-    color: white;
+    color: rgb(var(--mm-ink));
     background: linear-gradient(
       90deg,
       var(--mm-mobile-nav-active-start),
@@ -8259,7 +8427,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .collection-workspace {
   --mm-collection-sidebar-width: var(--workflow-list-column-workflow-width);
-  --mm-workspace-divider: var(--mm-border, rgba(148, 163, 184, 0.24));
   width: 100%;
   max-width: none;
   min-width: 0;
@@ -8402,12 +8569,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-bottom-color: var(--workflow-list-divider-color);
 }
 
-.skills-catalog-page .data-table tbody tr:hover {
-  background: rgb(var(--mm-accent) / 0.08);
-}
+@media (hover: hover) {
+  .skills-catalog-page .data-table tbody tr:hover {
+    background: rgb(var(--mm-accent) / 0.08);
+  }
 
-.dark .skills-catalog-page .data-table tbody tr:hover {
-  background: rgb(var(--mm-accent) / 0.18);
+  .dark .skills-catalog-page .data-table tbody tr:hover {
+    background: rgb(var(--mm-accent) / 0.18);
+  }
 }
 
 /* Re-inset the bled edges so header labels and cell text stay aligned with the
@@ -8450,8 +8619,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   text-decoration: none;
 }
 
-.skills-catalog-title-link:hover .skills-catalog-title {
-  text-decoration: underline;
+@media (hover: hover) {
+  .skills-catalog-title-link:hover .skills-catalog-title {
+    text-decoration: underline;
+  }
 }
 
 .skills-catalog-title {
@@ -8478,25 +8649,22 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding: 0.45rem 0.55rem;
   border: 0;
   border-radius: 0.5rem;
-  background: rgb(var(--mm-ok) / 0.16);
+  background: rgb(var(--mm-accent) / 0.14);
   box-shadow:
-    inset 0 0 0 1px rgb(var(--mm-ok) / 0.55),
+    inset 0 0 0 1px rgb(var(--mm-accent) / 0.55),
     inset 0 1px 0 var(--mm-glass-edge);
-  color: rgb(var(--mm-ok));
+  color: var(--mm-button-selected-fg);
   cursor: pointer;
   transition: background 130ms ease, color 130ms ease, box-shadow 130ms ease;
 }
 
-.skills-create-nav-button:hover {
-  background: rgb(var(--mm-ok) / 0.24);
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--mm-ok) / 0.8),
-    inset 0 1px 0 var(--mm-glass-edge);
-}
-
-.skills-create-nav-button:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
+@media (hover: hover) {
+  .skills-create-nav-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-accent) / 0.22);
+    box-shadow:
+      inset 0 0 0 1px rgb(var(--mm-accent) / 0.8),
+      inset 0 1px 0 var(--mm-glass-edge);
+  }
 }
 
 .skills-create-nav-button svg {
@@ -8645,17 +8813,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-width: 0;
 }
 
-/* Defensive reset: sidebar rows are flat table slices. If a future
- * implementation renders a row as a <button>, the global primary-button
- * styling (pill radius, shadow, hover/press scale) must never leak in. */
-button.workflow-workspace-sidebar-row,
-button.workflow-workspace-sidebar-row:hover,
-button.workflow-workspace-sidebar-row:active {
-  border-radius: 0;
-  box-shadow: none;
-  transform: none;
-}
-
 .workflow-workspace-sidebar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -8686,9 +8843,14 @@ button.workflow-workspace-sidebar-row:active {
   -webkit-line-clamp: 1;
 }
 
-.workflow-workspace-sidebar-row:hover,
 .workflow-workspace-sidebar-row:focus-visible {
   background: rgb(var(--mm-ink) / 0.06);
+}
+
+@media (hover: hover) {
+  .workflow-workspace-sidebar-row:hover {
+    background: rgb(var(--mm-ink) / 0.06);
+  }
 }
 
 .workflow-workspace-sidebar-row[aria-current="page"] {
@@ -9017,8 +9179,8 @@ button.workflow-workspace-sidebar-row:active {
   min-height: 640px;
   height: 70vh;
   border: 0;
-  border-radius: var(--mm-radius, 8px);
-  background: var(--mm-surface, #fff);
+  border-radius: 8px;
+  background: rgb(var(--mm-panel));
 }
 
 .td-native-chat-unavailable {
@@ -9028,9 +9190,9 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .td-native-chat-evidence {
-  border: 1px solid var(--mm-border, #e2e8f0);
-  border-radius: var(--mm-radius, 8px);
-  background: var(--mm-surface-muted, #f8fafc);
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-panel) / 0.6);
   padding: 0.5rem 0.75rem;
 }
 
@@ -9043,7 +9205,7 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .td-native-chat-continue-error {
-  color: var(--mm-danger, #b91c1c);
+  color: rgb(var(--mm-danger-text));
   text-align: right;
 }
 
@@ -9052,9 +9214,9 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .td-native-chat-continue-form {
-  border: 1px solid var(--mm-border, #e2e8f0);
-  border-radius: var(--mm-radius, 8px);
-  background: var(--mm-surface-muted, #f8fafc);
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-panel) / 0.6);
   padding: 0.75rem;
   gap: 0.5rem;
 }
@@ -9244,31 +9406,32 @@ button.workflow-workspace-sidebar-row:active {
    * is the elevated surface, the rows are not.
    */
   box-shadow: none;
-  transform: none;
-  filter: none;
   transition: background 120ms ease, border-color 120ms ease;
 }
 
 /* Pointer hover / active and programmatic focus: one calm filled-row cue. */
-.td-workflow-actions-item:hover,
 .td-workflow-actions-item:focus,
 .td-workflow-actions-item:active {
   border-color: rgb(var(--mm-accent) / 0.45);
   background: var(--mm-control-shell-hover);
   box-shadow: none;
-  transform: none;
-  filter: none;
-  outline: none;
+}
+
+@media (hover: hover) {
+  .td-workflow-actions-item:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    border-color: rgb(var(--mm-accent) / 0.45);
+    background: var(--mm-control-shell-hover);
+    box-shadow: none;
+  }
 }
 
 /* Keyboard focus: the standard single accent ring, no competing border. */
 .td-workflow-actions-item:focus-visible {
   border-color: transparent;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .td-workflow-actions-item-danger {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 .td-workflow-actions-item-disabled {
@@ -9276,15 +9439,20 @@ button.workflow-workspace-sidebar-row:active {
   color: rgb(var(--mm-muted));
 }
 
-.td-workflow-actions-item-disabled:hover,
 .td-workflow-actions-item-disabled:focus,
 .td-workflow-actions-item-disabled:focus-visible,
 .td-workflow-actions-item-disabled:active {
   border-color: rgb(var(--mm-border) / 0.6);
   background: rgb(var(--mm-border) / 0.14);
   box-shadow: none;
-  transform: none;
-  filter: none;
+}
+
+@media (hover: hover) {
+  .td-workflow-actions-item-disabled:hover {
+    border-color: rgb(var(--mm-border) / 0.6);
+    background: rgb(var(--mm-border) / 0.14);
+    box-shadow: none;
+  }
 }
 
 .td-workflow-actions-disabled-reason,
@@ -9375,6 +9543,7 @@ button.workflow-workspace-sidebar-row:active {
 
 .td-workflow-actions-trigger-compact {
   min-width: 0;
+  min-height: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -9393,7 +9562,7 @@ button.workflow-workspace-sidebar-row:active {
 .workflow-row-actions-error {
   max-width: 16rem;
   margin: 0;
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
   font-size: 0.74rem;
   font-weight: 500;
   line-height: 1.3;
@@ -9437,13 +9606,10 @@ button.workflow-workspace-sidebar-row:active {
   transition: background 120ms ease, color 120ms ease;
 }
 
-.td-instructions-toggle:hover {
-  background: rgb(var(--mm-accent) / 0.1);
-}
-
-.td-instructions-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
+@media (hover: hover) {
+  .td-instructions-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-accent) / 0.1);
+  }
 }
 
 .td-hero .meta-inline {
@@ -9582,8 +9748,10 @@ button.workflow-workspace-sidebar-row:active {
   text-decoration: none;
 }
 
-.td-repository-value a:hover {
-  color: rgb(var(--mm-accent));
+@media (hover: hover) {
+  .td-repository-value a:hover {
+    color: rgb(var(--mm-accent));
+  }
 }
 
 .td-repository-icon {
@@ -9798,11 +9966,11 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .dashboard-toast--success .dashboard-toast__icon {
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-ok-text));
 }
 
 .dashboard-toast--error .dashboard-toast__icon {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 .dashboard-toast__content {
@@ -9837,9 +10005,14 @@ button.workflow-workspace-sidebar-row:active {
   text-decoration: none;
 }
 
-.dashboard-toast__action:hover,
 .dashboard-toast__action:focus-visible {
   text-decoration: underline;
+}
+
+@media (hover: hover) {
+  .dashboard-toast__action:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    text-decoration: underline;
+  }
 }
 
 .dashboard-toast__close {
@@ -9865,16 +10038,21 @@ button.workflow-workspace-sidebar-row:active {
   stroke-width: 2;
 }
 
-.dashboard-toast__close:hover,
 .dashboard-toast__close:focus-visible,
 .dashboard-toast__close:active {
-  transform: none;
-  filter: none;
   box-shadow: none;
-  background-image: none;
   border-color: rgb(var(--mm-border) / 0.82);
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
+}
+
+@media (hover: hover) {
+  .dashboard-toast__close:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    box-shadow: none;
+    border-color: rgb(var(--mm-border) / 0.82);
+    background: rgb(var(--mm-ink) / 0.06);
+    color: rgb(var(--mm-ink));
+  }
 }
 
 .dashboard-toast__close:active {
@@ -9914,7 +10092,7 @@ button.workflow-workspace-sidebar-row:active {
   padding: 0.65rem 0.72rem;
   border: 1px solid rgb(var(--mm-danger) / 0.5);
   background: rgb(var(--mm-danger) / 0.08);
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
   font-size: 0.9rem;
   display: flex;
   flex-direction: column;
@@ -10050,7 +10228,7 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .log-panel__output--error {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 /* Upgraded DataTable ------------------------------------------------------- */
@@ -10093,7 +10271,7 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .data-table-error {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-danger-text));
 }
 
 /* Responsive stacked-card fallback. Hidden until the viewport is too narrow
@@ -10382,7 +10560,6 @@ button.workflow-workspace-sidebar-row:active {
 .omnigent-policy-detail,
 .omnigent-policy-editor { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .omnigent-policy-detail pre { max-width: 100%; overflow: auto; min-width: 0; }
-.omnigent-policy-detail pre:focus-visible { outline: 2px solid rgb(var(--mm-accent-2)); outline-offset: 2px; }
 
 /* MoonMind#4559 shared responsive contract: fieldsets have an intrinsic
  * minimum width (min-inline-size: min-content) that pushes single-column
@@ -10955,3 +11132,21 @@ button.workflow-workspace-sidebar-row:active {
 .model-selection__fields input, .model-selection__fields select { width: 100%; min-width: 0; box-sizing: border-box; }
 .model-selection p { overflow-wrap: anywhere; }
 @media (max-width: 640px) { .model-selection__fields { grid-template-columns: minmax(0, 1fr); } }
+
+/* One focus indicator for every keyboard-focusable control: an outline that
+ * keeps at least 3:1 against the page in both themes. Hover rules change
+ * background, border and shadow only, so they cannot hide it; outlines survive
+ * forced-colors mode, where box-shadow rings are dropped; and keeping this
+ * last means equal-specificity component rules (such as an `all: unset`
+ * reset) cannot remove it. */
+:focus-visible {
+  outline: 2px solid rgb(var(--mm-focus-ring));
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid CanvasText;
+    outline-offset: 2px;
+  }
+}

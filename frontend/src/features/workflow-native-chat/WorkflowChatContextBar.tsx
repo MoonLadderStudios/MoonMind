@@ -7,6 +7,10 @@
 // carries only chat-specific context.
 import type { MouseEvent } from 'react';
 
+import { buttonClassName } from '../../components/dashboard/Button';
+
+const ACTION_LINK_CLASS = buttonClassName({ variant: 'secondary', size: 'sm' });
+
 interface WorkflowChatContextBarProps {
   stepLabel?: string | null;
   runtimeLabel?: string | null;
@@ -64,21 +68,21 @@ export function WorkflowChatContextBar({
       </div>
       <nav className="wf-native-chat__actions" aria-label="Workflow chat actions">
         <a
-          className="button secondary small"
+          className={ACTION_LINK_CLASS}
           href={overviewHref}
           onClick={handleInternal(overviewHref)}
         >
           Back to Overview
         </a>
         <a
-          className="button secondary small"
+          className={ACTION_LINK_CLASS}
           href={evidenceHref}
           onClick={handleInternal(evidenceHref)}
         >
           View captured evidence
         </a>
         {fullPageHref ? (
-          <a className="button secondary small" href={fullPageHref}>
+          <a className={ACTION_LINK_CLASS} href={fullPageHref}>
             Open in Omnigent
           </a>
         ) : null}

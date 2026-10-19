@@ -360,6 +360,49 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
   });
 
+  it("shows why read-only row actions are disabled as visible linked text", async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            id: "schedule-1",
+            version: 1,
+            name: "Daily repository sweep",
+            enabled: true,
+            cron: "0 9 * * *",
+            timezone: "UTC",
+            nextRunAt: "2026-05-31T12:00:00Z",
+            updatedAt: "2025-01-15T09:30:00Z",
+            scopeType: "personal",
+            target: {},
+            policy: {},
+            permissions: {
+              canEdit: false,
+              canRunNow: false,
+              disabledReasons: {
+                canEdit: "Operator access is required to edit this schedule.",
+                canRunNow: "Operator access is required to run this schedule.",
+              },
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    const runNow = (await screen.findByRole("button", { name: "Run Daily repository sweep now" })) as HTMLButtonElement;
+    const pause = screen.getByRole("button", { name: "Pause Daily repository sweep" }) as HTMLButtonElement;
+    expect(runNow.disabled).toBe(true);
+    expect(pause.disabled).toBe(true);
+    const describedBy = (button: HTMLElement) =>
+      document.getElementById(button.getAttribute("aria-describedby") || "")?.textContent;
+    expect(describedBy(runNow)).toBe("Operator access is required to run this schedule.");
+    expect(describedBy(pause)).toBe("Operator access is required to edit this schedule.");
+    expect(screen.getByText("Operator access is required to run this schedule.")).not.toBeNull();
+  });
+
   it("triggers a safe run-now row action without exposing destructive delete", async () => {
     const listResponse = {
       items: [
@@ -865,7 +908,7 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Next Run. Server sorted not active." }));
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Next Run" }));
 
     await waitFor(() => {
       const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);
@@ -874,6 +917,28 @@ describe("SchedulesPage", () => {
     });
     expect(screen.queryByText(/server-authoritative/)).toBeNull();
     expect(document.querySelector('[title*="server-authoritative"]')).toBeNull();
+  });
+
+  it("exposes the server sort on the Recurring table headers with aria-sort", async () => {
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
+    const table = screen.getByRole("table", { name: "Recurring schedules" });
+    const header = (name: RegExp) => within(table).getByRole("columnheader", { name });
+    // The default list order is most recently updated first.
+    expect(header(/Updated/).getAttribute("aria-sort")).toBe("descending");
+    expect(header(/Next Run/).getAttribute("aria-sort")).toBe("none");
+    expect(header(/Last Scheduled/).getAttribute("aria-sort")).toBe("none");
+    // Unsortable columns carry no sort state.
+    expect(header(/Policy/).hasAttribute("aria-sort")).toBe(false);
+
+    fireEvent.click(within(header(/Next Run/)).getByRole("button"));
+    await waitFor(() => expect(header(/Next Run/).getAttribute("aria-sort")).toBe("ascending"));
+    expect(header(/Updated/).getAttribute("aria-sort")).toBe("none");
+
+    fireEvent.click(within(header(/Next Run/)).getByRole("button"));
+    await waitFor(() => expect(header(/Next Run/).getAttribute("aria-sort")).toBe("descending"));
+    await waitFor(() => expect(String(fetchSpy.mock.calls.at(-1)?.[0])).toContain("sortDir=desc"));
   });
 
   it("loads the recurring schedule detail route by the routed definition id", async () => {
@@ -1024,10 +1089,19 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={detailPayload} />);
 
     expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
-    expect(screen.getByText("Operator access is required to edit this schedule. Operator access is required to run this schedule.")).not.toBeNull();
-    expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Pause schedule" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("note").textContent).toBe("Operator access is required to edit this schedule. Operator access is required to run this schedule.");
+    // Each disabled action is described by its visible reason, not only a tooltip.
+    const describedBy = (button: HTMLElement) =>
+      document.getElementById(button.getAttribute("aria-describedby") || "")?.textContent;
+    const edit = screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement;
+    const runNow = screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement;
+    const pause = screen.getByRole("button", { name: "Pause schedule" }) as HTMLButtonElement;
+    expect(edit.disabled).toBe(true);
+    expect(describedBy(edit)).toBe("Operator access is required to edit this schedule.");
+    expect(runNow.disabled).toBe(true);
+    expect(describedBy(runNow)).toBe("Operator access is required to run this schedule.");
+    expect(pause.disabled).toBe(true);
+    expect(describedBy(pause)).toBe("Operator access is required to edit this schedule.");
     expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
   });
 

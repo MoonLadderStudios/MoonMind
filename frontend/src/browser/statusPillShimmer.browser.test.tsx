@@ -119,6 +119,16 @@ describe('status pill shimmer computed styles', () => {
       const waveStyle = getComputedStyle(letterWave);
       expect(waveStyle.color).not.toBe('rgba(0, 0, 0, 0)');
       expect(letterWave.textContent).toBe('Executing');
+      // Copying the pill yields the word, not one letter per line.
+      const selectStyle = getComputedStyle(letterWave) as CSSStyleDeclaration & { webkitUserSelect?: string };
+      expect(selectStyle.userSelect || selectStyle.webkitUserSelect).toBe('none');
+      const selection = window.getSelection()!;
+      selection.selectAllChildren(pill);
+      const copied = selection.toString();
+      // Case follows the pill's text-transform; the word must arrive whole.
+      expect(copied.toLowerCase()).toContain('executing');
+      expect(copied).not.toMatch(/e\s+x\s+e/i);
+      selection.removeAllRanges();
     });
   }
 
@@ -128,7 +138,7 @@ describe('status pill shimmer computed styles', () => {
     const pill = renderPill(displayStatus!);
     expect(pill.dataset.effect).toBe('shimmer-sweep');
     expect(pill.dataset.state).toBe('executing');
-    expect(pill.getAttribute('aria-label')).toBe('Executing');
+    expect(pill.querySelector('.sr-only')?.textContent).toBe('Executing');
 
     const { before } = shimmerLayerStyles(pill);
     expect(before.backgroundImage).not.toBe('none');

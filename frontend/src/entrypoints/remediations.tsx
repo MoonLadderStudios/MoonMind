@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardErrorState } from '../components/DashboardErrorState';
+import { Button } from '../components/dashboard/Button';
 import { PageHeader } from '../components/dashboard/PageHeader';
 import { DataTable, type Column } from '../components/tables/DataTable';
 import { responseError } from '../lib/api/client';
@@ -167,7 +168,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
       title="Remediation"
       description="Scan remediation workflows and their source Workflow provenance."
       headingProps={{ id: 'remediations-title' }}
-      actions={<button type="button" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</button>}
+      actions={<Button variant="secondary" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</Button>}
     />
     {unavailableCount > 0 ? <div className="notice error" role="status">
       <p>{unavailableCount === 1 ? '1 remediation could not be loaded.' : `${unavailableCount} remediations could not be loaded.`}</p>

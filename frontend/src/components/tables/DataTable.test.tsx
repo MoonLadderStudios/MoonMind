@@ -74,6 +74,41 @@ describe('DataTable (MM-959)', () => {
     expect(within(bodyRows[0]!).getByText('Gamma')).toBeTruthy();
   });
 
+  it('reports header activation and keeps caller order when sorting is controlled', () => {
+    const requested: string[] = [];
+    const { rerender } = render(
+      <DataTable
+        data={rows}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        sort={{ key: 'count', direction: 'desc' }}
+        onSortChange={(key) => requested.push(key)}
+      />,
+    );
+    expect(screen.getByRole('columnheader', { name: /Count/ }).getAttribute('aria-sort')).toBe('descending');
+    expect(screen.getByRole('columnheader', { name: /Name/ }).getAttribute('aria-sort')).toBe('none');
+
+    fireEvent.click(screen.getByRole('button', { name: /Sort by Name/ }));
+    expect(requested).toEqual(['name']);
+    // Rows keep the caller's (server's) order rather than being re-sorted locally.
+    const bodyRows = screen.getAllByRole('row').slice(1);
+    expect(within(bodyRows[0]!).getByText('Beta')).toBeTruthy();
+    // The header still reflects the controlled sort until the caller changes it.
+    expect(screen.getByRole('columnheader', { name: /Count/ }).getAttribute('aria-sort')).toBe('descending');
+
+    rerender(
+      <DataTable
+        data={rows}
+        columns={columns}
+        getRowKey={(r) => r.id}
+        sort={{ key: 'name', direction: 'asc' }}
+        onSortChange={(key) => requested.push(key)}
+      />,
+    );
+    expect(screen.getByRole('columnheader', { name: /Name/ }).getAttribute('aria-sort')).toBe('ascending');
+    expect(screen.getByRole('columnheader', { name: /Count/ }).getAttribute('aria-sort')).toBe('none');
+  });
+
   it('marks header, data, and action cells with stable column keys', () => {
     render(
       <DataTable

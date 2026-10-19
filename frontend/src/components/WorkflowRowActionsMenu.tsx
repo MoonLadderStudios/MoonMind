@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { DashboardActionDialog } from './DashboardActionDialog';
+import { buttonClassName } from './dashboard/Button';
 import { useDashboardToast } from './dashboard/DashboardToast';
 import { responseError } from '../lib/api/client';
 import { navigateTo } from '../lib/navigation';
@@ -497,7 +498,10 @@ export function WorkflowRowActionsMenu({
         items={items}
         triggerContent={KEBAB_ICON}
         triggerAriaLabel="More actions"
-        triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+        triggerClassName={buttonClassName({
+          variant: 'secondary',
+          className: 'td-workflow-actions-trigger td-workflow-actions-trigger-compact',
+        })}
         menuAriaLabel="More actions"
         emptyMessage={emptyMessage}
         subject={workflowSubject}

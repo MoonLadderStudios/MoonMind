@@ -304,7 +304,7 @@ function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
 
 function LoadingPage() {
   return (
-    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8" role="status">
       <h1 className="m-0 rounded-3xl border border-mm-border/80 bg-transparent p-6 font-sans text-sm font-normal leading-normal text-slate-500 shadow-sm dark:text-slate-400">
         Loading MoonMind...
       </h1>
@@ -855,11 +855,9 @@ function AppShell({
             </div>
           </div>
         </div>
-        <section
-          ref={panelRef}
-          className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
-          aria-live="polite"
-        >
+        {/* Not a live region: pages announce their own status messages, so
+            table refreshes and other content updates stay silent. */}
+        <section ref={panelRef} className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}>
           {children}
         </section>
       </div>

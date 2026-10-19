@@ -284,10 +284,117 @@ describe("Workflow Create form trust", () => {
     const toolId = within(second).getByLabelText("Tool ID");
     await waitFor(() => expect(document.activeElement).toBe(toolId));
     expect(toolId.getAttribute("aria-invalid")).toBe("true");
+    // The message is the field's accessible description, not only an errormessage reference.
+    expect((toolId.getAttribute("aria-describedby") || "").split(" ")).toContain(message.id);
     expect(createRequests()).toHaveLength(0);
 
     fireEvent.change(toolId, { target: { value: "example.raw_tool" } });
     expect(within(second).getByLabelText("Tool ID").getAttribute("aria-invalid")).not.toBe("true");
+    expect(within(second).getByLabelText("Tool ID").hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("links a bottom-bar field error without dropping the field's own description", async () => {
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Reject an invalid repository." },
+    });
+    const repository = within(submissionBar()).getByLabelText("Repository");
+    fireEvent.change(repository, { target: { value: "not a repository" } });
+    const publishMode = within(submissionBar()).getByLabelText("Publish Mode");
+    const publishDescription = publishMode.getAttribute("aria-describedby");
+    expect(publishDescription).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    const message = await within(submissionBar()).findByRole("alert");
+    await waitFor(() => expect(document.activeElement).toBe(repository));
+    expect(repository.getAttribute("aria-invalid")).toBe("true");
+    expect((repository.getAttribute("aria-describedby") || "").split(" ")).toContain(message.id);
+    expect(publishMode.getAttribute("aria-describedby")).toBe(publishDescription);
+  });
+
+  it("gives the submission bar visible labels and a named Start button", async () => {
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    await screen.findByLabelText("Instructions");
+
+    const bar = submissionBar();
+    for (const name of ["Repository", "Branch", "Publish Mode"]) {
+      const control = within(bar).getByLabelText(name) as HTMLInputElement | HTMLSelectElement;
+      // A real <label> names the control; a placeholder or aria-label alone is not visible.
+      const labels = Array.from(control.labels || []);
+      expect(labels.map((label) => label.textContent)).toEqual([name]);
+      expect(bar.contains(labels[0] as HTMLElement)).toBe(true);
+    }
+    const start = within(bar).getByRole("button", { name: "Start Workflow" });
+    expect(start.querySelector("[data-submit-icon='arrow']")).toBeTruthy();
+  });
+
+  it("says beside a disabled Start button why it cannot submit", async () => {
+    const execution = recordedExecution("mm:retired-profile");
+    const workflow = (execution.inputParameters as { workflow: { runtime: Record<string, unknown> } })
+      .workflow;
+    workflow.runtime = { ...workflow.runtime, profileId: "profile:retired" };
+    executions["mm:retired-profile"] = execution;
+    window.history.pushState(
+      {},
+      "Workflow Edit",
+      "/workflows/new?editExecutionId=mm%3Aretired-profile",
+    );
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+
+    await screen.findByText(/Profile cannot be submitted/);
+    const start = within(submissionBar()).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    const descriptions = (start.getAttribute("aria-describedby") || "")
+      .split(" ")
+      .filter(Boolean)
+      .map((id) => document.getElementById(id));
+    const reason = descriptions[0] as HTMLElement;
+    // The reason is visible text in the submission bar, not only a tooltip.
+    expect(submissionBar().contains(reason)).toBe(true);
+    expect(reason.textContent).toBe("Fix the Provider Profile in Execution context to start.");
+    expect(start.title).not.toContain("Provider Profile");
+    expect(descriptions.map((description) => description?.textContent)).toContainEqual(
+      expect.stringMatching(/^Profile cannot be submitted: /),
+    );
+  });
+
+  it("labels the Harness select alone and keeps status text out of its label", async () => {
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    await screen.findByLabelText("Instructions");
+
+    const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
+    expect(harness.tagName).toBe("SELECT");
+    const labels = Array.from(harness.labels || []);
+    expect(labels).toHaveLength(1);
+    const label = labels[0] as HTMLLabelElement;
+    expect(label.textContent).toBe("Harness");
+    expect(label.htmlFor).toBe(harness.id);
+    expect(label.querySelector("button, input, select, textarea, [role='status']")).toBeNull();
+  });
+
+  it("shows why a Preset step cannot be expanded yet", async () => {
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+
+    const step = stepSection(1);
+    fireEvent.click(within(step).getByRole("radio", { name: "Preset" }));
+    const expand = within(step).getByRole("button", { name: "Expand" }) as HTMLButtonElement;
+    expect(expand.disabled).toBe(true);
+    const describedBy = (expand.getAttribute("aria-describedby") || "").split(" ").filter(Boolean);
+    const reasons = describedBy.map((id) => document.getElementById(id));
+    expect(reasons.every((reason) => reason && step.contains(reason))).toBe(true);
+    expect(reasons.map((reason) => reason?.textContent)).toContain(
+      "Choose a preset template to expand.",
+    );
+
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => expect(presetSelect.options.length).toBeGreaterThan(1));
+    fireEvent.change(presetSelect, { target: { value: "global::::jira-orchestrate" } });
+    await waitFor(() =>
+      expect((within(step).getByRole("button", { name: "Expand" }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(within(step).queryByText("Choose a preset template to expand.")).toBeNull();
   });
 
   it("follows Create, Edit and Compare URL changes without losing the draft", async () => {

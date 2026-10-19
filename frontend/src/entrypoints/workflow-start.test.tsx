@@ -14943,10 +14943,7 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("outlines the create button on click while morphing its arrow into a green check and preserving the shockwave", async () => {
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*color:\s*rgb\(var\(--mm-action-primary\)\);[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
-    );
+  it("morphs the create arrow into a check on click and preserves the shockwave", async () => {
     expect(css).toMatch(
       /\.queue-submit-primary--icon \.queue-submit-primary-arrow-glyph--check\s*\{[^}]*opacity:\s*0;[^}]*transform:\s*scale\(0\.6\);/s,
     );
@@ -14968,32 +14965,14 @@ describe("Task Create submit arrow animation", () => {
     expect(css).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);/,
     );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
-    );
     expect(css).not.toMatch(
       /\.queue-submit-primary--icon[^{]*:active\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*queue-submit-primary-arrow-exit/s,
     );
     expect(css).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
     );
-    expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*2px solid rgb\(var\(--mm-action-primary\) \/ 0\.92\);[^}]*box-shadow:[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.64\)[^}]*filter:\s*none;/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.5\)\s*41%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.16\)\s*68%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*100%/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*62%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.44\)\s*62%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.92\)\s*77%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*77%/s,
-    );
     expect(css).not.toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*filter:\s*blur/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 32px 2px rgb\(var\(--mm-accent-2\) \/ 0\.36\)[^}]*0 0 62px -2px rgb\(var\(--mm-accent-2\) \/ 0\.24\)/s,
-    );
-    expect(css).not.toMatch(
-      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 0 3px rgb\(var\(--mm-action-primary\) \/ 0\.6\)/s,
     );
   });
 
@@ -18573,11 +18552,49 @@ describe("Task Create schema-driven capability inputs", () => {
     await waitFor(() => {
       expect(within(step).getAllByText("A Jira issue is required.").length).toBeGreaterThan(0);
     });
+    // The inline error is the invalid field's accessible description.
+    const jiraIssue = within(step).getByLabelText("Jira issue");
+    expect(jiraIssue.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = jiraIssue.getAttribute("aria-describedby") || "";
+    expect(describedBy).toBeTruthy();
+    expect(
+      describedBy.split(" ").map((id) => document.getElementById(id)?.textContent),
+    ).toContain("A Jira issue is required.");
     expect(
       fetchSpy.mock.calls.some(([url]) =>
         String(url).startsWith("/api/presets/jira-schema-preset:expand"),
       ),
     ).toBe(false);
+  });
+
+  it("gives every schema field a step-unique id so labels resolve inside their own step", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const first = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const second = (await screen.findByText("Step 2")).closest("section") as HTMLElement;
+    for (const step of [first, second]) {
+      selectStepType(step, "Skill");
+      fireEvent.change(within(step).getByRole("combobox", { name: /skill/i }), {
+        target: { value: "schema.skill" },
+      });
+    }
+    await within(first).findByLabelText("Repository name");
+    await within(second).findByLabelText("Repository name");
+    // Advanced mode renders every optional per-step field as well.
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    await within(second).findByLabelText("Unsupported widget");
+
+    const ids = Array.from(document.querySelectorAll<HTMLElement>("[id]"), (element) => element.id);
+    expect(ids.filter((id, index) => ids.indexOf(id) !== index)).toEqual([]);
+    for (const step of [first, second]) {
+      const labels = Array.from(step.querySelectorAll<HTMLLabelElement>("label[for]"));
+      expect(labels.length).toBeGreaterThan(0);
+      for (const label of labels) {
+        const control = document.getElementById(label.htmlFor);
+        expect(control, label.htmlFor).toBeTruthy();
+        expect(step.contains(control)).toBe(true);
+      }
+    }
   });
 
   it("renders a new schema preset without capability-id-specific code", async () => {
@@ -18956,13 +18973,9 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(within(step).queryByTestId("skill-schema-fallback-0")).toBeNull();
     fireEvent.click(screen.getByLabelText("Advanced mode"));
 
-    const unsupported = (await waitFor(() => {
-      const input = step.querySelector<HTMLInputElement>(
-        "#queue-capability-input-externalLookup",
-      );
-      expect(input).toBeTruthy();
-      return input as HTMLInputElement;
-    })) as HTMLInputElement;
+    const unsupported = (await within(step).findByLabelText(
+      "External lookup",
+    )) as HTMLInputElement;
     expect(unsupported.disabled).toBe(false);
     fireEvent.change(unsupported, { target: { value: "preserve-me" } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -21842,33 +21855,12 @@ describe("Task Create MM-937 step hover containment", () => {
     );
   });
 
-  it("anchors step header control hover scaling to the trailing edge so a step does not spill past the steps container", () => {
-    // The step header controls are right-aligned (margin-left: auto), so the
-    // trailing control sits flush against the steps container edge.
-    expect(dashboardCss).toMatch(
-      /\.queue-step-controls\s*\{[^}]*margin-left:\s*auto;/s,
-    );
-    // The hover scale that would otherwise push that control outward.
-    expect(dashboardCss).toMatch(
-      /\.queue-step-icon-button:hover\s*\{[^}]*transform:\s*scale\(var\(--mm-control-hover-scale\)\);/s,
-    );
-    // The containment fix: scale only the trailing control from its right edge
-    // so it grows inward instead of spilling past the container boundary when
-    // hovered, while the leading controls keep their natural center scaling.
-    expect(dashboardCss).toMatch(
-      /\.queue-step-controls\s+\.queue-step-icon-button:last-child\s*\{[^}]*transform-origin:\s*right center;/s,
-    );
-  });
-
   it("keeps context chip remove buttons compact after the generic icon-button rules", () => {
     expect(dashboardCss).toMatch(
       /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*0\.78rem;[^}]*height:\s*0\.78rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
     );
     expect(dashboardCss).toMatch(
       /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove\s+svg,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s+svg\s*\{[^}]*width:\s*0\.46rem;[^}]*height:\s*0\.46rem;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove:hover,[^{]+\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\.is-clicked\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;[^}]*filter:\s*none;/s,
     );
   });
 

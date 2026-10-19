@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { FormEvent, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Button, buttonClassName } from '../components/dashboard/Button';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageHeader } from '../components/dashboard/PageHeader';
 import { PageSizeSelector } from '../components/PageSizeSelector';
@@ -36,6 +37,8 @@ import { formatStatusLabel } from '../utils/formatters';
 import { describeCadence, describeCron } from '../lib/cronCadence';
 
 const SCHEDULES_MOBILE_MEDIA_QUERY = '(max-width: 720px)';
+const SCHEDULE_EDIT_REASON_ID = 'schedule-edit-unavailable-reason';
+const SCHEDULE_RUN_REASON_ID = 'schedule-run-unavailable-reason';
 
 const ScheduleSchema = z.object({
   id: z.string(),
@@ -1173,7 +1176,7 @@ function ScheduleDetailPage({
         onRetry={onSidebarRetry}
       >
         <div className="schedules-page stack">
-          <a href="/schedules" className="secondary">Back to recurring schedules</a>
+          <a href="/schedules" className={buttonClassName({ variant: 'secondary', className: 'justify-self-start' })}>Back to recurring schedules</a>
           <div className="schedules-error" role="alert">{errorMessage(detailQuery.error, 'Schedule not found')}</div>
         </div>
       </RecurringScheduleWorkspace>
@@ -1209,17 +1212,15 @@ function ScheduleDetailPage({
           <span className={`schedules-state schedules-state--${scheduleState(schedule)}`}>
             {stateLabel(schedule)}
           </span>
-          <button
-            type="button"
-            className="secondary"
+          <Button
+            variant="secondary"
             onClick={() => void refreshDetail()}
             disabled={detailQuery.isFetching || runsQuery.isFetching}
           >
             {detailQuery.isFetching || runsQuery.isFetching ? 'Refreshing' : 'Refresh'}
-          </button>
-          <button
-            type="button"
-            className="secondary"
+          </Button>
+          <Button
+            variant="secondary"
             onClick={() => {
               setEditForm(editFormFromSchedule(schedule));
               setSubmitErrors({});
@@ -1231,42 +1232,41 @@ function ScheduleDetailPage({
             }}
             disabled={!actions?.canEdit}
             title={!actions?.canEdit ? actions?.editReason : undefined}
+            aria-describedby={actions && !actions.canEdit ? SCHEDULE_EDIT_REASON_ID : undefined}
           >
             {isEditing ? 'Cancel edit' : 'Edit schedule'}
-          </button>
-          <button
-            type="button"
-            className="button"
+          </Button>
+          <Button
             onClick={() => runNowMutation.mutate()}
             disabled={runNowMutation.isPending || !actions?.canRun}
             title={!actions?.canRun ? actions?.runReason : undefined}
+            aria-describedby={actions && !actions.canRun ? SCHEDULE_RUN_REASON_ID : undefined}
           >
             {runNowMutation.isPending ? 'Requesting' : 'Run now'}
-          </button>
+          </Button>
           {actions?.canDelete ? (
-            <button
-              type="button"
-              className="secondary"
+            <Button
+              variant="danger"
               onClick={() => setDeleteDialogOpen(true)}
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? 'Deleting' : 'Delete schedule'}
-            </button>
+            </Button>
           ) : null}
-          <button
-            type="button"
-            className="secondary"
+          <Button
+            variant="secondary"
             onClick={() => pauseResumeMutation.mutate({
               enabled: !schedule.enabled,
               version: schedule.version,
             })}
             disabled={pauseResumeMutation.isPending || isEditing || updateMutation.isPending || !actions?.canEdit}
             title={!actions?.canEdit ? actions?.editReason : undefined}
+            aria-describedby={actions && !actions.canEdit ? SCHEDULE_EDIT_REASON_ID : undefined}
           >
             {pauseResumeMutation.isPending
               ? (schedule.enabled ? 'Pausing' : 'Resuming')
               : (schedule.enabled ? 'Pause schedule' : 'Resume schedule')}
-          </button>
+          </Button>
         </>
         )}
       />
@@ -1290,11 +1290,12 @@ function ScheduleDetailPage({
 
       {actions && (!actions.canEdit || !actions.canRun || (actions.deleteContractAvailable && !actions.canDelete)) ? (
         <div className="schedules-error" role="note">
-          {[
-            !actions.canEdit ? actions.editReason : null,
-            !actions.canRun ? actions.runReason : null,
-            actions.deleteContractAvailable && !actions.canDelete ? actions.deleteReason : null,
-          ].filter(Boolean).join(' ')}
+          {/* Each reason has its own id so the disabled buttons above can reference it. */}
+          {!actions.canEdit ? <span id={SCHEDULE_EDIT_REASON_ID}>{actions.editReason}</span> : null}
+          {!actions.canEdit && !actions.canRun ? ' ' : null}
+          {!actions.canRun ? <span id={SCHEDULE_RUN_REASON_ID}>{actions.runReason}</span> : null}
+          {(!actions.canEdit || !actions.canRun) && actions.deleteContractAvailable && !actions.canDelete ? ' ' : null}
+          {actions.deleteContractAvailable && !actions.canDelete ? <span>{actions.deleteReason}</span> : null}
         </div>
       ) : null}
 
@@ -1482,12 +1483,11 @@ function ScheduleDetailPage({
                 <span>Enabled</span>
               </label>
               <div className="toolbar-controls">
-                <button type="submit" className="button" disabled={updateMutation.isPending}>
+                <Button type="submit" disabled={updateMutation.isPending}>
                   {updateMutation.isPending ? 'Saving' : 'Save schedule'}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
+                </Button>
+                <Button
+                  variant="secondary"
                   onClick={() => {
                     setEditForm(editFormFromSchedule(schedule));
                     setSubmitErrors({});
@@ -1496,7 +1496,7 @@ function ScheduleDetailPage({
                   }}
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </form>
           ) : (
@@ -1753,6 +1753,12 @@ function ScheduleRowActions({
 }) {
   const queryClient = useQueryClient();
   const availability = scheduleActionAvailability(schedule, sources);
+  // Disabled reasons render as visible text; one shared reason is shown once.
+  const reasonIdPrefix = useId();
+  const runReasonId = `${reasonIdPrefix}-run`;
+  const editReasonId = !availability.canRun && availability.editReason === availability.runReason
+    ? runReasonId
+    : `${reasonIdPrefix}-edit`;
   const runNowEndpoint = scheduleEndpoint(payload, 'runNow', schedule.id);
   const updateEndpoint = scheduleEndpoint(payload, 'update', schedule.id);
 
@@ -1825,9 +1831,9 @@ function ScheduleRowActions({
   return (
     <div className="schedules-row-actions">
       {currentRun && <RunNowResult run={currentRun} />}
-      <button
-        type="button"
-        className="secondary"
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={() => runNowMutation.mutate()}
         disabled={busy || !availability.canRun}
         {...(runNowMutation.isError
@@ -1835,13 +1841,14 @@ function ScheduleRowActions({
           : availability.canRun
           ? {}
           : { title: availability.runReason })}
+        aria-describedby={availability.canRun ? undefined : runReasonId}
         aria-label={`Run ${schedule.name} now`}
       >
         {runNowMutation.isPending ? 'Requesting' : 'Run now'}
-      </button>
-      <button
-        type="button"
-        className="secondary"
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
         disabled={busy || !availability.canEdit}
         {...(pauseResumeMutation.isError
@@ -1854,10 +1861,17 @@ function ScheduleRowActions({
           : availability.canEdit
           ? {}
           : { title: availability.editReason })}
+        aria-describedby={availability.canEdit ? undefined : editReasonId}
         aria-label={`${pauseLabel} ${schedule.name}`}
       >
         {pauseResumeMutation.isPending ? 'Updating' : pauseLabel}
-      </button>
+      </Button>
+      {!availability.canRun ? (
+        <span id={runReasonId} className="small">{availability.runReason}</span>
+      ) : null}
+      {!availability.canEdit && editReasonId !== runReasonId ? (
+        <span id={editReasonId} className="small">{availability.editReason}</span>
+      ) : null}
     </div>
   );
 }
@@ -2053,20 +2067,6 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
     setCursorStack([]);
   };
 
-  const sortableHeader = (key: RecurringSortKey, label: string) => (
-    <button
-      type="button"
-      className="data-table__sort"
-      onClick={() => changeSort(key)}
-      aria-label={`${label}. Server sorted ${sort === key ? sortDir : 'not active'}.`}
-    >
-      <span>{label}</span>
-      <span aria-hidden="true" className="data-table__sort-indicator">
-        {sort === key ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
-      </span>
-    </button>
-  );
-
   useEffect(() => {
     if (routeDefinitionId) {
       return;
@@ -2113,12 +2113,12 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
         headingProps={{ tabIndex: -1, 'data-recurring-table-title': '' }}
         actions={(
         <>
-          <button type="button" className="secondary" onClick={() => void refetch()} disabled={isFetching}>
+          <Button variant="secondary" onClick={() => void refetch()} disabled={isFetching}>
             {isFetching ? 'Refreshing' : 'Refresh'}
-          </button>
+          </Button>
           <a
             href="/workflows/new?scheduleMode=recurring"
-            className="button queue-step-icon-button"
+            className={buttonClassName({ variant: 'icon' })}
             aria-label="Create recurring schedule"
           >
             +
@@ -2157,14 +2157,9 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
 
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
         <div className="workflow-list-filter-toolbar">
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => setMobileFiltersOpen(true)}
-            aria-label="Filters"
-          >
+          <Button variant="secondary" onClick={() => setMobileFiltersOpen(true)} aria-label="Filters">
             Filters
-          </button>
+          </Button>
         </div>
         {activeFilters.length > 0 ? (
           <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
@@ -2198,15 +2193,14 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             <div className="workflow-list-advanced-filter-drawer" role="dialog" aria-modal="true" aria-label="Recurring filters">
               <div className="section-heading-row">
                 <h3>Filters</h3>
-                <button type="button" className="secondary" onClick={() => setMobileFiltersOpen(false)} aria-label="Close filters">
+                <Button variant="secondary" onClick={() => setMobileFiltersOpen(false)} aria-label="Close filters">
                   Close
-                </button>
+                </Button>
               </div>
               <RecurringFilterForm filters={filters} onChange={setFilter} />
               <div className="workflow-list-filter-actions">
-                <button
-                  type="button"
-                  className="secondary"
+                <Button
+                  variant="secondary"
                   onClick={() => {
                     setFilters(EMPTY_RECURRING_FILTERS);
                     setCursor('');
@@ -2214,10 +2208,10 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                   }}
                 >
                   Reset filters
-                </button>
-                <button type="button" className="button" onClick={() => setMobileFiltersOpen(false)}>
+                </Button>
+                <Button onClick={() => setMobileFiltersOpen(false)}>
                   Apply filters
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2323,12 +2317,14 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
               },
               {
                 key: 'nextRunAt',
-                header: sortableHeader('nextRunAt', 'Next Run'),
+                header: 'Next Run',
+                sortable: true,
                 render: (item) => formatWhen(item.nextRunAt),
               },
               {
                 key: 'lastScheduledFor',
-                header: sortableHeader('lastScheduledFor', 'Last Scheduled'),
+                header: 'Last Scheduled',
+                sortable: true,
                 render: (item) => formatWhen(item.lastScheduledFor),
               },
               {
@@ -2356,7 +2352,8 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
               },
               {
                 key: 'updatedAt',
-                header: sortableHeader('updatedAt', 'Updated'),
+                header: 'Updated',
+                sortable: true,
                 render: (item) => formatWhen(item.updatedAt),
               },
             ]}
@@ -2370,15 +2367,17 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             emptyMessage={emptyMessage}
             getRowKey={(item) => item.id}
             ariaLabel="Recurring schedules"
+            sort={{ key: sort, direction: sortDir }}
+            onSortChange={(key) => changeSort(key as RecurringSortKey)}
           />
         <div className="queue-pagination workflow-list-footer-pagination">
           <PageSizeSelector pageSize={pageSize} onPageSizeChange={changePageSize} disabled={isLoading || isFetching} />
           <span className="workflow-list-footer-page-summary">
             Page {pageIndex + 1} · {schedules.length} shown{typeof data?.count === 'number' ? ` · ${totalCount} total` : ''}
           </span>
-          <button
-            type="button"
-            className="secondary queue-pagination-button"
+          <Button
+            variant="secondary"
+            className="queue-pagination-button"
             disabled={cursorStack.length === 0 || isLoading || isFetching}
             onClick={() => {
               const previousStack = cursorStack.slice(0, -1);
@@ -2387,10 +2386,10 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             }}
           >
             Previous
-          </button>
-          <button
-            type="button"
-            className="secondary queue-pagination-button"
+          </Button>
+          <Button
+            variant="secondary"
+            className="queue-pagination-button"
             disabled={!nextCursor || isLoading || isFetching}
             onClick={() => {
               setCursorStack((current) => [...current, cursor]);
@@ -2398,7 +2397,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             }}
           >
             Next
-          </button>
+          </Button>
         </div>
       </section>
     </div>

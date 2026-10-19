@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { responseError } from '../../lib/api/client';
 import { formatHarnessLabel } from '../../runtime/runtimeTargets';
+import { Button } from '../dashboard/Button';
 import { fetchProviderProfiles, PROVIDER_PROFILE_QUERY_KEY } from './ProviderProfilesManager';
 import {
   useSettingsDraftGuard,
@@ -617,20 +618,16 @@ export function GeneratedSettingsSection({
             </p>
           </div>
           {onScopeChange ? (
-          <div className="flex rounded-full border border-slate-300 p-1 dark:border-slate-700" aria-label="Settings scope">
+          <div className="flex gap-1 rounded-full border border-slate-300 p-1 dark:border-slate-700" role="group" aria-label="Settings scope">
             {(['workspace', 'user'] as SettingScope[]).map((candidate) => (
-              <button
+              <Button
                 key={candidate}
-                type="button"
-                className={`rounded-full px-4 py-2 text-sm font-medium ${
-                  scope === candidate
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                    : 'bg-transparent text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white'
-                }`}
+                variant="ghost"
+                aria-pressed={scope === candidate}
                 onClick={() => requestScopeChange(candidate)}
               >
                 {SCOPE_LABELS[candidate]}
-              </button>
+              </Button>
             ))}
           </div>
           ) : null}
@@ -663,14 +660,14 @@ export function GeneratedSettingsSection({
                 </p>
               ) : null}
             </div>
-            <button
-              type="button"
-              className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => setSelectedAuditKey(null)}
               aria-label={`Close audit history for ${selectedAuditDescriptor.title}`}
             >
               Close
-            </button>
+            </Button>
           </div>
 
           {auditQuery.isLoading ? (
@@ -772,21 +769,12 @@ export function GeneratedSettingsSection({
               <p className="text-sm text-amber-800 dark:text-amber-200">Review changed keys before saving.</p>
             </div>
             <div className="flex gap-2">
-              <button
-                type="button"
-                className="rounded-xl border border-amber-300 bg-transparent px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-100 dark:hover:bg-amber-900/40"
-                onClick={() => setPending({})}
-              >
+              <Button variant="danger" onClick={() => setPending({})}>
                 Discard changes
-              </button>
-              <button
-                type="button"
-                className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900"
-                disabled={hasInvalidChange}
-                onClick={saveChanges}
-              >
+              </Button>
+              <Button variant="primary" disabled={hasInvalidChange} onClick={saveChanges}>
                 Save changes
-              </button>
+              </Button>
             </div>
           </div>
           <div className="mt-4 grid gap-3">
@@ -918,26 +906,26 @@ export function GeneratedSettingsSection({
                     <div className="flex flex-wrap items-center justify-end gap-3">
                       <div className="flex flex-wrap justify-end gap-2">
                         {canReadAudit ? (
-                          <button
-                            type="button"
-                            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => setSelectedAuditKey(descriptor.key)}
                             aria-controls="settings-audit-panel"
                             aria-expanded={selectedAuditKey === descriptor.key}
                             aria-label={`View audit for ${descriptor.title}`}
                           >
                             View audit
-                          </button>
+                          </Button>
                         ) : null}
                         {canReset(descriptor, scope) ? (
-                          <button
-                            type="button"
-                            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => resetOverride(descriptor)}
                             aria-label={`Reset ${descriptor.title}`}
                           >
                             Reset
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
                     </div>

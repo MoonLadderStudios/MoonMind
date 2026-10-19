@@ -10,6 +10,8 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { Button } from '../../components/dashboard/Button';
+
 export interface CapturedEvidenceItem {
   label: string;
   kind: string;
@@ -254,24 +256,22 @@ export function WorkflowTerminalChatActions({
   return (
     <div className="stack td-native-chat-terminal-actions">
       <div className="td-native-chat-actions">
-        <button
-          type="button"
-          className="button secondary"
+        <Button
+          variant="secondary"
           aria-expanded={evidenceOpen}
           onClick={() => setEvidenceOpen((open) => !open)}
           data-testid="workflow-native-chat-evidence-toggle"
         >
           View captured evidence
-        </button>
-        <button
-          type="button"
-          className="button secondary"
+        </Button>
+        <Button
+          variant="secondary"
           aria-expanded={formOpen}
           onClick={() => setFormOpen((open) => !open)}
           data-testid="workflow-native-chat-continue"
         >
           Continue in a new workflow
-        </button>
+        </Button>
       </div>
       {formOpen ? (
         <form
@@ -300,14 +300,13 @@ export function WorkflowTerminalChatActions({
               data-testid="workflow-native-chat-continue-instructions"
             />
           </label>
-          <button
+          <Button
             type="submit"
-            className="button"
             disabled={!canSubmit}
             data-testid="workflow-native-chat-continue-submit"
           >
             {continueState === 'pending' ? 'Continuing…' : 'Start continuation'}
-          </button>
+          </Button>
         </form>
       ) : null}
       {continueState === 'error' ? (

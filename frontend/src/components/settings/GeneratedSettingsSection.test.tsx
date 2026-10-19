@@ -455,11 +455,19 @@ describe('GeneratedSettingsSection', () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
+    const scopeGroup = screen.getByRole('group', { name: 'Settings scope' });
+    expect(within(scopeGroup).getByRole('button', { name: 'Workspace' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(scopeGroup).getByRole('button', { name: 'User' }).getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(screen.getByRole('button', { name: 'User' }));
 
     await screen.findByDisplayValue('env://WORKSPACE_TOKEN');
     expect(requests.some((request) => request.url.includes('scope=user'))).toBe(true);
     expect(screen.queryByText('Default Publish Mode')).toBeNull();
+    const userScopeGroup = screen.getByRole('group', { name: 'Settings scope' });
+    expect(within(userScopeGroup).getByRole('button', { name: 'User' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(userScopeGroup).getByRole('button', { name: 'Workspace' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
   });
 
   it('does not offer reset for inherited workspace overrides in user scope', async () => {

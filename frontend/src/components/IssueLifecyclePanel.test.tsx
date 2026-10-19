@@ -87,12 +87,22 @@ describe('IssueLifecyclePanel', () => {
     await waitFor(() => expect(screen.getByTestId('issue-lifecycle-panel')).not.toBeNull());
     expect(screen.getByText(/A safe continuation handoff is available/)).not.toBeNull();
     // Continuation requires explicit stop proof; confirm it before asserting availability.
+    const blockedContinue = screen.getByRole('button', { name: 'Continue existing work' });
+    expect(document.getElementById(blockedContinue.getAttribute('aria-describedby') || '')?.textContent).toBe(
+      'Continue existing work: Confirm prior writer stop proof first.',
+    );
     const stopProof = screen.getByRole('checkbox') as HTMLInputElement;
     fireEvent.click(stopProof);
     await waitFor(() =>
       expect((screen.getByRole('button', { name: 'Continue existing work' }) as HTMLButtonElement).disabled).toBe(false),
     );
-    expect((screen.getByRole('button', { name: 'Resolve competing-attempt conflict' }) as HTMLButtonElement).disabled).toBe(true);
+    const resolve = screen.getByRole('button', { name: 'Resolve competing-attempt conflict' }) as HTMLButtonElement;
+    expect(resolve.disabled).toBe(true);
+    // The server's disabled reason is visible text linked to the button, not only a tooltip.
+    const resolveReason = document.getElementById(resolve.getAttribute('aria-describedby') || '');
+    expect(resolveReason?.textContent).toBe('Resolve competing-attempt conflict: no competing refs');
+    expect(screen.getByText('Resolve competing-attempt conflict: no competing refs')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue existing work' }).getAttribute('aria-describedby')).toBeNull();
     // Prior failure history is preserved and visible.
     expect(screen.getByText(/Prior failed attempts preserved: 1/)).not.toBeNull();
     // Advanced evidence is progressively disclosed behind a closed

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -40,6 +41,7 @@ import {
   TechnicalDetailsDisclosure,
 } from '../components/workflows/WorkflowDetailFacts';
 import { PageHeader } from '../components/dashboard/PageHeader';
+import { Button, buttonClassName, type ButtonVariant } from '../components/dashboard/Button';
 import { LogPanel } from '../components/dashboard/LogPanel';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { QueryStaleNotice } from '../components/dashboard/StaleDataNotice';
@@ -362,7 +364,7 @@ function RuntimeCommandDetail({
     <div className="td-summary-block">
       <h4>Runtime Command</h4>
       {hasCommand ? (
-        <div className="td-facts-grid">
+        <dl className="td-facts-grid">
           {commandName ? <Fact label="Command"><code>{commandName}</code></Fact> : null}
           {recordedHarnessLabel(runtime) ? (
             <Fact label="Harness">{recordedHarnessLabel(runtime)}</Fact>
@@ -372,7 +374,7 @@ function RuntimeCommandDetail({
           {renderMode ? <Fact label="Render Mode">{formatStatusLabel(renderMode)}</Fact> : null}
           {status ? <Fact label="Status">{formatStatusLabel(status)}</Fact> : null}
           {hintCatalogVersion ? <Fact label="Hint Catalog Version">{hintCatalogVersion}</Fact> : null}
-        </div>
+        </dl>
       ) : (
         <p className="small">Historical runtime command metadata is not available.</p>
       )}
@@ -2193,7 +2195,7 @@ function IconMenuButton({
       items={items}
       triggerContent={KEBAB_ICON}
       triggerAriaLabel={ariaLabel}
-      triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+      triggerClassName={buttonClassName({ variant: 'secondary', className: 'td-workflow-actions-trigger td-workflow-actions-trigger-compact' })}
       subject={subject}
       subjectId={subjectId}
     />
@@ -2909,8 +2911,8 @@ function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelo
   return <section className={`notice ${envelope.status === 'completed' ? '' : 'warning'}`} aria-label="Terminal outcome evidence">
     <strong>Terminal outcome: {formatStatusLabel(envelope.status)}</strong>
     {envelope.summary ? <p>{envelope.summary}</p> : null}
-    {links.length > 0 ? <div className="button-group">
-      {links.map(({ label, href }) => <a key={label} className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open terminal ${label.toLowerCase()}`}>{label}</a>)}
+    {links.length > 0 ? <div className="button-row">
+      {links.map(({ label, href }) => <a key={label} className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={href} target="_blank" rel="noreferrer" aria-label={`Open terminal ${label.toLowerCase()}`}>{label}</a>)}
     </div> : null}
     {envelope.evidenceIncompleteReason ? <p className="small">Evidence incomplete: {envelope.evidenceIncompleteReason}</p> : null}
     {envelope.cleanupState || envelope.leaseReleaseState ? <p className="small">{[
@@ -2966,8 +2968,8 @@ function GovernanceReportBlock({ workflowId, report }: { workflowId: string; rep
         Only this summary is kept with the run; the full report body is not stored. Run artifacts
         remain on the Evidence tab.
       </p>
-      <div className="button-group">
-        <a className="button secondary small" href={href}>
+      <div className="button-row">
+        <a className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={href}>
           Open run evidence
         </a>
       </div>
@@ -3816,7 +3818,7 @@ function InputImagesSection({
                       </p>
                     )}
                     <a
-                      className="button secondary"
+                      className={buttonClassName({ variant: 'secondary' })}
                       href={href}
                       download={filename}
                     >
@@ -3866,7 +3868,7 @@ function ReportPresentationSection({
         </div>
         <div className="actions">
           <a
-            className="button secondary"
+            className={buttonClassName({ variant: 'secondary' })}
             href={reportOpenHref(apiBase, primaryReport)}
             title="Open report"
           >
@@ -3895,7 +3897,7 @@ function ReportPresentationSection({
                     <td>{reportViewerLabel(artifact)}</td>
                     <td>
                       <a
-                        className="button secondary"
+                        className={buttonClassName({ variant: 'secondary' })}
                         href={reportOpenHref(apiBase, artifact)}
                         title={`Open ${artifactReportLinkLabel(artifact) || 'report content'}`}
                       >
@@ -4498,13 +4500,15 @@ function StepCheckBadge({ check }: { check: z.infer<typeof StepLedgerCheckSchema
   return (
     <span
       {...statusPillProps}
-      aria-label={hasShimmerSweep ? label : undefined}
       className={`step-check-badge ${checkStatusClass} ${statusPillProps.className}`}
     >
       {hasShimmerSweep ? (
-        <span className="status-letter-wave" aria-hidden="true" data-label={label}>
-          {label}
-        </span>
+        <>
+          <span className="sr-only">{label}</span>
+          <span className="status-letter-wave" aria-hidden="true" data-label={label}>
+            {label}
+          </span>
+        </>
       ) : (
         label
       )}
@@ -5287,6 +5291,17 @@ function BranchExplorerPanel({
     !actionsEnabled && 'Branch actions are disabled by workflow policy.',
     busy && 'Another workflow action is in progress.',
   ]);
+  // Disabled actions get their reason as visible text, not only a tooltip:
+  // each distinct reason renders once and every action it blocks points at it.
+  const createBlockedReasonId = useId();
+  const branchActionReasonBaseId = useId();
+  const branchActionReasons = Array.from(new Set(
+    [continueBlockedReason, forkBlockedReason, compareBlockedReason, promoteBlockedReason, publishBlockedReason, archiveBlockedReason]
+      .filter((reason): reason is string => Boolean(reason)),
+  ));
+  const branchActionReasonId = (reason: string | null): string | undefined => (
+    reason ? `${branchActionReasonBaseId}-${branchActionReasons.indexOf(reason)}` : undefined
+  );
 
   return (
     <section className="stack td-branch-explorer td-evidence-region" aria-label="Branch Explorer">
@@ -5323,22 +5338,21 @@ function BranchExplorerPanel({
                       const childCount = branches.filter((candidate) => candidate.parentBranchId === branch.branchId).length;
                       return (
                         <li key={branch.branchId} className="stack gap-1">
-                          <button
-                            type="button"
-                            className="secondary"
+                          <Button
+                            variant="secondary"
                             aria-pressed={selectedBranch?.branchId === branch.branchId}
                             onClick={() => onSelectBranch(branch.branchId)}
                           >
                             {branch.label}
-                          </button>
-                          <div className="td-facts-grid">
+                          </Button>
+                          <dl className="td-facts-grid">
                             <Fact label="State"><CheckpointBranchStatusPill status={branch.state} /></Fact>
                             <Fact label="Branch ID"><code className="text-xs break-all">{branch.branchId}</code></Fact>
                             <Fact label="Kind">{formatStatusLabel(branch.branchKind || 'root')}</Fact>
                             <Fact label="Children">{childCount}</Fact>
                             {branch.parentBranchId ? <Fact label="Parent"><code className="text-xs break-all">{branch.parentBranchId}</code></Fact> : null}
                             {branch.gitWorkBranch ? <Fact label="Git Branch"><code className="text-xs break-all">{branch.gitWorkBranch}</code></Fact> : null}
-                          </div>
+                          </dl>
                           {branchEvidenceLinks(apiBase, branch)}
                         </li>
                       );
@@ -5438,15 +5452,16 @@ function BranchExplorerPanel({
           Branch instructions
           <textarea value={draft.instructions} disabled={busy} rows={3} onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} />
         </label>
-        <div className="td-facts-grid">
+        <dl className="td-facts-grid">
           <Fact label="Checkpoint"><code className="text-xs break-all">{selectedSource ? stepCheckpointRef(selectedSource) : '—'}</code></Fact>
           <Fact label="Side-effect risk">{draft.publishMode === 'none' ? 'No publish side effect requested' : 'Git publication requested'}</Fact>
           <Fact label="Run"><code className="text-xs break-all">{runId || '—'}</code></Fact>
-        </div>
-        <button
-          type="button"
+        </dl>
+        <Button
+          variant="primary"
           disabled={createDisabled}
           title={createBlockedReason || undefined}
+          aria-describedby={createBlockedReason ? createBlockedReasonId : undefined}
           onClick={() => selectedSource && onBranchAction({
             kind: 'create',
             draft,
@@ -5455,8 +5470,8 @@ function BranchExplorerPanel({
           })}
         >
           Create branch from checkpoint
-        </button>
-        {createBlockedReason ? <p className="notice subtle">Create branch unavailable: {createBlockedReason}</p> : null}
+        </Button>
+        {createBlockedReason ? <p id={createBlockedReasonId} className="notice subtle">Create branch unavailable: {createBlockedReason}</p> : null}
       </div>
       )}
 
@@ -5471,26 +5486,26 @@ function BranchExplorerPanel({
               { label: 'Competing Branches', value: String(competingBranches.length) },
             ]}
           />
-          <div className="td-facts-grid">
+          <dl className="td-facts-grid">
             <Fact label="Branch head"><code className="text-xs break-all">{selectedBranch.currentHeadStepExecutionId || selectedBranch.currentHeadCommit || selectedBranch.currentHeadCheckpointRef || '—'}</code></Fact>
             <Fact label="Gate verdict">{formatStatusLabel(selectedBranch.state)}</Fact>
             <Fact label="Git / PR">{selectedBranch.pullRequestUrl ? <a href={selectedBranch.pullRequestUrl} target="_blank" rel="noreferrer">Pull request</a> : <code className="text-xs break-all">{selectedBranch.currentHeadCommit || selectedBranch.gitWorkBranch || '—'}</code>}</Fact>
             <Fact label="Invalidations">Recorded during promotion</Fact>
             <Fact label="Side effects">{selectedBranch.publishStatus ? formatStatusLabel(selectedBranch.publishStatus) : 'Unpublished'}</Fact>
             <Fact label="Approvals">Policy evidence required by promote API</Fact>
-          </div>
+          </dl>
           {turnsError ? <p className="small step-tl-error">{turnsError.message}</p> : null}
           {turns.length > 0 ? (
             <ol className="step-execution-history" aria-label="Branch turns">
               {turns.map((turn, index) => (
                 <li key={turn.branchTurnId}>
                   <strong>Turn {index + 1}</strong> <CheckpointBranchTurnStatusPill status={turn.status} />
-                  <div className="td-facts-grid">
+                  <dl className="td-facts-grid">
                     <Fact label="Turn ID"><code className="text-xs break-all">{turn.branchTurnId}</code></Fact>
                     <Fact label="Instructions"><code className="text-xs break-all">{turn.instructionRef}</code></Fact>
                     {turn.stepExecutionManifestRef ? <Fact label="Manifest"><code className="text-xs break-all">{turn.stepExecutionManifestRef}</code></Fact> : null}
                     {turn.createdStepExecutionId ? <Fact label="Step Execution"><code className="text-xs break-all">{turn.createdStepExecutionId}</code></Fact> : null}
-                  </div>
+                  </dl>
                 </li>
               ))}
             </ol>
@@ -5511,18 +5526,24 @@ function BranchExplorerPanel({
             </select>
           </label>
           <div className="button-row">
-            <button type="button" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</button>
-            <button type="button" className="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</button>
-            <button type="button" className="secondary" disabled={compareDisabled} title={compareBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</button>
-            <button type="button" className="secondary" disabled={promoteDisabled} title={promoteBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</button>
-            <button type="button" className="secondary" disabled={publishDisabled} title={publishBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</button>
-            <button type="button" className="secondary" disabled={Boolean(archiveBlockedReason)} title={archiveBlockedReason || undefined} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</button>
+            <Button variant="primary" disabled={Boolean(continueBlockedReason)} title={continueBlockedReason || undefined} aria-describedby={branchActionReasonId(continueBlockedReason)} onClick={() => onBranchAction({ kind: 'continue', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('continue', workflowId, selectedBranch.branchId) })}>Continue branch</Button>
+            <Button variant="secondary" disabled={Boolean(forkBlockedReason)} title={forkBlockedReason || undefined} aria-describedby={branchActionReasonId(forkBlockedReason)} onClick={() => onBranchAction({ kind: 'fork', branch: selectedBranch, instructions: branchInstructions, idempotencyKey: branchIdempotencyKey('fork', workflowId, selectedBranch.branchId) })}>Fork from this branch</Button>
+            <Button variant="secondary" disabled={compareDisabled} title={compareBlockedReason || undefined} aria-describedby={branchActionReasonId(compareBlockedReason)} onClick={() => onBranchAction({ kind: 'compare', branch: selectedBranch, againstBranchId })}>Compare branches</Button>
+            <Button variant="secondary" disabled={promoteDisabled} title={promoteBlockedReason || undefined} aria-describedby={branchActionReasonId(promoteBlockedReason)} onClick={() => onBranchAction({ kind: 'promote', branch: selectedBranch, competingBranches, idempotencyKey: branchIdempotencyKey('promote', workflowId, selectedBranch.branchId) })}>Promote branch</Button>
+            <Button variant="secondary" disabled={publishDisabled} title={publishBlockedReason || undefined} aria-describedby={branchActionReasonId(publishBlockedReason)} onClick={() => onBranchAction({ kind: 'publish', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('publish', workflowId, selectedBranch.branchId) })}>Publish branch</Button>
+            <Button variant="danger" disabled={Boolean(archiveBlockedReason)} title={archiveBlockedReason || undefined} aria-describedby={branchActionReasonId(archiveBlockedReason)} onClick={() => onBranchAction({ kind: 'archive', branch: selectedBranch, idempotencyKey: branchIdempotencyKey('archive', workflowId, selectedBranch.branchId) })}>Archive branch</Button>
           </div>
-          {selectedActionBlockedReason ? (
-            <p className="notice subtle">
-              Branch action unavailable: {selectedActionBlockedReason}
-            </p>
-          ) : null}
+          {branchActionReasons.map((reason) => (
+            reason === selectedActionBlockedReason ? (
+              <p key={reason} id={branchActionReasonId(reason)} className="notice subtle">
+                Branch action unavailable: {reason}
+              </p>
+            ) : (
+              <p key={reason} id={branchActionReasonId(reason)} className="small">
+                {reason}
+              </p>
+            )
+          ))}
           {latestCompare ? <p className="small">Latest comparison summary: <code className="text-xs break-all">{latestCompare.summaryRef}</code></p> : null}
         </div>
       ) : null}
@@ -5951,6 +5972,7 @@ function StepLedgerRowCard({
   branches: CheckpointBranch[];
 }) {
   const lastError = formatStepLastError(row.lastError);
+  const detailsId = useId();
 
   return (
     <article className={`step-tl-row${expanded ? ' step-tl-expanded' : ''}${isLast ? ' step-tl-last' : ''}`}>
@@ -5959,23 +5981,25 @@ function StepLedgerRowCard({
         {!isLast ? <span className="step-tl-line" /> : null}
       </div>
       <div className="step-tl-content">
+        {/* The visible title, status, timing and summary name this toggle;
+            aria-expanded carries the show/hide state. The {' '} separators keep
+            words apart in that name and collapse away between flex items. */}
         <button
           type="button"
           className="step-tl-toggle"
           onClick={onToggle}
           aria-expanded={expanded}
-          aria-label={expanded ? `Hide details for ${row.title}` : `Show details for ${row.title}`}
+          aria-controls={expanded ? detailsId : undefined}
         >
           <div className="step-tl-header">
-            <span className="step-tl-title">{row.title}</span>
+            <span className="step-tl-title">{row.title}</span>{' '}
             <span className="step-tl-right">
-              <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>
-              <StepLedgerStatusPill status={row.status} />
-              <StepTimingChip row={row} />
-              <RemediationCadenceChip row={row} />
-              <BranchStatusAffordance branches={branches} />
-              <span className="sr-only">{formatStatusLabel(row.status)}</span>
-              {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
+              <code className="step-tl-tool">{formatStepToolLabel(row.tool)}</code>{' '}
+              <StepLedgerStatusPill status={row.status} />{' '}
+              <StepTimingChip row={row} />{' '}
+              <RemediationCadenceChip row={row} />{' '}
+              <BranchStatusAffordance branches={branches} />{' '}
+              {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}{' '}
               <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
             </span>
@@ -5996,7 +6020,7 @@ function StepLedgerRowCard({
           {!expanded ? <StepEvidenceRefs row={row} /> : null}
         </button>
         {expanded ? (
-          <div className="step-tl-details">
+          <div className="step-tl-details" id={detailsId}>
             <section className="step-tl-detail-section">
               <h4>Summary</h4>
               <p className="small">{row.summary || 'No step summary yet.'}</p>
@@ -6385,13 +6409,13 @@ function LiveLogsPanel({
     <div className="stack live-logs-panel">
       {summaryErrorMessage ? <div className="notice error">{summaryErrorMessage}</div> : null}
       {expanded ? (
-        <div className="button-group live-logs-toolbar">
+        <div className="button-row live-logs-toolbar">
           <label className="live-logs-wrap-toggle">
             <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
             <span className="small">Wrap lines</span>
           </label>
-          <button className="secondary small" onClick={handleCopy}>Copy</button>
-          <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+          <Button variant="secondary" size="sm" onClick={handleCopy}>Copy</Button>
+          <a className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
         </div>
       ) : null}
       <p className="small">
@@ -6668,12 +6692,12 @@ function BridgeSessionLogsPanel({
   return (
     <div className="stack live-logs-panel">
       {eventsQuery.isError ? <div className="notice error">{(eventsQuery.error as Error).message}</div> : null}
-      <div className="button-group live-logs-toolbar">
+      <div className="button-row live-logs-toolbar">
         <label className="live-logs-wrap-toggle">
           <input type="checkbox" checked={wrapLines} onChange={(event) => setWrapLines(event.target.checked)} />
           <span className="small">Wrap lines</span>
         </label>
-        <button className="secondary small" onClick={handleCopy}>Copy</button>
+        <Button variant="secondary" size="sm" onClick={handleCopy}>Copy</Button>
       </div>
       <p className="small">
         Bridge session <code className="text-xs">{bridgeSessionId}</code> - {statusLabel}
@@ -6762,14 +6786,14 @@ function BridgeSessionLogsPanel({
                         {resource.path ? <code className="text-xs break-all"> — {resource.path}</code> : null}
                         {resource.sourceEventSequence != null ? <span className="small"> (event {resource.sourceEventSequence})</span> : null}
                         {href && resource.previewAvailable ? (
-                          <a className="button secondary small" href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a>
+                          <a className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={href} target="_blank" rel="noreferrer" aria-label={`Open ${resource.label}`}>Open</a>
                         ) : null}
                         {href && resource.downloadAvailable ? (
-                          <a className="button secondary small" href={href} download aria-label={`Download ${resource.label}`}>Download</a>
+                          <a className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={href} download aria-label={`Download ${resource.label}`}>Download</a>
                         ) : null}
                         {resource.relatedArtifactRefs?.map((ref, relatedIndex) => {
                           const relatedHref = artifactRefHref(apiBase, ref);
-                          return relatedHref ? <a key={ref} className="button secondary small" href={relatedHref} target="_blank" rel="noreferrer" aria-label={`Open related evidence ${relatedIndex + 1} for ${resource.label}`}>Related evidence</a> : null;
+                          return relatedHref ? <a key={ref} className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={relatedHref} target="_blank" rel="noreferrer" aria-label={`Open related evidence ${relatedIndex + 1} for ${resource.label}`}>Related evidence</a> : null;
                         })}
                         {resource.unavailableReason ? <div className="small">Unavailable: {resource.unavailableReason}</div> : null}
                       </li>
@@ -7155,19 +7179,18 @@ function RetryFromStepPanel({
               </select>
             </div>
           ) : null}
-          <div className="action-row">
-            <button
-              type="button"
-              className="queue-action"
+          <div className="button-row">
+            <Button
+              variant="primary"
               disabled={busy}
               onClick={() => onRetry(selected?.logicalStepId || null)}
             >
               Retry from {selected && !selected.isDefault ? 'selected step' : 'failed step'}
-            </button>
+            </Button>
             {taskEditingOn && canRerun ? (
-              <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
+              <Button variant="secondary" disabled={busy} onClick={onRerun}>
                 Rerun from the start
-              </button>
+              </Button>
             ) : null}
           </div>
         </>
@@ -7483,13 +7506,13 @@ function SessionContinuityPanel({
 
   const renderControlButton = ({
     label,
-    className,
+    variant,
     disabledReason,
     onClick,
     hiddenWhenUnavailable = false,
   }: {
     label: string;
-    className: string;
+    variant: ButtonVariant;
     disabledReason: string | null;
     onClick: () => void;
     hiddenWhenUnavailable?: boolean;
@@ -7498,15 +7521,14 @@ function SessionContinuityPanel({
     if (!compact && hiddenWhenUnavailable && disabled) return null;
     return (
       <span className="chat-session-control-action">
-        <button
-          type="button"
-          className={className}
+        <Button
+          variant={variant}
           disabled={disabled}
           onClick={onClick}
           aria-describedby={disabled ? `session-control-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-reason` : undefined}
         >
           {label}
-        </button>
+        </Button>
         {disabled && compact ? (
           <span
             id={`session-control-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-reason`}
@@ -7576,10 +7598,10 @@ function SessionContinuityPanel({
                   <code className="text-xs break-all">{resource.artifactId}</code>
                   {resource.unavailableReason ? <p className="small notice warning">{resource.unavailableReason}</p> : null}
                   <div className="actions" style={{ marginTop: '0.5rem' }}>
-                    {resource.previewAvailable ? <a aria-label={`Open ${label}`} className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
+                    {resource.previewAvailable ? <a aria-label={`Open ${label}`} className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={contentHref} target="_blank" rel="noreferrer">
                       Open
                     </a> : null}
-                    {resource.downloadAvailable ? <a aria-label={`Download ${label}`} className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
+                    {resource.downloadAvailable ? <a aria-label={`Download ${label}`} className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={downloadHref} target="_blank" rel="noreferrer">
                       Download
                     </a> : null}
                   </div>
@@ -7649,28 +7671,28 @@ function SessionContinuityPanel({
         <div className="actions chat-session-control-actions">
           {renderControlButton({
             label: 'Continue session',
-            className: 'secondary',
+            variant: 'secondary',
             disabledReason: busy || !followUpMessage.trim() || !canSendFollowUp ? sendDisabledReason : null,
             onClick: submitFollowUp,
             hiddenWhenUnavailable: true,
           })}
           {renderControlButton({
             label: 'Clear / Reset',
-            className: 'secondary',
+            variant: 'danger',
             disabledReason: clearDisabledReason,
             onClick: clearSession,
             hiddenWhenUnavailable: true,
           })}
           {renderControlButton({
             label: 'Interrupt turn',
-            className: 'secondary',
+            variant: 'secondary',
             disabledReason: interruptDisabledReason,
             onClick: interruptTurn,
             hiddenWhenUnavailable: true,
           })}
           {renderControlButton({
             label: 'Cancel session',
-            className: 'queue-action queue-action-danger',
+            variant: 'danger',
             disabledReason: cancelDisabledReason,
             onClick: cancelSession,
             hiddenWhenUnavailable: true,
@@ -8143,22 +8165,20 @@ function RemediationApprovalControls({
         />
       </label>
       <div className="actions">
-        <button
-          type="button"
-          className="secondary"
+        <Button
+          variant="secondary"
           disabled={busy}
           onClick={() => onApprovalDecision(remediationWorkflowId, requestId, 'approved', rationale)}
         >
           Approve remediation action
-        </button>
-        <button
-          type="button"
-          className="secondary"
+        </Button>
+        <Button
+          variant="secondary"
           disabled={busy}
           onClick={() => onApprovalDecision(remediationWorkflowId, requestId, 'rejected', rationale)}
         >
           Deny remediation action
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -8188,19 +8208,19 @@ function RemediationOperatorControls({
       {hasControl ? (
         <div className="actions" role="group" aria-label="Remediation operator controls">
           {controls.canTakeOver ? (
-            <button type="button" className="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'takeover')}>
+            <Button variant="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'takeover')}>
               Take over and pause
-            </button>
+            </Button>
           ) : null}
           {controls.canResume ? (
-            <button type="button" className="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'resume')}>
+            <Button variant="secondary" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'resume')}>
               Resume remediation
-            </button>
+            </Button>
           ) : null}
           {controls.canCancel ? (
-            <button type="button" className="queue-action-danger" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'cancel')}>
+            <Button variant="danger" disabled={busy} onClick={() => onOperatorControl(item.remediationWorkflowId, 'cancel')}>
               Cancel remediation
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : (
@@ -8464,7 +8484,7 @@ function RemediationEvidencePanel({
                     )}
                   </td>
                   <td>
-                    <a className="button secondary" href={artifactDownloadHref(apiBase, artifact)}>
+                    <a className={buttonClassName({ variant: 'secondary' })} href={artifactDownloadHref(apiBase, artifact)}>
                       Open Evidence
                     </a>
                   </td>
@@ -8566,7 +8586,7 @@ function ArtifactBrowserActions({ apiBase, artifact }: { apiBase: string; artifa
   return (
     <div className="actions">
       <a
-        className="button secondary"
+        className={buttonClassName({ variant: 'secondary' })}
         href={artifactDownloadHref(apiBase, artifact)}
         download={name}
         title="Download artifact"
@@ -8575,7 +8595,7 @@ function ArtifactBrowserActions({ apiBase, artifact }: { apiBase: string; artifa
       </a>
       {previewHref ? (
         <a
-          className="button secondary"
+          className={buttonClassName({ variant: 'secondary' })}
           href={previewHref}
           target="_blank"
           rel="noreferrer"
@@ -8648,9 +8668,8 @@ function ArtifactBrowserPanel({
           Artifact Browser | {shownCount} artifact{shownCount === 1 ? '' : 's'}
         </span>
         {deletedCount > 0 ? (
-          <button
-            type="button"
-            className="button secondary"
+          <Button
+            variant="secondary"
             aria-pressed={showDeleted}
             onClick={() => {
               setShowDeleted((current) => !current);
@@ -8658,7 +8677,7 @@ function ArtifactBrowserPanel({
             }}
           >
             {showDeleted ? 'Hide' : 'Show'} deleted ({deletedCount})
-          </button>
+          </Button>
         ) : null}
       </div>
       {isLoading ? (
@@ -8684,14 +8703,13 @@ function ArtifactBrowserPanel({
                 <tr key={row.key} data-artifact-group="omnigent-sse">
                   <td>{formatStatusLabel(row.category)}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="button secondary"
+                    <Button
+                      variant="secondary"
                       aria-expanded={chunksExpanded}
                       onClick={() => setChunksExpanded((current) => !current)}
                     >
                       Omnigent event stream chunks ({row.artifacts.length})
-                    </button>
+                    </Button>
                   </td>
                   <td>
                     {formatBytes(row.artifacts.reduce((total, artifact) => total + (artifact.sizeBytes ?? 0), 0))}
@@ -8721,22 +8739,20 @@ function ArtifactBrowserPanel({
                 {currentPage * ARTIFACT_BROWSER_PAGE_SIZE + 1}–
                 {Math.min(rows.length, (currentPage + 1) * ARTIFACT_BROWSER_PAGE_SIZE)} of {rows.length}
               </span>
-              <button
-                type="button"
-                className="button secondary"
+              <Button
+                variant="secondary"
                 disabled={currentPage === 0}
                 onClick={() => setPage(currentPage - 1)}
               >
                 Previous
-              </button>
-              <button
-                type="button"
-                className="button secondary"
+              </Button>
+              <Button
+                variant="secondary"
                 disabled={currentPage >= pageCount - 1}
                 onClick={() => setPage(currentPage + 1)}
               >
                 Next
-              </button>
+              </Button>
             </div>
           ) : null}
         </div>
@@ -10385,13 +10401,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       {actionNotice ? (
         <div className="notice" role="status">
           {actionNotice}
-          <button
-            type="button"
-            className="secondary"
+          <Button
+            variant="secondary"
             onClick={() => setActionNotice(null)}
           >
             Dismiss
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -11033,8 +11048,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 </div>
               ) : null}
               {runSummaryDiagnosticsHref ? (
-                <div className="button-group">
-                  <a className="button secondary small" href={runSummaryDiagnosticsHref} target="_blank" rel="noreferrer">
+                <div className="button-row">
+                  <a className={buttonClassName({ variant: 'secondary', size: 'sm' })} href={runSummaryDiagnosticsHref} target="_blank" rel="noreferrer">
                     {runSummary.failure ? 'Open failure diagnostics' : 'Open last step diagnostics'}
                   </a>
                 </div>

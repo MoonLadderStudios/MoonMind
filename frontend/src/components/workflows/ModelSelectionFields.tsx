@@ -2,6 +2,7 @@ import { useId } from "react";
 import { isTierEffortOptionAvailable, type ProviderProfileTierCapabilities } from "../../utils/providerProfileTiers";
 import { displayModelSelection, editModelSelection, hasModelSelection, inheritModelSelection, isCustomSelection, replaceModelSelection } from "../../lib/modelSelection";
 import type { ModelSelection, ModelSelectionProfile, ModelSelectionPreview } from "../../lib/modelSelection";
+import { Button } from "../dashboard/Button";
 
 export function ModelSelectionFields({ value, inherited, profile, scope, onChange, loading, error, preview, capabilities, modelList, effortList }: {
   value: ModelSelection;
@@ -72,6 +73,6 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
     {!isCustomSelection(effective) && preview?.effortSource === "provider_profile_default" ? <p className="small">Effort uses the saved profile default.</p> : null}
     {loading ? <p className="small" role="status">Loading profile tiers…</p> : error ? <p className="small" role="alert">{error}</p> : profile && tiers.length === 0 ? <p className="small" role="alert">This profile has an empty tier policy. Review Profile settings; your draft is preserved.</p> : null}
     {preview && (display.model === null || display.effort === null) ? <p className="small">{display.model === null && preview.model && preview.modelSource === "runtime_default" ? `Runtime default model: ${preview.model}. ` : ""}{display.effort === null && preview.effort && preview.effortSource === "runtime_default" ? `Runtime default effort: ${preview.effort}.` : ""}</p> : null}
-    {inherited != null && hasModelSelection(value) ? <button type="button" onClick={() => onChange(value.parameters ? { parameters: value.parameters } : {})}>Use workflow settings</button> : null}
+    {inherited != null && hasModelSelection(value) ? <Button variant="secondary" size="sm" onClick={() => onChange(value.parameters ? { parameters: value.parameters } : {})}>Use workflow settings</Button> : null}
   </div>;
 }

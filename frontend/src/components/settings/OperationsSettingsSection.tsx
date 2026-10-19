@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { responseError } from '../../lib/api/client';
+import { Button } from '../dashboard/Button';
 import { newRequestId } from '../../lib/requestId';
 import { formatStatusLabel } from '../../utils/formatters';
 
@@ -997,9 +998,9 @@ export function OperationsSettingsSection({
             </a>
           ) : null}
           {action.retryAllowed && action.operationId ? (
-            <button
-              type="button"
-              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+            <Button
+              variant="ghost"
+              size="sm"
               disabled={
                 !canInvokeOperations ||
                 retryMutation.isPending ||
@@ -1008,7 +1009,7 @@ export function OperationsSettingsSection({
               onClick={() => retryMutation.mutate(String(action.operationId))}
             >
               Retry operation
-            </button>
+            </Button>
           ) : null}
           {(action.owner !== 'workflow' || !legacyRollbackNote) &&
           action.rollbackEligibility &&
@@ -1240,18 +1241,18 @@ export function OperationsSettingsSection({
                 </p>
               ) : null}
 
-              <button
+              <Button
                 type="submit"
+                variant="primary"
                 disabled={
                   deploymentMutation.isPending ||
                   !canInvokeOperations ||
                   controllerUnavailable ||
                   controllerNotInstalled
                 }
-                className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
               >
                 Update MoonMind
-              </button>
+              </Button>
 
               {renderDeploymentNotice(updateNotice)}
             </form>
@@ -1641,12 +1642,9 @@ export function OperationsSettingsSection({
                         required
                       />
                     </label>
-                    <button
-                      type="submit"
-                      className="inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-                    >
+                    <Button type="submit" variant="primary">
                       Pause workers
-                    </button>
+                    </Button>
                   </fieldset>
                 </form>
 
@@ -1668,12 +1666,9 @@ export function OperationsSettingsSection({
                         required
                       />
                     </label>
-                    <button
-                      type="submit"
-                      className="inline-flex items-center justify-center rounded-full bg-emerald-600 dark:bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white dark:text-white transition hover:bg-emerald-500 dark:hover:bg-emerald-400"
-                    >
+                    <Button type="submit" variant="primary">
                       Resume workers
-                    </button>
+                    </Button>
                   </fieldset>
                 </form>
               </section>

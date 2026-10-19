@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { Button, buttonClassName } from '../components/dashboard/Button';
 import { PageHeader } from '../components/dashboard/PageHeader';
 import { DataTable, type Column } from '../components/tables/DataTable';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
@@ -156,6 +157,8 @@ const MORE_ICON = (
 );
 
 /** Raw identifiers stay one disclosure away from the readable name. */
+const POLICY_BLOCKERS_ID = 'omnigent-policy-unavailability-blockers';
+
 function RawIdDisclosure({ value, label = 'ID' }: { value: string; label?: string }) {
   return (
     <details className="omnigent-inventory__raw-id">
@@ -487,7 +490,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       description={kind === 'agents' ? 'Available agent identities and runtime status.' : 'Authorized policy scopes and status.'}
     />
     <section aria-labelledby="omnigent-inventory-heading">
-      <div className="omnigent-inventory__toolbar"><h2 id="omnigent-inventory-heading">{label} inventory</h2>{kind === 'policies' ? <button type="button" onClick={() => setEditor({ mode: 'create', id: '', name: '', document: '{}' })}>Create policy</button> : null}<button type="button" onClick={() => void result.refetch()} disabled={result.isFetching}>Refresh</button></div>
+      <div className="omnigent-inventory__toolbar"><h2 id="omnigent-inventory-heading">{label} inventory</h2>{kind === 'policies' ? <Button onClick={() => setEditor({ mode: 'create', id: '', name: '', document: '{}' })}>Create policy</Button> : null}<Button variant="secondary" onClick={() => void result.refetch()} disabled={result.isFetching}>Refresh</Button></div>
       <label><span>Filter {label.toLowerCase()}</span><input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
       {notice ? <p role="status">{notice}</p> : null}
       {transition.isError ? <p role="alert">{transition.error.message}</p> : null}
@@ -502,7 +505,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           errorMessage={result.isError ? (
             <span className="omnigent-inventory__error">
               <span>{result.error?.message ?? `${label} request failed`}</span>{' '}
-              <button type="button" onClick={() => void result.refetch()}>Try again</button>
+              <Button variant="secondary" size="sm" onClick={() => void result.refetch()}>Try again</Button>
             </span>
           ) : `${label} request failed`}
           emptyMessage={filter ? `No ${label.toLowerCase()} match this filter.` : `No authorized ${label.toLowerCase()} are available.`}
@@ -530,8 +533,8 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             ? {
                 rowActions: (row: InventoryRow) => (
                   <span className="omnigent-inventory__row-actions">
-                    <button type="button" onClick={() => { setSelected(row); setSelectedVersion(null); }}>Inspect</button>
-                    {row.version ? <button type="button" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</button> : null}
+                    <Button variant="secondary" onClick={() => { setSelected(row); setSelectedVersion(null); }}>Inspect</Button>
+                    {row.version ? <Button variant="ghost" onClick={() => transition.mutate({ row, state: 'active', makeDefault: true })}>Activate / rollback</Button> : null}
                   </span>
                 ),
               }
@@ -541,18 +544,18 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
       </div>
       {kind === 'policies' ? <p>Saving a policy always creates a new version; versions already in use are never changed.</p> : null}
       {selected ? <section className="omnigent-policy-detail" aria-label="Immutable policy version">
-        <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><button type="button" onClick={() => { setSelected(null); setSelectedVersion(null); }}>Close</button></div>
+        <div className="omnigent-inventory__toolbar"><h2>{selected.name} immutable version</h2><Button variant="secondary" onClick={() => { setSelected(null); setSelectedVersion(null); }}>Close</Button></div>
         {versions.isError || audit.isError ? <p role="alert">{versions.error?.message ?? audit.error?.message}</p> : null}
-        {versions.data ? <div><h3>Version history</h3>{versions.data.map((version) =>
-          <button type="button" key={version.ref} aria-pressed={visibleVersion?.ref === version.ref}
-            onClick={() => setSelectedVersion(version)}>{version.ref} · {version.state}</button>)}</div> : <p role="status">Loading immutable history…</p>}
+        {versions.data ? <div><h3>Version history</h3><div className="button-row">{versions.data.map((version) =>
+          <Button variant="secondary" size="sm" key={version.ref} aria-pressed={visibleVersion?.ref === version.ref}
+            onClick={() => setSelectedVersion(version)}>{version.ref} · {version.state}</Button>)}</div></div> : <p role="status">Loading immutable history…</p>}
         <p>Validation: {(visibleVersion?.validation ?? selected.validation)?.valid ? 'Valid' : 'Needs attention'}</p>
         {(visibleVersion?.validation ?? selected.validation)?.diagnostics?.map((diagnostic) => <p role="alert" key={`${diagnostic.code}-${diagnostic.path}`}>{diagnostic.path ? `${diagnostic.path}: ` : ''}{diagnostic.code}: {diagnostic.message}</p>)}
         <details>
           <summary>Policy document (host, resources, workspace, network, capture, controls, checkpoints, remediation, approvals, retention)</summary>
           <pre>{JSON.stringify(visibleVersion?.document ?? selected.document, null, 2)}</pre>
         </details>
-        {visibleVersion ? <button type="button" onClick={() => validate.mutate(visibleVersion)}>Validate against deployment</button> : null}
+        {visibleVersion ? <Button variant="secondary" onClick={() => validate.mutate(visibleVersion)}>Validate against deployment</Button> : null}
         {usage.isError ? <p role="alert">{usage.error.message}</p> : null}
         {usage.data ? <section aria-label="Policy usage and activation impact">
           <h3>Dependent use and activation impact</h3>
@@ -566,13 +569,15 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           {usage.data.dependents.workflows.length ? <ul>{usage.data.dependents.workflows.map((ref) => <li key={ref}>{ref}</li>)}</ul> : null}
           <p>Bridge sessions: {usage.data.dependents.bridgeSessionCount} ({usage.data.dependents.activeBridgeSessionCount} active)</p>
           {usage.data.dependents.bridgeSessions.length ? <ul>{usage.data.dependents.bridgeSessions.map((ref) => <li key={ref}>{ref}{usage.data.dependents.activeBridgeSessions.includes(ref) ? ' · active' : ' · historical'}</li>)}</ul> : null}
-          {usage.data.unavailabilityBlockers.map((blocker) => <p role="alert" key={blocker}>{blocker}</p>)}
+          {usage.data.unavailabilityBlockers.length ? <div id={POLICY_BLOCKERS_ID}>{usage.data.unavailabilityBlockers.map((blocker) => <p role="alert" key={blocker}>{blocker}</p>)}</div> : null}
         </section> : null}
-        {visibleVersion && visibleVersion.version !== selected.version ? <button type="button" onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'active', makeDefault: true })}>Roll back default to {visibleVersion.ref}</button> : null}
-        {visibleVersion && visibleVersion.state === 'active' ? <button type="button" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'disabled' })}>Disable {visibleVersion.ref}</button> : null}
-        {visibleVersion && visibleVersion.state === 'active' ? <button type="button" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'deprecated' })}>Deprecate {visibleVersion.ref}</button> : null}
-        <button type="button" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: policyEditorDocument(visibleVersion?.document ?? selected.document) })}>Edit as new version</button>
-        <button type="button" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: policyEditorDocument(visibleVersion?.document ?? selected.document) })}>Clone</button>
+        <div className="button-row">
+          {visibleVersion && visibleVersion.version !== selected.version ? <Button variant="secondary" onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'active', makeDefault: true })}>Roll back default to {visibleVersion.ref}</Button> : null}
+          {visibleVersion && visibleVersion.state === 'active' ? <Button variant="secondary" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} aria-describedby={usage.data?.unavailabilityBlockers.length ? POLICY_BLOCKERS_ID : undefined} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'disabled' })}>Disable {visibleVersion.ref}</Button> : null}
+          {visibleVersion && visibleVersion.state === 'active' ? <Button variant="secondary" disabled={Boolean(usage.data?.unavailabilityBlockers.length)} aria-describedby={usage.data?.unavailabilityBlockers.length ? POLICY_BLOCKERS_ID : undefined} onClick={() => transition.mutate({ row: { ...selected, version: visibleVersion.version }, state: 'deprecated' })}>Deprecate {visibleVersion.ref}</Button> : null}
+          <Button variant="secondary" onClick={() => setEditor({ mode: 'version', id: selected.id, name: selected.name, document: policyEditorDocument(visibleVersion?.document ?? selected.document) })}>Edit as new version</Button>
+          <Button variant="secondary" onClick={() => setEditor({ mode: 'clone', id: `${selected.id}-clone`, name: `${selected.name} clone`, document: policyEditorDocument(visibleVersion?.document ?? selected.document) })}>Clone</Button>
+        </div>
         {versionDiff.data ? <><h3>Normalized diff to current default</h3><pre>{versionDiff.data.diff || 'No document differences.'}</pre></> : null}
         <h3>Audit history</h3>
         {audit.data?.length ? <ol>{audit.data.map((event) => <li key={event.eventId}>{event.type} · version {event.version ?? 'identity'} · {event.actor}</li>)}</ol> : <p>No lifecycle events recorded.</p>}
@@ -584,14 +589,16 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <label><span>Name</span><input value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} required /></label>
         <label><span>Complete policy document (JSON)</span><textarea rows={18} value={editor.document} onChange={(event) => setEditor({ ...editor, document: event.target.value })} required /></label>
         {savePolicy.isError ? <p role="alert">{savePolicy.error.message}</p> : null}
-        <button type="submit" disabled={savePolicy.isPending}>Validate and save draft</button>
-        <button type="button" onClick={() => setEditor(null)}>Cancel</button>
+        <div className="button-row">
+          <Button type="submit" disabled={savePolicy.isPending}>Validate and save draft</Button>
+          <Button variant="secondary" onClick={() => setEditor(null)}>Cancel</Button>
+        </div>
       </form> : null}
     </section>
     {kind === 'agents' ? <section aria-labelledby="omnigent-profiles-heading">
       <div className="omnigent-inventory__toolbar">
         <div><p className="eyebrow">Reusable configuration</p><h2 id="omnigent-profiles-heading">Execution configurations</h2></div>
-        <div className="actions"><button type="button" onClick={() => setAgentEditor({ mode: 'create', id: 'omnigent-opencode-default', name: 'OpenCode via Omnigent', description: '', document: '{}', preset: 'opencode', sourceRef: '', defaultModel: '', launchPolicyRef: 'omnigent-on-demand@1', workspaceMutation: 'allowed', skillsText: '', toolsText: '', captureStream: true, captureEvidence: true, continuationCheckpoint: true, continuationBranch: true, publicationMode: 'none' })}>Create Omnigent agent</button><button type="button" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</button></div>
+        <div className="actions"><Button onClick={() => setAgentEditor({ mode: 'create', id: 'omnigent-opencode-default', name: 'OpenCode via Omnigent', description: '', document: '{}', preset: 'opencode', sourceRef: '', defaultModel: '', launchPolicyRef: 'omnigent-on-demand@1', workspaceMutation: 'allowed', skillsText: '', toolsText: '', captureStream: true, captureEvidence: true, continuationCheckpoint: true, continuationBranch: true, publicationMode: 'none' })}>Create Omnigent agent</Button><Button variant="secondary" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</Button></div>
       </div>
       <p>Immutable, validated selections used by workflows and continuations.</p>
       {profileAction.isError ? <p role="alert">{profileAction.error.message}</p> : null}
@@ -618,7 +625,10 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           </details>
         </> : agentEditor.mode === 'version' ? <label><span>Normalized profile document (JSON)</span><textarea rows={18} value={agentEditor.document} onChange={(event) => setAgentEditor({ ...agentEditor, document: event.target.value })} required /></label> : null}
         {saveAgentProfile.isError ? <p role="alert">{saveAgentProfile.error.message}</p> : null}
-        <button type="submit" disabled={saveAgentProfile.isPending}>Save immutable profile version</button><button type="button" onClick={() => setAgentEditor(null)}>Cancel</button>
+        <div className="button-row">
+          <Button type="submit" disabled={saveAgentProfile.isPending}>Save immutable profile version</Button>
+          <Button variant="secondary" onClick={() => setAgentEditor(null)}>Cancel</Button>
+        </div>
       </form> : null}
       <div className="omnigent-inventory__table-wrap">
         <DataTable<AgentProfile>
@@ -631,7 +641,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
           errorMessage={profiles.isError ? (
             <span className="omnigent-inventory__error">
               <span>{profiles.error?.message ?? 'Execution configurations request failed'}</span>{' '}
-              <button type="button" onClick={() => void profiles.refetch()}>Try again</button>
+              <Button variant="secondary" size="sm" onClick={() => void profiles.refetch()}>Try again</Button>
             </span>
           ) : 'Execution configurations request failed'}
           emptyMessage="No persistent execution configurations are available."
@@ -677,11 +687,11 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
             const ready = latest?.validationResult?.ready === true;
             return (
               <span className="omnigent-inventory__row-actions">
-                <button type="button" aria-label={`View ${profile.displayName}`} onClick={() => setSelectedProfile(profile)}>View</button>
+                <Button variant="secondary" aria-label={`View ${profile.displayName}`} onClick={() => setSelectedProfile(profile)}>View</Button>
                 <WorkflowActionsMenu
                   items={profileMenuItems(profile)}
                   triggerContent={MORE_ICON}
-                  triggerClassName="secondary td-workflow-actions-trigger-compact"
+                  triggerClassName={buttonClassName({ variant: 'secondary', className: 'td-workflow-actions-trigger-compact' })}
                   triggerAriaLabel={`More actions for ${profile.displayName}`}
                   menuAriaLabel={`${profile.displayName} actions`}
                   emptyMessage="No actions are available."
@@ -695,7 +705,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         />
       </div>
       {selectedProfile ? <section className="card" aria-labelledby="agent-profile-detail-heading">
-        <div className="actions"><h3 id="agent-profile-detail-heading">{selectedProfile.displayName} details</h3><button type="button" onClick={() => setSelectedProfile(null)}>Close details</button></div>
+        <div className="actions"><h3 id="agent-profile-detail-heading">{selectedProfile.displayName} details</h3><Button variant="secondary" onClick={() => setSelectedProfile(null)}>Close details</Button></div>
         <p>{sentenceCase(selectedProfile.state)} · {selectedProfile.versions.length} version{selectedProfile.versions.length === 1 ? '' : 's'}</p>
         <RawIdDisclosure label="Profile ID" value={selectedProfile.profileId} />
         <h4>Version history and normalized diff</h4>

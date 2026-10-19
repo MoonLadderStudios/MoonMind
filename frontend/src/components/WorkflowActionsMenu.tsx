@@ -9,6 +9,7 @@ import {
 } from 'react';
 
 import { useActionConfirmation } from './DashboardActionDialog';
+import { buttonClassName } from './dashboard/Button';
 import type { WorkflowActionMenuItem, WorkflowActionMenuSection } from '../lib/workflowActions';
 
 export type WorkflowActionsMenuProps = {
@@ -47,7 +48,7 @@ export function WorkflowActionsMenu({
   items,
   triggerContent = 'Workflow actions',
   triggerAriaLabel,
-  triggerClassName = 'secondary td-workflow-actions-trigger',
+  triggerClassName = buttonClassName({ variant: 'secondary', className: 'td-workflow-actions-trigger' }),
   menuAriaLabel = 'Workflow actions',
   emptyMessage = 'No workflow actions are currently available.',
   subject = 'Workflow',

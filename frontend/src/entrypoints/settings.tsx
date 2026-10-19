@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation, useSearchParams } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { Button } from '../components/dashboard/Button';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageHeader } from '../components/dashboard/PageHeader';
 import { SecretManager } from '../components/secrets/SecretManager';
@@ -339,16 +340,16 @@ function InstanceSettingsContent({ payload }: { payload: BootPayload }) {
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
           Clear browser-local list layouts, selected workflows and recurring schedules, and other dashboard choices.
         </p>
-        <button
-          type="button"
-          className="mt-4 rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+        <Button
+          variant="secondary"
+          className="mt-4"
           onClick={() => {
             resetDashboardPreferences();
             setNotice({ level: 'ok', text: 'Dashboard preferences reset.' });
           }}
         >
           Reset dashboard preferences
-        </button>
+        </Button>
       </section>
     </SettingsPageFrame>
   );
