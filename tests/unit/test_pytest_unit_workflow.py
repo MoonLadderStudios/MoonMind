@@ -195,10 +195,10 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
     assert hermetic["env"]["MOONMIND_INTEGRATION_FAIL_FAST"] == (
         "${{ github.event_name != 'schedule' && '1' || '0' }}"
     )
-    # The wrapper's cooperative execution budget and bounded teardown must
-    # finish inside the native step bound, which stays inside the job bound.
+    # Include the wrapper's interrupt grace and the kill grace for each of
+    # its three diagnostics/teardown commands before the native step bound.
     budget_seconds = int(hermetic["env"]["MOONMIND_INTEGRATION_TIMEOUT"])
-    assert budget_seconds + 30 + 3 * 120 < int(hermetic["timeout-minutes"]) * 60
+    assert budget_seconds + 30 + 3 * (120 + 10) < int(hermetic["timeout-minutes"]) * 60
     for name in (
         "Install the journey browser's Playwright runtime",
         "Run hermetic integration CI suite",
