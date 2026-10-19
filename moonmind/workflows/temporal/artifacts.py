@@ -2013,7 +2013,9 @@ class TemporalArtifactService:
         candidates = self._read_candidates(principal, admitted_principal)
         if owner and owner in candidates:
             return True
-        # No blanket service-principal bypass for quarantined bytes.
+        if "operator" in candidates and getattr(artifact, "operator_recovery_granted", False):
+            return True
+        # No blanket service-principal bypass for restricted bytes.
         return False
 
     def _assert_raw_access(
@@ -2038,6 +2040,7 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> None:
+        self._assert_not_quarantined(artifact)
         if self._raw_access_allowed(
             artifact, principal=principal, admitted_principal=admitted_principal
         ):
@@ -2062,6 +2065,8 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> bool:
+        if self._is_quarantined(artifact):
+            return False
         if self._raw_access_allowed(
             artifact, principal=principal, admitted_principal=admitted_principal
         ):

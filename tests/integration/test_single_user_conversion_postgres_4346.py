@@ -2,7 +2,7 @@
 
 Proves the four-disposition matrix, staleness/advisory contention, ledger
 idempotent rerun, and migration 386 on PostgreSQL — not SQLite. Postgres-only
-paths (``pg_try_advisory_lock``, ledger concurrency, migration 386 DDL on
+paths (``pg_try_advisory_xact_lock``, ledger concurrency, migration 386 DDL on
 postgres) are unproven by the sqlite suites. Runs an ephemeral local cluster
 with no manually managed test service (mirrors
 ``test_profile_secret_migration_postgres_4349.py``).
@@ -32,6 +32,9 @@ from api_service.db.models import (
     SecretStatus,
     SettingsOverride,
     TemporalArtifact,
+    TemporalArtifactLink, TemporalArtifactPin, TemporalArtifactUseClaim,
+    TemporalArtifactDeletionIntent,
+    TemporalExecutionCanonicalRecord,
     TemporalExecutionOwnerType,
     TemporalExecutionRecord,
     TemporalWorkflowType,
@@ -48,7 +51,10 @@ _TABLES = (
     ManagedSecret.__table__,
     SingleUserConversionRun.__table__,
     TemporalExecutionRecord.__table__,
+    TemporalExecutionCanonicalRecord.__table__,
     TemporalArtifact.__table__,
+    TemporalArtifactLink.__table__, TemporalArtifactPin.__table__,
+    TemporalArtifactUseClaim.__table__, TemporalArtifactDeletionIntent.__table__,
     SettingsOverride.__table__,
     Preset.__table__,
     RecurringWorkflowDefinition.__table__,
@@ -535,3 +541,211 @@ async def test_postgres_rerun_replays_through_cutover(pg_maker) -> None:
         assert len(secrets) == 1
         blob = str(second.to_sanitized_dict())
         assert "pg-cut" not in blob
+
+
+@pytest.mark.asyncio
+async def test_postgres_artifact_conversion_blocks_authority_writers(
+    pg_maker, tmp_path, monkeypatch,
+) -> None:
+    """Default conversion retains locks across missing-table inspection savepoints.
+
+    Pause only the final commit, after the real artifact transform. An ordinary
+    writer on each authority table must remain blocked until that commit. The
+    fixture intentionally omits unrelated tables to exercise absent-table reads.
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    from api_service.services import single_user_conversion as suc
+    from moonmind.security import auth_modes_4120
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore, TemporalArtifactAuthorizationError,
+        TemporalArtifactRepository, TemporalArtifactService,
+    )
+    from api_service.db.models import (
+        TemporalArtifactLink, TemporalArtifactPin, TemporalArtifactUseClaim,
+        TemporalArtifactRedactionLevel,
+    )
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    store = LocalTemporalArtifactStore(tmp_path / "artifact-bytes")
+    async with pg_maker() as session:
+        owner = str((await _mk_user(session)).id)
+        await session.commit()
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(session), store=store)
+        artifact, _ = await artifacts.create(
+            principal=owner, redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            content_type="application/octet-stream",
+            link={"namespace": "default", "workflow_id": "historical", "run_id": "old", "link_type": "input"},
+        )
+        artifact_id = artifact.artifact_id
+        await artifacts.write_complete(artifact_id=artifact_id, principal=owner,
+            payload=b"retained postgres bytes", content_type="application/octet-stream")
+        session.add(TemporalArtifactPin(artifact_id=artifact_id, pinned_by_principal=owner))
+        session.add(TemporalArtifactUseClaim(artifact_id=artifact_id,
+            owner_principal=owner, request_id="retained", operation_kind="restore",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1)))
+        await session.commit()
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    async with pg_maker() as converter:
+        real_commit = converter.commit
+
+        async def pause_commit():
+            entered.set()
+            await release.wait()
+            await real_commit()
+
+        monkeypatch.setattr(converter, "commit", pause_commit)
+        converting = asyncio.create_task(suc.run_guarded_upgrade(converter, operator_authorized=True))
+        await asyncio.wait_for(entered.wait(), 10)
+
+        async def authority_writer(table):
+            # Fail fast at PostgreSQL's real lock boundary. A leaked outer
+            # rollback during partial-schema inspection would let this write.
+            from sqlalchemy.exc import DBAPIError
+            async with pg_maker() as writer:
+                await writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
+                with pytest.raises(DBAPIError, match="lock timeout"):
+                    if table == "user":
+                        writer.add(User(id=uuid.uuid4(), email="concurrent-person@example.invalid"))
+                        await writer.flush()
+                    else:
+                        await writer.execute(text(f'UPDATE "{table}" SET artifact_id = artifact_id'))
+                await writer.rollback()
+
+        try:
+            for table in ("user", "temporal_artifacts", "temporal_artifact_links",
+                          "temporal_artifact_pins", "temporal_artifact_use_claims",
+                          "temporal_artifact_deletion_intents"):
+                await authority_writer(table)
+        finally:
+            release.set()
+        result = await asyncio.wait_for(converting, 10)
+        assert result.published
+        assert result.transforms["artifacts"]["recovery_grants"] == 1
+
+    async with pg_maker() as restarted:
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
+        row, payload = await artifacts.read(artifact_id=artifact_id, principal="operator")
+        assert payload == b"retained postgres bytes"
+        assert row.created_by_principal == owner
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await artifacts.read(artifact_id=artifact_id, principal=str(uuid.uuid4()))
+        assert not await artifacts.release_saved_work_use(
+            artifact_id=artifact_id, principal="operator", request_id="retained")
+        assert (await restarted.execute(select(TemporalArtifactLink))).scalars().one().run_id == "old"
+        again = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
+        assert again.published
+
+
+@pytest.mark.asyncio
+async def test_postgres_artifact_conversion_rollback_and_old_ledger(pg_maker, monkeypatch):
+    from api_service.services import single_user_conversion as suc
+    from api_service.auth_providers import _disabled_account_free_allowed
+
+    async with pg_maker() as session:
+        owner = str((await _mk_user(session)).id)
+        session.add(TemporalArtifact(artifact_id="retained", storage_key="retained",
+            created_by_principal=owner))
+        session.add(SingleUserConversionRun(preflight_digest="historical", status="complete",
+            result_json={"published": True, "decision": {"disposition": "eligible_conversion"}}))
+        await session.commit()
+        assert not await _disabled_account_free_allowed(session)
+        real_commit = session.commit
+
+        async def interrupted_commit():
+            # Real default transforms have run, but neither grant nor current
+            # completion can become durable if publication is interrupted.
+            await session.flush()
+            raise RuntimeError("publication interrupted")
+
+        monkeypatch.setattr(session, "commit", interrupted_commit)
+        with pytest.raises(RuntimeError, match="publication interrupted"):
+            await suc.run_guarded_upgrade(session, operator_authorized=True)
+        monkeypatch.setattr(session, "commit", real_commit)
+    async with pg_maker() as restarted:
+        assert not (await restarted.get(TemporalArtifact, "retained")).operator_recovery_granted
+        assert not await _disabled_account_free_allowed(restarted)
+        assert (await suc.run_guarded_upgrade(restarted, operator_authorized=True)).published
+    async with pg_maker() as restarted:
+        assert (await restarted.get(TemporalArtifact, "retained")).operator_recovery_granted
+        assert await _disabled_account_free_allowed(restarted)
+
+
+@pytest.mark.asyncio
+async def test_postgres_artifact_recovery_migration_grants_nothing(pg_maker):
+    """Actual additive DDL preserves retained rows and defaults to no grant."""
+    import importlib
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    migration = importlib.import_module("api_service.migrations.versions.396_artifact_operator_recovery")
+    async with pg_maker() as session:
+        owner = str((await _mk_user(session)).id)
+        session.add(TemporalArtifact(artifact_id="pre-schema", storage_key="original-key",
+            created_by_principal=owner))
+        await session.commit()
+        await session.execute(text("ALTER TABLE temporal_artifacts DROP COLUMN operator_recovery_granted"))
+        connection = await session.connection()
+
+        def upgrade(sync_connection):
+            with Operations.context(MigrationContext.configure(sync_connection)):
+                migration.upgrade()
+
+        await connection.run_sync(upgrade)
+        await session.commit()
+    async with pg_maker() as restarted:
+        row = await restarted.get(TemporalArtifact, "pre-schema")
+        assert row.created_by_principal == owner
+        assert row.storage_key == "original-key"
+        assert not row.operator_recovery_granted
+
+
+@pytest.mark.asyncio
+async def test_postgres_conversion_claim_ends_with_transaction(
+    pg_maker, conversion_postgres_url,
+):
+    """A different physical connection can claim after publish, replay, refusal."""
+    from api_service.services import single_user_conversion as suc
+    other_engine = create_async_engine(conversion_postgres_url)
+    try:
+        async with pg_maker() as session:
+            for replay in (False, True):
+                assert (await suc.run_guarded_upgrade(session, operator_authorized=True)).published
+                async with other_engine.connect() as other:
+                    assert (await other.execute(text("SELECT pg_try_advisory_xact_lock(:key)"),
+                        {"key": suc._conversion_advisory_key()})).scalar() is True
+                    await other.rollback()
+            await _mk_user(session)
+            await _mk_user(session)
+            await session.commit()
+            assert not (await suc.run_guarded_upgrade(session, operator_authorized=True)).published
+            async with other_engine.connect() as other:
+                assert (await other.execute(text("SELECT pg_try_advisory_xact_lock(:key)"),
+                    {"key": suc._conversion_advisory_key()})).scalar() is True
+    finally:
+        await other_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgres_converted_recovery_refuses_schema_downgrade(pg_maker):
+    import importlib
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from api_service.services import single_user_conversion as suc
+    migration = importlib.import_module("api_service.migrations.versions.396_artifact_operator_recovery")
+    async with pg_maker() as session:
+        owner = str((await _mk_user(session)).id)
+        session.add(TemporalArtifact(artifact_id="granted", storage_key="retained",
+            created_by_principal=owner))
+        await session.commit()
+        assert (await suc.run_guarded_upgrade(session, operator_authorized=True)).published
+        connection = await session.connection()
+
+        def downgrade(sync_connection):
+            with Operations.context(MigrationContext.configure(sync_connection)):
+                migration.downgrade()
+
+        with pytest.raises(RuntimeError, match="recovery grants"):
+            await connection.run_sync(downgrade)
+        await session.rollback()
+    async with pg_maker() as restarted:
+        assert (await restarted.get(TemporalArtifact, "granted")).operator_recovery_granted

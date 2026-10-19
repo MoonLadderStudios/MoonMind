@@ -107,7 +107,7 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
     """Migration-state gate for account-free disabled-mode access (#4346).
 
     Returns True only when the guarded conversion ledger records a
-    completed, published fresh-init or eligible conversion: migration
+    completed, published current-revision fresh-init or eligible conversion: migration
     state proves the source needed no account (or converted cleanly), so
     ordinary disabled-mode routes may serve a transient local-operator
     principal without minting a synthetic User row. Fresh installations
@@ -120,6 +120,7 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
         from sqlalchemy import select as _select
 
         from api_service.services.single_user_conversion import (
+            SCHEMA_REVISION,
             SingleUserConversionRun,
         )
 
@@ -132,6 +133,8 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
         if str(getattr(row, "status", "")) != "complete":
             continue
         stored = dict(getattr(row, "result_json", None) or {})
+        if stored.get("schema_revision") != SCHEMA_REVISION:
+            continue
         if not stored.get("published", False):
             continue
         decision = dict(stored.get("decision", None) or {})

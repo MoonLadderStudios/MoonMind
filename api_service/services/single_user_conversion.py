@@ -24,23 +24,14 @@ a single active login, or a preferred-account argument are never
 consulted and can never merge people. Multiple external provider accounts
 are not multiple people (non-UUID machine principals are ignored).
 
-Consistency: the conversion-wide advisory claim is acquired before the
-authoritative inventory read and held through the single commit that
-runs transforms and records completion, so a concurrent mutation cannot
-slip between eligibility and publication. :func:`preflight` captures a
-fingerprint of the source (owner sets, unowned rows, secret holders,
-settings values, secret ciphertext hashes, and counts);
-:func:`apply_conversion` recomputes it and raises
-:class:`StaleAttributionError` when anything changed, so a change that
-preceded the claim cannot publish on stale attribution either. The
-fingerprint is a tripwire, not the enforcement: the claim plus the
-transaction is. No new lock/identity service: mutual exclusion reuses
-the ledger row plus a best-effort conversion-wide PostgreSQL advisory
-claim (SQLite falls back to the ledger row alone). No ``in_progress``
-row is ever committed: interruption before commit leaves nothing behind
-and a retry converges; a stale ``in_progress`` row from an older
-revision is reclaimed only while holding the conversion claim (which
-proves no live writer exists) and otherwise fails closed.
+Consistency: the existing conversion advisory claim serializes converters;
+transaction-held locks on the authoritative inventory tables exclude ordinary
+writers until publication. SQLite reserves its writer transaction instead.
+Preflight binds ownership, counts, and content hashes (including retained
+artifact children) to detect changes preceding those locks. Inspection errors
+roll back only their savepoint, never the transaction holding authority locks.
+No in-progress row is committed; interruption rolls back grants and completion
+together. Historical completion from an older revision is not current readiness.
 
 Reports carry counts, reason codes, and truncated identifier prefixes
 only — never emails, names, secret values, or resource content.
@@ -66,7 +57,7 @@ from api_service.db.models import Base, Uuid, mutable_json_dict
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_REVISION = "386_single_user_conversion_4346"
+SCHEMA_REVISION = "396_artifact_operator_recovery"
 
 DEPLOYMENT_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -296,7 +287,10 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
     ("temporal_execution_sources", "owner_id", "user_temporal"),
     ("workflow_execution_source_mappings", "owner_id", "user_temporal"),
     ("managed_agent_oauth_sessions", "requested_by_user_id", "uuid_text"),
-    ("temporal_artifacts", "created_by_principal", "uuid_text"),
+    ("temporal_artifacts", "created_by_principal", "artifact_principal"),
+    ("temporal_artifact_pins", "pinned_by_principal", "artifact_principal"),
+    ("temporal_artifact_use_claims", "owner_principal", "artifact_principal"),
+    ("temporal_artifact_deletion_intents", "initiated_by_principal", "artifact_principal"),
 )
 
 # Null-owner rows in these tables are ambiguous retained data, not
@@ -329,9 +323,14 @@ _SUBSYSTEM_BY_SURFACE: dict[str, str] = {
     "preset_recents": "presets",
     "recurring_workflow_definitions": "schedules",
     "temporal_artifacts": "artifacts",
-    "workflow_artifacts": "artifacts",
+    "workflow_artifacts": "workflows",
+    "temporal_artifact_links": "artifacts",
+    "temporal_artifact_pins": "artifacts",
+    "temporal_artifact_use_claims": "artifacts",
+    "temporal_artifact_deletion_intents": "artifacts",
     "temporal_executions": "temporal",
     "temporal_execution_sources": "temporal",
+    "workflow_execution_source_mappings": "temporal",
     "workflow_runs": "workflows",
 }
 
@@ -395,6 +394,50 @@ async def _probe_count(
         return None
 
 
+_ARTIFACT_EVIDENCE_TABLES = (
+    "temporal_artifacts", "temporal_artifact_links", "temporal_artifact_pins",
+    "temporal_artifact_use_claims", "temporal_artifact_deletion_intents",
+    "workflow_artifacts",
+)
+
+
+def _is_artifact_machine_principal(raw: Any) -> bool:
+    value = str(raw or "").strip()
+    return value in {"operator", "system", "agent_workflow", "agent_runtime"} or any(
+        value.startswith(prefix) and bool(value[len(prefix):].strip())
+        for prefix in ("service:", "workflow:", "system:")
+    )
+
+
+async def _lock_conversion_evidence(session: AsyncSession) -> None:
+    """Hold ordinary authority writers outside the inventory/commit interval.
+
+    The converter advisory claim alone cannot exclude ordinary writers. Lock
+    precisely the tables read by attribution, including empty tables where a
+    second human could appear. Missing tables in partial schemas have no rows.
+    """
+    dialect = session.get_bind().dialect.name
+    if dialect == "sqlite":
+        # SQLite has no table locks. Acquire its writer reservation before any
+        # savepoint so releasing an inspection savepoint cannot end protection.
+        await session.execute(text("BEGIN IMMEDIATE"))
+        return
+    if dialect != "postgresql":
+        raise ConcurrentConversionError("conversion requires an authority writer lock")
+    from sqlalchemy import inspect as sa_inspect
+
+    connection = await session.connection()
+    present = set(await connection.run_sync(lambda c: sa_inspect(c).get_table_names()))
+    names = {"user", "user_profile", "settings_overrides"}
+    names.update(t for t, _c, _k in _PRINCIPAL_SURFACES)
+    names.update(t for t, _c in _UNOWNED_TRACKED)
+    names.update(_UNOWNED_CONJUNCTIONS)
+    names.update(_ARTIFACT_EVIDENCE_TABLES)
+    quoted = ", ".join('"' + name + '"' for name in sorted(names & present))
+    if quoted:
+        await session.execute(text(f"LOCK TABLE {quoted} IN SHARE ROW EXCLUSIVE MODE NOWAIT"))
+
+
 async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     """Trace every retained user reference (SQL + serialized + in-flight).
 
@@ -420,115 +463,70 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         if table is None or column_name not in table.c:
             continue
         col = table.c[column_name]
-        if kind == "user_temporal":
-            owner_type_col = table.c.get("owner_type")
-            try:
-                if owner_type_col is not None:
-                    rows = (
-                        await session.execute(
-                            select(col, owner_type_col).where(col.is_not(None))
-                        )
-                    ).all()
-                    values = [
-                        str(v)
-                        for v, t in rows
-                        if str(t or "").lower() == "user" and v is not None
-                    ]
-                else:
-                    rows = (
-                        await session.execute(
-                            select(col).where(col.is_not(None))
-                        )
-                    ).all()
-                    values = [str(r[0]) for r in rows if r[0] is not None]
-            except Exception as exc:
-                # A failed principal read leaves attribution unknown: roll
-                # back only this surface, then classify. An absent table
-                # holds no rows (skip); any other failure is recorded so
-                # the disposition refuses instead of converting without
-                # this evidence.
-                try:
-                    await session.rollback()
-                except Exception:
-                    # The surface read already failed; a failed rollback
-                    # must not mask the classification below.
-                    pass
-                if not _is_absent_table_error(exc):
-                    _record_inventory_error(inv, f"{table_name}.{column_name}")
-                continue
-            for raw in values:
-                norm = _looks_like_uuid(raw)
-                if norm:
-                    principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-            total = await _probe_count(
-                session, table, col,
-                inv=inv, surface=f"count:{table_name}.{column_name}",
-            )
-            if total is not None:
-                resource_counts[f"{table_name}.{column_name}"] = total
-            continue
-        if kind == "uuid_text":
-            try:
-                rows = (
-                    await session.execute(select(col).where(col.is_not(None)))
-                ).all()
-            except Exception as exc:
-                # Same classify-and-record rule as above: an absent table
-                # is empty evidence, any other failure is unknown evidence.
-                try:
-                    await session.rollback()
-                except Exception:
-                    # The surface read already failed; a failed rollback
-                    # must not mask the classification below.
-                    pass
-                if not _is_absent_table_error(exc):
-                    _record_inventory_error(inv, f"{table_name}.{column_name}")
-                continue
-            for (raw,) in rows:
-                if raw is None or str(raw).strip() == "":
-                    continue
-                norm = _looks_like_uuid(str(raw).strip())
-                if norm:
-                    principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-            total = await _probe_count(
-                session, table, col,
-                inv=inv, surface=f"count:{table_name}.{column_name}",
-            )
-            if total is not None:
-                resource_counts[f"{table_name}.{column_name}"] = total
-            continue
-        # uuid_fk
+        stmt = select(col).where(col.is_not(None))
+        if kind == "user_temporal" and "owner_type" in table.c:
+            stmt = stmt.where(func.lower(cast(table.c.owner_type, String)) == "user")
         try:
-            rows = (
-                await session.execute(select(col).where(col.is_not(None)))
-            ).all()
+            async with session.begin_nested():
+                rows = (await session.execute(stmt)).all()
         except Exception as exc:
-            # Same classify-and-record rule as above: an absent table is
-            # empty evidence, any other failure is unknown evidence.
-            try:
-                await session.rollback()
-            except Exception:
-                # The surface read already failed; a failed rollback must
-                # not mask the classification below.
-                pass
             if not _is_absent_table_error(exc):
                 _record_inventory_error(inv, f"{table_name}.{column_name}")
             continue
         for (raw,) in rows:
-            if raw is None:
-                continue
             norm = _looks_like_uuid(raw)
-            if norm is None:
-                continue
-            if norm == DEPLOYMENT_SUBJECT_ID:
-                continue
-            principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
+            if norm and not (kind == "uuid_fk" and norm == DEPLOYMENT_SUBJECT_ID):
+                principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
+            elif kind == "artifact_principal" and not _is_artifact_machine_principal(raw):
+                # Unknown text is not proof of a machine or a person.
+                _record_inventory_error(inv, f"principal:{table_name}.{column_name}")
         total = await _probe_count(
             session, table, col,
             inv=inv, surface=f"count:{table_name}.{column_name}",
         )
         if total is not None:
             resource_counts[f"{table_name}.{column_name}"] = total
+
+    artifact_content_entries: list[str] = []
+    for table_name in _ARTIFACT_EVIDENCE_TABLES:
+        table = metadata.tables.get(table_name)
+        if table is None:
+            continue
+        # Conversion-owned output is not source attribution. Everything else,
+        # including child authority and quarantine, binds stale preflight checks.
+        columns = [c for c in table.c if c.name != "operator_recovery_granted"]
+        try:
+            async with session.begin_nested():
+                rows = (await session.execute(select(*columns))).all()
+        except Exception as exc:
+            if not _is_absent_table_error(exc):
+                _record_inventory_error(inv, f"artifact_evidence:{table_name}")
+            continue
+        resource_counts[f"{table_name}.rows"] = len(rows)
+        for row in rows:
+            artifact_content_entries.append(table_name + ":" + _canonical(list(row)))
+        if table_name == "temporal_artifacts":
+            for row in rows:
+                # Deployment attestation alone cannot reconstruct a lost human
+                # raw owner. Refuse until that disposition has an owned design.
+                if row._mapping["created_by_principal"] is None:
+                    _record_inventory_error(inv, "artifact_recovery:missing_creator")
+
+    # Live parents need their owning transforms even when machine-owned and
+    # their optional human owner columns are empty. Historical artifact links
+    # alone do not invent a parent or an unrelated transform requirement.
+    for table_name in (
+        "temporal_executions", "temporal_execution_sources",
+        "workflow_execution_source_mappings", "workflow_runs",
+    ):
+        table = metadata.tables.get(table_name)
+        if table is not None:
+            total = await _probe_count(
+                session, table, next(iter(table.primary_key.columns)),
+                inv=inv, surface=f"count:{table_name}.rows",
+            )
+            if total is not None:
+                resource_counts[f"{table_name}.rows"] = total
 
     inv.principals = {k: sorted(v) for k, v in principals.items()}
     all_principals = sorted({p for vs in principals.values() for p in vs})
@@ -653,7 +651,8 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         from api_service.db.models import UserProfile
         from api_service.services.profile_secret_migration import LEGACY_FIELDS
 
-        secret_rows = (await session.execute(select(UserProfile))).scalars().all()
+        async with session.begin_nested():
+            secret_rows = (await session.execute(select(UserProfile))).scalars().all()
         holders = set()
         for p in secret_rows:
             for column, _short in LEGACY_FIELDS:
@@ -683,12 +682,6 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         # secret attribution unknown, so clear the holders and record it
         # rather than converting without secret attribution.
         inv.secret_holders = []
-        try:
-            await session.rollback()
-        except Exception:
-            # The surface read already failed; a failed rollback must not
-            # mask the classification below.
-            pass
         if not _is_absent_table_error(exc):
             _record_inventory_error(inv, "profile_secrets")
 
@@ -703,7 +696,8 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     try:
         from api_service.db.models import SettingsOverride
 
-        rows = (await session.execute(select(SettingsOverride))).scalars().all()
+        async with session.begin_nested():
+            rows = (await session.execute(select(SettingsOverride))).scalars().all()
         by_context: dict[tuple[str, str, str], dict[str, set[str]]] = {}
         for r in rows:
             uid = _looks_like_uuid(getattr(r, "user_id", None))
@@ -739,12 +733,6 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         # evidence, so clear collisions and record it rather than
         # converting blind.
         inv.settings_collisions = []
-        try:
-            await session.rollback()
-        except Exception:
-            # The surface read already failed; a failed rollback must not
-            # mask the classification below.
-            pass
         if not _is_absent_table_error(exc):
             _record_inventory_error(inv, "settings")
 
@@ -753,6 +741,8 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             hashlib.sha256(
                 "\n".join(sorted(settings_content_entries)).encode()
             ).hexdigest()
+            + "|"
+            + hashlib.sha256("\n".join(sorted(artifact_content_entries)).encode()).hexdigest()
             + "|"
             + hashlib.sha256(
                 "\n".join(sorted(profile_content_entries)).encode()
@@ -954,6 +944,7 @@ class ApplyResult:
 
     def to_sanitized_dict(self) -> dict[str, Any]:
         return {
+            "schema_revision": SCHEMA_REVISION,
             "digest": self.digest,
             "published": self.published,
             "decision": self.decision.to_sanitized_dict(),
@@ -1020,14 +1011,14 @@ async def _try_conversion_claim(session: AsyncSession) -> bool | None:
     conversion holds it, and None when the dialect has no advisory locks
     (SQLite and other hermetic test backends) so the caller falls back to
     the committed ledger-row path. A failed probe rolls back only its own
-    savepoint, never the caller's work. The session-level lock survives
-    the commit below and is released in the apply ``finally``.
+    savepoint, never the caller's work. The transaction-level claim ends
+    atomically with commit/rollback, independent of connection-pool checkout.
     """
     probe = await session.begin_nested()
     try:
         claimed = (
             await session.execute(
-                text("SELECT pg_try_advisory_lock(:key)"),
+                text("SELECT pg_try_advisory_xact_lock(:key)"),
                 {"key": _conversion_advisory_key()},
             )
         ).scalar()
@@ -1044,21 +1035,8 @@ async def _try_conversion_claim(session: AsyncSession) -> bool | None:
 
 
 async def _release_conversion_claim(session: AsyncSession) -> None:
-    """Release a claim acquired by :func:`_try_conversion_claim`."""
-    try:
-        await session.execute(
-            text("SELECT pg_advisory_unlock(:key)"),
-            {"key": _conversion_advisory_key()},
-        )
-    except Exception:
-        logger.debug("single-user conversion advisory unlock skipped", exc_info=True)
-    finally:
-        try:
-            await session.rollback()
-        except Exception:
-            # Unlock acts immediately at the session level; ending the
-            # statement's transaction is cleanup that must not fail loudly.
-            pass
+    """End the transaction holding a claim acquired by the helper above."""
+    await session.rollback()
 
 
 def _replay_stored_result(
@@ -1083,7 +1061,8 @@ def _replay_stored_result(
     )
     return ApplyResult(
         digest=digest,
-        published=bool(stored.get("published", False)),
+        published=(stored.get("schema_revision") == SCHEMA_REVISION
+                   and bool(stored.get("published", False))),
         decision=restored,
         transforms=dict(stored.get("transforms", {})),
     )
@@ -1150,12 +1129,14 @@ async def apply_conversion(
     transforms = dict(transforms or {})
     options = preflight_result.options
 
-    claimed = await _try_conversion_claim(session)
-    if claimed is False:
-        raise ConcurrentConversionError(
-            "another single-user conversion holds this database"
-        )
+    claimed = None
     try:
+        await _lock_conversion_evidence(session)
+        claimed = await _try_conversion_claim(session)
+        if claimed is False:
+            raise ConcurrentConversionError(
+                "another single-user conversion holds this database"
+            )
         fresh = await collect_inventory(session)
         fresh_fingerprint = fresh.fingerprint()
         if fresh_fingerprint != preflight_result.fingerprint:
@@ -1300,8 +1281,8 @@ async def apply_conversion(
             await session.rollback()
             raise
     finally:
-        if claimed:
-            await _release_conversion_claim(session)
+        # Refusals and replays must release the authority locks too.
+        await _release_conversion_claim(session)
 
 
 async def startup_guard_decision(
@@ -1465,14 +1446,49 @@ async def profile_secrets_transform(
     }
 
 
+async def artifacts_transform(
+    session: AsyncSession, eligible_ids: list[str]
+) -> dict[str, Any]:
+    """Grant proven historical human recovery without changing provenance.
+
+    Only the guarded entrypoint owns this write. Caller metadata, schema
+    migration, machine owners and ordinary artifact creation cannot grant it.
+    Original creators continue to own quota and in-flight claim scopes.
+    """
+    from api_service.db.models import TemporalArtifact
+
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(select(TemporalArtifact))).scalars().all()
+    except Exception as exc:
+        if _is_absent_table_error(exc):
+            return {"recovery_grants": 0, "preserved": 0}
+        raise
+    eligible = set(eligible_ids)
+    granted = 0
+    for row in rows:
+        owner = _looks_like_uuid(row.created_by_principal)
+        if owner:
+            if owner not in eligible:
+                raise StaleAttributionError("artifact creator is not proven eligible")
+            if not row.operator_recovery_granted:
+                row.operator_recovery_granted = True
+                granted += 1
+        elif not _is_artifact_machine_principal(row.created_by_principal):
+            raise StaleAttributionError("artifact creator has no supported recovery disposition")
+    await session.flush()
+    return {"recovery_grants": granted, "preserved": len(rows)}
+
+
 #: Production subsystem transforms registered into the shared entrypoint.
 #: ``profile_secrets`` is the concrete #4349 conversion. Settings, presets,
-#: schedules, artifacts, temporal, and workflow transforms are owned by
+#: schedules, temporal, and workflow transforms are owned by
 #: subsystem child issues; until they register here, an eligible source
 #: holding those subsystems refuses with ``missing_transform_coverage``
 #: rather than exposing a partially converted result.
 DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
     "profile_secrets": profile_secrets_transform,
+    "artifacts": artifacts_transform,
 }
 
 
