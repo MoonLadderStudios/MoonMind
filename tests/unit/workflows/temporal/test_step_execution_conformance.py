@@ -75,6 +75,7 @@ def test_golden_fixture_catalog_is_complete_and_deterministic() -> None:
         "memory-source-identity",
         "memory-unsafe-content",
         "gate-failure",
+        "recovery-with-preserved-steps",
         "degraded-checkpoint-payload",
         "degraded-gate-verdict",
         "legacy-checkpoint-only-ledger-row",

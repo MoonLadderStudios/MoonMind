@@ -187,6 +187,9 @@ with workflow.unsafe.imports_passed_through():
         freeze_attempt_input,
         project_head,
     )
+    from moonmind.workflows.temporal.recovery_entry import (
+        compile_recovery_entry_policy,
+    )
     from moonmind.workflows.temporal.remediation_loop import (
         apply_continuation_decision,
         capture_remediation_candidate,
@@ -276,9 +279,15 @@ from moonmind.workflows.temporal.publish_auto_evidence import (
 from moonmind.workflows.executions.execution_contract import (
     validate_workflow_runtime_targets,
 )
+from moonmind.workflows.temporal.recovery_decision import validate_recovery_contract
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
     resolve_resume_checkpoint_step_id,
+)
+from moonmind.workflows.temporal.recovery_state import (
+    CheckpointRecoveryContract,
+    deterministic_recovery_identity,
+    validate_restore_result,
 )
 from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
 from moonmind.workflows.temporal.step_executions import (
@@ -299,10 +308,13 @@ from moonmind.workflows.temporal.step_ledger import (
     invalidate_downstream_steps_for_changed_output,
     mark_step_checkpoint_evidence,
     mark_step_execution_manifest_evidence,
+    materialize_preserved_steps,
+    preserved_outputs_for_dependencies,
     record_dependency_inputs_for_step,
     refresh_ready_steps,
     update_step_row,
     upsert_step_check,
+    validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
 
@@ -326,6 +338,11 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+# Retire only new runs. Histories without this marker retain their complete
+# linked-recovery command path until their deployment's retained histories drain.
+RUN_LINKED_RECOVERY_RETIREMENT_PATCH = "run-linked-recovery-retirement-v1"
+RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
+RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
 RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH = "run-step-profile-selection-inheritance-v1"
 RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH = "run-account-intent-normalization-v2"
@@ -376,6 +393,7 @@ _DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
     }
 )
 RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v1"
+RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH = "run-checkpoint-recovery-state-machine-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
 RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = "run-pr-resolver-continuation-identity-v1"
 RUN_PR_RESOLVER_VERDICT_PROPAGATION_PATCH = "run-pr-resolver-verdict-propagation-v1"
@@ -1358,6 +1376,11 @@ def _resolve_plan_ref_inputs(
             hint = ""
             if available:
                 hint = f"; available outputs: {', '.join(available)}"
+            if payload.get("preserved") is True:
+                hint += (
+                    "; preserved producers expose only recorded artifact refs "
+                    "(outputSummaryRef/outputPrimaryRef)"
+                )
             raise ValueError(
                 f"Reference at {current_node_id} points to invalid output "
                 f"path '{pointer}' on node '{ref_node}': {exc}{hint}"
@@ -1781,6 +1804,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
         self._finish_summary: dict[str, Any] | None = None
+        self._linked_recovery_retired = False
+        self._recovery_source: dict[str, Any] | None = None
+        self._recovery_failed_step_id: str | None = None
+        self._recovery_workspace: dict[str, Any] = {}
+        self._recovery_workspace_restored_ref: str | None = None
+        self._checkpoint_recovery_contract: CheckpointRecoveryContract | None = None
+        self._checkpoint_recovery_state: dict[str, Any] | None = None
+        # Compact record of a resume-path checkpoint validation/restoration
+        # failure (failureCode + checkpointRef), captured before the failure is
+        # raised so the failed-run recovery manifest reports the real degraded
+        # checkpoint outcome and blocks resume instead of silently full-rerunning.
+        self._recovery_checkpoint_validation_failure: dict[str, Any] | None = None
         # Compact reference to the failed-run recovery manifest emitted before
         # terminal failure is reported (MM-881).
         self._recovery_manifest_ref: str | None = None
@@ -2295,6 +2330,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             logical_step_id,
             attempt=attempt,
         )
+        lineage = self._step_execution_lineage(
+            logical_step_id,
+            reason=manifest_reason,
+            source_execution_ordinal=source_execution_ordinal,
+        )
         workspace = self._step_execution_workspace(
             logical_step_id,
             attempt=attempt,
@@ -2443,6 +2483,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             runId=identity.run_id,
             logicalStepId=identity.logical_step_id,
             executionOrdinal=identity.execution_ordinal,
+            lineage=dict(lineage) if lineage is not None else None,
             branch=dict(branch_metadata) if branch_metadata else None,
             reason=manifest_reason,
             status=resolved_status,
@@ -2462,6 +2503,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             checks=checks,
             sideEffects=side_effects_payload,
             dependencyEffects=dependency_effects,
+            recoverySource=self._validate_recovery_source_for_execution(),
             budget=budget,
         )
         manifest_ref = await self._write_step_execution_manifest(
@@ -2769,20 +2811,111 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             updated_at=updated_at,
         )
 
+    def _recovery_source_text(
+        self,
+        source: Mapping[str, Any],
+        *keys: str,
+    ) -> str:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def _recovery_source_int(
+        self,
+        source: Mapping[str, Any],
+        *keys: str,
+    ) -> int | None:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value >= 1:
+                return value
+            if isinstance(value, str) and value.strip():
+                try:
+                    parsed = int(value.strip())
+                except ValueError:
+                    continue
+                if parsed >= 1:
+                    return parsed
+        return None
+
     def _step_execution_source_identity(
         self,
         logical_step_id: str,
         *,
         attempt: int,
     ) -> dict[str, Any] | None:
-        if attempt <= 1:
+        if attempt > 1:
+            info = workflow.info()
+            return {
+                "workflowId": info.workflow_id,
+                "runId": info.run_id,
+                "logicalStepId": logical_step_id,
+                "executionOrdinal": attempt - 1,
+            }
+        recovery_source = self._recovery_source
+        if (
+            not isinstance(recovery_source, Mapping)
+            or logical_step_id != self._recovery_failed_step_id
+        ):
             return None
-        info = workflow.info()
+        source_workflow_id = self._recovery_source_text(
+            recovery_source,
+            "sourceWorkflowId",
+            "source_workflow_id",
+        )
+        source_run_id = self._recovery_source_text(
+            recovery_source,
+            "sourceRunId",
+            "source_run_id",
+        )
+        source_logical_step_id = self._recovery_source_text(
+            recovery_source,
+            "failedStepId",
+            "failed_step_id",
+        )
+        source_execution_ordinal = self._recovery_source_int(
+            recovery_source,
+            "failedStepExecution",
+            "failed_step_execution",
+        )
+        if (
+            not source_workflow_id
+            or not source_run_id
+            or not source_logical_step_id
+            or not source_execution_ordinal
+        ):
+            return None
         return {
-            "workflowId": info.workflow_id,
-            "runId": info.run_id,
-            "logicalStepId": logical_step_id,
-            "executionOrdinal": attempt - 1,
+            "workflowId": source_workflow_id,
+            "runId": source_run_id,
+            "logicalStepId": source_logical_step_id,
+            "executionOrdinal": source_execution_ordinal,
+        }
+
+    def _step_execution_lineage(
+        self,
+        logical_step_id: str,
+        *,
+        reason: str,
+        source_execution_ordinal: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if (
+            not source_execution_ordinal
+            or logical_step_id != self._recovery_failed_step_id
+        ):
+            return None
+        return {
+            "sourceWorkflowId": source_execution_ordinal["workflowId"],
+            "sourceRunId": source_execution_ordinal["runId"],
+            "sourceLogicalStepId": source_execution_ordinal["logicalStepId"],
+            "sourceExecutionOrdinal": source_execution_ordinal["executionOrdinal"],
+            "relationship": reason,
+            "lineageExecutionOrdinal": int(source_execution_ordinal["executionOrdinal"])
+            + (self._step_execution_for(logical_step_id) or 0),
         }
 
     def _step_execution_started_at(self, logical_step_id: str) -> datetime | None:
@@ -2971,6 +3104,34 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         attempt: int,
         source_execution_ordinal: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
+        if (
+            source_execution_ordinal
+            and logical_step_id == self._recovery_failed_step_id
+        ):
+            resolved_policy = resolve_checkpoint_policy(
+                boundary="before_recovery_restoration",
+                recovery_source=(
+                    self._recovery_source
+                    if isinstance(self._recovery_source, Mapping)
+                    else None
+                ),
+                runtime_kind=self._target_runtime,
+            )
+            workspace = workspace_policy_metadata(
+                policy=resolved_policy.workspace_policy,
+                checkpoint_ref=self._recovery_workspace_restored_ref,
+                checkpoint_valid=bool(self._recovery_workspace_restored_ref),
+            )
+            workspace.update(
+                {
+                    "sourceExecutionOrdinal": dict(source_execution_ordinal),
+                }
+            )
+            self._apply_step_checkpoint_manifest_refs(
+                workspace,
+                self._step_checkpoint_refs_by_boundary.get(logical_step_id, {}),
+            )
+            return workspace
         checkpoint_ref = self._step_checkpoint_refs.get(
             logical_step_id
         ) or self._previous_step_checkpoint_refs.get(logical_step_id)
@@ -3368,12 +3529,522 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "byKind": by_kind,
         }
 
+    def _recovery_workspace_checkpoint_ref(
+        self,
+        workspace: Mapping[str, Any],
+    ) -> str:
+        return self._recovery_source_text(
+            workspace,
+            "checkpointRef",
+            "checkpoint_ref",
+            "workspaceCheckpointRef",
+            "workspace_checkpoint_ref",
+            "branchCheckpointRef",
+            "branch_checkpoint_ref",
+            "checkpointPayloadRef",
+            "checkpoint_payload_ref",
+        )
+
+    def _recovery_workspace_has_evidence(
+        self,
+        workspace: Mapping[str, Any],
+    ) -> bool:
+        return any(
+            isinstance(value, str) and value.strip() for value in workspace.values()
+        )
+
     def _rebuild_step_ledger_index(self) -> None:
         self._step_ledger_by_id = {
             row["logicalStepId"]: row
             for row in self._step_ledger_rows
             if isinstance(row.get("logicalStepId"), str) and row["logicalStepId"]
         }
+
+    def _validate_recovery_source_for_execution(self) -> dict[str, Any] | None:
+        recovery_source = self._recovery_source
+        if self._recovery_failed_step_id is not None:
+            return dict(recovery_source) if recovery_source is not None else None
+        self._recovery_failed_step_id = None
+        self._recovery_workspace = {}
+        self._recovery_workspace_restored_ref = None
+        self._checkpoint_recovery_contract = None
+        self._checkpoint_recovery_state = None
+        if recovery_source is None:
+            return None
+        if not isinstance(recovery_source, Mapping):
+            raise ValueError("Recovery source must be a compact mapping.")
+        if not recovery_source:
+            return None
+        # Patch-gated so histories started before the explicit contract retain
+        # their recorded validation path during replay.
+        if self._workflow_patch_enabled(RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH):
+            validate_recovery_contract(recovery_source)
+
+        source_workflow_id = self._recovery_source_text(
+            recovery_source,
+            "sourceWorkflowId",
+            "source_workflow_id",
+        )
+        if not source_workflow_id:
+            raise ValueError("Recovery source requires source workflow ID.")
+
+        source_run_id = self._recovery_source_text(
+            recovery_source,
+            "sourceRunId",
+            "source_run_id",
+        )
+        if not source_run_id:
+            raise ValueError("Recovery source requires source run ID.")
+
+        snapshot_ref = self._recovery_source_text(
+            recovery_source,
+            "sourceTaskInputSnapshotRef",
+            "source_task_input_snapshot_ref",
+        )
+        if not snapshot_ref:
+            raise ValueError("Recovery source requires task input snapshot ref.")
+
+        failed_step_id = self._recovery_source_text(
+            recovery_source,
+            "failedStepId",
+            "failed_step_id",
+        )
+        if not failed_step_id:
+            raise ValueError("Recovery source requires failed step ID.")
+
+        checkpoint_ref = self._recovery_source_text(
+            recovery_source,
+            "recoveryCheckpointRef",
+            "recovery_checkpoint_ref",
+        )
+        if not checkpoint_ref:
+            raise ValueError("Recovery source requires recovery checkpoint ref.")
+        manifest_ref = self._recovery_source_text(
+            recovery_source,
+            "failedRunRecoveryManifestRef",
+            "failed_run_recovery_manifest_ref",
+        )
+        if not manifest_ref:
+            raise ValueError(
+                "Recovery source requires failed-run recovery manifest ref."
+            )
+
+        plan_identity = self._recovery_source_text(
+            recovery_source,
+            "sourcePlanRef",
+            "source_plan_ref",
+            "sourcePlanDigest",
+            "source_plan_digest",
+        )
+        if not plan_identity:
+            raise ValueError("Recovery source requires source plan identity.")
+
+        workspace = (
+            recovery_source.get("recoveryWorkspace")
+            if "recoveryWorkspace" in recovery_source
+            else recovery_source.get("recovery_workspace")
+        )
+        if not isinstance(workspace, Mapping):
+            raise ValueError("Recovery source requires resume workspace checkpoint.")
+        if not self._recovery_workspace_has_evidence(workspace):
+            raise ValueError("Recovery source requires workspace evidence.")
+        workspace_checkpoint_ref = self._recovery_workspace_checkpoint_ref(workspace)
+        if workspace_checkpoint_ref and workspace_checkpoint_ref != checkpoint_ref:
+            raise ValueError(
+                "Recovery source checkpoint ref must match workspace evidence."
+            )
+
+        preserved_steps = recovery_source.get("preservedSteps") or recovery_source.get(
+            "preserved_steps"
+        )
+        if preserved_steps is not None and not isinstance(preserved_steps, list):
+            raise ValueError("Recovery source preserved steps must be a list.")
+        for preserved in preserved_steps or []:
+            if not isinstance(preserved, Mapping):
+                continue
+            logical_step_id = self._recovery_source_text(
+                preserved,
+                "logicalStepId",
+                "logical_step_id",
+            )
+            if not logical_step_id:
+                raise ValueError(
+                    "Recovery source preserved step requires logical step ID."
+                )
+            status = self._recovery_source_text(preserved, "status").lower()
+            if status == "succeeded":
+                status = "completed"
+            if status and status not in {"completed", "skipped"}:
+                raise ValueError(
+                    f"preserved step {logical_step_id} must be completed before Resume"
+                )
+            artifacts = preserved.get("artifacts")
+            if not isinstance(artifacts, Mapping):
+                raise ValueError(
+                    f"preserved step {logical_step_id} requires recoverable output refs"
+                )
+            has_output_ref = any(
+                isinstance(artifacts.get(key), str) and artifacts.get(key).strip()
+                for key in ("outputSummary", "outputPrimary")
+            )
+            if not has_output_ref:
+                raise ValueError(
+                    f"preserved step {logical_step_id} requires recoverable output refs"
+                )
+            state_checkpoint_ref = self._recovery_source_text(
+                preserved,
+                "stateCheckpointRef",
+                "state_checkpoint_ref",
+            )
+            if not state_checkpoint_ref:
+                raise ValueError(
+                    f"preserved step {logical_step_id} requires a state checkpoint ref"
+                )
+
+        explicit_contract = recovery_source.get("checkpointRecovery")
+        if explicit_contract is None:
+            explicit_contract = recovery_source.get("checkpoint_recovery")
+        if explicit_contract is not None:
+            contract = CheckpointRecoveryContract.model_validate(explicit_contract)
+            restore_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                contract.restore_activity
+            )
+            if restore_route.fleet != "agent_runtime":
+                raise ValueError(
+                    "CHECKPOINT_CAPABILITY_INVALID: restore activity must run on "
+                    "the agent_runtime fleet"
+                )
+            self._checkpoint_recovery_contract = contract
+            self._checkpoint_recovery_state = {
+                "status": "recovery_preflight_validated",
+                "recoveryAction": contract.recovery_action,
+                "resumePhase": contract.resume_phase,
+                "sourceCheckpointRef": contract.source_checkpoint_ref,
+                "sourceCheckpointBoundary": contract.source_checkpoint_boundary,
+                "sourceCheckpointKind": contract.source_checkpoint_kind,
+                "targetRuntimeId": contract.capabilities.runtime_id,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
+                "restoreActivity": contract.restore_activity,
+            }
+
+        self._recovery_failed_step_id = failed_step_id
+        self._recovery_workspace = dict(workspace)
+        return dict(recovery_source)
+
+    def _restore_recovery_workspace_for_failed_step(
+        self,
+        logical_step_id: str,
+    ) -> str | None:
+        if (
+            not self._recovery_failed_step_id
+            or logical_step_id != self._recovery_failed_step_id
+        ):
+            return None
+        if self._recovery_workspace_restored_ref:
+            return self._recovery_workspace_restored_ref
+        checkpoint_ref = self._recovery_workspace_checkpoint_ref(
+            self._recovery_workspace
+        )
+        if not checkpoint_ref:
+            return None
+        self._recovery_workspace_restored_ref = checkpoint_ref
+        return checkpoint_ref
+
+    async def _prepare_recovery_workspace_for_failed_step(
+        self,
+        logical_step_id: str,
+    ) -> str | None:
+        if (
+            not self._recovery_failed_step_id
+            or logical_step_id != self._recovery_failed_step_id
+        ):
+            return None
+        if self._recovery_workspace_restored_ref:
+            return self._recovery_workspace_restored_ref
+        if not isinstance(self._recovery_source, Mapping):
+            return None
+
+        if self._checkpoint_recovery_contract is not None and workflow.patched(
+            RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH
+        ):
+            return await self._restore_checkpoint_recovery_workspace(logical_step_id)
+
+        checkpoint_ref = self._recovery_workspace_checkpoint_ref(
+            self._recovery_workspace
+        )
+        if not checkpoint_ref:
+            return None
+
+        checkpoint_payload = self._recovery_workspace.get("checkpoint")
+        if not isinstance(checkpoint_payload, Mapping):
+            checkpoint_payload = self._recovery_workspace.get("checkpointPayload")
+        if not isinstance(checkpoint_payload, Mapping):
+            checkpoint_payload = {
+                key: value
+                for key, value in self._recovery_workspace.items()
+                if key not in {"checkpointRef", "checkpoint_ref"}
+            }
+
+        source_workflow_id = self._recovery_source_text(
+            self._recovery_source,
+            "sourceWorkflowId",
+            "source_workflow_id",
+        )
+        source_run_id = self._recovery_source_text(
+            self._recovery_source,
+            "sourceRunId",
+            "source_run_id",
+        )
+        execution_ordinal = (
+            self._recovery_source_int(
+                self._recovery_source,
+                "failedStepExecution",
+                "failed_step_execution",
+                "sourceExecutionOrdinal",
+                "source_execution_ordinal",
+            )
+            or 1
+        )
+        task_input_snapshot_ref = self._recovery_source_text(
+            self._recovery_source,
+            "sourceTaskInputSnapshotRef",
+            "source_task_input_snapshot_ref",
+        )
+        source_plan_ref = self._recovery_source_text(
+            self._recovery_source,
+            "sourcePlanRef",
+            "source_plan_ref",
+        )
+        source_plan_digest = self._recovery_source_text(
+            self._recovery_source,
+            "sourcePlanDigest",
+            "source_plan_digest",
+        )
+        resolved_policy = resolve_checkpoint_policy(
+            boundary="before_recovery_restoration",
+            recovery_source=self._recovery_source,
+            runtime_kind=self._target_runtime,
+        )
+        workspace_policy = (
+            self._recovery_source_text(
+                self._recovery_workspace,
+                "workspacePolicy",
+                "workspace_policy",
+            )
+            or resolved_policy.workspace_policy
+        )
+
+        validate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "step_checkpoint.validate"
+        )
+        validate_payload = {
+            "checkpoint": dict(checkpoint_payload),
+            "expectedSource": {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "logicalStepId": logical_step_id,
+                "executionOrdinal": execution_ordinal,
+            },
+            "expectedTaskInputSnapshotRef": task_input_snapshot_ref,
+            "expectedPlanRef": source_plan_ref or None,
+            "expectedPlanDigest": source_plan_digest or None,
+            "workspacePolicy": workspace_policy,
+            "checkpointRef": checkpoint_ref,
+        }
+        validation = await workflow.execute_activity(
+            validate_route.activity_type,
+            validate_payload,
+            **self._execute_kwargs_for_route(validate_route),
+        )
+        if not isinstance(validation, Mapping) or validation.get("valid") is not True:
+            failure_code = "invalid_checkpoint"
+            if isinstance(validation, Mapping):
+                failure_code = str(validation.get("failureCode") or failure_code)
+            self._recovery_checkpoint_validation_failure = {
+                "failureCode": failure_code,
+                "checkpointRef": checkpoint_ref,
+            }
+            raise ValueError(f"recovery checkpoint validation failed: {failure_code}")
+
+        target_workspace_locator = self._recovery_workspace.get(
+            "targetWorkspaceLocator"
+        )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = self._recovery_workspace.get(
+                "target_workspace_locator"
+            )
+        if not isinstance(target_workspace_locator, Mapping):
+            target_workspace_locator = None
+        target_workspace_ref = self._recovery_source_text(
+            self._recovery_workspace,
+            "targetWorkspaceRef",
+            "target_workspace_ref",
+            "workspaceRef",
+            "workspace_ref",
+        )
+        if target_workspace_locator is None:
+            target_workspace_ref = target_workspace_ref or checkpoint_ref
+        apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "workspace.apply_policy"
+        )
+        apply_payload = {
+            "identity": {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "logicalStepId": logical_step_id,
+                "executionOrdinal": execution_ordinal,
+            },
+            "workspacePolicy": workspace_policy,
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": dict(checkpoint_payload),
+            "expectedPlanRef": source_plan_ref or None,
+            "expectedPlanDigest": source_plan_digest or None,
+            "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
+        }
+        if target_workspace_locator is not None:
+            apply_payload["targetWorkspaceLocator"] = dict(target_workspace_locator)
+        if target_workspace_ref:
+            apply_payload["targetWorkspaceRef"] = target_workspace_ref
+        policy = await workflow.execute_activity(
+            apply_route.activity_type,
+            apply_payload,
+            **self._execute_kwargs_for_route(apply_route),
+        )
+        if not isinstance(policy, Mapping) or policy.get("status") != "applied":
+            failure_code = "policy_incompatible"
+            if isinstance(policy, Mapping):
+                failure_code = str(policy.get("failureCode") or failure_code)
+            self._recovery_checkpoint_validation_failure = {
+                "failureCode": failure_code,
+                "checkpointRef": checkpoint_ref,
+            }
+            raise ValueError(
+                f"recovery workspace policy application failed: {failure_code}"
+            )
+
+        workspace_ref = str(policy.get("workspaceRef") or target_workspace_ref).strip()
+        self._recovery_workspace_restored_ref = workspace_ref or checkpoint_ref
+        return self._recovery_workspace_restored_ref
+
+    async def _restore_checkpoint_recovery_workspace(self, logical_step_id: str) -> str:
+        """Invoke the frozen runtime-owned restore route exactly once per history."""
+        contract = self._checkpoint_recovery_contract
+        state = self._checkpoint_recovery_state
+        if contract is None or state is None:
+            raise ValueError(
+                "CHECKPOINT_RESTORATION_NOT_READY: recovery preflight missing"
+            )
+        if state.get("status") == "recovery_workspace_restored":
+            return str(state["restorationEvidenceRef"])
+
+        source_ordinal = (
+            self._recovery_source_int(
+                self._recovery_source or {},
+                "failedStepExecution",
+                "failed_step_execution",
+            )
+            or 1
+        )
+        destination_id, idempotency_key = deterministic_recovery_identity(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=source_ordinal,
+            checkpoint_ref=contract.source_checkpoint_ref,
+        )
+        state.update(
+            {
+                "status": "recovery_restoring_workspace",
+                "destinationAgentRunId": destination_id,
+                "restoreIdempotencyKey": idempotency_key,
+            }
+        )
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(contract.restore_activity)
+        workspace = dict(self._recovery_workspace)
+        source_locator = workspace.get("sourceWorkspaceLocator") or workspace.get(
+            "workspaceLocator"
+        )
+        checkpoint = (
+            workspace.get("workspace") or workspace.get("checkpoint") or workspace
+        )
+        result = await workflow.execute_activity(
+            route.activity_type,
+            {
+                "schemaVersion": "v1",
+                "recoveryIdentity": {
+                    "workflowId": workflow.info().workflow_id,
+                    "runId": workflow.info().run_id,
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal + 1,
+                },
+                "source": {
+                    "workflowId": self._recovery_source_text(
+                        self._recovery_source or {},
+                        "sourceWorkflowId",
+                        "source_workflow_id",
+                    ),
+                    "runId": self._recovery_source_text(
+                        self._recovery_source or {}, "sourceRunId", "source_run_id"
+                    ),
+                    "logicalStepId": logical_step_id,
+                    "executionOrdinal": source_ordinal,
+                    "checkpointRef": contract.source_checkpoint_ref,
+                    "checkpointBoundary": contract.source_checkpoint_boundary,
+                    **(
+                        {"sourceWorkspaceLocator": dict(source_locator)}
+                        if isinstance(source_locator, Mapping)
+                        else {}
+                    ),
+                },
+                "checkpoint": {
+                    "kind": contract.source_checkpoint_kind,
+                    "baseCommit": checkpoint.get("baseCommit"),
+                    "archiveRef": checkpoint.get("archiveRef"),
+                    "archiveDigest": checkpoint.get("archiveDigest"),
+                    "manifestRef": checkpoint.get("manifestRef"),
+                    "manifestDigest": checkpoint.get("manifestDigest"),
+                },
+                "destination": {
+                    "runtimeId": contract.capabilities.runtime_id,
+                    "agentRunId": destination_id,
+                    "repository": self._repo,
+                    "relativePath": "repo",
+                },
+                "workspacePolicy": contract.workspace_policy,
+                "resumePhase": contract.resume_phase,
+                "capabilitySetVersion": contract.capabilities.capability_set_version,
+                "capabilityDigest": contract.capabilities.capability_digest,
+                "idempotencyKey": idempotency_key,
+            },
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(result, Mapping):
+            raise ValueError("CHECKPOINT_RESTORATION_NOT_READY: invalid restore result")
+        locator, evidence_ref, evidence_digest = validate_restore_result(
+            result,
+            runtime_id=contract.capabilities.runtime_id,
+            destination_agent_run_id=destination_id,
+        )
+        state.update(
+            {
+                "status": "recovery_workspace_restored",
+                "destinationWorkspaceLocator": locator,
+                "restorationEvidenceRef": evidence_ref,
+                "restorationEvidenceDigest": evidence_digest,
+            }
+        )
+        self._recovery_workspace_restored_ref = evidence_ref
+        return evidence_ref
+
+    def _preserved_outputs_for_step(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        return preserved_outputs_for_dependencies(
+            self._step_ledger_rows,
+            logical_step_id,
+        )
 
     def _record_step_dependency_inputs(self, logical_step_id: str) -> None:
         try:
@@ -3411,6 +4082,75 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _step_ledger_row_for(self, logical_step_id: str) -> dict[str, Any] | None:
         return self._step_ledger_by_id.get(logical_step_id)
 
+    def _is_preserved_step(self, logical_step_id: str) -> bool:
+        row = self._step_ledger_row_for(logical_step_id)
+        return isinstance(row, Mapping) and isinstance(
+            row.get("preservedFrom"),
+            Mapping,
+        )
+
+    def _preserved_step_outputs(self, logical_step_id: str) -> dict[str, Any]:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return {}
+        artifacts = row.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            return {}
+        outputs: dict[str, Any] = {}
+        output_summary = artifacts.get("outputSummary")
+        if isinstance(output_summary, str) and output_summary.strip():
+            outputs["outputSummaryRef"] = output_summary.strip()
+        output_primary = artifacts.get("outputPrimary")
+        if isinstance(output_primary, str) and output_primary.strip():
+            outputs["outputPrimaryRef"] = output_primary.strip()
+        if outputs:
+            outputs["preservedFrom"] = dict(row.get("preservedFrom") or {})
+        return outputs
+
+    def _record_preserved_step_terminal_state(
+        self,
+        logical_step_id: str,
+        node: Mapping[str, Any],
+    ) -> None:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return
+        terminal_disposition = self._coerce_text(
+            row.get("terminalDisposition") or row.get("terminal_disposition"),
+            max_chars=100,
+        )
+        if terminal_disposition:
+            self._step_terminal_dispositions[logical_step_id] = terminal_disposition
+        tool = self._plan_node_tool_mapping(node)
+        tool = tool if isinstance(tool, Mapping) else {}
+        tool_name = str(tool.get("name") or tool.get("id") or "").strip()
+        if (
+            terminal_disposition == "accepted"
+            and self._is_moonspec_verify_step(
+                tool_name=tool_name,
+                node_inputs=self._node_inputs_mapping(node),
+            )
+            and self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+            is None
+        ):
+            self._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+            self._publish_context["moonSpecGate"] = {
+                "logicalStepId": logical_step_id,
+                "verdict": "FULLY_IMPLEMENTED",
+            }
+
+    def _merge_preserved_dependency_outputs(
+        self,
+        logical_step_id: str,
+        previous_step_outputs: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        preserved_outputs = self._preserved_outputs_for_step(logical_step_id)
+        if not preserved_outputs:
+            return previous_step_outputs
+        merged = dict(previous_step_outputs)
+        merged["preservedOutputs"] = preserved_outputs
+        return merged
+
     def _initialize_step_ledger(
         self,
         *,
@@ -3418,12 +4158,42 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         dependency_map: dict[str, list[str]],
         updated_at: datetime,
     ) -> None:
+        recovery_source = self._validate_recovery_source_for_execution() or {}
         self._step_ledger_rows = build_initial_step_rows(
             ordered_nodes=ordered_nodes,
             dependency_map=dependency_map,
             updated_at=updated_at,
         )
         self._rebuild_step_ledger_index()
+        preserved_steps = recovery_source.get("preservedSteps") or recovery_source.get(
+            "preserved_steps"
+        )
+        if isinstance(preserved_steps, list):
+            source_workflow_id = self._recovery_source_text(
+                recovery_source,
+                "sourceWorkflowId",
+                "source_workflow_id",
+            )
+            source_run_id = self._recovery_source_text(
+                recovery_source,
+                "sourceRunId",
+                "source_run_id",
+            )
+            if source_workflow_id and source_run_id:
+                materialize_preserved_steps(
+                    self._step_ledger_rows,
+                    source_workflow_id=source_workflow_id,
+                    source_run_id=source_run_id,
+                    preserved_steps=[
+                        step for step in preserved_steps if isinstance(step, Mapping)
+                    ],
+                    updated_at=updated_at,
+                )
+                validate_preserved_dependency_outputs(
+                    self._step_ledger_rows,
+                    updated_at=updated_at,
+                )
+                refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
         self._sync_progress_snapshot(updated_at=updated_at)
 
     def _initialize_remediation_loop_controller(
@@ -3607,6 +4377,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             state_payload.pop("latestProgressSignature", None)
         continuation: dict[str, Any] = {
             "schemaVersion": 1,
+            "linkedRecoveryRetired": self._linked_recovery_retired,
             "state": state_payload,
             "orderedNodes": [dict(node) for node in ordered_nodes],
             "stepLedgerRows": [dict(row) for row in self._step_ledger_rows],
@@ -4341,6 +5112,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         summary: str | None = None,
         increment_attempt: bool = True,
     ) -> None:
+        self._restore_recovery_workspace_for_failed_step(logical_step_id)
         if not self._try_update_step_row(
             logical_step_id,
             updated_at=updated_at,
@@ -6141,6 +6913,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             workspace_locator=(
                 capture_input.get("workspaceLocator")
                 if isinstance(capture_input.get("workspaceLocator"), Mapping)
+                else None
+            ),
+            recovery_source=(
+                self._recovery_source
+                if isinstance(self._recovery_source, Mapping)
                 else None
             ),
             runtime_kind=(
@@ -10942,6 +11719,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
+        self._linked_recovery_retired = workflow.patched(
+            RUN_LINKED_RECOVERY_RETIREMENT_PATCH
+        )
+        # A genuine Continue-As-New remains part of admitted work, including
+        # chains whose previous worker predates the retirement marker. A fresh
+        # caller cannot select the legacy path by supplying continuation fields.
+        continuation = (
+            input_payload.get("remediation_loop_continuation")
+            if isinstance(input_payload, dict)
+            else None
+        )
+        if getattr(workflow.info(), "continued_run_id", None) and isinstance(
+            continuation, Mapping
+        ):
+            self._linked_recovery_retired = (
+                self._linked_recovery_retired
+                and continuation.get("linkedRecoveryRetired") is True
+            )
         self._canonical_git_repository_projection_enabled = workflow.patched(
             RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH
         )
@@ -10949,6 +11744,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             workflow_type, parameters, input_ref, plan_ref, scheduled_for = (
                 self._initialize_from_payload(input_payload)
             )
+            recovery_target = parameters.get("recoveryTarget")
+            if (
+                not self._linked_recovery_retired
+                and recovery_target is not None
+                and workflow.patched(RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH)
+            ):
+                if not isinstance(recovery_target, Mapping):
+                    raise ValueError("RECOVERY_TARGET_MISSING")
+                recovery_policy = compile_recovery_entry_policy(
+                    recovery_target,
+                    destination_workflow_id=workflow.info().workflow_id,
+                )
+                parameters["recoveryExecutionPolicy"] = dataclasses.asdict(
+                    recovery_policy
+                )
+                # Publication and restoration targets must never fall through
+                # to the ordinary semantic-work path. Their dedicated activity
+                # routes are promoted separately after replay evidence exists.
+                if recovery_policy.publication_only or recovery_policy.restoration_only:
+                    raise ValueError("RECOVERY_PHASE_UNSUPPORTED")
         except ValueError as exc:
             raise exceptions.ApplicationError(
                 str(exc),
@@ -11465,6 +12280,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 parameters.get("moonspecEnvironmentBlockedPublishAction")
                 or parameters.get("moonspec_environment_blocked_publish_action")
             )
+        )
+        recovery_source = self._mapping_value(
+            parameters, "recoverySource", "recovery_source"
+        )
+        self._recovery_source = (
+            dict(recovery_source)
+            if not self._linked_recovery_retired and isinstance(recovery_source, Mapping)
+            else None
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)
@@ -12406,8 +13229,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
         # MoonLadderStudios/MoonMind#973: recorded COMPLETED results by node
-        # for deterministic ``ref.node`` resolution, extended as each node
-        # completes; never rerun to rebuild.
+        # for deterministic ``ref.node`` resolution. Seeded from preserved
+        # steps and extended as each node completes; never rerun to rebuild.
         completed_step_results: dict[str, Any] = {}
         ref_resolution_enabled = workflow.patched(
             RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH
@@ -12428,6 +13251,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             original_node_inputs = (
                 dict(raw_node_inputs) if isinstance(raw_node_inputs, Mapping) else {}
             )
+            if self._is_preserved_step(node_id):
+                self._record_preserved_step_terminal_state(node_id, node)
+                preserved_outputs = self._preserved_step_outputs(node_id)
+                if preserved_outputs:
+                    previous_step_outputs = preserved_outputs
+                    if ref_resolution_enabled:
+                        completed_step_results[node_id] = {
+                            "status": "COMPLETED",
+                            "outputs": dict(preserved_outputs),
+                            "progress": {},
+                            # Preserved producers expose only recorded
+                            # artifact refs; other pointers fail explicitly
+                            # with that hint instead of silent progress loss.
+                            "preserved": True,
+                        }
+                continue
             current_step_row = self._step_ledger_row_for(node_id)
             if (
                 self._remediation_loop_continuation is not None
@@ -12601,8 +13440,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         feedback=previous_review_feedback,
                         issues=previous_review_issues,
                     )
+                current_previous_outputs = self._merge_preserved_dependency_outputs(
+                    node_id,
+                    previous_step_outputs,
+                )
                 current_previous_outputs = self._merge_trusted_issue_context(
-                    previous_step_outputs
+                    current_previous_outputs
                 )
                 if ref_resolution_enabled:
                     try:
@@ -12663,6 +13506,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 self._update_memo()
                 self._refresh_step_readiness(updated_at=workflow.now())
+                if node_id == self._recovery_failed_step_id:
+                    await self._record_canonical_step_checkpoint(
+                        node_id,
+                        boundary="before_recovery_restoration",
+                        updated_at=workflow.now(),
+                    )
+                await self._prepare_recovery_workspace_for_failed_step(node_id)
                 self._mark_step_running(
                     node_id,
                     updated_at=workflow.now(),
@@ -12708,9 +13558,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "quality_gate_failed"
                     if previous_review_feedback
                     else (
-                        "initial_execution"
-                        if current_step_execution == 1
-                        else "runtime_recovered"
+                        "recover_from_failed_step"
+                        if node_id == self._recovery_failed_step_id
+                        else (
+                            "initial_execution"
+                            if current_step_execution == 1
+                            else "runtime_recovered"
+                        )
                     )
                 )
                 await self._record_canonical_step_checkpoint(
@@ -12902,6 +13756,37 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 ),
                             )
                             agent_request_for_context = request
+                            if (
+                                node_id == self._recovery_failed_step_id
+                                and self._checkpoint_recovery_state is not None
+                            ):
+                                locator = self._checkpoint_recovery_state.get(
+                                    "destinationWorkspaceLocator"
+                                )
+                                evidence_ref = self._checkpoint_recovery_state.get(
+                                    "restorationEvidenceRef"
+                                )
+                                if not isinstance(locator, Mapping) or not evidence_ref:
+                                    raise ValueError(
+                                        "CHECKPOINT_RESTORATION_NOT_READY: recovered "
+                                        "AgentRun requires destination locator and evidence"
+                                    )
+                                recovered_workspace = dict(request.workspace_spec)
+                                recovered_workspace["workspaceLocator"] = dict(locator)
+                                recovered_workspace["restorationEvidenceRef"] = (
+                                    evidence_ref
+                                )
+                                recovered_workspace["sourceCheckpointRef"] = (
+                                    self._checkpoint_recovery_state[
+                                        "sourceCheckpointRef"
+                                    ]
+                                )
+                                recovered_workspace["capabilityDigest"] = (
+                                    self._checkpoint_recovery_state["capabilityDigest"]
+                                )
+                                request = request.model_copy(
+                                    update={"workspace_spec": recovered_workspace}
+                                )
                             await self._resolve_step_resilience_policy_ref(
                                 node_id=node_id,
                                 execution_profile_ref=request.execution_profile_ref,
@@ -16720,12 +17605,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if self._codex_session_binding is not None:
             return self._codex_session_binding
 
+        recovery_agent_run_id = ""
+        if self._checkpoint_recovery_state is not None:
+            recovery_agent_run_id = str(
+                self._checkpoint_recovery_state.get("destinationAgentRunId") or ""
+            ).strip()
+        agent_run_id = recovery_agent_run_id or workflow.info().workflow_id
         session_input = CodexManagedSessionWorkflowInput(
-            agentRunId=workflow.info().workflow_id,
+            agentRunId=agent_run_id,
             runtimeId=runtime_id,
             executionProfileRef=request.execution_profile_ref,
         )
         session_workflow_id = self._workflow_scoped_session_workflow_id(runtime_id)
+        if recovery_agent_run_id:
+            session_workflow_id = f"{session_workflow_id}:recovery"
         initial_binding = CodexManagedSessionBinding.from_input(
             workflow_id=session_workflow_id,
             session_input=session_input,
@@ -22141,6 +23034,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 # coordinator's gh preflight reads the compact parameters plane,
                 # while cloning remains owned by the workspace specification.
                 parameters["repository"] = nested_repository
+        checkpoint_recovery = None
+        if (
+            self._recovery_failed_step_id == node_id
+            and isinstance(self._recovery_source, Mapping)
+            and self._workflow_patch_enabled(
+                RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH
+            )
+        ):
+            # This is trusted workflow-owned recovery state created by the API
+            # after artifact validation. Keep it out of ordinary plan inputs.
+            checkpoint_recovery = dict(self._recovery_source)
         if self._workflow_patch_enabled(
             RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH
         ) and isinstance(workflow_parameters, Mapping):
@@ -23224,6 +24128,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 if isinstance(remediation_workspace, Mapping)
                 else None
             ),
+            checkpoint_recovery=checkpoint_recovery,
             terminal_contract=terminal_contract_payload,
             terminal_continuation_authority=terminal_continuation_authority,
             input_refs=input_refs,
@@ -24279,7 +25184,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if not workflow.patched(RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH):
             return None, None
         try:
-            failed_step_id = self._coerce_text(
+            failed_step_id = self._recovery_failed_step_id or self._coerce_text(
                 (self._failure_diagnostic or {}).get("stepId"), max_chars=200
             )
             # A step rejected before launch captured no workspace of its own, so
@@ -24294,6 +25199,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         self._step_checkpoint_refs_by_boundary
                     ),
                     failure_diagnostic=self._failure_diagnostic,
+                    recovery_failed_step_id=self._recovery_failed_step_id,
                 )
                 or failed_step_id
             )
@@ -24324,6 +25230,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 checkpoint_refs_by_boundary=self._step_checkpoint_refs_by_boundary,
                 side_effect_records=self._step_side_effect_records,
                 failure_diagnostic=self._failure_diagnostic,
+                recovery_failed_step_id=self._recovery_failed_step_id,
+                checkpoint_validation_failure=(
+                    self._recovery_checkpoint_validation_failure
+                ),
                 checkpoint_kind=self._coerce_text(
                     capture_input.get("kind") or capture_input.get("checkpointKind"),
                     max_chars=100,
@@ -25771,6 +26681,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "consecutiveNoProgress": budgets.consecutive_semantic_no_progress,
                     "repeatedFailureSignature": budgets.repeated_failure_signature,
                     "candidateCheckpointRecorded": bool(self._remediation_loop_state.workspace_head_ref),
+                    "savedWorkAvailable": True if self._recovery_workspace_restored_ref else None,
+                }
+            if (self._checkpoint_recovery_state or {}).get("status") == "recovery_workspace_restored":
+                memo_dict["objectiveRecoverySource"] = {
+                    "workflowId": self._recovery_source_text(self._recovery_source or {}, "sourceWorkflowId", "source_workflow_id"),
+                    "runId": self._recovery_source_text(self._recovery_source or {}, "sourceRunId", "source_run_id"),
+                    "verified": True,
                 }
         if isinstance(self._step_count, int) and self._step_count > 0:
             # Retry from a step finds each step's start in history by the

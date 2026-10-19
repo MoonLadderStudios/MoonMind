@@ -212,6 +212,7 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "elapsedMs": None,
                 "serverNow": updated_at.isoformat(),
                 "precision": "unavailable",
+                "preserved": False,
             },
             "summary": None,
             "checks": [],
@@ -273,6 +274,7 @@ def test_update_step_row_adds_live_and_terminal_timing() -> None:
         "elapsedMs": 0,
         "serverNow": started_at.isoformat(),
         "precision": "live",
+        "preserved": False,
     }
 
     completed = update_step_row(
@@ -289,6 +291,7 @@ def test_update_step_row_adds_live_and_terminal_timing() -> None:
         "elapsedMs": 102000,
         "serverNow": completed_at.isoformat(),
         "precision": "fallback",
+        "preserved": False,
     }
 
 

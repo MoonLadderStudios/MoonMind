@@ -18,7 +18,10 @@ from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_LINKED_RECOVERY_RETIREMENT_PATCH,
+    MoonMindUserWorkflow,
+)
 
 _REGISTRY_REF = "art:sha256:registry"
 _PLAN_REF = "art:sha256:plan"
@@ -142,8 +145,12 @@ async def test_new_run_never_enters_linked_recovery_mode(
     monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
     monkeypatch.setattr(workflow, "execute_activity", fake_execute_activity)
     # Keep patch-gated side paths (resilience policy, checkpoint capture, ...)
-    # out of this run; the recovery entry never depended on a patch marker.
-    monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
+    # out of this run while selecting the new-run retirement path. Retained
+    # command histories are exercised separately with the actual Replayer.
+    monkeypatch.setattr(
+        workflow, "patched",
+        lambda patch_id: patch_id == RUN_LINKED_RECOVERY_RETIREMENT_PATCH,
+    )
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda _attrs: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda _memo: None)
 
@@ -183,3 +190,58 @@ async def test_new_run_never_enters_linked_recovery_mode(
         assert row["timing"].get("preserved") is not True
     # No workspace restore of a failed source run.
     assert not {"step_checkpoint.validate", "workspace.apply_policy"} & run_activity_types
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("continued_run_id", "carried", "patch_enabled", "retired"),
+    [
+        (None, {}, True, True),
+        (None, {"linkedRecoveryRetired": False}, True, True),
+        ("previous-run", {}, True, False),
+        ("previous-run", {"linkedRecoveryRetired": False}, True, False),
+        ("previous-run", {"linkedRecoveryRetired": True}, True, True),
+        ("previous-run", {"linkedRecoveryRetired": True}, False, False),
+    ],
+)
+async def test_retirement_choice_preserves_genuine_continuations_only(
+    monkeypatch: pytest.MonkeyPatch,
+    continued_run_id: str | None,
+    carried: dict[str, Any],
+    patch_enabled: bool,
+    retired: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    from temporalio.exceptions import ApplicationError
+
+    instance = MoonMindUserWorkflow()
+    monkeypatch.setattr(workflow, "info", lambda: SimpleNamespace(
+        continued_run_id=continued_run_id,
+    ))
+    monkeypatch.setattr(workflow, "patched", lambda _patch: patch_enabled)
+
+    def stop_after_decision(_payload: Any) -> Any:
+        raise ValueError("stop after retirement decision")
+
+    monkeypatch.setattr(instance, "_initialize_from_payload", stop_after_decision)
+    with pytest.raises(ApplicationError, match="stop after retirement decision"):
+        await instance.run({"remediation_loop_continuation": carried})
+    assert instance._linked_recovery_retired is retired
+
+
+@pytest.mark.parametrize("retired", [False, True])
+def test_continue_as_new_carries_frozen_retirement_choice(
+    monkeypatch: pytest.MonkeyPatch, retired: bool,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import RemediationLoopState
+
+    instance = MoonMindUserWorkflow()
+    instance._linked_recovery_retired = retired
+    instance._remediation_loop_state = RemediationLoopState(
+        loopId="loop", phase="verification_pending", consumedBudgets={}
+    )
+    instance._original_input_payload = {}
+    monkeypatch.setattr(workflow, "patched", lambda _patch: False)
+    carried = instance._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
+    assert carried["remediation_loop_continuation"]["linkedRecoveryRetired"] is retired

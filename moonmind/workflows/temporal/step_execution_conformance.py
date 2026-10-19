@@ -432,6 +432,16 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
         status="failed",
         terminalDisposition="retryable",
     )
+    recovery_manifest = _valid_manifest_payload(
+        reason="recover_from_failed_step",
+        lineage={
+            "sourceWorkflowId": "workflow-0",
+            "sourceRunId": "run-0",
+            "sourceLogicalStepId": "implement-story",
+            "sourceExecutionOrdinal": 1,
+            "relationship": "recover_from_failed_step",
+        },
+    )
     degraded_checkpoint = _valid_checkpoint_payload(boundary="after_future_gate")
     source = _identity().model_dump(by_alias=True)
     memory_failed = _valid_manifest_payload(
@@ -645,6 +655,16 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
                 "ADDITIONAL_WORK_NEEDED",
                 category="gate",
                 expected="valid",
+            ),
+        },
+        {
+            "fixtureId": "recovery-with-preserved-steps",
+            "decision": _classify_manifest_payload(
+                "recovery-with-preserved-steps",
+                recovery_manifest,
+                category="golden",
+                expected="valid",
+                traceability=("FR-003", "SC-003", "DESIGN-REQ-003"),
             ),
         },
         {

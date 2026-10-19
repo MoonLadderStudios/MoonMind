@@ -79,8 +79,8 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
             "schemaVersion": "v1",
             "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
             "executionScope": "run",
-            # Stored v1 manifests carry these keys, always empty since linked
-            # failed-step recovery was removed.
+            # Stored v1 manifests carry these keys. New runs leave them empty;
+            # retained linked-recovery histories may still populate them.
             "lineage": None,
             "recoverySource": None,
             "reason": "runtime_recovered",
@@ -488,4 +488,36 @@ def test_mm_1089_step_execution_semantic_operation_keeps_branch_turn_distinct() 
         "reexecute",
         "recover",
         "checkpoint_branch",
+    }
+
+
+def test_retained_linked_recovery_manifest_keeps_source_and_preserved_provenance() -> None:
+    from moonmind.workflows.temporal.step_execution_conformance import (
+        _valid_manifest_payload,
+    )
+
+    source = {"sourceWorkflowId": "source", "sourceRunId": "source-run"}
+    payload = _valid_manifest_payload(
+        reason="recover_from_failed_step",
+        recoverySource=source,
+        lineage={
+            "sourceWorkflowId": "source",
+            "sourceRunId": "source-run",
+            "sourceLogicalStepId": "implement",
+            "sourceExecutionOrdinal": 1,
+            "relationship": "recover_from_failed_step",
+            "preservedSteps": [{
+                "logicalStepId": "prepare",
+                "sourceWorkflowId": "source",
+                "sourceRunId": "source-run",
+                "sourceExecutionOrdinal": 1,
+                "outputRefs": {"outputPrimary": "artifact://prepared"},
+            }],
+        },
+    )
+    decoded = StepExecutionManifestModel.model_validate(payload).model_dump(by_alias=True)
+    assert decoded["reason"] == "recover_from_failed_step"
+    assert decoded["recoverySource"] == source
+    assert decoded["lineage"]["preservedSteps"][0]["outputRefs"] == {
+        "outputPrimary": "artifact://prepared"
     }

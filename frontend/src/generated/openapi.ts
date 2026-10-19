@@ -10660,6 +10660,20 @@ export interface components {
             completedWaitCycles: number;
         };
         /**
+         * PreservedStepProvenanceModel
+         * @description Source execution provenance for a preserved step row.
+         */
+        PreservedStepProvenanceModel: {
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Executionordinal */
+            executionOrdinal: number;
+        };
+        /**
          * PresetAppliedMetadataSchema
          * @description Audit metadata describing one template application.
          */
@@ -11837,6 +11851,8 @@ export interface components {
             disabledReasonCode?: (("CHECKPOINT_CAPTURE_UNSUPPORTED" | "CHECKPOINT_RESTORE_UNSUPPORTED" | "CHECKPOINT_RESTORE_ROUTE_MISSING" | "CHECKPOINT_KIND_INCOMPATIBLE" | "CHECKPOINT_BOUNDARY_INCOMPATIBLE" | "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH" | "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING" | "CHECKPOINT_CAPABILITY_DIGEST_MISMATCH" | "CHECKPOINT_ARTIFACT_INVALID" | "CHECKPOINT_SIDE_EFFECT_UNSAFE" | "RECOVERY_TARGET_UNAVAILABLE") | ("SAME_SESSION_UNREACHABLE" | "SAME_SESSION_CONTINUATION_UNSUPPORTED") | "environment_invalid") | null;
             /** Checkpointboundary */
             checkpointBoundary?: string | null;
+            /** Resumephase */
+            resumePhase?: ("rerun_failed_step" | "continue_to_gate" | "continue_after_gate" | "continue_to_remediation" | "resume_publication" | "retry_restoration") | null;
             /** Checkpointkind */
             checkpointKind?: string | null;
             /** Targetruntimeid */
@@ -13545,7 +13561,7 @@ export interface components {
             executionOrdinal: number;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
@@ -13670,7 +13686,7 @@ export interface components {
             executionOrdinal: number;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
-            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
             /** Status */
             status?: ("pending" | "preparing" | "executing" | "running" | "checking" | "completed" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
@@ -13812,6 +13828,21 @@ export interface components {
             };
         };
         /**
+         * StepLedgerResumePreservationModel
+         * @description Bounded failed-step recovery preservation eligibility for one source step.
+         */
+        StepLedgerResumePreservationModel: {
+            /** Eligible */
+            eligible: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "complete" | "not_completed" | "missing_output_refs" | "missing_state_checkpoint";
+            /** Message */
+            message?: string | null;
+        };
+        /**
          * StepLedgerRowModel
          * @description Current/latest Step Execution state for one logical step in the active run.
          */
@@ -13858,6 +13889,8 @@ export interface components {
             checks?: components["schemas"]["StepLedgerCheckModel"][];
             refs?: components["schemas"]["StepLedgerRefsModel"];
             artifacts?: components["schemas"]["StepLedgerArtifactsModel"];
+            preservedFrom?: components["schemas"]["PreservedStepProvenanceModel"] | null;
+            recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             /** Statecheckpointref */
             stateCheckpointRef?: string | null;
             /** Workspacecheckpointref */
@@ -13950,6 +13983,11 @@ export interface components {
              * @enum {string}
              */
             precision: "exact" | "live" | "fallback" | "unavailable";
+            /**
+             * Preserved
+             * @default false
+             */
+            preserved: boolean;
         };
         /**
          * TemporalArtifactEncryption

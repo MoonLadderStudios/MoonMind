@@ -3298,7 +3298,8 @@ def test_run_records_prepared_refs_and_idempotent_checkpoint_evidence(
     ]
     assert first_ref == second_ref == "artifact://runtime/checkpoint"
     assert step["stateCheckpointRef"] == "artifact://runtime/checkpoint"
-    assert "recoveryPreservation" not in step
+    assert step["recoveryPreservation"]["eligible"] is True
+    assert step["recoveryPreservation"]["reason"] == "complete"
 
 
 @pytest.mark.asyncio
