@@ -152,7 +152,7 @@ def _mcp_endpoint(source: Mapping[str, str]) -> str:
     explicit = str(source.get("MOONMIND_CONTAINER_JOBS_MCP_URL") or "").strip()
     if explicit:
         return explicit
-    return _required_env(source, "MOONMIND_URL").rstrip("/") + "/mcp"
+    return _required_env(source, "MOONMIND_URL").rstrip("/") + "/mcp/container"
 
 
 def _mcp_bearer_token(source: Mapping[str, str]) -> str | None:
