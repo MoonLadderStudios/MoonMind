@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.remediation_actions import (
     RemediationPermissionSet,
     RemediationSecurityProfile,
     remediation_changes_require_checkpoint_branch,
+    remediation_parameter_digest,
 )
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
@@ -77,7 +78,11 @@ def test_unready_control_plane_actions_are_not_advertised() -> None:
     assert catalog == ()
 
 
-async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approval() -> None:
+@pytest.mark.parametrize("reason", [
+    "terminal recovery",
+    "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+])
+async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approval(reason) -> None:
     link = SimpleNamespace(
         remediation_workflow_id="remediation-1",
         remediation_run_id="remediation-run-1",
@@ -105,7 +110,7 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
     kwargs = dict(
         remediation_workflow_id="remediation-1",
         action_kind="execution.force_terminate",
-        parameters={"reason": "terminal recovery"},
+        parameters={"reason": reason},
         dry_run=False,
         idempotency_key="action-1",
         requesting_principal="operator:requester",
@@ -160,6 +165,10 @@ async def test_issue_3620_authority_persists_and_resolves_exact_expiring_approva
         **kwargs, approval_ref=link.approval_state["approvalRef"]
     )
     assert allowed.decision == "allowed"
+    assert allowed.to_dict()["request"]["params"] == kwargs["parameters"]
+    assert remediation_parameter_digest(allowed.to_dict()["request"]["params"]) == (
+        link.approval_state["parameterDigest"]
+    )
 
     denied = await service.evaluate_action_request(
         **kwargs, approval_ref="approval://remediation/caller-invented"
