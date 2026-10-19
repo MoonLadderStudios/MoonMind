@@ -603,3 +603,130 @@ async def test_restore_inputs_of_another_execution_stay_denied(
             artifact_gateway=TemporalOmnigentArtifactGateway(artifacts),
             workflow_id="run-wf",
         )
+
+
+async def _admitted_launch(sessions, *, workflow_id: str):
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        create_execution_plan_envelope,
+    )
+
+    skills = await _skill_set(
+        sessions, tag=workflow_id, owner="agent_workflow", workflow_id=workflow_id
+    )
+    base, binding = await _admitted_plan(sessions, skills, plan_owner="system")
+    launch = {
+        "launchPolicyRef": base.payload.launchPolicyRef,
+        "hostImageRef": "example/native-host@sha256:" + "a" * 64,
+        "harness": base.payload.harnessId,
+        "runtimeUid": 1000,
+    }
+    launch["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
+        json.dumps(launch, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    body = json.dumps(launch, sort_keys=True, separators=(",", ":")).encode()
+    launch_id = await _put(
+        sessions, body, owner="system", workflow_id=None,
+        link_type="input.effective_launch_snapshot", content_type="application/json",
+    )
+    payload = base.payload.model_dump(mode="json", by_alias=True)
+    payload.update(
+        hostImageRef=launch["hostImageRef"],
+        omnigentHostBuildDigest="sha256:" + "b" * 64,
+        hostArchitecture="linux/amd64",
+        policySnapshotDigest="sha256:" + "c" * 64,
+        effectiveLaunchSnapshotRef=f"artifact:{launch_id}",
+        effectiveLaunchSnapshotDigest="sha256:" + hashlib.sha256(body).hexdigest(),
+    )
+    plan = await DbExecutionPlanStore(sessions).persist(
+        create_execution_plan_envelope(payload)
+    )
+    plan_id = await _put(
+        sessions,
+        json.dumps(plan.model_dump(mode="json", by_alias=True), sort_keys=True,
+                   separators=(",", ":"), ensure_ascii=False).encode(),
+        owner="system", workflow_id=None, link_type="", content_type="application/json",
+        metadata={"artifact_class": "omnigent.execution_plan"},
+    )
+    binding = binding.model_copy(update={
+        "plan_ref": plan.planRef,
+        "plan_digest": "sha256:" + plan.planRef.rsplit(":", 1)[-1],
+        "plan_artifact_ref": f"artifact:{plan_id}",
+    })
+    request = _request(plan, binding, workflow_id=workflow_id, skills=skills)
+    return plan, request, launch, launch_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
+@pytest.mark.parametrize("binding_shape", ["typed", "retained-plan-ref"])
+async def test_planned_host_launch_requires_its_admitted_execution(
+    artifacts, auth_mode, binding_shape
+):
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentPlannedHostResolver,
+    )
+
+    plan, request, launch, launch_id = await _admitted_launch(
+        artifacts, workflow_id="launch-a"
+    )
+    gateway = TemporalOmnigentArtifactGateway(artifacts)
+    resolver = OmnigentPlannedHostResolver(
+        catalog_repository=SimpleNamespace(), artifact_gateway=gateway
+    )
+    # Knowledge of the plan or launch ref grants nothing before admission.
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await resolver._load_exact_launch(plan, request=request)
+    await gateway.admit_execution_plan_inputs(request=request, plan=plan)
+    if binding_shape == "retained-plan-ref":
+        request = request.model_copy(update={"omnigent_execution_plan": None})
+    assert await resolver._load_exact_launch(plan, request=request) == launch
+    with pytest.raises(OmnigentArtifactError, match="Step Execution authority"):
+        await resolver._load_exact_launch(
+            plan, request=request.model_copy(update={"step_execution": None})
+        )
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await gateway.read_bytes(launch_id)
+
+    other_plan, other_request, _launch, _launch_id = await _admitted_launch(
+        artifacts, workflow_id="launch-b"
+    )
+    await gateway.admit_execution_plan_inputs(request=other_request, plan=other_plan)
+    # A substituted launch is outside the request's immutable plan closure.
+    with pytest.raises(OmnigentArtifactError, match="not an admitted input"):
+        await resolver._load_exact_launch(other_plan, request=request)
+    # A substituted plan binding cannot borrow another workflow's delegation.
+    forged = request.model_copy(update={
+        "omnigent_execution_plan": other_request.omnigent_execution_plan,
+        "parameters": dict(other_request.parameters),
+    })
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await resolver._load_exact_launch(other_plan, request=forged)
+    async with artifacts() as session:
+        row = await TemporalArtifactRepository(session).get_artifact(launch_id)
+        assert row.created_by_principal == "system"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
+@pytest.mark.parametrize("protection", ["restricted", "quarantined"])
+async def test_planned_host_launch_preserves_raw_protection(
+    artifacts, auth_mode, protection
+):
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentPlannedHostResolver,
+    )
+
+    plan, request, _launch, launch_id = await _admitted_launch(
+        artifacts, workflow_id="protected-launch"
+    )
+    gateway = TemporalOmnigentArtifactGateway(artifacts)
+    await gateway.admit_execution_plan_inputs(request=request, plan=plan)
+    await _protect(artifacts, launch_id, protection)
+    resolver = OmnigentPlannedHostResolver(
+        catalog_repository=SimpleNamespace(), artifact_gateway=gateway
+    )
+    with pytest.raises(Exception) as failure:
+        await resolver._load_exact_launch(plan, request=request)
+    assert type(failure.value).__name__ in {
+        "TemporalArtifactAuthorizationError", "TemporalArtifactStateError"
+    }
