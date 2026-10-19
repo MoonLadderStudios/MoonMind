@@ -1,5 +1,7 @@
 """Mounted artifact recovery preserves admission and retained accounting."""
 
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx
@@ -11,7 +13,7 @@ from api_service.api.routers import temporal_artifacts
 from api_service.auth_providers import get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import (
-    TemporalArtifact, TemporalArtifactUseClaim,
+    TemporalArtifact, TemporalArtifactRedactionLevel, TemporalArtifactUseClaim,
     User, WorkflowRun,
 )
 from api_service.services import single_user_conversion as conversion
@@ -34,6 +36,100 @@ def mounted_app(session, tmp_path):
         lambda: service(session, tmp_path)
     )
     return app
+
+
+async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_startup(
+    tmp_path, monkeypatch,
+):
+    from api_service import main
+
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR)
+    async with database(tmp_path) as maker:
+        @asynccontextmanager
+        async def startup_session():
+            async with maker() as session:
+                yield session
+
+        monkeypatch.setattr(main, "get_async_session_context", startup_session)
+        async with maker() as session:
+            _original_id, owner = await seed(session, tmp_path)
+            assert owner != DEFAULT_OPERATOR
+        assert (await main._run_guarded_single_user_upgrade())["published"]
+
+        # Normal OIDC writes continue after the prerequisite first starts.
+        # The old completion alone must not authorize these new resources.
+        later = {}
+        async with maker() as writer:
+            artifacts = service(writer, tmp_path)
+            for label, principal, metadata in [
+                ("human", owner, {}),
+                ("quarantined", owner, {"quarantine": True}),
+                ("machine", "service:producer", {}),
+            ]:
+                row, _ = await artifacts.create(
+                    principal=principal, content_type="application/octet-stream",
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                    metadata_json=metadata,
+                )
+                row = await artifacts.write_complete(
+                    artifact_id=row.artifact_id, principal=principal,
+                    payload=f"later {label} bytes".encode(),
+                    content_type="application/octet-stream",
+                )
+                assert row.operator_recovery_granted is False
+                later[label] = row.artifact_id
+
+        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+        async with maker() as before:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=mounted_app(before, tmp_path)),
+                base_url="http://localhost",
+            ) as client:
+                response = await client.get(f"/api/artifacts/{later['human']}/download")
+                assert response.status_code == 403, response.text
+
+        collect = AsyncMock(wraps=conversion.collect_inventory)
+        monkeypatch.setattr(conversion, "collect_inventory", collect)
+        summary = await main._run_guarded_single_user_upgrade()
+        assert summary["published"], summary
+
+        async with maker() as restarted:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=mounted_app(restarted, tmp_path)),
+                base_url="http://localhost",
+            ) as client:
+                artifact_id = later["human"]
+                response = await client.get(f"/api/artifacts/{artifact_id}/download")
+                assert response.status_code == 200, response.text
+                assert response.content == b"later human bytes"
+                assert collect.await_count == 2
+                response = await client.get(f"/api/artifacts/{artifact_id}?include_download=true")
+                assert response.status_code == 200, response.text
+                assert response.json()["raw_access_allowed"] is True
+                assert response.json()["created_by_principal"] == owner
+                response = await client.post(f"/api/artifacts/{artifact_id}/presign-download")
+                assert response.status_code == 200, response.text
+                for label, expected in [("quarantined", 409), ("machine", 403)]:
+                    artifact_id = later[label]
+                    response = await client.get(f"/api/artifacts/{artifact_id}/download")
+                    assert response.status_code == expected, response.text
+                    response = await client.post(f"/api/artifacts/{artifact_id}/presign-download")
+                    assert response.status_code == expected, response.text
+                    response = await client.get(f"/api/artifacts/{artifact_id}?include_download=true")
+                    assert response.status_code == 200, response.text
+                    assert response.json()["raw_access_allowed"] is False
+                    assert response.json()["download_url"] is None
+            for label in later:
+                row = await restarted.get(TemporalArtifact, later[label])
+                assert row.operator_recovery_granted is (label != "machine")
+                assert row.created_by_principal == ("service:producer" if label == "machine" else owner)
+
+        collect.reset_mock()
+        assert (await main._run_guarded_single_user_upgrade())["published"]
+        async with maker() as guarded:
+            assert (await conversion.startup_guard_decision(guarded)).eligible
+        collect.assert_not_awaited()
 
 
 async def test_mounted_converted_historical_owner_recovers_without_changing_claim_scope(
