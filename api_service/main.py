@@ -3306,7 +3306,7 @@ async def _sync_preset_seed_catalog() -> None:
         async with get_async_session_context() as session:
             service = PresetCatalogService(session)
             result = await service.sync_seed_templates(seed_dir=_PRESET_SEED_DIR)
-            deactivated = await service.deactivate_templates(
+            deactivated = await service.deactivate_seed_templates(
                 slugs=_LEGACY_PRESET_SLUGS_TO_DEACTIVATE,
                 scope="global",
                 scope_ref=None,
