@@ -1874,8 +1874,6 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> None:
-        if is_disabled_local_mode():
-            return
         owner = self._owner_principal(artifact)
         if not owner:
             return
@@ -2115,8 +2113,6 @@ class TemporalArtifactService:
         readers remain execution-bound below; raw restricted bytes,
         quarantine, and redaction checks keep their owning gates.
         """
-        if is_disabled_local_mode():
-            return
         if self._reads_all_instance_artifacts(principal, admitted_principal):
             return
         owner = self._owner_principal(artifact)
@@ -3588,7 +3584,7 @@ class TemporalArtifactService:
         link_type: str | None = None,
         latest_only: bool = False,
     ) -> list[db_models.TemporalArtifact]:
-        if not is_disabled_local_mode() and not principal:
+        if not principal:
             raise TemporalArtifactAuthorizationError("principal required")
         if latest_only and link_type:
             latest = await self._repository.latest_for_execution_link(
@@ -3605,9 +3601,6 @@ class TemporalArtifactService:
                 run_id=run_id,
                 link_type=link_type,
             )
-
-        if is_disabled_local_mode():
-            return artifacts
 
         visible: list[db_models.TemporalArtifact] = []
         for artifact in artifacts:

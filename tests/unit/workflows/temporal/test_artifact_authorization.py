@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import Base, TemporalArtifactRedactionLevel
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
@@ -63,11 +64,11 @@ async def test_authenticated_mode_denies_cross_principal_read(
                     principal="user-2",
                 )
 
-async def test_disabled_mode_allows_local_default_principal_reads(
+async def test_disabled_mode_preserves_operator_reads_and_denies_unscoped_readers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Disabled auth mode should permit read operations without user identity checks."""
+    """The admitted operator remains visible without granting ambient access."""
 
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
     async with temporal_db(tmp_path) as session_maker:
@@ -88,9 +89,14 @@ async def test_disabled_mode_allows_local_default_principal_reads(
 
             _meta, payload = await service.read(
                 artifact_id=artifact.artifact_id,
-                principal="another-local-user",
+                principal="operator",
             )
             assert payload == b"local"
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await service.read(
+                    artifact_id=artifact.artifact_id,
+                    principal="another-local-user",
+                )
 
 async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
     tmp_path: Path,
@@ -157,7 +163,7 @@ async def test_restricted_report_metadata_uses_preview_default_read_without_raw_
 
             _artifact, _links, _pinned, policy = await service.get_metadata(
                 artifact_id=artifact.artifact_id,
-                principal="viewer",
+                principal="operator",
             )
 
             assert policy.raw_access_allowed is False
@@ -170,5 +176,46 @@ async def test_restricted_report_metadata_uses_preview_default_read_without_raw_
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.presign_download(
                     artifact_id=artifact.artifact_id,
-                    principal="viewer",
+                    principal="operator",
                 )
+
+
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
+@pytest.mark.parametrize("latest_only", [False, True])
+async def test_execution_list_requires_owner_or_admitted_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str, latest_only: bool,
+) -> None:
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    async with temporal_db(tmp_path) as sessions:
+        async with sessions() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="service:producer", content_type="text/plain",
+                link=ExecutionRef(namespace="default", workflow_id="run-a",
+                                  run_id="run-a-1", link_type="input.test"),
+            )
+            await service.write_complete(
+                artifact_id=artifact.artifact_id, principal="service:producer",
+                payload=b"input", content_type="text/plain",
+            )
+            query = dict(namespace="default", workflow_id="run-a", run_id="run-a-1",
+                         link_type="input.test", latest_only=latest_only)
+            for principal in ("service:consumer", "system", "workflow:run-b"):
+                assert await service.list_for_execution(principal=principal, **query) == []
+                assert await service.list_for_execution(
+                    principal=principal, admitted_principal="workflow:run-b", **query
+                ) == []
+            with pytest.raises(TemporalArtifactAuthorizationError, match="principal required"):
+                await service.list_for_execution(principal="", **query)
+            for principal, admitted in (
+                ("service:producer", None), ("workflow:run-a", None),
+                ("service:consumer", "workflow:run-a"), ("operator", None),
+                ("00000000-0000-0000-0000-000000000000", None),
+            ):
+                listed = await service.list_for_execution(
+                    principal=principal, admitted_principal=admitted, **query
+                )
+                assert [row.artifact_id for row in listed] == [artifact.artifact_id]
