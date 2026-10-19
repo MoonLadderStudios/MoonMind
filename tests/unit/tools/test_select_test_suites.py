@@ -1141,6 +1141,7 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
             {"fresh-journey", "upgrade-journey", "controller-journey"},
         ),
         ("tools/single_user_journey_provider.py", {"fresh-journey", "upgrade-journey"}),
+        ("tools/single_user_journey_cutover.py", {"upgrade-journey"}),
         ("tests/integration/reliability/test_checkpoint_cold_resume.py", set()),
     ],
 )
