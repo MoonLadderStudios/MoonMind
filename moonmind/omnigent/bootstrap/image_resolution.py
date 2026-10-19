@@ -480,15 +480,15 @@ async def resolve_omnigent_images(
         str(source.get("OMNIGENT_SHARED_HOST_IMAGE_REF") or "").strip()
         or str(source.get("OMNIGENT_HOST_IMAGE_REF") or "").strip()
     )
-    if explicit_shared:
-        from moonmind.omnigent.harness_platform.static_hosts import (
-            classify_effective_static_host_image,
-        )
+    from moonmind.omnigent.harness_platform.static_hosts import (
+        classify_effective_static_host_image,
+    )
 
-        selected_image, supported, _ = classify_effective_static_host_image(source)
-        if not supported:
-            shared_source = {}
-        elif _is_digest_pinned(selected_image):
+    selected_image, supported, _ = classify_effective_static_host_image(source)
+    if not supported:
+        shared_source = {}
+    elif explicit_shared:
+        if _is_digest_pinned(selected_image):
             shared_source["OMNIGENT_SHARED_HOST_IMAGE_REF"] = selected_image
         else:
             # REF accepts an operator coordinate as well as a digest. Resolve
@@ -509,6 +509,7 @@ async def resolve_omnigent_images(
         "OMNIGENT_SHARED_HOST_IMAGE_REF",
         shared_source,
     )
+    shared_selection = selected_image if shared_ref and supported else None
     # Fall back to previous if still None
     if (
         not server_requires_live_evidence
@@ -520,15 +521,40 @@ async def resolve_omnigent_images(
         server_image_digest = _extract_digest(server_ref)
     if not pi_ref and previous and previous.pi_host_image_ref:
         pi_ref = previous.pi_host_image_ref
-    # An unresolved configured choice must not silently become a different
-    # prior image. Exact-coordinate local-cache fallback already ran above.
+    # A transient daemon/registry outage must not erase an unchanged installed
+    # selection. Record its coordinate separately from the resolved artifact so
+    # a later explicit repository/tag change cannot inherit the old artifact.
+    prior_selection = (
+        previous.details.get("sharedHostImageSelection") if previous else None
+    )
+    prior_shared = previous.shared_host_image_ref if previous else None
+    same_shared_selection = bool(
+        supported
+        and selected_image
+        and prior_shared
+        and _is_digest_pinned(prior_shared)
+        and _image_repository(prior_shared) == _image_repository(selected_image)
+        and (
+            prior_selection == selected_image
+            or (
+                not prior_selection
+                and not explicit_shared
+                and selected_image == f"{_image_repository(prior_shared)}:latest"
+                and prior_shared.partition("@")[0]
+                in {_image_repository(prior_shared), selected_image}
+            )
+        )
+    )
     if (
         not shared_ref
-        and not shared_choice_configured
-        and previous
-        and previous.shared_host_image_ref
+        and (not shared_choice_configured or same_shared_selection)
+        and prior_shared
     ):
-        shared_ref = previous.shared_host_image_ref
+        shared_ref = prior_shared
+        shared_selection = selected_image if same_shared_selection else prior_selection
+    if prior_selection and selected_image == prior_shared == shared_ref:
+        # Release records republish the resolved digest, not a new selection.
+        shared_selection = prior_selection
 
     # Server and host build digests retain independent provenance. An explicit
     # operator build pin still requires that exact host label; default server
@@ -663,6 +689,7 @@ async def resolve_omnigent_images(
         source="auto",
         details={
             "serverImageDigest": server_image_digest,
+            "sharedHostImageSelection": shared_selection,
             "hostImageProvenance": host_provenance,
             "buildIdentitySource": build_identity_source,
             "opencodeHostCompatibility": {

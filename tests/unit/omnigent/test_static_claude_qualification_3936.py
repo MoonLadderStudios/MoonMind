@@ -119,7 +119,20 @@ def test_static_claude_disposition_never_substitutes_host_modes() -> None:
 # ------------------------------------------------------- R3: effective image
 
 
-@pytest.mark.parametrize("ref", [FAKE_DIGEST, "registry.example/host:chosen"])
+@pytest.mark.parametrize(
+    "ref",
+    [
+        FAKE_DIGEST,
+        "host",
+        "host:chosen",
+        "registry.example/team/host",
+        "registry.example/host:chosen",
+        "localhost:5000/team/host",
+        "registry.example:5000/team/host:Release_1.2-3",
+        "registry.example:5000/team/host@sha256:" + "a1" * 32,
+        "registry.example:5000/team/host:chosen@sha256:" + "a1" * 32,
+    ],
+)
 def test_effective_launch_image_preserves_shared_precedence(ref):
     env = {
         "OMNIGENT_SHARED_HOST_IMAGE_REF": ref,
@@ -127,6 +140,24 @@ def test_effective_launch_image_preserves_shared_precedence(ref):
     }
     assert static_hosts.resolve_effective_static_host_image(env) == ref
     assert static_hosts.resolve_static_host_image_ref(env) == ref
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": "registry.example/host:"},
+        {"OMNIGENT_HOST_IMAGE_REF": "registry.example/host/"},
+        {"OMNIGENT_SHARED_HOST_IMAGE": "registry.example/host/"},
+        {"OMNIGENT_SHARED_HOST_IMAGE_TAG": "chosen/"},
+    ],
+)
+def test_effective_image_classifier_rejects_malformed_selection(env):
+    image, supported, reason = static_hosts.classify_effective_static_host_image(env)
+    assert image is None
+    assert supported is False
+    assert "invalid static host image reference" in reason
+    with pytest.raises(HarnessPlatformError):
+        static_hosts.resolve_effective_static_host_image(env)
 
 
 def test_rendered_compose_services_share_default_image():
@@ -1074,7 +1105,22 @@ def test_production_prelaunch_gate_binds_staged_marker_to_lease() -> None:
 
 
 @pytest.mark.parametrize(
-    "image", ["not an image", "host@sha256:invalid", "-host:latest"]
+    "image",
+    [
+        "not an image",
+        "host@sha256:invalid",
+        "-host:latest",
+        "registry.example/host:",
+        "registry.example/host/",
+        "registry.example//host",
+        "registry.example/:chosen",
+        "registry.example:5000/host:",
+        "registry.example:/host:chosen",
+        "registry.example/team:chosen/host",
+        "registry.example/host:chosen:extra",
+        "registry.example/host:@sha256:" + "a1" * 32,
+        "registry.example/host/@sha256:" + "a1" * 32,
+    ],
 )
 def test_production_prelaunch_gate_rejects_malformed_image_at_launch(image):
     with pytest.raises(OmnigentOAuthHostError) as excinfo:

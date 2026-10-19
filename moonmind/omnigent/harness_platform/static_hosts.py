@@ -78,6 +78,11 @@ STATIC_CLAUDE_RETIREMENT_PATH_ID = "omnigent.legacy.claude_static_host_startup"
 STATIC_CLAUDE_PRIMARY_PATH = "on-demand generic Claude host"
 
 _DIGEST_PINNED_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_IMAGE_COORDINATE_RE = re.compile(
+    r"(?:[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]+)?/)?"
+    r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*"
+    r"(?::[A-Za-z0-9_][A-Za-z0-9._-]*)?"
+)
 
 # Ambient credential selectors that must never be present on a static row.
 # Mirrors the deny-list enforced by start-omnigent-host.sh / check scripts.
@@ -386,7 +391,10 @@ def classify_effective_static_host_image(
             f"{tag or 'latest'}"
         )
         reason = "shared image/tag or latest default"
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:@-]*", image) or (
+    # Check the repository and optional tag before the digest separately:
+    # an explicit empty tag must not be normalized into an omitted/latest tag.
+    coordinate = image.partition("@")[0]
+    if not _IMAGE_COORDINATE_RE.fullmatch(coordinate) or (
         "@" in image and not _DIGEST_PINNED_RE.fullmatch(image)
     ):
         return None, False, f"invalid static host image reference from {reason}"
