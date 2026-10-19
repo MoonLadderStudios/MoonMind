@@ -370,9 +370,13 @@ def test_download_previews_inert_artifacts_inline_only_when_requested(tmp_path) 
             text_artifact.artifact_id: (text_artifact, text_path),
             html_artifact.artifact_id: (html_artifact, html_path),
         }
-        service.read_path.side_effect = lambda *, artifact_id, principal: paths[
-            artifact_id
-        ]
+        def read_path(*, artifact_id, principal, recovery_principal=None):
+            # This UUID fixture bypasses local admission, so it must not gain
+            # the protected operator recovery identity as a side effect.
+            assert recovery_principal is None
+            return paths[artifact_id]
+
+        service.read_path.side_effect = read_path
         text_url = f"/api/artifacts/{text_artifact.artifact_id}/download"
         html_url = f"/api/artifacts/{html_artifact.artifact_id}/download"
 

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
 from api_service.api.routers import agent_runs as agent_runs_router
-from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
+from api_service.api.routers.temporal_artifacts import (
+    _get_temporal_artifact_service,
+    _resolve_recovery_principal,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.config.settings import settings
@@ -73,11 +76,15 @@ async def _load_agent_run_record(agent_run_id: str) -> object | None:
 async def _session_projection(
     record: CodexManagedSessionRecord,
     artifact_service: TemporalArtifactService,
+    principal: str,
+    recovery_principal: str | None = None,
 ):
     projection = await _build_agent_run_artifact_session_projection(
         agent_run_id=record.agent_run_id,
         session_id=record.session_id,
         service=artifact_service,
+        principal=principal,
+        recovery_principal=recovery_principal,
     )
     if projection is None:
         agent_runs_router._session_projection_not_found()
@@ -161,9 +168,12 @@ async def get_session_snapshot(
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: User = Depends(get_current_user()),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
-    projection = await _session_projection(record, artifact_service)
+    projection = await _session_projection(
+        record, artifact_service, str(_user.id), recovery_principal
+    )
     run_record = await _load_agent_run_record(record.agent_run_id)
     return {
         "id": record.session_id,
@@ -186,6 +196,7 @@ async def get_session_items(
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: User = Depends(get_current_user()),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     run_record = await _load_agent_run_record(record.agent_run_id)
@@ -217,7 +228,9 @@ async def get_session_items(
     truncated = len(events) > limit
     if truncated:
         events = events[:limit]
-    projection = await _session_projection(record, artifact_service)
+    projection = await _session_projection(
+        record, artifact_service, str(_user.id), recovery_principal
+    )
     return {
         "items": [_event_item(event) for event in events] + _artifact_items(projection),
         "truncated": truncated,
@@ -258,6 +271,7 @@ async def post_session_event(
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
     ),
+    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     event_type = str(payload.get("type") or "").strip()
@@ -316,6 +330,7 @@ async def post_session_event(
         payload=control,
         _user=_user,
         artifact_service=artifact_service,
+        recovery_principal=recovery_principal,
     )
     return {
         "type": event_type,
@@ -332,6 +347,7 @@ async def resolve_session_elicitation(
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: User = Depends(get_current_user()),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     decision = _elicitation_resolution_decision(payload)
@@ -365,6 +381,7 @@ async def resolve_session_elicitation(
         payload=control,
         _user=_user,
         artifact_service=artifact_service,
+        recovery_principal=recovery_principal,
     )
     return {
         "type": "elicitation_resolution",
