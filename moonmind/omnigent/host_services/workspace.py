@@ -46,6 +46,7 @@ from moonmind.omnigent.workspace_publication import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+from moonmind.utils.workspace_paths import open_directory
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -531,7 +532,8 @@ class OmnigentWorkspaceMaterializer:
                 f"sandbox workspace owner identity cannot be verified: {exc}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
-        if not candidate.exists():
+        existed = candidate.exists()
+        if not existed:
             if source.kind == "repository" or (
                 source.kind in {"artifact", "checkpoint"}
                 and source.repository_ref
@@ -559,7 +561,28 @@ class OmnigentWorkspaceMaterializer:
                 )
             else:
                 candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
-        else:
+        # The worker can be root while the host runs as the selected UID/GID.
+        # Empty projections do not transfer ownership, and restored entries do
+        # not include this directory. Reconcile only the admitted root inode on
+        # every attempt, preserving existing bytes, modes and child ownership.
+        # Use the original locator: resolving it first would hide link aliases.
+        owned_path = (
+            self._root
+            / "temporal_sandbox"
+            / sandbox_locator.workspace_id
+            / sandbox_locator.relative_path
+        )
+        try:
+            with open_directory(owned_path) as directory_fd:
+                current = os.fstat(directory_fd)
+                if (current.st_uid, current.st_gid) != (runtime_uid, runtime_gid):
+                    os.fchown(directory_fd, runtime_uid, runtime_gid)
+        except OSError as exc:
+            raise HarnessPlatformError(
+                "sandbox workspace ownership handoff failed",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            ) from exc
+        if existed:
             # Reclaim leftover import-owned staging from a crashed attempt.
             # This touches only `.moonmind-import-*` generations, never the
             # live authorized workspace or another owner's content.

@@ -1888,3 +1888,151 @@ async def test_signed_grant_must_name_recorded_owner_step(tmp_path, monkeypatch)
         ExistingWorkspaceGrantLedger(store.store_root).admitted_generation(workspace_id)
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_scratch_root_handoff_uses_selected_owner_and_preserves_retry_content(
+    tmp_path, monkeypatch
+):
+    import stat
+
+    workspace_id = _workspace_id()
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    selected = (os.getuid() + 11, os.getgid() + 12)
+    observed_owner = [0, 0]  # Production worker-created scratch is root-owned.
+    original_fstat = os.fstat
+    handoffs = []
+
+    def observed_stat(fd):
+        current = original_fstat(fd)
+        if workspace.exists() and current.st_ino == workspace.stat().st_ino:
+            values = list(current)
+            values[4:6] = observed_owner
+            return os.stat_result(values)
+        return current
+
+    def handoff(fd, uid, gid):
+        assert original_fstat(fd).st_ino == workspace.stat().st_ino
+        handoffs.append((uid, gid))
+        observed_owner[:] = [uid, gid]
+
+    monkeypatch.setattr(os, "fstat", observed_stat)
+    monkeypatch.setattr(os, "fchown", handoff)
+    request = _request(_locator_spec(workspace_id, workspaceSource={"kind": "scratch"}))
+    await materializer.materialize(
+        request, runtime_uid=selected[0], runtime_gid=selected[1]
+    )
+    assert handoffs == [selected]
+    assert stat.S_IMODE(workspace.stat().st_mode) == 0o700
+    generated = workspace / "report.md"
+    generated.write_text("work must survive retry\n")
+    owner_before = generated.stat().st_uid, generated.stat().st_gid
+    await materializer.materialize(
+        request, runtime_uid=selected[0], runtime_gid=selected[1]
+    )
+    assert handoffs == [selected]
+    assert generated.read_text() == "work must survive retry\n"
+    assert (generated.stat().st_uid, generated.stat().st_gid) == owner_before
+
+
+@pytest.mark.asyncio
+async def test_scratch_root_handoff_failure_is_closed_and_retry_repairs_only_root(
+    tmp_path, monkeypatch
+):
+    workspace_id = _workspace_id()
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    records = SandboxWorkspaceRecordStore(tmp_path)
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+    request = _request(_locator_spec(workspace_id))
+    attempts = []
+
+    def fail_handoff(fd, uid, gid):
+        attempts.append((uid, gid))
+        raise PermissionError("ownership transfer denied")
+
+    monkeypatch.setattr(os, "fchown", fail_handoff)
+    selected = (os.getuid() + 1, os.getgid() + 1)
+    with pytest.raises(HarnessPlatformError, match="ownership handoff"):
+        await materializer.materialize(
+            request, runtime_uid=selected[0], runtime_gid=selected[1]
+        )
+    assert records.read_readiness(workspace_id) is None
+    (workspace / "preserved.txt").write_bytes(b"recoverable work")
+    monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: attempts.append((uid, gid)))
+    await materializer.materialize(
+        request, runtime_uid=selected[0], runtime_gid=selected[1]
+    )
+    assert attempts == [selected, selected]
+    assert (workspace / "preserved.txt").read_bytes() == b"recoverable work"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("symlink_component", ["repo", "workspace"])
+async def test_owned_workspace_handoff_rejects_symlink_aliases(
+    tmp_path, monkeypatch, symlink_component
+):
+    workspace_id = _workspace_id()
+    authority = tmp_path / "temporal_sandbox"
+    owner = authority / workspace_id
+    if symlink_component == "repo":
+        target = owner / "unrelated"
+        target.mkdir(parents=True)
+        (owner / "repo").symlink_to(target, target_is_directory=True)
+    else:
+        target = authority / "unrelated"
+        (target / "repo").mkdir(parents=True)
+        owner.symlink_to(target, target_is_directory=True)
+    (target / "untouched.txt").write_bytes(b"unrelated bytes")
+    changes = []
+    monkeypatch.setattr(os, "fchown", lambda *args: changes.append(args))
+    with pytest.raises(HarnessPlatformError):
+        await OmnigentWorkspaceMaterializer(
+            command_runner=_never_clone, workspace_root=tmp_path
+        ).materialize(
+            _request(_locator_spec(workspace_id)),
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    assert changes == []
+    assert (target / "untouched.txt").read_bytes() == b"unrelated bytes"
+
+
+@pytest.mark.asyncio
+async def test_existing_grant_does_not_authorize_root_ownership_change(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
+    workspace_id = "shared-owner"
+    workspace = _ensure_owned_workspace(
+        tmp_path, workspace_id, owner=("owner-wf", "owner-st")
+    )
+    before = workspace.stat()
+    changes = []
+    monkeypatch.setattr(os, "fchown", lambda *args: changes.append(args))
+    result = await OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    ).materialize(
+        _request(
+            _grant_spec(
+                workspace_id,
+                owner=("owner-wf", "owner-st"),
+                mode="read_only",
+                grantee="reader-wf",
+            ),
+            workflow_id="reader-wf",
+            step_id="reader-st",
+        ),
+        runtime_uid=os.getuid() + 1,
+        runtime_gid=os.getgid() + 1,
+    )
+    assert result["accessMode"] == "read-only"
+    assert changes == []
+    assert (workspace.stat().st_uid, workspace.stat().st_gid) == (
+        before.st_uid,
+        before.st_gid,
+    )

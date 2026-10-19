@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import shutil
 import tarfile
 import uuid
@@ -213,7 +214,9 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
         request=request,
         plan=plan,
         host_class=SimpleNamespace(
-            runtime={"uid": 0, "gid": 0}, imageRef="host-image", omnigentVersion=""
+            runtime={"uid": os.getuid(), "gid": os.getgid()},
+            imageRef="host-image",
+            omnigentVersion="",
         ),
         launch_policy=SimpleNamespace(),
         repository_owner_ref=owner,

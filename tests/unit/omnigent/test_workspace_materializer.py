@@ -742,6 +742,12 @@ async def test_restored_publication_directory_uses_selected_runtime_owner(
 
     selected_uid, selected_gid = os.getuid() + 1, os.getgid() + 1
     assigned = []
+    assigned_roots = []
+    monkeypatch.setattr(
+        os,
+        "fchown",
+        lambda fd, uid, gid: assigned_roots.append((os.fstat(fd).st_ino, uid, gid)),
+    )
     monkeypatch.setattr(
         os,
         "chown",
@@ -766,6 +772,7 @@ async def test_restored_publication_directory_uses_selected_runtime_owner(
         runtime_uid=selected_uid,
         runtime_gid=selected_gid,
     )
+    assert assigned_roots == [(existing.stat().st_ino, selected_uid, selected_gid)]
     expected = {
         existing / "artifacts",
         existing / "artifacts/github-issue-implement-verify.json",
