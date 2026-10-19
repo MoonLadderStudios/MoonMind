@@ -355,6 +355,17 @@ async def _optional_current_user(
         user = await _load_disabled_user(session)
         request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
         return user
+    if get_request_production_mode() == "header":
+        from moonmind.security.advanced_identity_4124 import trusted_proxy_header_name
+
+        if trusted_proxy_header_name() in request.headers:
+            from api_service.api.routers.advanced_auth_4124 import get_trusted_proxy_user
+
+            # Presence selects the existing authority, including an empty or
+            # invalid assertion. Absent assertions retain optional session and
+            # separately authenticated machine behavior. Proxy admission never
+            # mints the disabled-mode recovery sentinel.
+            return await get_trusted_proxy_user(request)
     return await _resolve_session_principal(request, session, optional=True)
 
 
