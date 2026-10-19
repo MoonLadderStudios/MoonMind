@@ -436,12 +436,45 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             TemporalArtifactService,
         )
 
+        from moonmind.schemas.saved_work_models import saved_work_artifact_metadata
+
+        saved_metadata = {}
+        if (
+            name == "saved_work_manifest"
+            and content_type == "application/vnd.moonmind.saved-work-manifest+json;version=1"
+        ):
+            saved_metadata = {
+                "artifact_kind": "saved_work_manifest",
+                **saved_work_artifact_metadata("saved_work_manifest", payload),
+            }
         digest = hashlib.sha256(payload).hexdigest()
         execution_link = self._execution_link(
             request, name=name, link_type=link_type
         )
         async with self._session_factory() as session:
             service = TemporalArtifactService(TemporalArtifactRepository(session))
+            if saved_metadata:
+                # A saved-work index is an output only after its immutable
+                # bytes are remotely readable. Interrupted uploads/readback
+                # remain unlinked and cannot become a falsely complete save.
+                completed, _reused = await service.put_content_addressed_payload_complete(
+                    principal=self._principal, payload=payload,
+                    content_type=content_type, scope="saved_work_manifest",
+                    metadata_json=saved_metadata,
+                )
+                _artifact, restored = await service.read(
+                    artifact_id=completed.artifact_id, principal=self._principal,
+                    allow_restricted_raw=True,
+                )
+                if restored != payload:
+                    raise OmnigentArtifactError("Remote saved-work manifest differs from the saved candidate")
+                if execution_link is None:
+                    raise OmnigentArtifactError("Saved work requires execution ownership")
+                await service.link_artifact(
+                    artifact_id=completed.artifact_id, principal=self._principal,
+                    execution_ref=execution_link,
+                )
+                return f"artifact:{completed.artifact_id}"
             artifact, _upload = await service.create(
                 principal=self._principal,
                 content_type=content_type,
@@ -453,6 +486,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                     "name": _safe_artifact_name(name),
                     "link_type": str(link_type)[:255],
                     "correlation_id": str(request.correlation_id)[:255],
+                    **saved_metadata,
                 },
             )
             completed = await service.write_payload_complete(

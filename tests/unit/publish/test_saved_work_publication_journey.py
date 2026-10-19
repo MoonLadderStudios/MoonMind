@@ -85,7 +85,10 @@ def _enforced_access(monkeypatch):
 
 
 @asynccontextmanager
-async def _artifact_service(tmp_path: Path):
+async def _artifact_service(tmp_path: Path, existing=None):
+    if existing is not None:
+        yield existing
+        return
     # In-memory schema creation keeps the journey inside the fast unit budget.
     engine = create_async_engine(
         "sqlite+aiosqlite://", future=True, poolclass=StaticPool
@@ -315,13 +318,14 @@ async def journey(
     seed_baseline=False,
     emulate_temporal=True,
     saved_work_factory=None,
+    artifact_service=None,
 ):
     """Saved work, destination, and provider fixtures for one journey.
 
     ``emulate_temporal=False`` leaves ``workflow.execute_activity`` alone so a
     real Temporal worker can run the same Activities.
     """
-    async with _artifact_service(tmp_path) as service:
+    async with _artifact_service(tmp_path, artifact_service) as service:
         saved = (
             await saved_work_factory(service)
             if saved_work_factory is not None
