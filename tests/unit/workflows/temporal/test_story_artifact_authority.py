@@ -1,4 +1,4 @@
-"""Runtime story publication hands durable inputs to its own parent Run."""
+"""Story handoff validates parent authority; authenticated reads enforce scope."""
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -45,8 +45,8 @@ from tests.unit.omnigent.test_admitted_input_authority import (  # noqa: F401
     "missing_namespace", "foreign_namespace", "parent_run_mismatch",
     "child_workflow_mismatch", "child_run_mismatch", "describe_unavailable", "missing_output", "unsafe_output",
 ])
-async def test_published_story_reaches_only_owning_workflow_reader(
-    artifacts, tmp_path, monkeypatch, scenario, caplog,  # noqa: F811
+async def test_published_story_preserves_parent_authority_and_auth_read_scope(
+    artifacts, tmp_path, monkeypatch, scenario, caplog, auth_mode,  # noqa: F811
 ):
     parent, child = "story-parent", "story-parent:agent:breakdown"
     request = AgentExecutionRequest.model_validate({
@@ -166,7 +166,16 @@ async def test_published_story_reaches_only_owning_workflow_reader(
         workflow_service.describe_workflow_execution.assert_awaited_once()
         row = await TemporalArtifactRepository(session).get_artifact(ref)
         assert row.created_by_principal == "system:agent_runtime"
-        if scenario not in {"current_history", "retained_history", "describe_unavailable"}:
+        linked_workflows = {
+            link.workflow_id
+            for link in await TemporalArtifactRepository(session).list_links(ref)
+        }
+        assert child in linked_workflows
+        assert not {"sibling-parent", "forged-parent"} & linked_workflows
+        if scenario in {"current_history", "retained_history", "describe_unavailable"}:
+            assert parent in linked_workflows
+        else:
+            assert parent not in linked_workflows
             assert "parent handoff authority could not be verified" in caplog.text
 
     @asynccontextmanager
@@ -188,16 +197,19 @@ async def test_published_story_reaches_only_owning_workflow_reader(
     )
     try:
         # The executing native tool's real Temporal context supplies scope.
-        for workflow_id in ("sibling-parent", "forged-parent"):
-            monkeypatch.setattr(worker_runtime.temporalio.activity, "info", lambda: SimpleNamespace(
-                workflow_id=workflow_id,
-            ))
-            with pytest.raises(TemporalArtifactAuthorizationError):
-                await captured["reader"](ref)
+        if auth_mode != "disabled":
+            for workflow_id in ("sibling-parent", "forged-parent"):
+                monkeypatch.setattr(worker_runtime.temporalio.activity, "info", lambda: SimpleNamespace(
+                    workflow_id=workflow_id,
+                ))
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    await captured["reader"](ref)
         monkeypatch.setattr(worker_runtime.temporalio.activity, "info", lambda: SimpleNamespace(
             workflow_id=parent,
         ))
-        if scenario in {"current_history", "retained_history", "describe_unavailable"}:
+        if auth_mode == "disabled" or scenario in {
+            "current_history", "retained_history", "describe_unavailable"
+        }:
             assert await captured["reader"](ref) == story_bytes
         else:
             with pytest.raises(TemporalArtifactAuthorizationError):

@@ -42,9 +42,9 @@ from moonmind.workflows.temporal.artifacts import (
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.fixture
-def auth_mode():
-    return "oidc"
+@pytest.fixture(params=["accounts", "oidc", "header", "disabled"])
+def auth_mode(request):
+    return request.param
 
 
 @pytest_asyncio.fixture
@@ -211,7 +211,7 @@ async def _dispatch_claimed(fixture):
     "auth_mode", ["accounts", "oidc", "header", "disabled"], indirect=True
 )
 async def test_claimed_owner_admits_instruction_before_dispatch_and_on_retry(
-    instruction_authority,
+    instruction_authority, auth_mode,
 ):
     fixture = instruction_authority
     for _ in range(2):
@@ -236,13 +236,14 @@ async def test_claimed_owner_admits_instruction_before_dispatch_and_on_retry(
         )
         assert body == fixture.text
         assert artifact.created_by_principal == fixture.producer
-        for scope in (None, "workflow:unrelated-turn"):
-            with pytest.raises(TemporalArtifactAuthorizationError):
-                await fixture.artifacts(session).read(
-                    artifact_id=fixture.ref.removeprefix("artifact://"),
-                    principal="service:omnigent-generic-host",
-                    admitted_principal=scope,
-                )
+        if auth_mode != "disabled":
+            for scope in (None, "workflow:unrelated-turn"):
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    await fixture.artifacts(session).read(
+                        artifact_id=fixture.ref.removeprefix("artifact://"),
+                        principal="service:omnigent-generic-host",
+                        admitted_principal=scope,
+                    )
 
 
 @pytest.mark.parametrize(
@@ -412,18 +413,19 @@ async def test_retained_inflight_turn_recovers_only_recorded_instruction(
 
 
 @pytest.mark.parametrize(
-    "changed",
+    "auth_mode,changed",
     [
-        "unrecorded_ref",
-        "missing_manifest",
-        "manifest_ref",
-        "manifest_step",
-        "manifest_turn",
-        "digest",
-        "restricted",
-        "quarantined",
-        "activity_workflow",
+        (mode, changed)
+        for mode in ("accounts", "oidc", "header", "disabled")
+        for changed in (
+            "unrecorded_ref", "missing_manifest", "manifest_ref", "manifest_step",
+            "manifest_turn", "digest", "restricted", "quarantined", "activity_workflow",
+        )
+        # An unrelated ordinary output is checked by artifact read policy;
+        # the durable instruction checks above it remain mode-independent.
+        if changed != "unrecorded_ref" or mode != "disabled"
     ],
+    indirect=["auth_mode"],
 )
 async def test_retained_instruction_rejects_missing_or_conflicting_authority(
     instruction_authority,
@@ -524,7 +526,7 @@ async def test_retained_instruction_rejects_missing_or_conflicting_authority(
 
 
 async def test_prepared_input_list_cannot_admit_another_instruction(
-    instruction_authority,
+    instruction_authority, auth_mode,
 ):
     fixture = instruction_authority
     other_ref = await fixture.put(b"Another turn's private instructions")
@@ -552,12 +554,13 @@ async def test_prepared_input_list_cannot_admit_another_instruction(
                 )
             )
         ).all()
-        with pytest.raises(TemporalArtifactAuthorizationError):
-            await fixture.artifacts(session).read(
-                artifact_id=other_ref.removeprefix("artifact://"),
-                principal="service:checkpoint-branch-turn",
-                admitted_principal=f"workflow:{fixture.identity.workflow_id}",
-            )
+        if auth_mode != "disabled":
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await fixture.artifacts(session).read(
+                    artifact_id=other_ref.removeprefix("artifact://"),
+                    principal="service:checkpoint-branch-turn",
+                    admitted_principal=f"workflow:{fixture.identity.workflow_id}",
+                )
 
 
 @pytest.mark.parametrize("changed", [None, "ref", "digest"])
