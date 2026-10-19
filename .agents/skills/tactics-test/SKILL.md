@@ -1,148 +1,90 @@
 ---
 name: tactics-test
-description: Run Unreal Engine build and automation test workflows for Tactics through MoonMind's shared Docker backend, with a portable direct-Docker fallback outside MoonMind.
+description: Run Unreal Engine build and automation tests for Tactics through managed container jobs, or an explicitly configured standalone Docker host.
 metadata:
   required-capabilities:
     - docker
 ---
 
-# Dood Unreal Tactics Build Test
+# Tactics Build and Test
 
-## Overview
+Run Linux Unreal builds and targeted automation tests for `Tactics.uproject`.
+The Skill submits work to the existing container-job owner inside MoonMind;
+the standalone path uses the host's Docker daemon directly.
 
-Run Linux Unreal build and targeted automation tests for `Tactics.uproject`. Inside a MoonMind managed session, submit typed container jobs so every workflow uses the deployment daemon's shared image cache. Outside MoonMind, use the portable direct-Docker fallback. Capture build and test logs in timestamped artifact folders inside the Tactics repository, and emit a machine-readable gate file for publish blocking.
+## Inputs and boundaries
 
-**Inside a managed session there is no Docker CLI, by design.** The sandbox
-reaches the deployment daemon through `moonmind container`, and
-`run_dood_unreal_tactics.sh` dispatches to it automatically. Do not probe
-`docker`, `docker info`, or `docker --version` to decide whether Unreal tests
-can run: `docker: command not found` is the expected state and says nothing
-about Unreal availability. Run the script and read its diagnostic. If it
-reports an incomplete managed handoff or an image-source failure, that is a
-deployment defect to report, not evidence that UE testing is unavailable.
+- The repository defaults to the admitted workspace in managed sessions and
+  the current working directory on standalone hosts. Use `--repo` for an
+  explicit project directory and `--uproject` for its project-relative file.
+- Managed sessions use the admitted workspace and the provisioned
+  `imageSourceRef=tactics-unreal`, with `unreal-ccache` and `unreal-ubt` caches.
+  A project subdirectory maps under that workspace; an outside repository is
+  rejected rather than silently testing a different candidate.
+- Standalone execution requires Docker CLI/daemon access and a compatible
+  image configured in `MOONMIND_UNREAL_ENGINE_IMAGE`, or selected with `--image`.
+  An unconfigured toolchain is reported; the script does not guess a version.
+- `--image` selects an explicit toolchain. In managed execution it remains
+  subject to the container backend's image and registry authorization.
+  `--pull` selects its pull policy; without an explicit managed image, the
+  provisioned image source owns that policy and `always`/`never` are rejected.
+- `--workspace-volume`, `--workspace-target`, cache mount options and `--platform`
+  configure only standalone Docker execution. Managed resources
+  and cache authority remain owned by the backend.
 
-## Inputs
-
-- Repository path (defaults to the active managed workspace inside MoonMind and
-  `/mnt/d/Unreal/Tactics` in the direct-Docker fallback)
-- Inside MoonMind: the `docker` capability (which means container-job service
-  access, not a sandbox Docker binary) and an operator-provisioned
-  `tactics-unreal` image source with a registry credential for its image
-- Outside MoonMind: Docker CLI access and a reachable daemon
-- Container image with the Unreal toolchain in the selected execution substrate
-
-## Workflow
-
-1. Validate repository path and project file.
-2. Run `scripts/run_dood_unreal_tactics.sh` from this skill directory.
-   The script selects `moonmind container run --spec` when managed-session
-   identity is present; it does not inspect or invoke Docker in that mode.
-3. Review timestamped artifacts under `.artifacts/dood-unreal-tactics/<timestamp>/` in the Tactics repo.
-4. Review gate result at `.artifacts/dood-unreal-tactics/latest/gate.json` (or explicit `--gate-file` path).
-5. Report:
-   - Build status (if build phase ran)
-   - Test status (if test phase ran)
-   - Build log and test log paths
+Inside a managed session there is no Docker CLI, by design. Run the entrypoint
+and read its diagnostic; do not probe `docker info` or `docker --version` to
+infer Unreal availability. Partial managed identity is an environment defect,
+not permission to fall back to host Docker. Missing provisioned image or
+registry access is a precise toolchain limitation, not a completed test.
 
 ## Commands
 
-### Build and test through the MoonMind shared Docker backend
-
-```bash
-scripts/run_dood_unreal_tactics.sh --repo "$(pwd)"
-```
-
-### Build and test with defaults (local bind mounts)
+Run from the Tactics project directory, using the selected Skill's script path:
 
 ```bash
 scripts/run_dood_unreal_tactics.sh
-```
-
-### Build and test with explicit gate file
-
-```bash
-scripts/run_dood_unreal_tactics.sh \
-  --repo $(pwd) \
-  --gate-file .artifacts/dood-unreal-tactics/latest/gate.json
-```
-
-### Build only
-
-```bash
 scripts/run_dood_unreal_tactics.sh --phase build
-```
-
-### Test only with custom filter
-
-```bash
 scripts/run_dood_unreal_tactics.sh --phase test --test-filter "Tactics.Unit.HostRuntime.MatrixSystems"
-```
-
-### Explicit repository and image
-
-```bash
-scripts/run_dood_unreal_tactics.sh \
-  --repo /mnt/d/Unreal/Tactics \
-  --image ghcr.io/epicgames/unreal-engine:dev-5.5@sha256:3f7b292cda7f6066aeaea46fa95a520a0d26811810e0d082cfbf5dc85018bd82
-```
-
-### Dry-run command preview
-
-```bash
+scripts/run_dood_unreal_tactics.sh --repo /path/to/Tactics --image "$MOONMIND_UNREAL_ENGINE_IMAGE"
 scripts/run_dood_unreal_tactics.sh --dry-run
 ```
 
-## Terminal outcomes
+The default phase is `all`: build first, then test only after the build passes.
+Explicit target, build platform, configuration and test filter retain their
+values. The chosen image must provide the compatible Unreal toolchain at the
+paths used by the script; a successful image pull does not establish that.
 
-A run is complete only when its reported outcome names the requested phase
-(`build`, `test`, or both), the current candidate under test (repository path
-plus exact toolchain image reference when an explicit image was supplied), and
-the gate-file evidence it was read from. Report per-phase status separately;
-never report a test verdict when only the build phase ran, and never report a
-build verdict when only the test phase ran.
+## Results and recovery
 
-- Read the gate result only from the explicit `--gate-file` path or
-  `.artifacts/dood-unreal-tactics/latest/gate.json` written by the current run.
-  A gate file from a previous timestamp, a different repository path, or a
-  different image reference is stale evidence: re-run the requested phase
-  instead of reporting it.
-- Sequence safely: run the build phase before the test phase when both were
-  requested; do not run tests against a build that did not succeed in the same
-  run.
-- `--dry-run` is strictly non-mutating: it previews the intended container
-  operation without building, testing, fetching, or writing gate output. Never
-  report a dry-run preview as a build or test result.
-- Preserve existing artifacts: the script writes a new timestamped folder and
-  refreshes the `latest` link; it never deletes or overwrites prior timestamped
-  evidence.
+Report the current gate's repository, phase, selected image/source, per-phase
+statuses, result directory and evidence paths. Managed results live under
+`.artifacts/moonmind-unreal-tactics/`; standalone results live under
+`.artifacts/dood-unreal-tactics/`. Each new run gets a distinct directory.
+`latest/gate.json` (or `--gate-file`) is only the current-run summary; retained
+run artifacts remain available separately.
 
-## Notes
+- A build-only PASS is build success, never test success. Skipped phases have
+  no required log. Tests require positive completed-test evidence; empty or
+  unavailable logs are incomplete, no matching tests are `no_tests`, and a
+  failed automation result fails even when the process exits zero.
+- Managed execution consumes the current container job's structured result,
+  including its job identity and artifact references. Test verdicts use the
+  full Unreal log written into the shared workspace and declared as a job
+  output, rather than a truncated CLI tail. A submission, process exit or
+  successful container start alone does not prove completion.
+- Resume the same managed run with `--resume <results-directory>` and its
+  original options. Matching successful phases are retained; missing evidence
+  reattaches with the same job request identity. Changed inputs or source
+  invalidate reuse. Resume requires a Git source snapshot; non-Git projects
+  can run but cannot safely reuse prior phases. A new request without
+  `--resume` creates fresh work.
+- Preserve original logs/results when investigating failures. Never credit an
+  earlier `latest/gate.json` as the result of a new run. Read the gate written
+  by this invocation and distinguish incomplete work from a failed phase.
+- `--dry-run` is a non-mutating preview. It submits no jobs, pulls no images,
+  writes no gate and preserves prior evidence. Its stdout `SKIPPED` result
+  never satisfies publish gating or proves toolchain availability.
 
-- The script runs build and test in separate ephemeral containers to keep worker and toolchain isolation clear.
-- MoonMind mode uses `imageSourceRef=tactics-unreal`, `cacheRef=unreal-ccache`,
-  and `cacheRef=unreal-ubt`. The trusted backend resolves the host image and
-  volume names; the skill never receives daemon or raw-volume authority.
-- `--workspace-volume`, `--ccache-volume`, and `--ubt-volume` apply only to the
-  portable direct-Docker fallback outside MoonMind.
-- Use `--pull always` when you need to force-refresh the container image.
-- Gate contract: publish gating consumes the JSON gate output and requires `status="PASS"`.
-
-## Terminal outcomes
-
-- A `--dry-run` preview reports `status="SKIPPED"` on stdout and never satisfies publish
-  gating. It submits no build or test work, writes no gate artifact, and
-  preserves any prior verified gate result. It proves nothing about the target.
-- Completion requires the current run's gate artifact with `status="PASS"`,
-  its recorded `resultsDir` timestamped artifact folder, and the build/test
-  log paths it names. Only logs for phases marked `pass` are required: a
-  `--phase build` gate omits `testLog` and a `--phase test` gate omits
-  `buildLog`. A process exit, a submitted job identifier, or a
-  successful container start alone does not establish completion.
-- A stale `latest/gate.json` from an earlier run must not be reused: always
-  read the gate written by the current run and confirm its `resultsDir`
-  matches the timestamped folder just produced. Each non-dry-run replaces the
-  gate before validation or work, so an interrupted run leaves `INCOMPLETE`
-  or `FAIL`, never the prior `PASS`.
-- A zero exit code alone is not test success. A test log that reports a
-  failed automation result fails the gate, and one that reports no matching
-  automation tests fails it with `testStatus="no_tests"`.
+Publish gating requires `status="PASS"` for the requested phases. Include the
+exact remaining evidence or environment limitation when the gate is not PASS.

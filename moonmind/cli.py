@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 import typer
@@ -104,6 +106,9 @@ def container_run(
         readable=True,
         help="JSON file containing ContainerJobSpec workload fields.",
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the ContainerJobResult as JSON."
+    ),
     request_id: str | None = typer.Option(
         None,
         "--request-id",
@@ -118,7 +123,17 @@ def container_run(
     except ContainerJobCliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
-    _print_container_job_result(result)
+    if as_json:
+        payload = asdict(result)
+        for field in ("message", "log_error"):
+            if payload[field]:
+                payload[field] = redact_sensitive_text(payload[field])
+        payload["log_tail"] = [redact_sensitive_text(line) for line in result.log_tail]
+        typer.echo(json.dumps(payload))
+        if result.state != "succeeded" or result.exit_code not in {None, 0}:
+            raise typer.Exit(code=1)
+    else:
+        _print_container_job_result(result)
 
 
 @container_app.command(

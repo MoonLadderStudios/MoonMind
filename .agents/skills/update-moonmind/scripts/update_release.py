@@ -1,6 +1,6 @@
 """Portable host entrypoint for the standalone MoonMind release controller.
 
-Only standard-library Python, Git and Compose are required on the host. The
+Only standard-library Python, Bash and Compose are required on the host. The
 submission is executed by the standalone controller in its own Compose
 project (deploy/controller), which owns image staging, changed-service
 ``up``, local state, and recovery independently of MoonMind health.

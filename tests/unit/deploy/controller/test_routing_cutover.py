@@ -123,7 +123,9 @@ def test_cutover_runs_once_after_workers_poll_and_later_updates_deny_routing_cha
         # Ordinary workers already poll, and the operation is still open, so
         # a lost controller resumes this same operation.
         assert runner.applied()
-        assert store.load(operation["operationId"])["installed"] is None
+        current = store.load(operation["operationId"])
+        assert current["status"] == "applying"
+        assert current["installed"]["image"] == operation["desired"]["image"]
         return {
             "status": "completed",
             "outcome": "transitioned",
