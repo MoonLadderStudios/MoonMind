@@ -1014,6 +1014,8 @@ async def _try_conversion_claim(session: AsyncSession) -> bool | None:
     savepoint, never the caller's work. The transaction-level claim ends
     atomically with commit/rollback, independent of connection-pool checkout.
     """
+    if session.get_bind().dialect.name == "sqlite":
+        return None
     probe = await session.begin_nested()
     try:
         claimed = (
@@ -1131,12 +1133,12 @@ async def apply_conversion(
 
     claimed = None
     try:
-        await _lock_conversion_evidence(session)
         claimed = await _try_conversion_claim(session)
         if claimed is False:
             raise ConcurrentConversionError(
                 "another single-user conversion holds this database"
             )
+        await _lock_conversion_evidence(session)
         fresh = await collect_inventory(session)
         fresh_fingerprint = fresh.fingerprint()
         if fresh_fingerprint != preflight_result.fingerprint:
