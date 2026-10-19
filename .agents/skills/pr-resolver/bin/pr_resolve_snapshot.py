@@ -1379,6 +1379,8 @@ _MISSING_UPSTREAM_ARTIFACT_PATTERN = re.compile(
 _DEPENDENT_FAILURE_KINDS = frozenset(
     {"missing_upstream_artifact", "upstream_job_failure"}
 )
+# GitHub queues a dependent job within a second or two of its last ``needs``.
+_DEPENDENT_JOB_QUEUE_TOLERANCE = timedelta(seconds=30)
 _GENERIC_EXIT_PATTERN = re.compile(
     r"^Process completed with exit code \d+\.?$", re.IGNORECASE
 )
@@ -1434,6 +1436,7 @@ def summarize_ci_infrastructure(
     *,
     fetch_annotations,
     fetch_run,
+    fetch_job=None,
 ) -> dict:
     """Decide whether every failed check is a GitHub Actions platform failure.
 
@@ -1442,7 +1445,7 @@ def summarize_ci_infrastructure(
     """
 
     classified: list[dict] = []
-    windows: list[tuple[datetime | None, datetime | None]] = []
+    jobs: list[tuple[object, datetime | None]] = []
     for check in failed_check_runs:
         match = _ACTIONS_JOB_URL_PATTERN.search(
             str(check.get("details_url") or check.get("detailsUrl") or "")
@@ -1480,12 +1483,7 @@ def summarize_ci_infrastructure(
                 "runId": int(match.group(1)),
             }
         )
-        windows.append(
-            (
-                _parse_utc_timestamp(check.get("started_at")),
-                _parse_utc_timestamp(check.get("completed_at")),
-            )
-        )
+        jobs.append((check_id, _parse_utc_timestamp(check.get("completed_at"))))
 
     platform_runs = {
         item["runId"]
@@ -1497,22 +1495,29 @@ def summarize_ci_infrastructure(
     ):
         return {"infrastructureOnly": False}
 
-    # GitHub starts a job that ``needs`` others only after they complete. A bare
-    # exit counts as a gate on the platform failure only when its job started
-    # after every platform failure in its run had finished; a job that ran
-    # alongside them failed on its own.
-    for item, (started_at, _) in zip(classified, windows):
+    # GitHub creates a job that ``needs`` others only once they finish, while a
+    # job that merely waited for a runner was created with its attempt. A bare
+    # exit is a gate on a platform failure only when its job was created as
+    # that failure finished; start order alone says nothing about ``needs``.
+    for item, (job_id, _) in zip(classified, jobs):
         if item["kind"] != "upstream_job_failure":
             continue
+        job = fetch_job(job_id) if fetch_job is not None else None
+        created_at = (
+            _parse_utc_timestamp(job.get("created_at"))
+            if isinstance(job, dict)
+            else None
+        )
         platform_finished = [
             completed_at
-            for other, (_, completed_at) in zip(classified, windows)
+            for other, (_, completed_at) in zip(classified, jobs)
             if other["runId"] == item["runId"]
             and other["kind"] not in _DEPENDENT_FAILURE_KINDS
+            and completed_at is not None
         ]
-        if started_at is None or any(
-            completed_at is None or started_at < completed_at
-            for completed_at in platform_finished
+        if created_at is None or not any(
+            timedelta(0) <= created_at - finished <= _DEPENDENT_JOB_QUEUE_TOLERANCE
+            for finished in platform_finished
         ):
             return {"infrastructureOnly": False}
 
@@ -1599,6 +1604,13 @@ def _fetch_check_run_annotations(*, pr_repo: str, check_id: object) -> list[dict
 
 def _fetch_actions_run(*, pr_repo: str, run_id: int) -> dict | None:
     payload = run_command_optional(["gh", "api", f"repos/{pr_repo}/actions/runs/{run_id}"])
+    return payload if isinstance(payload, dict) else None
+
+
+def _fetch_actions_job(*, pr_repo: str, job_id: object) -> dict | None:
+    payload = run_command_optional(
+        ["gh", "api", f"repos/{pr_repo}/actions/jobs/{job_id}"]
+    )
     return payload if isinstance(payload, dict) else None
 
 
@@ -2093,6 +2105,9 @@ def main():
                 ),
                 fetch_run=lambda run_id: _fetch_actions_run(
                     pr_repo=pr_repo, run_id=run_id
+                ),
+                fetch_job=lambda job_id: _fetch_actions_job(
+                    pr_repo=pr_repo, job_id=job_id
                 ),
             )
         )
