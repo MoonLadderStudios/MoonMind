@@ -128,7 +128,7 @@ def _activity(resolved, **updates):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("supervisor", ["ordinary", "strict"], indirect=True)
-@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header"])
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 async def test_resolve_and_reconcile_read_admitted_artifacts_without_new_grants(
     supervisor,
 ):
@@ -161,6 +161,7 @@ async def _command(context, resolved, *, command_id="command-1", session_id=None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 async def test_resolve_cannot_admit_another_workflow(supervisor):
     from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 

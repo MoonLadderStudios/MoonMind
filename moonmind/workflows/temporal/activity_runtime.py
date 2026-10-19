@@ -862,6 +862,11 @@ def _managed_runtime_artifact_root() -> Path:
 class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
 
+
+class ArtifactParentAuthorityUnavailable(TemporalActivityRuntimeError):
+    """Let the existing publication Activity retry unavailable ancestry."""
+
+
 def _docker_workflows_disabled_failure() -> temporal_exceptions.ApplicationError:
     return temporal_exceptions.ApplicationError(
         "policy_denied: docker_workflows_disabled",
@@ -1424,6 +1429,67 @@ def _temporal_snapshot_from_payload(
         artifact_ref=artifact_locator,
         skills=skills,
     )
+
+async def _verified_artifact_parent_scope(
+    *, info: Any, parent_workflow_id: str, parent_run_id: str,
+) -> str | None:
+    """Delegate only to this exact Activity run's server-recorded parent.
+
+    Retained AgentRun histories may carry provider-authored parent metadata.
+    It cannot grant artifact access without independent Temporal ancestry.
+    """
+    if info is None or not parent_workflow_id or not parent_run_id:
+        return None
+    from temporalio.api.common.v1 import WorkflowExecution
+    from temporalio.api.workflowservice.v1 import (
+        DescribeNamespaceRequest,
+        DescribeWorkflowExecutionRequest,
+    )
+
+    try:
+        # Native retry handles transient RPC errors; the outer deadline bounds
+        # both lookups together, including any final SDK retry attempt.
+        async with asyncio.timeout(10):
+            client = temporal_activity.client()
+            if client.namespace != info.namespace:
+                return None
+            described = await client.workflow_service.describe_workflow_execution(
+                DescribeWorkflowExecutionRequest(
+                    namespace=info.namespace,
+                    execution=WorkflowExecution(
+                        workflow_id=info.workflow_id, run_id=info.workflow_run_id,
+                    ),
+                ),
+                timeout=timedelta(seconds=10),
+                retry=True,
+            )
+            record = described.workflow_execution_info
+            if (
+                record.execution.workflow_id != info.workflow_id
+                or record.execution.run_id != info.workflow_run_id
+                or not record.HasField("parent_execution")
+                or record.parent_execution.workflow_id != parent_workflow_id
+                or record.parent_execution.run_id != parent_run_id
+                or not record.parent_namespace_id
+            ):
+                return None
+            namespace = await client.workflow_service.describe_namespace(
+                DescribeNamespaceRequest(namespace=info.namespace),
+                timeout=timedelta(seconds=10),
+                retry=True,
+            )
+            if record.parent_namespace_id != namespace.namespace_info.id:
+                return None
+    except Exception as exc:
+        logger.warning(
+            "Artifact parent authority is unavailable for %s (%s)",
+            info.workflow_id, type(exc).__name__,
+        )
+        raise ArtifactParentAuthorityUnavailable(
+            f"Artifact parent authority is unavailable for {info.workflow_id}"
+        ) from exc
+    return f"workflow:{parent_workflow_id}"
+
 
 async def _read_json_artifact(
     service: TemporalArtifactService,
@@ -8501,6 +8567,22 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return ""
 
+        parent_scope_checked = False
+        verified_parent_scope: str | None = None
+
+        async def _parent_artifact_read_scope() -> str | None:
+            nonlocal parent_scope_checked, verified_parent_scope
+            if not parent_scope_checked:
+                # JSON, Markdown, and verifier source reads share one lookup so
+                # authority checks stay within the publication Activity budget.
+                verified_parent_scope = await _verified_artifact_parent_scope(
+                    info=info,
+                    parent_workflow_id=_metadata_text("parentWorkflowId"),
+                    parent_run_id=_metadata_text("parentRunId"),
+                )
+                parent_scope_checked = True
+            return verified_parent_scope
+
         def _result_workspace() -> Path | None:
             """Resolve the authoritative workspace for output publication.
 
@@ -8655,6 +8737,19 @@ class TemporalAgentRuntimeActivities:
                 )
             return None
 
+        prepared_story_payloads: dict[str, bytes | None] = {}
+
+        def _prepare_story_breakdown_file(workspace: Path, raw_path: str) -> bytes | None:
+            if raw_path not in prepared_story_payloads:
+                path = _workspace_story_path(workspace, raw_path)
+                prepared_story_payloads[raw_path] = (
+                    read_regular_file(
+                        path, limit=settings.workflow.agent_job_artifact_max_bytes
+                    )
+                    if path is not None else None
+                )
+            return prepared_story_payloads[raw_path]
+
         async def _publish_story_breakdown_file(
             *,
             workspace: Path,
@@ -8664,12 +8759,9 @@ class TemporalAgentRuntimeActivities:
             metadata_name: str,
             label: str,
         ) -> str:
-            path = _workspace_story_path(workspace, raw_path)
-            if path is None:
+            payload = _prepare_story_breakdown_file(workspace, raw_path)
+            if payload is None:
                 return ""
-            payload = read_regular_file(
-                path, limit=settings.workflow.agent_job_artifact_max_bytes
-            )
             artifact, _upload = await self._artifact_service.create(
                 principal="system:agent_runtime",
                 content_type=content_type,
@@ -8689,8 +8781,28 @@ class TemporalAgentRuntimeActivities:
                 payload=payload,
                 content_type=content_type,
             )
+            parent_workflow_id = str(metadata.get("parentWorkflowId") or "").strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            admitted_parent = await _parent_artifact_read_scope()
+            if admitted_parent is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=completed.artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.story_breakdown_handoff",
+                    ),
+                )
+            elif parent_workflow_id or parent_run_id:
+                logger.warning(
+                    "Story breakdown artifact %s is preserved for its child execution; "
+                    "parent handoff authority could not be verified",
+                    completed.artifact_id,
+                )
             logger.info(
-                "Published %s story breakdown handoff artifact for %s",
+                "Published %s story breakdown artifact for %s",
                 label,
                 raw_path,
             )
@@ -9078,7 +9190,14 @@ class TemporalAgentRuntimeActivities:
             await _link_verifier_artifact_to_parent(ref.artifact_id)
             return ref
 
-        async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
+        verify_output_prepared = False
+        prepared_verify_output: tuple[str, Mapping[str, Any]] | None = None
+
+        def _prepare_moonspec_verify_output() -> tuple[str, Mapping[str, Any]] | None:
+            nonlocal verify_output_prepared, prepared_verify_output
+            if verify_output_prepared:
+                return prepared_verify_output
+            verify_output_prepared = True
             verify_path = _metadata_text(
                 "verify_artifact_path",
                 "verifyArtifactPath",
@@ -9086,7 +9205,7 @@ class TemporalAgentRuntimeActivities:
                 "verificationArtifactPath",
             )
             if not verify_path:
-                return {}
+                return None
             failure_class = str(
                 result_dict.get("failureClass")
                 or result_dict.get("failure_class")
@@ -9098,13 +9217,13 @@ class TemporalAgentRuntimeActivities:
                     "agent result (%s)",
                     failure_class,
                 )
-                return {}
+                return None
             workspace = _result_workspace()
             if workspace is None:
-                return {}
+                return None
             path = _workspace_moonspec_verify_path(workspace, verify_path)
             if path is None:
-                return {}
+                return None
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -9113,13 +9232,21 @@ class TemporalAgentRuntimeActivities:
                     verify_path,
                     exc_info=True,
                 )
-                return {}
+                return None
             if not isinstance(payload, Mapping):
                 logger.warning(
                     "MoonSpec verify artifact payload must be a JSON object: %s",
                     verify_path,
                 )
+                return None
+            prepared_verify_output = (verify_path, payload)
+            return prepared_verify_output
+
+        async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
+            prepared = _prepare_moonspec_verify_output()
+            if prepared is None:
                 return {}
+            verify_path, payload = prepared
             gate_payload = _canonicalize_moonspec_verify_gate_payload(payload)
             # Only this publisher may mint a descriptor after full validation
             # and an immutable write; a verifier cannot submit its own shortcut.
@@ -9210,10 +9337,15 @@ class TemporalAgentRuntimeActivities:
                         assessment, assessment_unreadable = {}, True
                 source_scope = None
                 if brief_ref and _metadata_text("acceptanceScopeContract") == "source-bound/v1":
+                    # The loader owns the source under the parent workflow.
+                    # Verify server ancestry before trusting retained result metadata.
+                    admitted_parent = await _parent_artifact_read_scope()
                     try:
                         _brief_artifact, brief_bytes = await self._artifact_service.read(
                             artifact_id=_artifact_id_from_ref(brief_ref).removeprefix("artifact://"),
-                            principal="system:agent_runtime", allow_restricted_raw=True,
+                            principal="system:agent_runtime",
+                            admitted_principal=admitted_parent,
+                            allow_restricted_raw=True,
                         )
                         brief = json.loads(brief_bytes.decode("utf-8"))
                         if isinstance(brief, Mapping):
@@ -9698,6 +9830,32 @@ class TemporalAgentRuntimeActivities:
         )
 
         try:
+            # Preflight only materialized outputs that need parent authority.
+            # Exhausted lookups then reach the Activity retry owner before any
+            # reference/output writes, while successful publication keeps its order.
+            story_path = _story_metadata_text("storyBreakdownPath", "story_breakdown_path")
+            if story_path:
+                workspace = _result_workspace()
+                if workspace is not None:
+                    story_paths = (
+                        story_path,
+                        _story_metadata_text(
+                            "storyBreakdownMarkdownPath", "story_breakdown_markdown_path"
+                        ),
+                    )
+                    story_payloads = [
+                        _prepare_story_breakdown_file(workspace, path)
+                        for path in story_paths
+                    ]
+                    if any(payload is not None for payload in story_payloads):
+                        await _parent_artifact_read_scope()
+            if (
+                _metadata_text("acceptanceContract") == "acceptance/v1"
+                and _metadata_text("acceptanceScopeContract") == "source-bound/v1"
+                and _metadata_text("briefArtifactRef")
+                and _prepare_moonspec_verify_output() is not None
+            ):
+                await _parent_artifact_read_scope()
             published_refs: dict[str, Any] = {}
             if instruction_ref:
                 published_refs["inputInstructionsRef"] = await _write_reference_artifact(
@@ -9938,6 +10096,10 @@ class TemporalAgentRuntimeActivities:
                 )
             await _notify_terminal_result(published_result)
             return published_result
+        except ArtifactParentAuthorityUnavailable:
+            # Preserve the existing Activity retry owner instead of publishing
+            # a successful but incomplete result after a transient lookup failure.
+            raise
         except Exception as exc:
             logger.warning(
                 "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
@@ -10423,6 +10585,11 @@ class TemporalAgentRuntimeActivities:
         }
         if not evidence_refs:
             return {}
+        admitted_principal = step_execution_read_principal(request)
+        if admitted_principal is None:
+            raise TemporalActivityRuntimeError(
+                "verifier evidence materialization requires admitted Step Execution authority"
+            )
         if not workspace_path:
             raise TemporalActivityRuntimeError(
                 "verifier evidence materialization requires payload.workspacePath"
@@ -10467,6 +10634,7 @@ class TemporalAgentRuntimeActivities:
                 _artifact, artifact_payload = await self._artifact_service.read(
                     artifact_id=artifact_id,
                     principal="service:agent_runtime",
+                    admitted_principal=admitted_principal,
                     allow_restricted_raw=True,
                 )
             except Exception as exc:

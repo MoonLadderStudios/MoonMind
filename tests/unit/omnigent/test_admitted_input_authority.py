@@ -2,7 +2,7 @@
 
 Uses the real artifact service (SQLite metadata plus local blobs) and
 synthetic identities. Bare service/runtime principals stay denied under every
-authenticated mode; readers succeed only for the verified plan's input closure
+authentication mode; readers succeed only for the verified plan's input closure
 and only through the execution that closure was delegated to.
 """
 
@@ -57,7 +57,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from tests.unit.omnigent.test_plan_and_realizer_dispatch import _codex_plan_inputs
 
-AUTHENTICATED_MODES = ("accounts", "oidc", "header")
+AUTH_MODES = ("accounts", "oidc", "header", "disabled")
 SKILL_NAME = "admitted-skill"
 
 
@@ -281,7 +281,7 @@ SHAPES = {
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", AUTHENTICATED_MODES)
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
 async def test_bare_runtime_readers_are_denied_without_admitted_scope(
     artifacts, auth_mode
 ):
@@ -305,7 +305,7 @@ async def test_bare_runtime_readers_are_denied_without_admitted_scope(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", (*AUTHENTICATED_MODES, "disabled"))
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
 @pytest.mark.parametrize("shape", sorted(SHAPES))
 async def test_admitted_skill_closure_reaches_every_runtime_consumer(
     artifacts, tmp_path, monkeypatch, auth_mode, shape
@@ -385,7 +385,7 @@ async def test_admitted_skill_closure_reaches_every_runtime_consumer(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", AUTHENTICATED_MODES)
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
 async def test_unadmitted_execution_cannot_read_another_executions_inputs(
     artifacts, auth_mode
 ):
@@ -462,7 +462,8 @@ async def test_admitted_reader_rejects_missing_or_conflicting_authority(artifact
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protection", ["restricted", "quarantined"])
-async def test_admission_does_not_release_protected_raw_bytes(artifacts, protection):
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
+async def test_admission_does_not_release_protected_raw_bytes(artifacts, protection, auth_mode):
     skills = await _skill_set(
         artifacts, tag=protection, owner="agent_workflow", workflow_id="run-wf"
     )
@@ -515,7 +516,7 @@ def _archive(files: dict[str, bytes]) -> bytes:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", (*AUTHENTICATED_MODES, "disabled"))
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
 async def test_restore_inputs_and_checkpoint_use_the_admitted_execution(
     artifacts, tmp_path, auth_mode
 ):
@@ -569,7 +570,7 @@ async def test_restore_inputs_and_checkpoint_use_the_admitted_execution(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", AUTHENTICATED_MODES)
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
 async def test_restore_inputs_of_another_execution_stay_denied(
     artifacts, tmp_path, auth_mode
 ):

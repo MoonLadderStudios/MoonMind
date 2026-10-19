@@ -679,11 +679,12 @@ async def test_sweep_bounded_paginated_idempotent_observable(
             assert settled.soft_deleted_count == 0
 
 
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 async def test_service_principal_carries_admitted_scope_for_saved_work(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str
 ) -> None:
     """A bare service principal is not a generic saved-work permission."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -735,8 +736,9 @@ async def test_retention_graph_helpers_reject_unsafe_shapes() -> None:
     assert "does not retract" in statement
 
 
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 async def test_bare_service_denied_across_data_plane_with_admitted_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str
 ) -> None:
     """Uniform owner policy on every data surface; scope must be carried.
 
@@ -745,7 +747,7 @@ async def test_bare_service_denied_across_data_plane_with_admitted_scope(
     artifact, and ``allow_restricted_raw=True`` never bypasses that.
     Carrying the admitted user scope through the same calls succeeds.
     """
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)

@@ -456,17 +456,17 @@ Baseline policy:
 
 ## 9.3 Service and worker access
 
-A worker's service identity names the caller; it is not a read grant. Under every authenticated mode a bare `service:` or runtime principal reads only artifacts it owns. Readers of execution inputs pass the admitted execution as `admitted_principal=workflow:<id>`, and the service then requires the artifact to be owned by or linked to that execution. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only, so admission never releases protected content.
+A worker's service identity names the caller; it is not a read grant. Under every authentication mode, including disabled mode, a bare `service:` or runtime principal reads only artifacts it owns. Readers of execution inputs pass the admitted execution as `admitted_principal=workflow:<id>`, and the service then requires the artifact to be owned by or linked to that execution. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only, so admission never releases protected content.
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
 * Omnigent admission verifies the persisted execution plan and links its artifact inputs to the Step Execution, including the admitted Skill bodies and required strict support evidence. Plan and strict-evidence pointers must match their persisted digests before receiving grants; ordinary optional certificates remain outside the required input closure. Snapshots produced by another execution or left unlinked by the operator become readable without copying bytes or rewriting owners.
 * Session-supervisor resolve and continuation reads reuse that execution's existing grant. Continuations bind the sealed intent and plan to the canonical session; mutating commands validate ownership, revision and fence before reading plan inputs. Retries and cleanup never create replacement input grants.
 * `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Generic-host and Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
-* Workspace checkpoint, restore-input and attachment projection and managed-runtime Skill loading carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope.
+* Workspace checkpoint, restore-input and attachment projection, managed-runtime Skill loading, and remediation head/evidence reads carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope. Story breakdown and source-brief handoffs verify the exact Activity execution's parent and namespace against Temporal before delegating; neither artifact creator values nor provider-supplied parent fields grant access.
 * Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.
 
-Missing or mismatched authority fails with the service's authorization error. Readers do not fall back to a local path, another identity or disabled-mode behavior. Only disabled local mode skips these checks.
+Mismatched scope fails authorization. Parent-lookup failures use publication's existing bounded retry policy before writes. Readers never substitute identities or disabled-mode access; read, metadata, list and saved-work checks apply in every mode while the admitted operator retains instance visibility.
 
 ## 9.4 Auditing
 
