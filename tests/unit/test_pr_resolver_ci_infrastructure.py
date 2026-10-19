@@ -30,6 +30,7 @@ MISSING_ARTIFACT_MESSAGE = (
     "is not expired"
 )
 HEAD_SHA = "2e6249be545d27eaa7982d156494030e710f4f15"
+WORKFLOW_PATH = ".github/workflows/build-and-test.yml"
 
 
 @pytest.fixture
@@ -52,9 +53,8 @@ def _check_run(
     name: str,
     *,
     run_id: int = 36790876840,
-    completed_at: str | None = None,
 ) -> dict:
-    check = {
+    return {
         "id": check_id,
         "name": name,
         "status": "completed",
@@ -64,9 +64,6 @@ def _check_run(
             f"{run_id}/job/{check_id}"
         ),
     }
-    if completed_at is not None:
-        check["completed_at"] = completed_at
-    return check
 
 
 def _failure(message: str) -> dict:
@@ -83,10 +80,12 @@ def _summarize(
     annotations: dict[int, list[dict]],
     *,
     jobs: dict[int, dict] | None = None,
+    workflow: str | None = None,
     run_attempt: int = 1,
     updated_at: str = "2026-09-30T23:27:40Z",
 ) -> dict:
     summarize = snapshot_module["summarize_ci_infrastructure"]
+    workflows = {(WORKFLOW_PATH, HEAD_SHA): workflow} if workflow else {}
     return summarize(
         checks,
         fetch_annotations=lambda check_id: annotations.get(check_id, []),
@@ -96,8 +95,11 @@ def _summarize(
             "status": "completed",
             "conclusion": "failure",
             "updated_at": updated_at,
+            "path": WORKFLOW_PATH,
+            "head_sha": HEAD_SHA,
         },
         fetch_job=lambda job_id: (jobs or {}).get(job_id),
+        fetch_workflow=lambda path, ref: workflows.get((path, ref)),
     )
 
 
@@ -142,37 +144,99 @@ def test_quota_failure_and_its_dependent_gate_are_infrastructure_only(
     ]
 
 
-def _job(created_at: str) -> dict:
-    return {"created_at": created_at}
+# Shape of Tactics build-and-test.yml: the gate needs both jobs and its
+# evaluation step reads the preflight result.
+TACTICS_WORKFLOW = """
+name: Build Project and Run Tests
+on: [pull_request]
+jobs:
+  preflight:
+    name: PR Preflight
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Run preflight tests
+        run: python3 -m tools.ci.run_preflight_tests
+      - name: Upload preflight test report
+        uses: actions/upload-artifact@v7
+  build_and_test:
+    name: Build Unreal Project Docker Image and Run Tests
+    needs: preflight
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Build
+        run: make build
+  ci_gate:
+    name: CI Gate
+    if: always()
+    needs: [preflight, build_and_test]
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Evaluate required CI jobs
+        env:
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          UNREAL_RESULT: ${{ needs.build_and_test.result }}
+        run: |
+          [ "$PREFLIGHT_RESULT" = success ] || exit 1
+  report:
+    name: Publish coverage
+    if: always()
+    needs: preflight
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Upload coverage
+        run: ./tools/publish_coverage.sh
+  unit_tests:
+    name: Unit tests
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Run unit tests
+        run: pytest
+  unit_summary:
+    name: Unit summary
+    if: always()
+    needs: unit_tests
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Summarize
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: ./tools/summarize.sh
+"""
+
+BARE_EXIT = "Process completed with exit code 1."
 
 
-def test_gate_queued_by_a_quota_failure_is_infrastructure_only(
+def _job(*failed_steps: str) -> dict:
+    return {
+        "steps": [
+            {"name": "Set up job", "conclusion": "success"},
+            *({"name": name, "conclusion": "failure"} for name in failed_steps),
+        ]
+    }
+
+
+def _preflight_and(check_id: int, name: str) -> list[dict]:
+    return [
+        _check_run(117884346304, "PR Preflight", run_id=39193540093),
+        _check_run(check_id, name, run_id=39193540093),
+    ]
+
+
+def test_gate_evaluating_a_quota_failed_dependency_is_infrastructure_only(
     snapshot_module: dict[str, Any],
 ) -> None:
     # Observed Tactics run 39193540093: PR Preflight passed its tests but its
-    # report upload hit the quota; CI Gate, created the moment preflight
-    # finished, then failed on ``needs.preflight`` with only a bare exit.
+    # report upload hit the quota; CI Gate's evaluation of
+    # ``needs.preflight.result`` then failed with only a bare exit status.
     summary = _summarize(
         snapshot_module,
-        [
-            _check_run(
-                117884346304,
-                "PR Preflight",
-                run_id=39193540093,
-                completed_at="2026-10-19T04:10:23Z",
-            ),
-            _check_run(
-                117885240310,
-                "CI Gate",
-                run_id=39193540093,
-                completed_at="2026-10-19T04:10:37Z",
-            ),
-        ],
+        _preflight_and(117885240310, "CI Gate"),
         {
             117884346304: [_failure(QUOTA_MESSAGE), _failure(QUOTA_MESSAGE)],
-            117885240310: [_failure("Process completed with exit code 1.")],
+            117885240310: [_failure(BARE_EXIT)],
         },
-        jobs={117885240310: _job("2026-10-19T04:10:24Z")},
+        jobs={117885240310: _job("Evaluate required CI jobs")},
+        workflow=TACTICS_WORKFLOW,
     )
 
     assert summary["infrastructureOnly"] is True
@@ -184,7 +248,7 @@ def test_gate_queued_by_a_quota_failure_is_infrastructure_only(
     messages = {
         item["name"]: item["message"] for item in summary["infrastructureFailures"]
     }
-    assert messages["CI Gate"] == "Process completed with exit code 1."
+    assert messages["CI Gate"] == BARE_EXIT
     assert messages["PR Preflight"].startswith("Failed to CreateArtifact")
     assert summary["infrastructureRuns"][0]["kinds"] == [
         "artifact_storage_quota",
@@ -192,40 +256,111 @@ def test_gate_queued_by_a_quota_failure_is_infrastructure_only(
     ]
 
 
-def test_bare_exit_job_delayed_only_by_runner_scheduling_stays_a_ci_failure(
+def test_gate_that_also_needs_a_slower_successful_job_is_infrastructure_only(
     snapshot_module: dict[str, Any],
 ) -> None:
-    # The unit-test job was queued with the attempt and only started once a
-    # runner freed up after the quota-failed job; start order is not ``needs``.
+    # The gate was queued only after its slower, successful dependency
+    # finished. The declared dependency set decides, not when it was queued.
+    workflow = TACTICS_WORKFLOW.replace(
+        "    needs: preflight\n    runs-on: [self-hosted, Linux]\n"
+        "    steps:\n      - name: Build\n",
+        "    runs-on: [self-hosted, Linux]\n    steps:\n      - name: Build\n",
+    )
+    assert workflow != TACTICS_WORKFLOW
     summary = _summarize(
         snapshot_module,
-        [
-            _check_run(1, "Build", completed_at="2026-10-19T04:10:23Z"),
-            _check_run(2, "Unit tests", completed_at="2026-10-19T04:14:00Z"),
-        ],
+        _preflight_and(117885240310, "CI Gate"),
         {
-            1: [_failure(QUOTA_MESSAGE)],
-            2: [_failure("Process completed with exit code 1.")],
+            117884346304: [_failure(QUOTA_MESSAGE)],
+            117885240310: [_failure(BARE_EXIT)],
         },
-        jobs={2: _job("2026-10-19T04:06:42Z")},
+        jobs={117885240310: _job("Evaluate required CI jobs")},
+        workflow=workflow,
+    )
+
+    assert summary["infrastructureOnly"] is True
+
+
+def test_independent_job_that_ran_later_stays_a_ci_failure(
+    snapshot_module: dict[str, Any],
+) -> None:
+    # Runner scheduling can start a job after the quota failure, but a job that
+    # does not need the failed job failed on its own.
+    summary = _summarize(
+        snapshot_module,
+        _preflight_and(2, "Unit tests"),
+        {117884346304: [_failure(QUOTA_MESSAGE)], 2: [_failure(BARE_EXIT)]},
+        jobs={2: _job("Run unit tests")},
+        workflow=TACTICS_WORKFLOW,
     )
 
     assert summary["infrastructureOnly"] is False
 
 
-def test_bare_exit_job_without_job_record_stays_a_ci_failure(
+def test_gate_on_other_jobs_results_stays_a_ci_failure(
     snapshot_module: dict[str, Any],
+) -> None:
+    # This gate evaluates ``needs.*.result``, but its needs do not include the
+    # quota-failed job, so that failure cannot explain its exit.
+    summary = _summarize(
+        snapshot_module,
+        _preflight_and(4, "Unit summary"),
+        {117884346304: [_failure(QUOTA_MESSAGE)], 4: [_failure(BARE_EXIT)]},
+        jobs={4: _job("Summarize")},
+        workflow=TACTICS_WORKFLOW,
+    )
+
+    assert summary["infrastructureOnly"] is False
+
+
+def test_downstream_job_failing_its_own_work_stays_a_ci_failure(
+    snapshot_module: dict[str, Any],
+) -> None:
+    # ``needs`` establishes order, not cause: this job's failed step never reads
+    # the preflight result, so its exit is its own.
+    summary = _summarize(
+        snapshot_module,
+        _preflight_and(3, "Publish coverage"),
+        {117884346304: [_failure(QUOTA_MESSAGE)], 3: [_failure(BARE_EXIT)]},
+        jobs={3: _job("Upload coverage")},
+        workflow=TACTICS_WORKFLOW,
+    )
+
+    assert summary["infrastructureOnly"] is False
+
+
+@pytest.mark.parametrize(
+    ("jobs", "workflow"),
+    [
+        ({117885240310: _job("Evaluate required CI jobs")}, None),
+        ({117885240310: _job("Evaluate required CI jobs")}, "jobs: [unparseable"),
+        ({}, TACTICS_WORKFLOW),
+        ({117885240310: _job()}, TACTICS_WORKFLOW),
+        (
+            {117885240310: _job("Evaluate required CI jobs", "Clean up")},
+            TACTICS_WORKFLOW,
+        ),
+    ],
+    ids=[
+        "no-workflow",
+        "invalid-yaml",
+        "no-job-record",
+        "no-failed-step",
+        "unread-failed-step",
+    ],
+)
+def test_gate_without_dependency_evidence_stays_a_ci_failure(
+    snapshot_module: dict[str, Any], jobs: dict[int, dict], workflow: str | None
 ) -> None:
     summary = _summarize(
         snapshot_module,
-        [
-            _check_run(1, "Build", completed_at="2026-10-19T04:10:23Z"),
-            _check_run(2, "CI Gate", completed_at="2026-10-19T04:10:37Z"),
-        ],
+        _preflight_and(117885240310, "CI Gate"),
         {
-            1: [_failure(QUOTA_MESSAGE)],
-            2: [_failure("Process completed with exit code 1.")],
+            117884346304: [_failure(QUOTA_MESSAGE)],
+            117885240310: [_failure(BARE_EXIT)],
         },
+        jobs=jobs,
+        workflow=workflow,
     )
 
     assert summary["infrastructureOnly"] is False
@@ -236,9 +371,10 @@ def test_bare_exit_gate_without_platform_cause_is_a_real_failure(
 ) -> None:
     summary = _summarize(
         snapshot_module,
-        [_check_run(2, "CI Gate", completed_at="2026-10-19T04:10:37Z")],
-        {2: [_failure("Process completed with exit code 1.")]},
-        jobs={2: _job("2026-10-19T04:10:24Z")},
+        [_check_run(117885240310, "CI Gate", run_id=39193540093)],
+        {117885240310: [_failure(BARE_EXIT)]},
+        jobs={117885240310: _job("Evaluate required CI jobs")},
+        workflow=TACTICS_WORKFLOW,
     )
 
     assert summary["infrastructureOnly"] is False
