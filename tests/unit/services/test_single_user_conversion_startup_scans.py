@@ -2,8 +2,9 @@
 
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, select
@@ -15,6 +16,7 @@ from api_service.db.models import (
     Base,
     TemporalArtifact,
     TemporalArtifactRedactionLevel,
+    TemporalArtifactUseClaim,
     User,
 )
 from api_service.services import single_user_conversion as conversion
@@ -514,3 +516,166 @@ async def test_disabled_direct_owner_and_machines_use_bounded_probe(
                 assert query._limit_clause.value == 1
             assert not any("FROM temporal_artifact_" in sql for sql, _query in queries)
             assert (await restarted.get(TemporalArtifact, "later-0")).operator_recovery_granted is False
+
+
+@pytest.mark.parametrize("mode, configuration, eligible", [
+    ("disabled", None, True),
+    ("disabled", "zero", True),
+    ("oidc", "zero", False),
+    ("disabled", "nonzero", False),
+    ("disabled", "invalid", False),
+    ("disabled", "noncanonical", False),
+])
+async def test_mixed_history_preserves_only_reserved_deployment_scope(
+    tmp_path, monkeypatch, mode, configuration, eligible,
+):
+    zero = conversion.DEPLOYMENT_SUBJECT_ID
+    default_owner = str(uuid4()) if configuration == "nonzero" else zero
+    configured = {
+        None: None, "zero": zero, "nonzero": default_owner,
+        "invalid": "invalid-uuid", "noncanonical": zero,
+    }[configuration]
+    if configuration == "noncanonical":
+        default_owner = "0" * 32
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", zero)
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    async with database(tmp_path) as maker:
+        async with maker() as first:
+            original_id, owner = await seed(first)
+            assert (await conversion.run_guarded_upgrade(
+                first, operator_authorized=True,
+            )).published
+        async with maker() as writer:
+            writer.add_all([
+                TemporalArtifact(
+                    artifact_id="disabled-created", storage_key="disabled-key",
+                    created_by_principal=default_owner, size_bytes=11,
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                ),
+                TemporalArtifact(
+                    artifact_id="later-human", storage_key="later-human-key",
+                    created_by_principal=owner, size_bytes=23,
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                ),
+                TemporalArtifactUseClaim(
+                    artifact_id=original_id, owner_principal=default_owner,
+                    request_id="retained-disabled-download", operation_kind="download",
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                ),
+            ])
+            await writer.commit()
+            repository = TemporalArtifactRepository(writer)
+            quota = {principal: await repository.quota_usage_for_scope(principal)
+                     for principal in (default_owner, owner)}
+            claim = (await writer.execute(select(TemporalArtifactUseClaim))).scalar_one()
+            claim_id = claim.id
+            claim_expiry = claim.expires_at.replace(tzinfo=None)
+        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", mode)
+        monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", configured)
+        async with maker() as restarted:
+            result = await conversion.run_guarded_upgrade(
+                restarted, operator_authorized=True,
+            )
+            assert result.published is eligible, result.to_sanitized_dict()
+            assert result.decision.eligible is eligible
+            assert await restarted.get(User, UUID(zero)) is None
+            if eligible:
+                assert result.decision.person_count == 1
+                assert result.transforms["artifacts"]["recovery_grants"] == 1
+            else:
+                assert result.decision.reason_code == "unknown_principal"
+            default = await restarted.get(TemporalArtifact, "disabled-created")
+            human = await restarted.get(TemporalArtifact, "later-human")
+            assert default.created_by_principal == default_owner
+            assert default.operator_recovery_granted is False
+            assert human.created_by_principal == owner
+            assert human.operator_recovery_granted is eligible
+            claim = await restarted.get(TemporalArtifactUseClaim, claim_id)
+            assert claim.owner_principal == default_owner
+            assert claim.artifact_id == original_id
+            assert claim.request_id == "retained-disabled-download"
+            assert claim.operation_kind == "download"
+            assert claim.expires_at.replace(tzinfo=None) == claim_expiry
+            repository = TemporalArtifactRepository(restarted)
+            assert {principal: await repository.quota_usage_for_scope(principal)
+                    for principal in (default_owner, owner)} == quota
+        if eligible:
+            async with maker() as unchanged:
+                collect = AsyncMock(side_effect=AssertionError("mixed recovery rescanned"))
+                monkeypatch.setattr(conversion, "collect_inventory", collect)
+                assert (await conversion.run_guarded_upgrade(
+                    unchanged, operator_authorized=True,
+                )).published
+                collect.assert_not_awaited()
+
+
+@pytest.mark.parametrize("scenario", ["alone", "second", "aliased", "later_collision"])
+async def test_reserved_zero_never_hides_a_real_user(
+    tmp_path, monkeypatch, scenario,
+):
+    zero = conversion.DEPLOYMENT_SUBJECT_ID
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", zero)
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    async with database(tmp_path) as maker:
+        async with maker() as writer:
+            owner = None
+            if scenario != "alone":
+                _original_id, owner = await seed(writer)
+            if scenario == "later_collision":
+                assert (await conversion.run_guarded_upgrade(
+                    writer, operator_authorized=True,
+                )).published
+                # Pending historical work must use current identity inventory;
+                # the direct-owner shortcut itself grants no new authority.
+                writer.add(TemporalArtifact(
+                    artifact_id="later-known-human", storage_key="later-known-key",
+                    created_by_principal=owner,
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                ))
+            writer.add(User(id=UUID(zero), email="zero@example.invalid"))
+            writer.add(TemporalArtifact(
+                artifact_id="real-zero-user", storage_key="zero-user-key",
+                created_by_principal=zero,
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            ))
+            await writer.commit()
+        async with maker() as session:
+            result = await conversion.run_guarded_upgrade(
+                session, operator_authorized=True,
+                alias_groups=[{zero, owner}] if scenario == "aliased" else None,
+            )
+            eligible = scenario in {"alone", "aliased"}
+            assert result.published is eligible, result.to_sanitized_dict()
+            assert result.decision.person_count == (1 if eligible else 2)
+            if not eligible:
+                assert result.decision.disposition == "multi_person_refusal"
+            row = await session.get(TemporalArtifact, "real-zero-user")
+            assert row.created_by_principal == zero
+            assert row.operator_recovery_granted is eligible
+            assert await session.get(User, UUID(zero)) is not None
+
+
+async def test_reserved_zero_eligibility_is_not_proof_of_a_real_user(
+    tmp_path, monkeypatch,
+):
+    zero = conversion.DEPLOYMENT_SUBJECT_ID
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", zero)
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            for granted in (False, True):
+                session.add(TemporalArtifact(
+                    artifact_id=f"reserved-{granted}", storage_key=f"reserved-{granted}",
+                    created_by_principal=zero, operator_recovery_granted=granted,
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                ))
+            await session.commit()
+            # eligible_ids may contain a retained secret holder without a User.
+            # It must neither invent a grant nor revoke existing proof.
+            outcome = await conversion.artifacts_transform(session, [zero])
+            assert outcome == {"recovery_grants": 0, "preserved": 2}
+            assert await session.get(User, UUID(zero)) is None
+            for granted in (False, True):
+                row = await session.get(TemporalArtifact, f"reserved-{granted}")
+                assert row.created_by_principal == zero
+                assert row.operator_recovery_granted is granted

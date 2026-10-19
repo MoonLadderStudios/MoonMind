@@ -555,6 +555,7 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
     import asyncio
     from datetime import datetime, timedelta, timezone
     from api_service.services import single_user_conversion as suc
+    from moonmind.config.settings import settings
     from moonmind.security import auth_modes_4120
     from moonmind.workflows.temporal.artifacts import (
         LocalTemporalArtifactStore, TemporalArtifactAuthorizationError,
@@ -565,6 +566,7 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         TemporalArtifactRedactionLevel,
     )
     monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", None)
     store = LocalTemporalArtifactStore(tmp_path / "artifact-bytes")
     async with pg_maker() as session:
         owner = str((await _mk_user(session)).id)
@@ -655,6 +657,29 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         again = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
         assert again.published
 
+    # Real account-free consumption and creation preserve the reserved local
+    # scope without inventing a User, before another OIDC -> disabled cycle.
+    zero = suc.DEPLOYMENT_SUBJECT_ID
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    async with pg_maker() as local:
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(local), store=store)
+        await artifacts.presign_download(artifact_id=artifact_id, principal=zero,
+                                        recovery_principal="operator")
+        row, _ = await artifacts.create(principal=zero,
+            redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            content_type="application/octet-stream")
+        row = await artifacts.write_complete(artifact_id=row.artifact_id, principal=zero,
+            payload=b"account-free postgres bytes", content_type="application/octet-stream")
+        zero_ids = {row.artifact_id, row.metadata_json["preview_artifact_id"]}
+        assert await local.get(User, uuid.UUID(zero)) is None
+        zero_rows = (await local.execute(select(TemporalArtifact.__table__).where(
+            TemporalArtifact.created_by_principal == zero))).all()
+        zero_claims = (await local.execute(select(TemporalArtifactUseClaim.__table__).where(
+            TemporalArtifactUseClaim.owner_principal == zero))).all()
+        assert len(zero_rows) == 2 and zero_claims
+        zero_quota = await TemporalArtifactRepository(local).quota_usage_for_scope(zero)
+
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
     # The prerequisite can first run while OIDC still admits ordinary writes.
     # Later historical human resources need current guarded proof at cutover.
     later = {}
@@ -683,7 +708,13 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         retained = (await restarted.execute(select(TemporalArtifact))).scalars().all()
         assert {row.artifact_id for row in retained if row.operator_recovery_granted} == {
             artifact_id, preview_id, *later[owner]}
-        assert {row.artifact_id for row in retained if not row.operator_recovery_granted} == later["service:producer"]
+        assert {row.artifact_id for row in retained if not row.operator_recovery_granted} == later["service:producer"] | zero_ids
+        assert (await restarted.execute(select(TemporalArtifact.__table__).where(
+            TemporalArtifact.created_by_principal == zero))).all() == zero_rows
+        assert (await restarted.execute(select(TemporalArtifactUseClaim.__table__).where(
+            TemporalArtifactUseClaim.owner_principal == zero))).all() == zero_claims
+        assert await TemporalArtifactRepository(restarted).quota_usage_for_scope(zero) == zero_quota
+        assert await restarted.get(User, uuid.UUID(zero)) is None
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
         row, payload = await artifacts.read(artifact_id=later_human_id, principal="operator")
         assert payload == b"post-completion postgres bytes"
@@ -716,6 +747,21 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
             # the retained human or machine rows checked above.
             await restarted.delete(ambiguous)
             await restarted.commit()
+
+    # A real retained account at the reserved UUID is still a person. It
+    # cannot be hidden by the preserved-scope exception during a new apply.
+    async with pg_maker() as writer:
+        writer.add(User(id=uuid.UUID(zero), email="real-zero@example.invalid"))
+        writer.add(TemporalArtifact(artifact_id="after-zero-user", storage_key="later-owner",
+            created_by_principal=owner))
+        await writer.commit()
+    async with pg_maker() as restarted:
+        refused = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
+        assert not refused.published
+        assert refused.decision.reason_code == "multi_person"
+        assert not (await restarted.get(TemporalArtifact, "after-zero-user")).operator_recovery_granted
+        assert (await restarted.execute(select(TemporalArtifact.__table__).where(
+            TemporalArtifact.created_by_principal == zero))).all() == zero_rows
 
 
 @pytest.mark.asyncio

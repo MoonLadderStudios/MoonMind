@@ -418,6 +418,16 @@ def _is_artifact_machine_principal(raw: Any) -> bool:
     )
 
 
+def _uses_reserved_disabled_artifact_scope() -> bool:
+    """Identify the built-in disabled actor; callers must rule out a real User."""
+    from moonmind.config.settings import settings
+    from moonmind.security.auth_modes_4120 import is_disabled_local_mode
+
+    return is_disabled_local_mode() and _looks_like_uuid(
+        settings.oidc.DEFAULT_USER_ID or DEPLOYMENT_SUBJECT_ID
+    ) == DEPLOYMENT_SUBJECT_ID
+
+
 async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
     """Probe for work without loading artifact rows or retained child content.
 
@@ -512,6 +522,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     users = (await session.execute(select(User.id))).scalars().all()
     inv.user_ids = sorted(str(u) for u in users)
     user_set = set(inv.user_ids)
+    preserve_deployment_artifacts = (
+        _uses_reserved_disabled_artifact_scope()
+        and DEPLOYMENT_SUBJECT_ID not in user_set
+    )
 
     from api_service.db.models import User as _U
 
@@ -540,6 +554,14 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                 _record_inventory_error(inv, f"{table_name}.{column_name}")
             continue
         for (raw,) in rows:
+            if (
+                preserve_deployment_artifacts
+                and kind in {"artifact_principal", "active_artifact_claim"}
+                and raw == DEPLOYMENT_SUBJECT_ID
+            ):
+                # Built-in account-free scope is retained, not a person alias.
+                # A persisted zero User disables this classification entirely.
+                continue
             norm = _looks_like_uuid(raw)
             if norm and not (kind == "uuid_fk" and norm == DEPLOYMENT_SUBJECT_ID):
                 principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
@@ -1652,9 +1674,27 @@ async def artifacts_transform(
         if _is_absent_table_error(exc):
             return {"recovery_grants": 0, "preserved": 0}
         raise
+    preserve_deployment_scope = False
+    if _uses_reserved_disabled_artifact_scope() and any(
+        row.created_by_principal == DEPLOYMENT_SUBJECT_ID for row in rows
+    ):
+        from api_service.db.models import User
+
+        # The owning apply holds the User-table lock. eligible_ids also carries
+        # secret holders, so it cannot establish whether a real zero User exists.
+        zero_user = (await session.execute(
+            select(User.id).where(User.id == UUID(DEPLOYMENT_SUBJECT_ID)).limit(1)
+        )).scalar_one_or_none()
+        preserve_deployment_scope = zero_user is None
     eligible = set(eligible_ids)
     granted = 0
     for row in rows:
+        if (
+            preserve_deployment_scope
+            and row.created_by_principal == DEPLOYMENT_SUBJECT_ID
+        ):
+            # Preserve creator, quota, claims and any existing grant verbatim.
+            continue
         owner = _looks_like_uuid(row.created_by_principal)
         if owner:
             if owner not in eligible:

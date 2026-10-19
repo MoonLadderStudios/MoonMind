@@ -20,7 +20,7 @@ from api_service.services import single_user_conversion as conversion
 from moonmind.config.settings import settings
 from moonmind.security import auth_modes_4120
 from moonmind.workflows.temporal.artifacts import (
-    LocalTemporalArtifactStore, TemporalArtifactValidationError,
+    LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactValidationError,
 )
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
@@ -38,13 +38,14 @@ def mounted_app(session, tmp_path):
     return app
 
 
+@pytest.mark.parametrize("create_default_artifact", [False, True])
 async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_startup(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, create_default_artifact,
 ):
     from api_service import main
 
     monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR)
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR if create_default_artifact else None)
     async with database(tmp_path) as maker:
         @asynccontextmanager
         async def startup_session():
@@ -53,10 +54,39 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
 
         monkeypatch.setattr(main, "get_async_session_context", startup_session)
         async with maker() as session:
-            _original_id, owner = await seed(session, tmp_path)
+            original_id, owner = await seed(session, tmp_path)
             assert owner != DEFAULT_OPERATOR
         assert (await main._run_guarded_single_user_upgrade())["published"]
 
+        # A real account-free phase records reserved-scope consumers without
+        # a User row. These must survive a later OIDC -> disabled transition.
+        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+        async with maker() as local:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=mounted_app(local, tmp_path)),
+                base_url="http://localhost",
+            ) as client:
+                response = await client.post(f"/api/artifacts/{original_id}/presign-download")
+                assert response.status_code == 200, response.text
+                if create_default_artifact:
+                    response = await client.post("/api/artifacts", json={
+                        "content_type": "application/octet-stream", "redaction_level": "restricted"})
+                    assert response.status_code == 201, response.text
+                    default_id = response.json()["artifact_ref"]["artifact_id"]
+                    response = await client.put(f"/api/artifacts/{default_id}/content",
+                        content=b"account-free saved bytes",
+                        headers={"Content-Type": "application/octet-stream"})
+                    assert response.status_code == 200, response.text
+            assert await local.get(User, UUID(DEFAULT_OPERATOR)) is None
+            claims_before = (await local.execute(select(TemporalArtifactUseClaim.__table__).where(
+                TemporalArtifactUseClaim.owner_principal == DEFAULT_OPERATOR))).all()
+            assert claims_before
+            default_rows_before = (await local.execute(select(TemporalArtifact.__table__).where(
+                TemporalArtifact.created_by_principal == DEFAULT_OPERATOR))).all()
+            assert len(default_rows_before) == (2 if create_default_artifact else 0)
+            quota_before = await TemporalArtifactRepository(local).quota_usage_for_scope(DEFAULT_OPERATOR)
+
+        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
         # Normal OIDC writes continue after the prerequisite first starts.
         # The old completion alone must not authorize these new resources.
         later = {}
@@ -95,6 +125,15 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
         assert summary["published"], summary
 
         async with maker() as restarted:
+            assert (await restarted.execute(select(TemporalArtifactUseClaim.__table__).where(
+                TemporalArtifactUseClaim.owner_principal == DEFAULT_OPERATOR))).all() == claims_before
+            assert (await restarted.execute(select(TemporalArtifact.__table__).where(
+                TemporalArtifact.created_by_principal == DEFAULT_OPERATOR))).all() == default_rows_before
+            assert await TemporalArtifactRepository(restarted).quota_usage_for_scope(DEFAULT_OPERATOR) == quota_before
+            assert await restarted.get(User, UUID(DEFAULT_OPERATOR)) is None
+            if create_default_artifact:
+                default = await restarted.get(TemporalArtifact, default_id)
+                assert default.operator_recovery_granted is False
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=mounted_app(restarted, tmp_path)),
                 base_url="http://localhost",
@@ -104,6 +143,10 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
                 assert response.status_code == 200, response.text
                 assert response.content == b"later human bytes"
                 assert collect.await_count == 2
+                if create_default_artifact:
+                    response = await client.get(f"/api/artifacts/{default_id}/download")
+                    assert response.status_code == 200, response.text
+                    assert response.content == b"account-free saved bytes"
                 response = await client.get(f"/api/artifacts/{artifact_id}?include_download=true")
                 assert response.status_code == 200, response.text
                 assert response.json()["raw_access_allowed"] is True
