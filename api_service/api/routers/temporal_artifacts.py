@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
-from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactCollectionResponse,
     ArtifactCollectionRowModel,
@@ -199,21 +198,9 @@ async def _get_temporal_artifact_service(
 async def _resolve_principal(
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> str:
-    # Single-user (#4351): operator artifact operations work without account
-    # ownership. The admitted operator uses a stable instance principal;
-    # legacy user-id-owned artifacts remain readable via instance visibility
-    # in TemporalArtifactService. Execution-bound isolation (workflow:/service:
-    # principals, linked-execution checks, raw-access policy) is unchanged.
-    # Authenticated accounts/oidc/header modes never take the disabled
-    # path: the mode gate above is the only disabled branch, so those
-    # modes cannot be reinterpreted as local single-user access.
-    if is_disabled_local_mode():
-        user_id = getattr(user, "id", None)
-        if user_id is not None:
-            return str(user_id)
-        # Local single-user admission without a persisted account row.
-        return "operator"
-
+    # The optional dependency also serves separately authenticated fan-out
+    # requests. A machine marker is not artifact authority, including in local
+    # mode. Ordinary local admission still supplies its conversion-gated user.
     if user is None or getattr(user, "id", None) is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

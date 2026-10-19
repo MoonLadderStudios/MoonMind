@@ -325,17 +325,19 @@ async def _optional_current_user(
     the same ``Authorization: Bearer`` header plus the
     ``X-MoonMind-Execution-Fanout: v1`` marker. The session extractor
     would reject that bearer as ``auth_invalid`` before the route can
-    verify it, so a marked request skips session validation here and the
-    route authorizes via ``resolve_execution_fanout_capability``.
+    verify it, so a marked request skips person/session resolution in every
+    mode and the route authorizes via ``resolve_execution_fanout_capability``.
+    The marker itself grants no authority; other optional-user consumers must
+    reject a missing user instead of substituting operator access.
     """
-    if is_disabled_local_mode():
-        return await _load_disabled_user(session)
     try:
         marker = request.headers.get("x-moonmind-execution-fanout", "")
     except Exception:
         marker = ""
     if isinstance(marker, str) and marker.strip() == "v1":
         return None
+    if is_disabled_local_mode():
+        return await _load_disabled_user(session)
     return await _resolve_session_principal(request, session, optional=True)
 
 
