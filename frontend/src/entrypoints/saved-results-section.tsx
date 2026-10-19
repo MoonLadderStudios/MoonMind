@@ -360,6 +360,7 @@ export function SavedResultsSection({
         sourceExecution,
         workflowId,
         publication.allowedModes,
+        projection.entries.find((entry) => entry.artifactId === savedWorkRef),
       );
       setDraft(next);
       // Stay open once shown, so filling in the base does not hide it.
