@@ -29,6 +29,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from api_service.services.checkpoint_branch_service import CheckpointBranchService
     from api_service.services.checkpoint_branch_turn_execution import (
+        admit_checkpoint_branch_turn_instruction,
         get_checkpoint_branch_artifact_service,
     )
     from moonmind.schemas.agent_runtime_models import (
@@ -1121,6 +1122,37 @@ async def persist_checkpoint_branch_turn_terminal(
                     )
                 )
             )
+        if locked_turn.instruction_ref in refs_to_resolve:
+            # Pre-upgrade in-flight turns may predate instruction linking.
+            # Only the fenced owner can recover this exact recorded input,
+            # using its persisted request rather than submitted result refs.
+            async with async_session_maker() as artifact_session:
+                artifacts = get_checkpoint_branch_artifact_service(artifact_session)
+                try:
+                    manifest_ref = _require_durable_artifact_ref(
+                        locked_turn.step_execution_manifest_ref,
+                        path="stepExecutionManifestRef",
+                    )
+                    _manifest, manifest_bytes = await artifacts.read(
+                        artifact_id=manifest_ref.removeprefix("artifact://"),
+                        principal=_RETENTION_PRINCIPAL,
+                        admitted_principal=f"workflow:{branch.workflow_id}",
+                    )
+                    stored_request = AgentExecutionRequest.model_validate(
+                        json.loads(manifest_bytes)["agentExecutionRequest"]
+                    )
+                    await admit_checkpoint_branch_turn_instruction(
+                        branch=branch,
+                        turn=locked_turn,
+                        request=stored_request,
+                        artifacts=artifacts,
+                        principal=_RETENTION_PRINCIPAL,
+                        namespace=activity_identity.namespace,
+                    )
+                except Exception as exc:
+                    raise CheckpointBranchRetainedEvidenceError(
+                        "recorded branch instruction authority is unavailable"
+                    ) from exc
         replacements: dict[str, str] = {}
         saved_manifest_bytes: bytes | None = None
         for index, ref in enumerate(dict.fromkeys(refs_to_resolve)):
