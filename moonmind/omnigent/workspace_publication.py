@@ -310,8 +310,14 @@ class OmnigentWorkspacePublicationService:
             workspace_path=str(workspace),
         )
 
-    async def save_request_workspace(self, request: AgentExecutionRequest):
-        """Use the canonical archive contract and verify its remote bytes."""
+    async def save_request_workspace(
+        self, request: AgentExecutionRequest, *, publish_saved_work: bool = True,
+    ):
+        """Preserve checkpoint bytes; expose accepted captures as saved outputs.
+
+        A live-host recovery probe is provisional until its caller confirms
+        the stopped boundary. It keeps recovery bytes without publication.
+        """
         from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
         from moonmind.schemas.temporal_models import WorkspaceCheckpointCaptureInput
         from moonmind.omnigent.realizers.turn_delivery import execution_identity
@@ -392,6 +398,8 @@ class OmnigentWorkspacePublicationService:
                 "checkpointRef": ref,
                 "recoveryEvidence": recovery,
             }
+        if not publish_saved_work:
+            return workspace_evidence
         return {
             **workspace_evidence,
             **await self._index_saved_workspace(
@@ -438,7 +446,7 @@ class OmnigentWorkspacePublicationService:
             if entry["type"] == "file":
                 normalized.update(size=entry["bytes"], sha256=entry["digest"].removeprefix("sha256:"))
             elif entry["type"] == "symlink":
-                target = entry["target"].encode()
+                target = os.fsencode(entry["target"])
                 normalized.update(size=len(target), sha256=hashlib.sha256(target).hexdigest(), linkTarget=entry["target"])
             else:
                 raise ValueError("Saved checkpoint contains an unsupported entry")
