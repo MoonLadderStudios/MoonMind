@@ -24,23 +24,14 @@ a single active login, or a preferred-account argument are never
 consulted and can never merge people. Multiple external provider accounts
 are not multiple people (non-UUID machine principals are ignored).
 
-Consistency: the conversion-wide advisory claim is acquired before the
-authoritative inventory read and held through the single commit that
-runs transforms and records completion, so a concurrent mutation cannot
-slip between eligibility and publication. :func:`preflight` captures a
-fingerprint of the source (owner sets, unowned rows, secret holders,
-settings values, secret ciphertext hashes, and counts);
-:func:`apply_conversion` recomputes it and raises
-:class:`StaleAttributionError` when anything changed, so a change that
-preceded the claim cannot publish on stale attribution either. The
-fingerprint is a tripwire, not the enforcement: the claim plus the
-transaction is. No new lock/identity service: mutual exclusion reuses
-the ledger row plus a best-effort conversion-wide PostgreSQL advisory
-claim (SQLite falls back to the ledger row alone). No ``in_progress``
-row is ever committed: interruption before commit leaves nothing behind
-and a retry converges; a stale ``in_progress`` row from an older
-revision is reclaimed only while holding the conversion claim (which
-proves no live writer exists) and otherwise fails closed.
+Consistency: the existing conversion advisory claim serializes converters;
+transaction-held locks on the authoritative inventory tables exclude ordinary
+writers until publication. SQLite reserves its writer transaction instead.
+Preflight binds ownership, counts, and content hashes (including retained
+artifact children) to detect changes preceding those locks. Inspection errors
+roll back only their savepoint, never the transaction holding authority locks.
+No in-progress row is committed; interruption rolls back grants and completion
+together. Historical completion from an older revision is not current readiness.
 
 Reports carry counts, reason codes, and truncated identifier prefixes
 only — never emails, names, secret values, or resource content.
@@ -57,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, UniqueConstraint, and_, cast, func, select, text
+from sqlalchemy import String, UniqueConstraint, and_, cast, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -66,7 +57,7 @@ from api_service.db.models import Base, Uuid, mutable_json_dict
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_REVISION = "386_single_user_conversion_4346"
+SCHEMA_REVISION = "396_artifact_operator_recovery"
 
 DEPLOYMENT_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -296,7 +287,8 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
     ("temporal_execution_sources", "owner_id", "user_temporal"),
     ("workflow_execution_source_mappings", "owner_id", "user_temporal"),
     ("managed_agent_oauth_sessions", "requested_by_user_id", "uuid_text"),
-    ("temporal_artifacts", "created_by_principal", "uuid_text"),
+    ("temporal_artifacts", "created_by_principal", "artifact_principal"),
+    ("temporal_artifact_use_claims", "owner_principal", "active_artifact_claim"),
 )
 
 # Null-owner rows in these tables are ambiguous retained data, not
@@ -329,9 +321,14 @@ _SUBSYSTEM_BY_SURFACE: dict[str, str] = {
     "preset_recents": "presets",
     "recurring_workflow_definitions": "schedules",
     "temporal_artifacts": "artifacts",
-    "workflow_artifacts": "artifacts",
+    "workflow_artifacts": "workflows",
+    "temporal_artifact_links": "artifacts",
+    "temporal_artifact_pins": "artifacts",
+    "temporal_artifact_use_claims": "artifacts",
+    "temporal_artifact_deletion_intents": "artifacts",
     "temporal_executions": "temporal",
     "temporal_execution_sources": "temporal",
+    "workflow_execution_source_mappings": "temporal",
     "workflow_runs": "workflows",
 }
 
@@ -395,6 +392,124 @@ async def _probe_count(
         return None
 
 
+_ARTIFACT_EVIDENCE_TABLES = (
+    "temporal_artifacts", "temporal_artifact_links", "temporal_artifact_pins",
+    "temporal_artifact_use_claims", "temporal_artifact_deletion_intents",
+    "workflow_artifacts",
+)
+
+
+_ARTIFACT_MACHINE_PRINCIPALS = ("operator", "system", "agent_workflow", "agent_runtime")
+_ARTIFACT_MACHINE_PREFIXES = ("service:", "workflow:", "system:")
+# SQL's default space-only trim would mistake a whitespace-only suffix for a
+# machine identity. Match Python str.strip across SQLite and PostgreSQL.
+_PRINCIPAL_WHITESPACE = (
+    "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def _is_artifact_machine_principal(raw: Any) -> bool:
+    value = str(raw or "").strip()
+    return value in _ARTIFACT_MACHINE_PRINCIPALS or any(
+        value.startswith(prefix) and bool(value[len(prefix):].strip())
+        for prefix in _ARTIFACT_MACHINE_PREFIXES
+    )
+
+
+def _uses_reserved_disabled_artifact_scope() -> bool:
+    """Identify the built-in disabled actor; callers must rule out a real User."""
+    from moonmind.config.settings import settings
+    from moonmind.security.auth_modes_4120 import is_disabled_local_mode
+
+    return is_disabled_local_mode() and _looks_like_uuid(
+        settings.oidc.DEFAULT_USER_ID or DEPLOYMENT_SUBJECT_ID
+    ) == DEPLOYMENT_SUBJECT_ID
+
+
+async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
+    """Probe for work without loading artifact rows or retained child content.
+
+    This only selects at most one ID; a no-match query can still scan the
+    table. Unknown, null and malformed owners require authoritative inspection.
+    The probe never supplies attribution or grants recovery.
+    """
+    from api_service.db.models import TemporalArtifact
+    from moonmind.config.settings import settings
+    from moonmind.security.auth_modes_4120 import is_disabled_local_mode
+
+    def stripped(value):
+        return func.ltrim(
+            func.rtrim(value, _PRINCIPAL_WHITESPACE), _PRINCIPAL_WHITESPACE,
+        )
+
+    creator = func.coalesce(TemporalArtifact.created_by_principal, "")
+    normalized = stripped(creator)
+    no_recovery_needed = or_(
+        normalized.in_(_ARTIFACT_MACHINE_PRINCIPALS),
+        *(and_(
+            # LIKE would treat uppercase prefixes as machines on SQLite.
+            func.substr(normalized, 1, len(prefix)) == prefix,
+            stripped(func.substr(normalized, len(prefix) + 1)) != "",
+        ) for prefix in _ARTIFACT_MACHINE_PREFIXES),
+    )
+    if is_disabled_local_mode():
+        default_owner = _looks_like_uuid(
+            settings.oidc.DEFAULT_USER_ID or DEPLOYMENT_SUBJECT_ID
+        )
+        if default_owner is not None:
+            # The unchanged raw-owner equality already admits this exact
+            # disabled request creator, even without a retained User row.
+            no_recovery_needed = or_(no_recovery_needed, creator == default_owner)
+    try:
+        async with session.begin_nested():
+            pending = (
+                await session.execute(
+                    select(TemporalArtifact.artifact_id)
+                    .where(
+                        TemporalArtifact.operator_recovery_granted.is_not(True),
+                        ~no_recovery_needed,
+                    )
+                    .limit(1)
+                )
+            ).scalars().first()
+    except Exception as exc:
+        if _is_absent_table_error(exc):
+            return False
+        raise
+    return pending is not None
+
+
+async def _lock_conversion_evidence(session: AsyncSession) -> None:
+    """Hold ordinary authority writers outside the inventory/commit interval.
+
+    The converter advisory claim alone cannot exclude ordinary writers. Lock
+    precisely the tables read by attribution, including empty tables where a
+    second human could appear. Missing tables in partial schemas have no rows.
+    """
+    dialect = session.get_bind().dialect.name
+    if dialect == "sqlite":
+        # SQLite has no table locks. Acquire its writer reservation before any
+        # savepoint so releasing an inspection savepoint cannot end protection.
+        await session.execute(text("BEGIN IMMEDIATE"))
+        return
+    if dialect != "postgresql":
+        raise ConcurrentConversionError("conversion requires an authority writer lock")
+    from sqlalchemy import inspect as sa_inspect
+
+    connection = await session.connection()
+    present = set(await connection.run_sync(lambda c: sa_inspect(c).get_table_names()))
+    names = {"user", "user_profile", "settings_overrides"}
+    names.update(t for t, _c, _k in _PRINCIPAL_SURFACES)
+    names.update(t for t, _c in _UNOWNED_TRACKED)
+    names.update(_UNOWNED_CONJUNCTIONS)
+    names.update(_ARTIFACT_EVIDENCE_TABLES)
+    quoted = ", ".join('"' + name + '"' for name in sorted(names & present))
+    if quoted:
+        await session.execute(text(f"LOCK TABLE {quoted} IN SHARE ROW EXCLUSIVE MODE NOWAIT"))
+
+
 async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     """Trace every retained user reference (SQL + serialized + in-flight).
 
@@ -407,6 +522,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     users = (await session.execute(select(User.id))).scalars().all()
     inv.user_ids = sorted(str(u) for u in users)
     user_set = set(inv.user_ids)
+    preserve_deployment_artifacts = (
+        _uses_reserved_disabled_artifact_scope()
+        and DEPLOYMENT_SUBJECT_ID not in user_set
+    )
 
     from api_service.db.models import User as _U
 
@@ -420,115 +539,82 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         if table is None or column_name not in table.c:
             continue
         col = table.c[column_name]
-        if kind == "user_temporal":
-            owner_type_col = table.c.get("owner_type")
-            try:
-                if owner_type_col is not None:
-                    rows = (
-                        await session.execute(
-                            select(col, owner_type_col).where(col.is_not(None))
-                        )
-                    ).all()
-                    values = [
-                        str(v)
-                        for v, t in rows
-                        if str(t or "").lower() == "user" and v is not None
-                    ]
-                else:
-                    rows = (
-                        await session.execute(
-                            select(col).where(col.is_not(None))
-                        )
-                    ).all()
-                    values = [str(r[0]) for r in rows if r[0] is not None]
-            except Exception as exc:
-                # A failed principal read leaves attribution unknown: roll
-                # back only this surface, then classify. An absent table
-                # holds no rows (skip); any other failure is recorded so
-                # the disposition refuses instead of converting without
-                # this evidence.
-                try:
-                    await session.rollback()
-                except Exception:
-                    # The surface read already failed; a failed rollback
-                    # must not mask the classification below.
-                    pass
-                if not _is_absent_table_error(exc):
-                    _record_inventory_error(inv, f"{table_name}.{column_name}")
-                continue
-            for raw in values:
-                norm = _looks_like_uuid(raw)
-                if norm:
-                    principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-            total = await _probe_count(
-                session, table, col,
-                inv=inv, surface=f"count:{table_name}.{column_name}",
-            )
-            if total is not None:
-                resource_counts[f"{table_name}.{column_name}"] = total
-            continue
-        if kind == "uuid_text":
-            try:
-                rows = (
-                    await session.execute(select(col).where(col.is_not(None)))
-                ).all()
-            except Exception as exc:
-                # Same classify-and-record rule as above: an absent table
-                # is empty evidence, any other failure is unknown evidence.
-                try:
-                    await session.rollback()
-                except Exception:
-                    # The surface read already failed; a failed rollback
-                    # must not mask the classification below.
-                    pass
-                if not _is_absent_table_error(exc):
-                    _record_inventory_error(inv, f"{table_name}.{column_name}")
-                continue
-            for (raw,) in rows:
-                if raw is None or str(raw).strip() == "":
-                    continue
-                norm = _looks_like_uuid(str(raw).strip())
-                if norm:
-                    principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-            total = await _probe_count(
-                session, table, col,
-                inv=inv, surface=f"count:{table_name}.{column_name}",
-            )
-            if total is not None:
-                resource_counts[f"{table_name}.{column_name}"] = total
-            continue
-        # uuid_fk
+        stmt = select(col).where(col.is_not(None))
+        if kind == "active_artifact_claim":
+            # Expired claims no longer protect retention or count quota. Their
+            # owner, like pin/deletion actors, is preserved provenance only.
+            stmt = stmt.where(table.c.expires_at > func.now())
+        if kind == "user_temporal" and "owner_type" in table.c:
+            stmt = stmt.where(func.lower(cast(table.c.owner_type, String)) == "user")
         try:
-            rows = (
-                await session.execute(select(col).where(col.is_not(None)))
-            ).all()
+            async with session.begin_nested():
+                rows = (await session.execute(stmt)).all()
         except Exception as exc:
-            # Same classify-and-record rule as above: an absent table is
-            # empty evidence, any other failure is unknown evidence.
-            try:
-                await session.rollback()
-            except Exception:
-                # The surface read already failed; a failed rollback must
-                # not mask the classification below.
-                pass
             if not _is_absent_table_error(exc):
                 _record_inventory_error(inv, f"{table_name}.{column_name}")
             continue
         for (raw,) in rows:
-            if raw is None:
+            if (
+                preserve_deployment_artifacts
+                and kind in {"artifact_principal", "active_artifact_claim"}
+                and raw == DEPLOYMENT_SUBJECT_ID
+            ):
+                # Built-in account-free scope is retained, not a person alias.
+                # A persisted zero User disables this classification entirely.
                 continue
             norm = _looks_like_uuid(raw)
-            if norm is None:
-                continue
-            if norm == DEPLOYMENT_SUBJECT_ID:
-                continue
-            principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
+            if norm and not (kind == "uuid_fk" and norm == DEPLOYMENT_SUBJECT_ID):
+                principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
+            elif kind in {"artifact_principal", "active_artifact_claim"} and not _is_artifact_machine_principal(raw):
+                # Unknown text is not proof of a machine or a person.
+                _record_inventory_error(inv, f"principal:{table_name}.{column_name}")
         total = await _probe_count(
             session, table, col,
             inv=inv, surface=f"count:{table_name}.{column_name}",
         )
         if total is not None:
             resource_counts[f"{table_name}.{column_name}"] = total
+
+    artifact_content_entries: list[str] = []
+    for table_name in _ARTIFACT_EVIDENCE_TABLES:
+        table = metadata.tables.get(table_name)
+        if table is None:
+            continue
+        # Conversion-owned output is not source attribution. Everything else,
+        # including child authority and quarantine, binds stale preflight checks.
+        columns = [c for c in table.c if c.name != "operator_recovery_granted"]
+        try:
+            async with session.begin_nested():
+                rows = (await session.execute(select(*columns))).all()
+        except Exception as exc:
+            if not _is_absent_table_error(exc):
+                _record_inventory_error(inv, f"artifact_evidence:{table_name}")
+            continue
+        resource_counts[f"{table_name}.rows"] = len(rows)
+        for row in rows:
+            artifact_content_entries.append(table_name + ":" + _canonical(list(row)))
+        if table_name == "temporal_artifacts":
+            for row in rows:
+                # Deployment attestation alone cannot reconstruct a lost human
+                # raw owner. Refuse until that disposition has an owned design.
+                if row._mapping["created_by_principal"] is None:
+                    _record_inventory_error(inv, "artifact_recovery:missing_creator")
+
+    # Live parents need their owning transforms even when machine-owned and
+    # their optional human owner columns are empty. Historical artifact links
+    # alone do not invent a parent or an unrelated transform requirement.
+    for table_name in (
+        "temporal_executions", "temporal_execution_sources",
+        "workflow_execution_source_mappings", "workflow_runs",
+    ):
+        table = metadata.tables.get(table_name)
+        if table is not None:
+            total = await _probe_count(
+                session, table, next(iter(table.primary_key.columns)),
+                inv=inv, surface=f"count:{table_name}.rows",
+            )
+            if total is not None:
+                resource_counts[f"{table_name}.rows"] = total
 
     inv.principals = {k: sorted(v) for k, v in principals.items()}
     all_principals = sorted({p for vs in principals.values() for p in vs})
@@ -653,7 +739,8 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         from api_service.db.models import UserProfile
         from api_service.services.profile_secret_migration import LEGACY_FIELDS
 
-        secret_rows = (await session.execute(select(UserProfile))).scalars().all()
+        async with session.begin_nested():
+            secret_rows = (await session.execute(select(UserProfile))).scalars().all()
         holders = set()
         for p in secret_rows:
             for column, _short in LEGACY_FIELDS:
@@ -683,12 +770,6 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         # secret attribution unknown, so clear the holders and record it
         # rather than converting without secret attribution.
         inv.secret_holders = []
-        try:
-            await session.rollback()
-        except Exception:
-            # The surface read already failed; a failed rollback must not
-            # mask the classification below.
-            pass
         if not _is_absent_table_error(exc):
             _record_inventory_error(inv, "profile_secrets")
 
@@ -703,7 +784,8 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     try:
         from api_service.db.models import SettingsOverride
 
-        rows = (await session.execute(select(SettingsOverride))).scalars().all()
+        async with session.begin_nested():
+            rows = (await session.execute(select(SettingsOverride))).scalars().all()
         by_context: dict[tuple[str, str, str], dict[str, set[str]]] = {}
         for r in rows:
             uid = _looks_like_uuid(getattr(r, "user_id", None))
@@ -739,12 +821,6 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         # evidence, so clear collisions and record it rather than
         # converting blind.
         inv.settings_collisions = []
-        try:
-            await session.rollback()
-        except Exception:
-            # The surface read already failed; a failed rollback must not
-            # mask the classification below.
-            pass
         if not _is_absent_table_error(exc):
             _record_inventory_error(inv, "settings")
 
@@ -753,6 +829,8 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             hashlib.sha256(
                 "\n".join(sorted(settings_content_entries)).encode()
             ).hexdigest()
+            + "|"
+            + hashlib.sha256("\n".join(sorted(artifact_content_entries)).encode()).hexdigest()
             + "|"
             + hashlib.sha256(
                 "\n".join(sorted(profile_content_entries)).encode()
@@ -809,7 +887,13 @@ async def evaluate_disposition(
                                 deployment_owned_tables,
                                 operator_authorized=operator_authorized)
     inv = await collect_inventory(session)
+    return _decision_from_inventory(inv, options)
 
+
+def _decision_from_inventory(
+    inv: ConversionInventory, options: ConversionOptions
+) -> ConversionDecision:
+    """Evaluate the same snapshot that binds preflight or locked apply."""
     alias_of: dict[str, int] = {}
     for idx, group in enumerate(options.alias_groups):
         for member in group:
@@ -954,6 +1038,7 @@ class ApplyResult:
 
     def to_sanitized_dict(self) -> dict[str, Any]:
         return {
+            "schema_revision": SCHEMA_REVISION,
             "digest": self.digest,
             "published": self.published,
             "decision": self.decision.to_sanitized_dict(),
@@ -978,13 +1063,7 @@ async def preflight(
                                 operator_authorized=operator_authorized)
     inv = await collect_inventory(session)
     fingerprint = inv.fingerprint()
-    decision = await evaluate_disposition(
-        session,
-        alias_groups=alias_groups,
-        collision_resolutions=collision_resolutions,
-        deployment_owned_tables=deployment_owned_tables,
-        operator_authorized=operator_authorized,
-    )
+    decision = _decision_from_inventory(inv, options)
     digest = compute_digest(fingerprint, options)
     try:
         await session.rollback()
@@ -1020,14 +1099,16 @@ async def _try_conversion_claim(session: AsyncSession) -> bool | None:
     conversion holds it, and None when the dialect has no advisory locks
     (SQLite and other hermetic test backends) so the caller falls back to
     the committed ledger-row path. A failed probe rolls back only its own
-    savepoint, never the caller's work. The session-level lock survives
-    the commit below and is released in the apply ``finally``.
+    savepoint, never the caller's work. The transaction-level claim ends
+    atomically with commit/rollback, independent of connection-pool checkout.
     """
+    if session.get_bind().dialect.name == "sqlite":
+        return None
     probe = await session.begin_nested()
     try:
         claimed = (
             await session.execute(
-                text("SELECT pg_try_advisory_lock(:key)"),
+                text("SELECT pg_try_advisory_xact_lock(:key)"),
                 {"key": _conversion_advisory_key()},
             )
         ).scalar()
@@ -1044,21 +1125,8 @@ async def _try_conversion_claim(session: AsyncSession) -> bool | None:
 
 
 async def _release_conversion_claim(session: AsyncSession) -> None:
-    """Release a claim acquired by :func:`_try_conversion_claim`."""
-    try:
-        await session.execute(
-            text("SELECT pg_advisory_unlock(:key)"),
-            {"key": _conversion_advisory_key()},
-        )
-    except Exception:
-        logger.debug("single-user conversion advisory unlock skipped", exc_info=True)
-    finally:
-        try:
-            await session.rollback()
-        except Exception:
-            # Unlock acts immediately at the session level; ending the
-            # statement's transaction is cleanup that must not fail loudly.
-            pass
+    """End the transaction holding a claim acquired by the helper above."""
+    await session.rollback()
 
 
 def _replay_stored_result(
@@ -1083,13 +1151,106 @@ def _replay_stored_result(
     )
     return ApplyResult(
         digest=digest,
-        published=bool(stored.get("published", False)),
+        published=(stored.get("schema_revision") == SCHEMA_REVISION
+                   and bool(stored.get("published", False))),
         decision=restored,
         transforms=dict(stored.get("transforms", {})),
     )
 
 
+def _is_production_completion(result: dict[str, Any]) -> bool:
+    """Require current committed production proof, not truthy serialized data."""
+    if result.get("schema_revision") != SCHEMA_REVISION:
+        return False
+    decision = result.get("decision")
+    if (
+        result.get("production_transforms_completed") is not True
+        or result.get("published") is not True
+        or not isinstance(decision, dict)
+        or decision.get("eligible") is not True
+    ):
+        return False
+    outcomes = result.get("transforms")
+    if not isinstance(outcomes, dict) or any(
+        not isinstance(outcomes.get(name), dict)
+        for name in DEFAULT_SUBSYSTEM_TRANSFORMS
+    ):
+        return False
+    artifact_outcome = outcomes["artifacts"]
+    if any(
+        type(artifact_outcome.get(name)) is not int
+        for name in ("recovery_grants", "preserved")
+    ):
+        return False
+    if decision.get("disposition") not in {"fresh_init", "eligible_conversion"}:
+        return False
+    return (
+        0 <= artifact_outcome["recovery_grants"] <= artifact_outcome["preserved"]
+    )
+
+
+async def _completed_production_result(session: AsyncSession) -> ApplyResult | None:
+    """Read one certified current cutover without materializing retained history.
+
+    The marker is committed only after the exact production transforms run.
+    Generic completion rows, custom transforms and older revisions cannot
+    establish that artifact recovery was converted. Outstanding recovery
+    work requires a new authoritative preflight and locked apply instead.
+    """
+    ledger_cls = _ledger_class()
+    stored = ledger_cls.result_json
+    try:
+        async with session.begin_nested():
+            row = (
+                await session.execute(
+                    select(ledger_cls)
+                    .where(
+                        ledger_cls.status == "complete",
+                        stored["schema_revision"].as_string() == SCHEMA_REVISION,
+                        stored["published"].as_boolean().is_(True),
+                        stored["decision"]["eligible"].as_boolean().is_(True),
+                        stored["decision"]["disposition"].as_string().in_(
+                            ("fresh_init", "eligible_conversion")
+                        ),
+                        stored["production_transforms_completed"]
+                        .as_boolean().is_(True),
+                        stored["transforms"]["artifacts"]["recovery_grants"]
+                        .as_integer() >= 0,
+                        stored["transforms"]["artifacts"]["preserved"]
+                        .as_integer() >= 0,
+                    )
+                    .limit(1)
+                )
+            ).scalars().first()
+    except Exception as exc:
+        if _is_absent_table_error(exc):
+            return None
+        raise
+    if row is None:
+        return None
+    result = dict(row.result_json)
+    if not _is_production_completion(result):
+        return None
+    if await _has_pending_artifact_recovery(session):
+        return None
+    return _replay_stored_result(
+        row.preflight_digest,
+        ConversionDecision(
+            disposition="unresolved_refusal", eligible=False,
+            reason_code="missing_completion",
+        ),
+        result,
+    )
+
+
 TransformFn = Callable[..., Any]
+
+
+def _uses_production_transforms(transforms: dict[str, TransformFn]) -> bool:
+    return transforms.keys() == DEFAULT_SUBSYSTEM_TRANSFORMS.keys() and all(
+        transforms[name] is fn
+        for name, fn in DEFAULT_SUBSYSTEM_TRANSFORMS.items()
+    )
 
 
 async def _run_transform(fn: TransformFn, session: AsyncSession, eligible: list[str]):
@@ -1140,22 +1301,26 @@ async def apply_conversion(
     holding the conversion claim (which proves no live writer exists);
     without the claim it fails closed with
     :class:`ConcurrentConversionError` rather than stealing a live writer.
-    Reruns with the same digest replay the recorded result, and a missing
-    stored completion replays as unpublished, never as success.
+    Custom reruns with the same digest replay the recorded result. The
+    exact production transforms repair uncertified or pending recovery in
+    place, atomically with their effects, rather than replaying an old cutover.
     """
     if not operator_authorized:
         raise ConversionAuthorizationError(
             "single-user conversion apply requires explicit operator authorization"
         )
     transforms = dict(transforms or {})
+    production_transforms = _uses_production_transforms(transforms)
     options = preflight_result.options
 
-    claimed = await _try_conversion_claim(session)
-    if claimed is False:
-        raise ConcurrentConversionError(
-            "another single-user conversion holds this database"
-        )
+    claimed = None
     try:
+        claimed = await _try_conversion_claim(session)
+        if claimed is False:
+            raise ConcurrentConversionError(
+                "another single-user conversion holds this database"
+            )
+        await _lock_conversion_evidence(session)
         fresh = await collect_inventory(session)
         fresh_fingerprint = fresh.fingerprint()
         if fresh_fingerprint != preflight_result.fingerprint:
@@ -1169,13 +1334,13 @@ async def apply_conversion(
                 "preflight digest no longer binds the current source and options"
             )
 
-        decision = await evaluate_disposition(
-            session,
-            alias_groups=[set(g) for g in options.alias_groups],
-            collision_resolutions=dict(options.collision_resolutions),
-            deployment_owned_tables=set(options.deployment_owned_tables),
+        decision_options = normalize_options(
+            options.alias_groups,
+            options.collision_resolutions,
+            options.deployment_owned_tables,
             operator_authorized=True,
         )
+        decision = _decision_from_inventory(fresh, decision_options)
         if not decision.eligible:
             return ApplyResult(
                 digest=preflight_result.digest, published=False, decision=decision
@@ -1211,10 +1376,17 @@ async def apply_conversion(
             if existing is not None:
                 if str(getattr(existing, "status", "")) == "complete":
                     stored = dict(getattr(existing, "result_json", None) or {})
-                    return _replay_stored_result(
-                        preflight_result.digest, decision, stored
-                    )
-                if claimed is True:
+                    if not production_transforms or (
+                        _is_production_completion(stored)
+                        and not await _has_pending_artifact_recovery(session)
+                    ):
+                        return _replay_stored_result(
+                            preflight_result.digest, decision, stored
+                        )
+                    # Custom/no-op completion or a cleared recovery grant
+                    # requires real defaults under current locked eligibility.
+                    # Replace the old result only together with those effects.
+                elif claimed is True:
                     # We hold the conversion-wide claim, so no live writer
                     # can own this row: it is a stale remnant of an older
                     # revision that committed ``in_progress`` before
@@ -1225,6 +1397,7 @@ async def apply_conversion(
                     )
                     await session.delete(existing)
                     await session.flush()
+                    existing = None
                 else:
                     raise ConcurrentConversionError(
                         "a conversion ledger row is in progress and liveness "
@@ -1256,14 +1429,24 @@ async def apply_conversion(
                 decision=decision,
                 transforms=outcomes,
             )
+            stored_result = result.to_sanitized_dict()
+            if production_transforms:
+                # Persist proof of actual production execution, not merely a
+                # complete row or caller-supplied transform outcome shape.
+                stored_result["production_transforms_completed"] = True
             try:
-                session.add(
-                    ledger_cls(
-                        preflight_digest=preflight_result.digest,
-                        status="complete",
-                        result_json=result.to_sanitized_dict(),
+                if existing is None:
+                    session.add(
+                        ledger_cls(
+                            preflight_digest=preflight_result.digest,
+                            status="complete",
+                            result_json=stored_result,
+                        )
                     )
-                )
+                else:
+                    # Repair and grants commit together; any failure retains
+                    # the prior completion and rolls back the new authority.
+                    existing.result_json = stored_result
                 await session.commit()
             except IntegrityError:
                 # A concurrent writer committed a ledger row for this digest
@@ -1282,9 +1465,13 @@ async def apply_conversion(
                     getattr(raced, "status", "")
                 ) == "complete":
                     stored = dict(getattr(raced, "result_json", None) or {})
-                    return _replay_stored_result(
-                        preflight_result.digest, decision, stored
-                    )
+                    if not production_transforms or (
+                        _is_production_completion(stored)
+                        and not await _has_pending_artifact_recovery(session)
+                    ):
+                        return _replay_stored_result(
+                            preflight_result.digest, decision, stored
+                        )
                 raise ConcurrentConversionError(
                     "conversion ledger conflicted without a completed winner"
                 )
@@ -1300,8 +1487,8 @@ async def apply_conversion(
             await session.rollback()
             raise
     finally:
-        if claimed:
-            await _release_conversion_claim(session)
+        # Refusals and replays must release the authority locks too.
+        await _release_conversion_claim(session)
 
 
 async def startup_guard_decision(
@@ -1311,6 +1498,10 @@ async def startup_guard_decision(
     deployment_owned_tables=None,
 ) -> ConversionDecision:
     """Read-only guard for startup/upgrade routes: never writes, never seeds."""
+    if not (alias_groups or collision_resolutions or deployment_owned_tables):
+        completed = await _completed_production_result(session)
+        if completed is not None:
+            return completed.decision
     return await evaluate_disposition(
         session,
         alias_groups=alias_groups,
@@ -1465,14 +1656,67 @@ async def profile_secrets_transform(
     }
 
 
+async def artifacts_transform(
+    session: AsyncSession, eligible_ids: list[str]
+) -> dict[str, Any]:
+    """Grant proven historical human recovery without changing provenance.
+
+    Only the guarded entrypoint owns this write. Caller metadata, schema
+    migration, machine owners and ordinary artifact creation cannot grant it.
+    Original creators continue to own quota and in-flight claim scopes.
+    """
+    from api_service.db.models import TemporalArtifact
+
+    try:
+        async with session.begin_nested():
+            rows = (await session.execute(select(TemporalArtifact))).scalars().all()
+    except Exception as exc:
+        if _is_absent_table_error(exc):
+            return {"recovery_grants": 0, "preserved": 0}
+        raise
+    preserve_deployment_scope = False
+    if _uses_reserved_disabled_artifact_scope() and any(
+        row.created_by_principal == DEPLOYMENT_SUBJECT_ID for row in rows
+    ):
+        from api_service.db.models import User
+
+        # The owning apply holds the User-table lock. eligible_ids also carries
+        # secret holders, so it cannot establish whether a real zero User exists.
+        zero_user = (await session.execute(
+            select(User.id).where(User.id == UUID(DEPLOYMENT_SUBJECT_ID)).limit(1)
+        )).scalar_one_or_none()
+        preserve_deployment_scope = zero_user is None
+    eligible = set(eligible_ids)
+    granted = 0
+    for row in rows:
+        if (
+            preserve_deployment_scope
+            and row.created_by_principal == DEPLOYMENT_SUBJECT_ID
+        ):
+            # Preserve creator, quota, claims and any existing grant verbatim.
+            continue
+        owner = _looks_like_uuid(row.created_by_principal)
+        if owner:
+            if owner not in eligible:
+                raise StaleAttributionError("artifact creator is not proven eligible")
+            if not row.operator_recovery_granted:
+                row.operator_recovery_granted = True
+                granted += 1
+        elif not _is_artifact_machine_principal(row.created_by_principal):
+            raise StaleAttributionError("artifact creator has no supported recovery disposition")
+    await session.flush()
+    return {"recovery_grants": granted, "preserved": len(rows)}
+
+
 #: Production subsystem transforms registered into the shared entrypoint.
 #: ``profile_secrets`` is the concrete #4349 conversion. Settings, presets,
-#: schedules, artifacts, temporal, and workflow transforms are owned by
+#: schedules, temporal, and workflow transforms are owned by
 #: subsystem child issues; until they register here, an eligible source
 #: holding those subsystems refuses with ``missing_transform_coverage``
 #: rather than exposing a partially converted result.
 DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
     "profile_secrets": profile_secrets_transform,
+    "artifacts": artifacts_transform,
 }
 
 
@@ -1487,15 +1731,28 @@ async def run_guarded_upgrade(
 ) -> ApplyResult:
     """Shared transaction/cutover entrypoint for every upgrade/startup route.
 
-    This is the only supported way to publish a conversion candidate:
-    capture a consistent preflight, then apply it with real subsystem
-    transforms through versioned migration 386 + ledger idempotency.
+    New candidates capture a consistent preflight, then apply it with real
+    subsystem transforms through versioned migration 386 + ledger idempotency.
+    Default restarts probe for outstanding artifact recovery before reusing
+    certified completion without loading history. Explicit evidence or transforms take
+    the authoritative preflight/apply path.
     Alembic revision 386 creates only the ledger table and never applies a
     destructive conversion as a schema-upgrade side effect; CLI, worker, and
     HTTP startup routes must call this entrypoint instead of invoking
     subsystem conversions directly. Refusals perform no conversion-side
     writes; stale sources raise :class:`StaleAttributionError`.
     """
+    if not operator_authorized:
+        raise ConversionAuthorizationError(
+            "single-user conversion apply requires explicit operator authorization"
+        )
+    if transforms is None and not (
+        alias_groups or collision_resolutions or deployment_owned_tables
+    ):
+        completed = await _completed_production_result(session)
+        if completed is not None:
+            await session.rollback()
+            return completed
     selected = (
         dict(DEFAULT_SUBSYSTEM_TRANSFORMS) if transforms is None else dict(transforms)
     )
