@@ -506,3 +506,64 @@ def test_container_cli_prints_authoritative_terminal_cause(
     assert result.exit_code == 1
     assert "failureClass=image_not_found" in result.output
     assert "message=deployment image source is absent" in result.output
+
+
+
+@pytest.mark.parametrize("state,exit_code", [("succeeded", 0), ("failed", 1)])
+def test_container_cli_json_preserves_result_and_exit_status(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, state: str, exit_code: int
+) -> None:
+    from dataclasses import asdict
+
+    spec_path = tmp_path / "job.json"
+    spec_path.write_text(
+        '{"imageSourceRef":"tactics-unreal","command":["true"],'
+        '"resources":{"cpuMillis":1000,"memoryMiB":512}}'
+    )
+    receipt = ContainerJobResult(
+        job_id="container-job:receipt",
+        state=state,
+        exit_code=exit_code,
+        failure_class="execution_failed" if exit_code else None,
+        message="build failed" if exit_code else None,
+        logs_ref="artifact:logs",
+        artifacts_ref="artifact:outputs",
+        log_tail=("terminal output",),
+        log_error="logs unavailable",
+    )
+    monkeypatch.setattr(
+        "moonmind.cli.run_container_job", lambda *_args, **_kwargs: receipt
+    )
+    result = CliRunner().invoke(
+        app, ["container", "run", "--spec", str(spec_path), "--json"]
+    )
+    assert result.exit_code == exit_code
+    assert json.loads(result.stdout) == json.loads(json.dumps(asdict(receipt)))
+
+
+def test_container_cli_json_redacts_failure_diagnostics(tmp_path, monkeypatch) -> None:
+    spec_path = tmp_path / "job.json"
+    spec_path.write_text(
+        '{"imageSourceRef":"tactics-unreal","command":["true"],"resources":{"cpuMillis":1000,"memoryMiB":512}}'
+    )
+    secret = "ghp_" + "x" * 40
+    receipt = ContainerJobResult(
+        job_id="container-job:receipt",
+        state="failed",
+        exit_code=1,
+        failure_class="execution_failed",
+        message=f"request rejected: {secret}",
+        logs_ref=None,
+        artifacts_ref=None,
+        log_tail=(f"failure: {secret}",),
+        log_error=f"unavailable: {secret}",
+    )
+    monkeypatch.setattr(
+        "moonmind.cli.run_container_job", lambda *_args, **_kwargs: receipt
+    )
+    result = CliRunner().invoke(
+        app, ["container", "run", "--spec", str(spec_path), "--json"]
+    )
+    assert result.exit_code == 1
+    assert secret not in result.stdout
+    assert json.loads(result.stdout)["state"] == "failed"
