@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 import re
 import runpy
 import sqlite3
@@ -2612,11 +2613,18 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
                 read_repository_access_snapshot=read_snapshot
             ),
         )
+        # Use the controlled clone writer's identity; root can hand off to
+        # the normal non-root runtime identity required by the clone boundary.
         materialized = await OmnigentWorkspaceMaterializer(
             command_runner=runner,
             workspace_root=tmp_path,
             repository_credential_service=credentials,
-        ).materialize(execution_request, plan=plan)
+        ).materialize(
+            execution_request,
+            plan=plan,
+            runtime_uid=os.getuid() or 1000,
+            runtime_gid=os.getgid() or 1000,
+        )
 
         clone_argv, clone_input = captured[0]
         assert materialized["kind"] == "bind"
