@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 import shutil
 import tarfile
 from datetime import UTC, datetime, timedelta
@@ -660,6 +661,14 @@ class NativeDocker(StaticCodexDocker):
             self.server.host_name = self.container_name
             self.server.workspace = Path(self.mounts["/workspaces/run"]["src"])
             assert self.server.workspace.is_dir()
+            selected_uid = self.host_class.runtime["uid"]
+            selected_gid = self.host_class.runtime["gid"]
+            assert _options(argv, "--user") == [f"{selected_uid}:{selected_gid}"]
+            workspace_owner = self.server.workspace.stat()
+            assert (workspace_owner.st_uid, workspace_owner.st_gid) == (
+                selected_uid,
+                selected_gid,
+            )
             skills = self.mounts[self.launch_env["MOONMIND_ACTIVE_SKILLS_DIR"]]
             self.server.skills = Path(skills["src"])
             assert skills["type"] == "bind" and "readonly" in skills
@@ -1115,6 +1124,31 @@ async def native_journey(
         monkeypatch.setattr(docker_backend, "run_runtime_command", docker.command)
         monkeypatch.setattr(
             credential_materializers, "run_runtime_command", docker.command
+        )
+        # The controlled host writes through this process instead of Docker's
+        # uid namespace. Select its actual writer identity; root can still hand
+        # off to the normal positive runtime uid without weakening ownership.
+        resolve_host = production.OmnigentPlannedHostResolver.__call__
+
+        async def resolve_controlled_host(resolver, selected_plan):
+            host, policy = await resolve_host(resolver, selected_plan)
+            return (
+                host.model_copy(
+                    update={
+                        "runtime": {
+                            **host.runtime,
+                            "uid": os.getuid() or 1000,
+                            "gid": os.getgid() or 1000,
+                        },
+                    }
+                ),
+                policy,
+            )
+
+        monkeypatch.setattr(
+            production.OmnigentPlannedHostResolver,
+            "__call__",
+            resolve_controlled_host,
         )
         services = production.build_generic_omnigent_execution_services(
             session_factory=session_factory, artifact_gateway=gateway

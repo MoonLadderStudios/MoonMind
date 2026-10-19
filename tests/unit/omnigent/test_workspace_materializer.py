@@ -31,6 +31,12 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 from moonmind.workflows.executions.repository_contract import RepositoryIdentity
 
 
+# Controlled clone commands write as this process; root runners can hand off
+# to the normal positive runtime identity without relaxing the production gate.
+_CONTROLLED_UID = os.getuid() or 1000
+_CONTROLLED_GID = os.getgid() or 1000
+
+
 class _SelectedRepositoryCredentials:
     """Isolate clone transport/retry tests from acquisition (covered in #4009 journeys)."""
 
@@ -307,6 +313,8 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
             }
         ),
         plan=object(),
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
     )
 
     assert workspace["kind"] == "bind"
@@ -321,7 +329,7 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
     assert clone_input == b"tokeeeeeeeeee"
     assert "dependabot/npm_and_yarn/multi-2181bdc769" in joined
     assert captured[1][0][-2:] == [
-        "1000:1000",
+        f"{_CONTROLLED_UID}:{_CONTROLLED_GID}",
         "/work/temporal_sandbox/" + workspace_id + "/repo",
     ]
     assert captured[1][1] is None
@@ -409,6 +417,8 @@ async def test_materializer_provisions_commit_identity_for_the_clone(
             }
         ),
         plan=object(),
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
     )
 
     clone_argv = captured[0]
@@ -444,7 +454,9 @@ async def test_materializer_keeps_existing_authoritative_workspace(
                 "repository": "MoonLadderStudios/MoonMind",
                 "branch": "main",
             }
-        )
+        ),
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
     )
     assert (existing / "KEEP").exists()
 
@@ -874,6 +886,8 @@ async def test_materializer_clones_remote_default_branch_when_branch_is_omitted(
             }
         ),
         plan=object(),
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
     )
 
     clone_argv = captured[0]
@@ -1046,6 +1060,8 @@ async def test_materializer_retries_transient_clone_dns_failure(
             }
         ),
         plan=object(),
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
     )
 
     assert workspace["kind"] == "bind"
@@ -1125,6 +1141,8 @@ async def test_materializer_retries_clone_interrupted_mid_transfer(
             }
         ),
         plan=object(),
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
     )
 
     assert workspace["kind"] == "bind"
