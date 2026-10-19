@@ -119,7 +119,7 @@ def _extract_member(
         if resolved != contained and contained not in resolved.parents:
             raise _invalid("saved snapshot symlink escapes its root", path)
         target.symlink_to(link)
-        encoded = link.encode()
+        encoded = os.fsencode(link)
         return {
             "path": path,
             "type": "symlink",

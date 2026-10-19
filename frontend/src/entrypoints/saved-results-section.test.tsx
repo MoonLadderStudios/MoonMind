@@ -289,6 +289,41 @@ describe('Saved Results section', () => {
     expect(screen.getByText(/Publication started/)).toBeTruthy();
   });
 
+  it.each(['missing', 'inapplicable', 'failed', 'unknown'])(
+    'defaults to additive import when the delta output is %s',
+    async (status) => {
+      const artifacts = savedArtifacts();
+      const summary = artifacts[0]!.metadata.saved_work_summary!;
+      summary.outputs = summary.outputs.filter((output) => output.format === 'full_snapshot');
+      if (status !== 'missing') {
+        summary.outputs.push({ format: 'exact_baseline_delta', status, artifact_id: 'art-delta' });
+      }
+      renderSection({ artifacts });
+      fireEvent.submit(await openPublishForm());
+      expect(await screen.findByText(/Publication started/)).toBeTruthy();
+      expect(bodyOf(calls('/retry-publication')[0]).destination).toMatchObject({
+        repository: 'Owner/Repo',
+        baseBranch: 'main',
+        strategy: 'additive_import',
+      });
+    },
+  );
+
+  it('preserves an explicit strategy while refreshing saved results', async () => {
+    const view = renderSection();
+    const form = await openPublishForm();
+    fireEvent.click(
+      within(form).getByRole('button', { name: 'Change base or how saved work is applied' }),
+    );
+    fireEvent.change(within(form).getByLabelText('Apply saved work as'), {
+      target: { value: 'additive_import' },
+    });
+    view.rerenderWith({ artifacts: savedArtifacts() });
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Publication started/)).toBeTruthy();
+    expect(bodyOf(calls('/retry-publication')[0]).destination.strategy).toBe('additive_import');
+  });
+
   it('publishes artifacts from the selected run when the execution advances', async () => {
     renderSection({ runId: 'run-selected', execution: { ...failedExecution, runId: 'run-current' } });
     fireEvent.submit(await openPublishForm());
