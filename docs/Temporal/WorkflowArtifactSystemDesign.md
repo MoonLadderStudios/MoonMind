@@ -533,7 +533,8 @@ restricted raw recovery. Caller metadata cannot grant recovery. Quarantined
 bytes remain preview-only, and machine-created artifacts receive no human
 recovery grant. Original creator provenance, quota scopes, links, pins, and
 in-flight claim owners remain unchanged; the operator cannot release a legacy
-claim merely by receiving recovery access.
+claim merely by receiving recovery access. Historical pin/deletion actors and
+expired claims remain provenance; their actor labels do not require live accounts.
 
 The grant and current-revision completion record commit atomically. Authority
 writers are excluded while the guarded inventory is checked and transformed;
