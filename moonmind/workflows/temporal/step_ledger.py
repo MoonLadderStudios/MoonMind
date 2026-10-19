@@ -48,6 +48,7 @@ def _step_timing_payload(
     status: Any,
     started_at: Any,
     updated_at: datetime,
+    preserved: bool = False,
 ) -> dict[str, Any]:
     started = _parse_step_datetime(started_at)
     normalized_status = _normalize_replayed_step_status(status)
@@ -61,6 +62,7 @@ def _step_timing_payload(
             "elapsedMs": elapsed_ms,
             "serverNow": updated_at_iso,
             "precision": "live" if elapsed_ms is not None else "unavailable",
+            "preserved": preserved,
         }
     if normalized_status in TERMINAL_STEP_STATUSES and started is not None:
         duration_ms = _step_duration_ms(started, updated_at)
@@ -71,6 +73,7 @@ def _step_timing_payload(
             "elapsedMs": duration_ms,
             "serverNow": updated_at_iso,
             "precision": "fallback" if duration_ms is not None else "unavailable",
+            "preserved": preserved,
         }
     return {
         "startedAt": started.isoformat() if started is not None else None,
@@ -79,6 +82,7 @@ def _step_timing_payload(
         "elapsedMs": None,
         "serverNow": updated_at_iso,
         "precision": "unavailable",
+        "preserved": preserved,
     }
 
 
@@ -87,6 +91,7 @@ def refresh_step_timing(row: dict[str, Any], *, updated_at: datetime) -> None:
         status=row.get("status"),
         started_at=row.get("startedAt"),
         updated_at=updated_at,
+        preserved=isinstance(row.get("preservedFrom"), Mapping),
     )
 
 def _normalize_replayed_step_status(status: Any) -> str:
@@ -123,6 +128,17 @@ def default_step_workload() -> dict[str, Any] | None:
     return None
 
 
+def _has_semantic_output_ref(row: Mapping[str, Any]) -> bool:
+    artifacts = row.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return False
+    for key in ("outputSummary", "outputPrimary"):
+        value = artifacts.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 def _semantic_output_refs(row: Mapping[str, Any]) -> dict[str, str]:
     artifacts = row.get("artifacts")
     if not isinstance(artifacts, Mapping):
@@ -152,6 +168,22 @@ def _producing_attempt_identity(
 ) -> dict[str, Any] | None:
     logical_step_id = str(row.get("logicalStepId") or "").strip()
     if not logical_step_id:
+        return None
+    preserved_from = row.get("preservedFrom")
+    if isinstance(preserved_from, Mapping):
+        source_workflow_id = str(preserved_from.get("workflowId") or "").strip()
+        source_run_id = str(preserved_from.get("runId") or "").strip()
+        source_logical_step_id = str(
+            preserved_from.get("logicalStepId") or logical_step_id
+        ).strip()
+        source_execution_ordinal = _source_execution_ordinal_value(preserved_from)
+        if source_workflow_id and source_run_id and source_execution_ordinal >= 1:
+            return {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "logicalStepId": source_logical_step_id or logical_step_id,
+                "executionOrdinal": source_execution_ordinal,
+            }
         return None
     attempt = _source_execution_ordinal_value(row)
     if not workflow_id or not run_id or attempt < 1:
@@ -202,6 +234,8 @@ def _mark_step_requires_revalidation(
         "expected": dict(expected),
         "actual": actual,
     }
+    row.pop("preservedFrom", None)
+    row.pop("recoveryPreservation", None)
     row.pop("stateCheckpointRef", None)
     row["updatedAt"] = updated_at.isoformat()
 
@@ -238,6 +272,96 @@ def dependency_input_signatures(
         if signature is not None:
             signatures[dep_id] = signature
     return signatures
+
+
+def preserved_outputs_for_dependencies(
+    rows: list[dict[str, Any]],
+    logical_step_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Return semantic output refs from preserved direct dependencies."""
+
+    row_by_id = {
+        step_id: row
+        for row in rows
+        if (step_id := str(row.get("logicalStepId") or "").strip())
+    }
+    target_row = row_by_id.get(logical_step_id)
+    if target_row is None:
+        raise KeyError(f"Unknown logical step id: {logical_step_id}")
+
+    outputs: dict[str, dict[str, str]] = {}
+    for dependency_id in target_row.get("dependsOn") or []:
+        dep_id = str(dependency_id or "").strip()
+        dependency_row = row_by_id.get(dep_id)
+        if dependency_row is None or "preservedFrom" not in dependency_row:
+            continue
+        semantic_refs = _semantic_output_refs(dependency_row)
+        if semantic_refs:
+            output_payload: dict[str, Any] = dict(semantic_refs)
+            producing_attempt = _producing_attempt_identity(dependency_row)
+            if producing_attempt is not None:
+                output_payload["producingAttempt"] = producing_attempt
+            outputs[dep_id] = output_payload
+    return outputs
+
+
+def validate_preserved_dependency_outputs(
+    rows: list[dict[str, Any]],
+    *,
+    updated_at: datetime,
+) -> None:
+    """Gate preserved downstream output reuse against exact dependency signatures."""
+
+    row_by_id = {
+        step_id: row
+        for row in rows
+        if (step_id := str(row.get("logicalStepId") or "").strip())
+    }
+    for row in rows:
+        if not isinstance(row.get("preservedFrom"), Mapping):
+            continue
+        expected = row.get("dependencyInputs")
+        if expected is None:
+            continue
+        if not isinstance(expected, Mapping):
+            raise ValueError(
+                f"preserved step {row.get('logicalStepId')} has invalid dependency input metadata"
+            )
+        dependencies = [
+            str(dep or "").strip() for dep in row.get("dependsOn") or []
+        ]
+        for dependency_id in dependencies:
+            if not dependency_id:
+                continue
+            expected_signature = expected.get(dependency_id)
+            if not isinstance(expected_signature, Mapping):
+                raise ValueError(
+                    f"preserved step {row.get('logicalStepId')} requires "
+                    f"dependency input metadata for {dependency_id}"
+                )
+            dependency_row = row_by_id.get(dependency_id)
+            if dependency_row is None:
+                raise ValueError(
+                    f"preserved step {row.get('logicalStepId')} references "
+                    f"unknown dependency {dependency_id}"
+                )
+            actual_signature = _dependency_output_signature(dependency_row)
+            if actual_signature != dict(expected_signature):
+                _mark_step_requires_revalidation(
+                    row,
+                    dependency_id=dependency_id,
+                    expected=expected_signature,
+                    actual=actual_signature,
+                    updated_at=updated_at,
+                )
+                raise ValueError(
+                    f"preserved step {row.get('logicalStepId')} dependency "
+                    f"{dependency_id} requires revalidation"
+                )
+        row["dependencyReuseGate"] = {
+            "status": "valid",
+            "checkedAt": updated_at.isoformat(),
+        }
 
 
 def record_dependency_inputs_for_step(
@@ -326,6 +450,19 @@ def invalidate_downstream_steps_for_changed_output(
     return invalidated
 
 
+def _recovery_preservation(
+    *,
+    eligible: bool,
+    reason: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "eligible": eligible,
+        "reason": reason,
+        "message": message,
+    }
+
+
 def build_initial_step_rows(
     *,
     ordered_nodes: list[dict[str, Any]],
@@ -407,6 +544,138 @@ def build_step_ledger_snapshot(
     }
 
 
+def materialize_preserved_steps(
+    rows: list[dict[str, Any]],
+    *,
+    source_workflow_id: str,
+    source_run_id: str,
+    preserved_steps: list[Mapping[str, Any]],
+    updated_at: datetime,
+) -> None:
+    """Mark completed source steps as preserved in a resumed run ledger."""
+
+    preserved_by_id: dict[str, Mapping[str, Any]] = {}
+    for step in preserved_steps:
+        logical_step_id = str(
+            step.get("logicalStepId") or step.get("logical_step_id") or ""
+        ).strip()
+        if logical_step_id:
+            preserved_by_id[logical_step_id] = step
+
+    for row in rows:
+        logical_step_id = str(row.get("logicalStepId") or "").strip()
+        preserved = preserved_by_id.get(logical_step_id)
+        if preserved is None:
+            continue
+        artifacts = default_step_artifacts()
+        raw_artifacts = preserved.get("artifacts")
+        if isinstance(raw_artifacts, Mapping):
+            for key, value in raw_artifacts.items():
+                if key in artifacts:
+                    artifacts[key] = value
+        state_checkpoint_ref = str(
+            preserved.get("stateCheckpointRef")
+            or preserved.get("state_checkpoint_ref")
+            or ""
+        ).strip()
+        workspace_checkpoint_ref = str(
+            preserved.get("workspaceCheckpointRef")
+            or preserved.get("workspace_checkpoint_ref")
+            or ""
+        ).strip()
+        step_checkpoint_ref = str(
+            preserved.get("stepCheckpointRef")
+            or preserved.get("step_checkpoint_ref")
+            or ""
+        ).strip()
+        if not state_checkpoint_ref:
+            raise ValueError(
+                f"preserved step {logical_step_id} requires a state checkpoint ref"
+            )
+        try:
+            source_execution_ordinal = int(
+                preserved.get("sourceExecutionOrdinal") or preserved.get("source_execution_ordinal") or 1
+            )
+        except (TypeError, ValueError):
+            source_execution_ordinal = 1
+        row["status"] = _normalize_replayed_step_status(
+            preserved.get("status") or "completed"
+        )
+        terminal_disposition = str(
+            preserved.get("terminalDisposition")
+            or preserved.get("terminal_disposition")
+            or ""
+        ).strip()
+        if terminal_disposition:
+            row["terminalDisposition"] = terminal_disposition
+        else:
+            row.pop("terminalDisposition", None)
+        row["attempt"] = 0
+        row["executionOrdinal"] = 0
+        row["summary"] = "Preserved from source run."
+        row["waitingReason"] = None
+        row["attentionRequired"] = False
+        row["artifacts"] = artifacts
+        row["stateCheckpointRef"] = state_checkpoint_ref
+        if workspace_checkpoint_ref:
+            row["workspaceCheckpointRef"] = workspace_checkpoint_ref
+        else:
+            row.pop("workspaceCheckpointRef", None)
+        if step_checkpoint_ref:
+            row["stepCheckpointRef"] = step_checkpoint_ref
+        else:
+            row.pop("stepCheckpointRef", None)
+        row["recoveryPreservation"] = _recovery_preservation(
+            eligible=True,
+            reason="complete",
+            message="Step has recoverable output refs and state checkpoint evidence.",
+        )
+        row["preservedFrom"] = {
+            "workflowId": source_workflow_id,
+            "runId": source_run_id,
+            "logicalStepId": logical_step_id,
+            "executionOrdinal": source_execution_ordinal,
+        }
+        source_started_at = (
+            preserved.get("startedAt")
+            or preserved.get("started_at")
+            or row.get("startedAt")
+        )
+        source_updated_at = (
+            preserved.get("endedAt")
+            or preserved.get("ended_at")
+            or preserved.get("updatedAt")
+            or preserved.get("updated_at")
+        )
+        row["startedAt"] = (
+            _parse_step_datetime(source_started_at).isoformat()
+            if _parse_step_datetime(source_started_at)
+            else None
+        )
+        source_ended = _parse_step_datetime(source_updated_at)
+        if source_ended is not None:
+            row["timing"] = _step_timing_payload(
+                status=row.get("status"),
+                started_at=row.get("startedAt"),
+                updated_at=source_ended,
+                preserved=True,
+            )
+            row["timing"]["serverNow"] = updated_at.isoformat()
+        else:
+            row["timing"] = _step_timing_payload(
+                status=row.get("status"),
+                started_at=row.get("startedAt"),
+                updated_at=updated_at,
+                preserved=True,
+            )
+        dependency_inputs = preserved.get("dependencyInputs") or preserved.get(
+            "dependency_inputs"
+        )
+        if isinstance(dependency_inputs, Mapping):
+            row["dependencyInputs"] = deepcopy(dict(dependency_inputs))
+        row["updatedAt"] = updated_at.isoformat()
+
+
 def mark_step_checkpoint_evidence(
     rows: list[dict[str, Any]],
     logical_step_id: str,
@@ -417,7 +686,7 @@ def mark_step_checkpoint_evidence(
     step_checkpoint_ref: str | None = None,
     boundary: str | None = None,
 ) -> dict[str, Any]:
-    """Attach checkpoint evidence to a step row."""
+    """Attach checkpoint evidence and preservation eligibility to a step row."""
 
     for row in rows:
         if row.get("logicalStepId") != logical_step_id:
@@ -461,6 +730,33 @@ def mark_step_checkpoint_evidence(
                 normalized_by_boundary[canonical_boundary] = canonical_ref
             refs["checkpointRefsByBoundary"] = normalized_by_boundary
             row["refs"] = refs
+        existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
+        status = _normalize_replayed_step_status(row.get("status"))
+        if status not in {"completed", "skipped"}:
+            preservation = _recovery_preservation(
+                eligible=False,
+                reason="not_completed",
+                message="Step is not completed and cannot be preserved for Resume.",
+            )
+        elif not _has_semantic_output_ref(row):
+            preservation = _recovery_preservation(
+                eligible=False,
+                reason="missing_output_refs",
+                message="Completed step cannot be preserved because no recoverable output refs were recorded.",
+            )
+        elif not existing_checkpoint:
+            preservation = _recovery_preservation(
+                eligible=False,
+                reason="missing_state_checkpoint",
+                message="Completed step cannot be preserved because no state checkpoint ref was recorded.",
+            )
+        else:
+            preservation = _recovery_preservation(
+                eligible=True,
+                reason="complete",
+                message="Step has recoverable output refs and state checkpoint evidence.",
+            )
+        row["recoveryPreservation"] = preservation
         row["updatedAt"] = updated_at.isoformat()
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")
@@ -522,6 +818,7 @@ def clear_step_checkpoint_evidence(
             refs["latestStepExecutionCheckpointRef"] = None
             refs["stepExecutionCheckpointRefs"] = []
             refs["checkpointRefsByBoundary"] = {}
+        row.pop("recoveryPreservation", None)
         row["updatedAt"] = updated_at.isoformat()
         return row
     raise KeyError(f"Unknown logical step id: {logical_step_id}")

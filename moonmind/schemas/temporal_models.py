@@ -123,6 +123,14 @@ RecoveryAction = Literal[
     "manual_intervention",
 ]
 RecoveryDefaultAction = RecoveryAction
+RecoveryResumePhase = Literal[
+    "rerun_failed_step",
+    "continue_to_gate",
+    "continue_after_gate",
+    "continue_to_remediation",
+    "resume_publication",
+    "retry_restoration",
+]
 CheckpointRecoveryDisabledReason = Literal[
     "CHECKPOINT_CAPTURE_UNSUPPORTED",
     "CHECKPOINT_RESTORE_UNSUPPORTED",
@@ -289,6 +297,22 @@ class EnvironmentDiagnosticReferenceModel(BaseModel):
         return self
 
 
+class PreservedStepProvenanceDetailModel(BaseModel):
+    """Ref-backed provenance for steps preserved during recovery."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    title: str | None = Field(None, max_length=200)
+    source_workflow_id: str | None = Field(None, alias="sourceWorkflowId", max_length=200)
+    source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)
+    source_execution_ordinal: int | None = Field(
+        None, alias="sourceExecutionOrdinal", ge=1
+    )
+    state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
+    output_refs: dict[str, str] = Field(default_factory=dict, alias="outputRefs")
+
+
 class RecoveryEligibilityDiagnosticModel(BaseModel):
     """Typed fail-closed checkpoint Resume decision for API and UI surfaces."""
 
@@ -308,6 +332,7 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
         validation_alias=AliasChoices("checkpointBoundary", "requiredBoundary"),
         max_length=100,
     )
+    resume_phase: RecoveryResumePhase | None = Field(None, alias="resumePhase")
     checkpoint_kind: str | None = Field(None, alias="checkpointKind", max_length=100)
     target_runtime_id: str | None = Field(None, alias="targetRuntimeId", max_length=100)
     capability_set_version: str | None = Field(None, alias="capabilitySetVersion", max_length=100)
@@ -445,7 +470,7 @@ class RecoveryEligibilityDiagnosticModel(BaseModel):
             # them for replay, while every new decision carrying any v2 proof
             # field must carry the complete immutable proof set.
             proof = (
-                self.checkpoint_kind, self.target_runtime_id,
+                self.resume_phase, self.checkpoint_kind, self.target_runtime_id,
                 self.capability_set_version, self.capability_digest,
                 self.restore_activity, self.workspace_authority,
             )
@@ -884,6 +909,17 @@ class StepExecutionLineageModel(BaseModel):
     lineage_execution_ordinal: int | None = Field(
         None, alias="lineageExecutionOrdinal", ge=1
     )
+    preserved_steps: list[PreservedStepProvenanceDetailModel] = Field(
+        default_factory=list, alias="preservedSteps"
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize_without_empty_preserved_steps(self, handler):
+        data = handler(self)
+        if not self.preserved_steps:
+            data.pop("preservedSteps", None)
+            data.pop("preserved_steps", None)
+        return data
 
 
 class StepExecutionSummaryRefModel(BaseModel):
@@ -966,9 +1002,8 @@ class StepExecutionManifestModel(BaseModel):
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     execution_scope: Literal["run"] = Field("run", alias="executionScope")
-    # ``lineage`` and ``recoverySource`` were filled only by linked failed-step
-    # recovery runs. New manifests leave them empty; they stay in this strict v1
-    # model because every stored manifest carries both keys.
+    # Retained linked-recovery histories still emit these fields. New runs leave
+    # them empty; every stored v1 manifest also carries both keys.
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     branch: StepExecutionBranchMetadataModel | None = Field(None, alias="branch")
     reason: StepExecutionReason = Field(..., alias="reason")
@@ -3316,6 +3351,18 @@ class StepLedgerArtifactsModel(BaseModel):
         alias="stepExecutionManifestRefs",
     )
 
+class StepLedgerResumePreservationModel(BaseModel):
+    """Bounded failed-step recovery preservation eligibility for one source step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    eligible: bool = Field(..., alias="eligible")
+    reason: Literal[
+        "complete", "not_completed", "missing_output_refs", "missing_state_checkpoint"
+    ] = Field(..., alias="reason")
+    message: str | None = Field(None, alias="message")
+
+
 class StepLedgerWorkloadModel(BaseModel):
     """Bounded Docker-backed workload metadata linked to a producing step."""
 
@@ -3400,6 +3447,7 @@ class StepTimingModel(BaseModel):
     elapsed_ms: int | None = Field(None, alias="elapsedMs", ge=0)
     server_now: datetime | None = Field(None, alias="serverNow")
     precision: StepTimingPrecision = Field("unavailable", alias="precision")
+    preserved: bool = Field(False, alias="preserved")
 
 
 _ACTIVE_STEP_TIMING_STATUSES = {"executing", "reviewing", "awaiting_external"}
@@ -3426,6 +3474,7 @@ def _fallback_step_timing_payload(
     status: str | None,
     started_at: datetime | None,
     updated_at: datetime | None,
+    preserved: bool = False,
     status_source: Literal["ledger", "step_execution"] = "ledger",
 ) -> dict[str, Any]:
     normalized_status = str(status or "").strip()
@@ -3440,6 +3489,7 @@ def _fallback_step_timing_payload(
             "elapsedMs": elapsed_ms,
             "serverNow": updated_at,
             "precision": "live" if elapsed_ms is not None else "unavailable",
+            "preserved": preserved,
         }
     if normalized_status in _TERMINAL_STEP_TIMING_STATUSES and started_at is not None:
         duration_ms = _duration_ms_between(started_at, updated_at)
@@ -3450,6 +3500,7 @@ def _fallback_step_timing_payload(
             "elapsedMs": duration_ms,
             "serverNow": updated_at,
             "precision": "fallback" if duration_ms is not None else "unavailable",
+            "preserved": preserved,
         }
     return {
         "startedAt": started_at,
@@ -3458,7 +3509,18 @@ def _fallback_step_timing_payload(
         "elapsedMs": None,
         "serverNow": updated_at,
         "precision": "unavailable",
+        "preserved": preserved,
     }
+
+class PreservedStepProvenanceModel(BaseModel):
+    """Source execution provenance for a preserved step row."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
 
 class StepLedgerRowModel(BaseModel):
     """Current/latest Step Execution state for one logical step in the active run."""
@@ -3487,6 +3549,12 @@ class StepLedgerRowModel(BaseModel):
     artifacts: StepLedgerArtifactsModel = Field(
         default_factory=StepLedgerArtifactsModel, alias="artifacts"
     )
+    preserved_from: PreservedStepProvenanceModel | None = Field(
+        None, alias="preservedFrom"
+    )
+    resume_preservation: StepLedgerResumePreservationModel | None = Field(
+        None, alias="recoveryPreservation"
+    )
     state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
     workspace_checkpoint_ref: str | None = Field(None, alias="workspaceCheckpointRef")
     step_checkpoint_ref: str | None = Field(None, alias="stepCheckpointRef")
@@ -3508,6 +3576,7 @@ class StepLedgerRowModel(BaseModel):
                     status=self.status,
                     started_at=self.started_at,
                     updated_at=self.updated_at,
+                    preserved=self.preserved_from is not None,
                 )
             )
         return self

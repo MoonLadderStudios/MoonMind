@@ -293,7 +293,7 @@ Rules:
 
 ### 10.1 Retried runs
 
-Retry from a step resets a closed run to the start of the chosen step. The reset run's ledger carries the earlier steps as their replayed history recorded them, and the chosen step and later steps run again as new attempts of the reset run. The failed run's attempts remain in its own history and artifacts.
+Retry from a step resets a closed run to the start of the chosen step. The reset run's ledger carries the earlier steps as their replayed history recorded them, and the chosen step and later steps run again as new attempts of the reset run. The failed run's attempts remain in its own history and artifacts. Retained linked-recovery histories continue their recorded path: earlier completed steps keep source provenance and are not dispatched again. Their ledger decoder retains `preservedFrom`, `recoveryPreservation`, and `timing.preserved`; new runs do not enter linked recovery.
 
 ## 11. Parent/child refs and artifact refs
 
