@@ -516,12 +516,35 @@ binding facade, not an unrestricted upstream proxy.
 ## 9.6 Single-user operation
 
 Artifacts are instance resources for the admitted operator: the stable
-`operator`/`system` principal (and legacy human-owner UUID strings as
+`operator` principal (and legacy human-owner UUID strings as
 provenance) inspects and controls instance artifacts and saved-work reads
 without a human-owner lookup. `workflow:`/`service:` machine principals
 stay execution-bound via owner-equality and linked-execution checks.
 Restricted raw bytes, quarantine, redaction, and explicit-grant gates are
-unchanged. See [Single-User Application Design](../SingleUserApplicationDesign.md).
+enforced independently of ordinary artifact visibility. See
+[Single-User Application Design](../SingleUserApplicationDesign.md).
+
+The guarded upgrade can convert an artifact-only retained dataset after proving
+one human operator (including explicitly attested same-person UUID aliases).
+It records a protected, server-owned recovery disposition on artifacts with a
+proven human creator. Only the exact stable `operator` principal, or a service
+carrying that explicitly admitted principal, may use this disposition for
+restricted raw recovery. Caller metadata cannot grant recovery. Quarantined
+bytes remain preview-only, and machine-created artifacts receive no human
+recovery grant. Original creator provenance, quota scopes, links, pins, and
+in-flight claim owners remain unchanged; the operator cannot release a legacy
+claim merely by receiving recovery access.
+
+The grant and current-revision completion record commit atomically. Authority
+writers are excluded while the guarded inventory is checked and transformed;
+interruption rolls both back. Historical ledger completion alone is not current
+readiness. Missing or malformed creators refuse conversion, including null
+creators with only deployment-ownership attestation. Retained live execution or
+workflow parents require their own registered transforms and refuse before any
+artifact mutation when those transforms are absent. Historical links without a
+live execution remain intact and do not invalidate independently proven creator
+attribution. Schema installation itself grants no recovery access. Once recovery grants
+exist, schema downgrade refuses rather than silently losing them; repair forward.
 
 ---
 
