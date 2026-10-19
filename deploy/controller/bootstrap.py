@@ -59,6 +59,9 @@ REFRESH_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 HANDOFF_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_HANDOFF="
 # A replacement that exits or restarts this soon after starting is reverted.
 HANDOFF_SETTLE_SECONDS = 5
+# Bound readiness separately from the CLI so failed starts can reach rollback.
+CONTROLLER_START_TIMEOUT_SECONDS = 60
+CONTROLLER_START_COMMAND_TIMEOUT_SECONDS = 120
 
 
 # The standalone controller image repository. Any other image is the MoonMind
@@ -431,8 +434,11 @@ def cmd_handoff(args, env) -> int:
                 requested=str(recorded.get("requested") or ""),
                 pinned=recorded.get("pinned"),
             )
-        code = _compose_up(state_dir, project, "--pull", "never")
-        restored = "restored" if code == 0 else f"restore failed (exit {code})"
+        try:
+            code = _compose_up(state_dir, project, "--pull", "never")
+            restored = "restored" if code == 0 else f"restore failed (exit {code})"
+        except (OSError, RuntimeError, ValueError) as restore_error:
+            restored = f"restore failed ({restore_error})"
         return _print_handoff_receipt(
             "unavailable", reason=f"{exc}; previous controller {restored}"
         )
@@ -1040,7 +1046,23 @@ def _compose(state_dir: Path, project: str, *args: str) -> int:
         str(state_dir / "controller-compose.yaml"),
         *args,
     ]
-    return subprocess.run(command, check=False).returncode
+    timeout = (
+        CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
+        if args[0] == "rm" or (
+            args[0] == "up"
+            and "--pull" in args
+            and args[args.index("--pull") + 1] == "never"
+        )
+        else None
+    )
+    try:
+        return subprocess.run(command, check=False, timeout=timeout).returncode
+    except subprocess.TimeoutExpired as exc:
+        # Keep streamed Compose diagnostics and let handoff restore its prior
+        # controller. Cancellation (KeyboardInterrupt) still propagates.
+        raise RuntimeError(
+            f"controller compose {args[0]} timed out after {exc.timeout} seconds"
+        ) from exc
 
 
 def _compose_up(state_dir: Path, project: str, *options: str) -> int:
@@ -1056,7 +1078,9 @@ def _compose_up(state_dir: Path, project: str, *options: str) -> int:
     if code:
         return code
     return _compose(
-        state_dir, project, "up", "-d", "--wait", *options, CONTROLLER_SERVICE
+        state_dir, project, "up", "-d", "--wait",
+        "--wait-timeout", str(CONTROLLER_START_TIMEOUT_SECONDS),
+        *options, CONTROLLER_SERVICE
     )
 
 
