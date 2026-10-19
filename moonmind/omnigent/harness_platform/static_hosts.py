@@ -1,8 +1,8 @@
 """Static-connected Codex/Claude host consolidation (MoonLadderStudios/MoonMind#3834).
 
-The canonical Compose deployment runs two static-connected Omnigent host
+Optional Compose profiles expose two static-connected Omnigent host
 services — ``omnigent-host-codex`` and ``omnigent-host-claude`` — on the one
-digest-pinned shared ``omnigent-host-moonmind`` image with one generic startup
+shared ``omnigent-host-moonmind`` image with one generic startup
 entrypoint (``services/omnigent/scripts/start-omnigent-host.sh``) and one
 generic health contract (``services/omnigent/scripts/check-omnigent-host.sh``).
 
@@ -246,37 +246,9 @@ def validate_static_combination(
 def resolve_static_host_image_ref(
     environment: Mapping[str, str] | None = None,
 ) -> str:
-    """Resolve the digest-pinned shared image ref for static rows.
+    """Resolve the selected static image without requiring an operator pin."""
 
-    Primary authority is ``OMNIGENT_SHARED_HOST_IMAGE_REF``. The legacy
-    ``OMNIGENT_HOST_IMAGE_REF`` is honored only as a bounded alias when the
-    shared ref is unset, and must itself be digest-pinned. Legacy mutable
-    ``OMNIGENT_HOST_IMAGE`` / ``OMNIGENT_HOST_IMAGE_TAG`` construction is not
-    honored here: static rows fail closed instead of launching a mutable tag.
-    """
-
-    source: Mapping[str, str] = os.environ if environment is None else environment
-    shared = str(source.get(SHARED_HOST_IMAGE_ENV) or "").strip()
-    if shared:
-        if not _DIGEST_PINNED_RE.fullmatch(shared):
-            raise HarnessPlatformError(
-                f"{SHARED_HOST_IMAGE_ENV} must be a digest-pinned image ref",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
-        return shared
-    legacy = str(source.get(LEGACY_HOST_IMAGE_ENV) or "").strip()
-    if legacy:
-        if not _DIGEST_PINNED_RE.fullmatch(legacy):
-            raise HarnessPlatformError(
-                f"{LEGACY_HOST_IMAGE_ENV} must be a digest-pinned image ref",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
-        return legacy
-    raise HarnessPlatformError(
-        f"{SHARED_HOST_IMAGE_ENV} (or bounded alias {LEGACY_HOST_IMAGE_ENV}) "
-        "must be set to a digest-pinned image ref",
-        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-    )
+    return resolve_effective_static_host_image(environment)
 
 
 def static_claude_disposition() -> dict[str, str]:
@@ -385,69 +357,46 @@ def render_static_service_env(
 def classify_effective_static_host_image(
     environment: Mapping[str, str] | None = None,
 ) -> tuple[str | None, bool, str]:
-    """Classify the effective static launch image for an operator environment.
+    """Resolve Compose's image selection; provenance is recorded at launch.
 
-    Models the Compose anchor precedence
-    ``${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-<default>}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-<default>}}``
-    together with the bounded legacy alias: an explicitly set digest-pinned
-    ``OMNIGENT_SHARED_HOST_IMAGE_REF`` wins; otherwise a digest-pinned
-    ``OMNIGENT_HOST_IMAGE_REF`` is honored as the bounded alias; anything
-    else falls back to ``OMNIGENT_SHARED_HOST_IMAGE`` /
-    ``OMNIGENT_SHARED_HOST_IMAGE_TAG`` construction, which is a development /
-    bootstrap input only — ``moonmind.omnigent.bootstrap.image_resolution``
-    must resolve it to a digest and persist it as
-    ``OMNIGENT_SHARED_HOST_IMAGE_REF`` before admission.
-
-    Returns ``(image_ref, supported, reason)`` where ``supported`` is true
-    only for digest-pinned refs. A mutable tag or an unset configuration is
-    never supported launch authority.
+    Explicit mappings are effective launch inputs and are never rewritten by
+    later installed state. Without a mapping, reuse the installed-image owner
+    so a long-lived process does not keep selecting its startup environment.
+    Tags and the ordinary latest default are valid selection inputs. This
+    does not qualify a host, admit a session, or weaken artifact attestation.
     """
 
-    source: Mapping[str, str] = os.environ if environment is None else environment
+    if environment is None:
+        from moonmind.omnigent.bootstrap.store import with_installed_image_refs
+
+        source = with_installed_image_refs()
+    else:
+        source = environment
     shared = str(source.get(SHARED_HOST_IMAGE_ENV) or "").strip()
-    if shared:
-        if _DIGEST_PINNED_RE.fullmatch(shared):
-            return shared, True, f"{SHARED_HOST_IMAGE_ENV} digest pin"
-        return None, False, (
-            f"{SHARED_HOST_IMAGE_ENV} must be a digest-pinned image ref"
-        )
     legacy = str(source.get(LEGACY_HOST_IMAGE_ENV) or "").strip()
-    if legacy:
-        if _DIGEST_PINNED_RE.fullmatch(legacy):
-            return legacy, True, (
-                f"{LEGACY_HOST_IMAGE_ENV} bounded-alias digest pin"
-            )
-        return None, False, (
-            f"{LEGACY_HOST_IMAGE_ENV} must be a digest-pinned image ref"
-        )
-    name = str(source.get(SHARED_HOST_IMAGE_NAME_ENV) or "").strip()
-    tag = str(source.get(SHARED_HOST_IMAGE_TAG_ENV) or "").strip()
-    if name or tag:
-        return (
+    if shared:
+        image, reason = shared, SHARED_HOST_IMAGE_ENV
+    elif legacy:
+        image, reason = legacy, f"{LEGACY_HOST_IMAGE_ENV} bounded-alias"
+    else:
+        name = str(source.get(SHARED_HOST_IMAGE_NAME_ENV) or "").strip()
+        tag = str(source.get(SHARED_HOST_IMAGE_TAG_ENV) or "").strip()
+        image = (
             f"{name or 'ghcr.io/moonladderstudios/omnigent-host-moonmind'}:"
-            f"{tag or 'latest'}",
-            False,
-            "mutable image:tag construction is a development/bootstrap input "
-            "only; resolve it to a digest-pinned "
-            f"{SHARED_HOST_IMAGE_ENV} before admission",
+            f"{tag or 'latest'}"
         )
-    return None, False, (
-        f"{SHARED_HOST_IMAGE_ENV} (or bounded alias {LEGACY_HOST_IMAGE_ENV}) "
-        "must be set to a digest-pinned image ref"
-    )
+        reason = "shared image/tag or latest default"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:@-]*", image) or (
+        "@" in image and not _DIGEST_PINNED_RE.fullmatch(image)
+    ):
+        return None, False, f"invalid static host image reference from {reason}"
+    return image, True, reason
 
 
 def resolve_effective_static_host_image(
     environment: Mapping[str, str] | None = None,
 ) -> str:
-    """Resolve the effective static launch image or fail closed.
-
-    Digest-pinned ``OMNIGENT_SHARED_HOST_IMAGE_REF`` (or the bounded legacy
-    ``OMNIGENT_HOST_IMAGE_REF`` alias when the shared ref is unset) is the
-    only supported launch authority. A mutable ``IMAGE`` / ``TAG``
-    construction or an unset configuration raises
-    :class:`HarnessPlatformError` instead of launching an unqualified image.
-    """
+    """Resolve the effective static image, rejecting malformed references."""
 
     image_ref, supported, reason = classify_effective_static_host_image(environment)
     if supported and image_ref is not None:
@@ -473,8 +422,7 @@ def admit_static_host_compose_launch(
     *rendered effective* environment — the values a container would
     receive — through :func:`validate_static_combination`, and resolves
     the *effective* launch image through
-    :func:`resolve_effective_static_host_image`, which fails closed on
-    unset, mutable-tag, or invalid operator configuration. A helper-level
+    :func:`resolve_effective_static_host_image`, which preserves the selected image or ordinary latest default. A helper-level
     classification alone is not launch authority; callers must pass
     through this boundary before ``docker compose up`` admits the service.
 
@@ -511,7 +459,7 @@ def admit_static_host_effective_launch(
     before ``docker compose up``): the rendered mapping is judged through
     :func:`validate_static_combination` and the effective launch image is
     resolved through :func:`resolve_effective_static_host_image`, which
-    fails closed on unset, mutable-tag, or invalid configuration.
+    rejects malformed references without requiring manual digest pins.
     """
 
     rendered = dict(rendered_env)

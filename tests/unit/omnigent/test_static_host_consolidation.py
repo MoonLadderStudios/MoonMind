@@ -77,17 +77,21 @@ def test_legacy_image_var_is_a_bounded_alias_only() -> None:
             "OMNIGENT_HOST_IMAGE_REF": legacy_digest,
         }
     ) == FAKE_DIGEST
-    # Mutable tags are rejected on both paths.
-    with pytest.raises(HarnessPlatformError):
+    assert (
         static_hosts.resolve_static_host_image_ref(
             {"OMNIGENT_SHARED_HOST_IMAGE_REF": "some-image:latest"}
         )
-    with pytest.raises(HarnessPlatformError):
+        == "some-image:latest"
+    )
+    assert (
         static_hosts.resolve_static_host_image_ref(
             {"OMNIGENT_HOST_IMAGE_REF": "some-image:latest"}
         )
-    with pytest.raises(HarnessPlatformError):
-        static_hosts.resolve_static_host_image_ref({})
+        == "some-image:latest"
+    )
+    assert static_hosts.resolve_static_host_image_ref({}) == (
+        "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
+    )
 
 
 def test_static_rows_share_common_hardening_and_topology() -> None:

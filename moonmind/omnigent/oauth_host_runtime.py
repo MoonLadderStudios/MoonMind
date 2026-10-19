@@ -5116,8 +5116,7 @@ class OmnigentOAuthHostRuntime:
         rendered effective environment and the effective launch image
         through
         ``static_hosts.admit_static_host_effective_launch`` (fails closed
-        on unset, mutable-tag, or invalid image configuration instead of
-        launching the mutable Compose default), then binds the staged
+        on malformed image references), then binds the staged
         credential generation to the live Provider Profile lease through
         ``verify_staged_generation_against_lease`` and
         ``trace_static_credential_ownership`` (profile -> lease -> exact
@@ -5319,7 +5318,9 @@ class OmnigentOAuthHostRuntime:
         effective_launch: Mapping[str, Any] | None = None,
         egress_attestation: EgressAttestation | None = None,
     ) -> dict[str, str]:
-        child_env = dict(os.environ)
+        from moonmind.omnigent.bootstrap.store import with_installed_image_refs
+
+        child_env = with_installed_image_refs()
         child_env["OMNIGENT_RUN_WORKSPACE"] = str(workspace_source)
         if binding is not None:
             generation = (
@@ -5395,9 +5396,8 @@ class OmnigentOAuthHostRuntime:
             # R3/R4): judge the rendered effective environment and the
             # effective launch image, and bind the staged generation to
             # the live lease, before `docker compose up` admits the
-            # service. Anything but a digest-pinned image or a
-            # lease-verified generation fails here instead of launching
-            # an unqualified static host.
+            # service. Malformed image references and unverified credential
+            # generations fail before any static host is launched.
             self._admit_static_compose_prelaunch(
                 binding=binding,
                 host_lease=host_lease,

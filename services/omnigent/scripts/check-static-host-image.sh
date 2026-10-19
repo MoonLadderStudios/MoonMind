@@ -1,15 +1,8 @@
 #!/bin/sh
-# Operator-side static-host image prelaunch gate (MoonLadderStudios/MoonMind#3936).
-#
-# Qualified static launches must pass the Compose prelaunch admission boundary
-# before `docker compose --profile <profile> up`: this script judges the
-# selected service's rendered effective environment and resolves the effective
-# launch image through the same trusted boundary the managed launch path uses
-# (`admit_static_host_compose_launch` / `admit_static_host_effective_launch`),
-# failing closed on anything but a digest-pinned image ref. The bootstrap
-# persistence gate (`require_static_host_image_authority`) runs inside the API
-# container after Compose has already started creating services, so it alone
-# cannot prevent the mutable fallback image from being pulled and launched.
+# Optional prelaunch diagnostic for the static service's effective environment.
+# Uses the same credential/pack validation as the managed launcher. Tags and
+# latest are valid image choices; actual artifact and host/session identity are
+# attested by the lifecycle owner before work is admitted.
 #
 # Usage:
 #   services/omnigent/scripts/check-static-host-image.sh --profile omnigent-host-codex
@@ -51,7 +44,9 @@ repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
 MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=${MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR:-$repo_root} \
 MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-$repo_root/docker-compose.yaml} \
   python3 - "$profile" << 'PYEOF'
+import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", "."))
@@ -66,35 +61,24 @@ service = profile
 local_root = os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", ".")
 compose_file = os.environ.get("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "docker-compose.yaml")
 try:
-    import yaml
-
-    with open(compose_file, encoding="utf-8") as fh:
-        loaded = yaml.safe_load(fh)
-    service_def = (loaded or {}).get("services", {}).get(service, {})
-    environment = service_def.get("environment", {})
-    if isinstance(environment, dict):
-        raw = {str(k): str(v) for k, v in environment.items()}
-    else:
-        raw = {}
-        for item in environment or []:
-            text = str(item)
-            if "=" in text:
-                key, value = text.split("=", 1)
-                raw[key] = value
+    configured = subprocess.run(
+        ["docker", "compose", "--project-directory", local_root, "-f", compose_file,
+         "--profile", profile, "config", "--format", "json"],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    service_def = json.loads(configured.stdout)["services"][service]
+    rendered = service_def.get("environment", {})
+    image = service_def["image"]
 except Exception as exc:  # noqa: BLE001 - prelaunch gate fails closed
     print(f"static host prelaunch admission unavailable: {exc}", file=sys.stderr)
     sys.exit(69)
 
-operator_env = dict(os.environ)
-rendered = static_hosts.render_static_service_env(raw, operator_env)
-pack = "codex-native-pack@1" if service == "omnigent-host-codex" else "claude-native-pack@1"
-materializer = "codex-oauth-home@1" if service == "omnigent-host-codex" else "claude-oauth-home@1"
-admission = static_hosts.admit_static_host_compose_launch(
+admission = static_hosts.admit_static_host_effective_launch(
     service=service,
-    pack_ref=pack,
-    materializer_ref=materializer,
-    operator_env=operator_env,
-    raw_service_env=raw,
+    pack_ref=str(rendered.get("MOONMIND_OMNIGENT_RUNTIME_PACK_REF") or ""),
+    materializer_ref=str(rendered.get("MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF") or ""),
+    operator_env={"OMNIGENT_SHARED_HOST_IMAGE_REF": image},
+    rendered_env=rendered,
 )
 print(f"static host prelaunch admission passed: {service} image={admission['image_ref']}")
 PYEOF
