@@ -887,8 +887,12 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
 
 @pytest.mark.asyncio
-async def test_startup_deactivates_legacy_speckit_orchestrate_template(
-    disabled_env_keys, tmp_path
+@pytest.mark.parametrize(
+    ("seed_source", "expected_active"),
+    [("previous-install/speckit-orchestrate.yaml", False), (None, True), ("", True)],
+)
+async def test_startup_deactivates_only_deployment_owned_legacy_presets(
+    disabled_env_keys, tmp_path, seed_source, expected_active
 ):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
     db_base.DATABASE_URL = db_url
@@ -906,6 +910,7 @@ async def test_startup_deactivates_legacy_speckit_orchestrate_template(
             scope_ref=None,
             title="SpecKit Orchestrate",
             description="Legacy preset",
+            seed_source=seed_source,
             tags=[],
             required_capabilities=[],
             is_active=True,
@@ -913,8 +918,15 @@ async def test_startup_deactivates_legacy_speckit_orchestrate_template(
         session.add(legacy_template)
         await session.commit()
 
+    # Exercise the real catalog startup while keeping unrelated workflow
+    # scheduling off external Temporal services.
     with (
         patch("api_service.main._initialize_oidc_provider"),
+        patch("api_service.main.ensure_provider_profile_managers_started"),
+        patch("api_service.main.ensure_managed_session_reconcile_schedule_started"),
+        patch("api_service.main.ensure_managed_runtime_workspace_cleanup_schedule_started"),
+        patch("api_service.main.ensure_omnigent_oauth_host_janitor_schedule_started"),
+        patch("api_service.main.ensure_recurring_workflow_schedules_reconciled"),
     ):
         await startup_event()
 
@@ -928,4 +940,5 @@ async def test_startup_deactivates_legacy_speckit_orchestrate_template(
         )
         template = result.scalar_one_or_none()
         assert template is not None
-        assert template.is_active is False
+        assert template.is_active is expected_active
+        assert template.seed_source == seed_source
