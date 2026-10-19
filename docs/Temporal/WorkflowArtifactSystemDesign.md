@@ -556,6 +556,12 @@ conversion. The probe never grants access. Established machine owners and the
 exact disabled-mode creator who already has owner access need no new recovery
 grant. With no pending recovery, startup avoids loading retained histories into
 Python; the bounded-result SQL probe may still scan the artifact table.
+When disabled mode uses its built-in zero UUID and no retained User has that
+ID, exact zero-owned artifacts and active claims remain deployment scope during
+conversion, unchanged and without new recovery grants. A retained zero User still
+counts as a person. Nonzero configured defaults require ordinary attribution
+evidence when mixed with newly pending historical recovery; configuration alone
+does not prove a historical identity or alias.
 Explicit preflight and apply inspect current source evidence, and unresolved
 aliases or unsupported live parents still require their existing dispositions.
 
