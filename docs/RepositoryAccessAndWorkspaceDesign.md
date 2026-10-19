@@ -192,7 +192,7 @@ Endpoint and egress policy apply to anonymous access too: embedded credentials, 
 
 All sources use server-generated locators, authoritative storage, ownership handoff, quotas, cleanup authority, and remote-Docker path translation. Preparation is idempotent and verifies content before recording completion; an existing directory is not evidence of a finished clone, and partial content is not launched. Scratch initializes local Git only when its output profile needs it, with a neutral identity and no remote; non-Git checkpoints do not fabricate commits.
 
-A materialized repository carries the deployment's commit identity in repository-local config, because Skills that publish commit inside a host whose image supplies no identity; reconciliation reapplies it after checkpoint projection, and an undeclared identity resolves to the documented default rather than blocking.
+Attempt-owned roots, including scratch and self-contained restores, receive the selected runtime UID/GID before readiness; existing-workspace grants retain their owner's permissions. Materialized repositories receive deployment commit identity in repository-local config after projection, using the documented default when undeclared.
 
 Imports verify authorization and digest, bound size, and reject traversal, escaping links, devices, and privileged metadata; credential paths, hooks, helpers, and session authority are not restored.
 
