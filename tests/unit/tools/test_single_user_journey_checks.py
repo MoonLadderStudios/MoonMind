@@ -838,3 +838,220 @@ def test_dashboard_that_submitted_again_after_reconnecting_fails(
 
     assert _phase("controller", base, state_file) == 1
     assert "submitted 2 updates" in capsys.readouterr().err
+
+
+class _GeneratedApi:
+    def __init__(self):
+        import hashlib
+        import io
+        import tarfile
+
+        self.marker = "first-run-generated:" + "a" * 32
+        self.content = (
+            f"# Generated scratch report\n\nRequest: {self.marker}\n"
+            f"SHA-256: {hashlib.sha256(self.marker.encode()).hexdigest()}\n"
+        ).encode()
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+            info = tarfile.TarInfo("report.md")
+            info.size = len(self.content)
+            tar.addfile(info, io.BytesIO(self.content))
+        self.archive = archive.getvalue()
+        self.compute = {
+            "marker": self.marker,
+            "bindingId": "binding-1",
+            "sessionId": "session-1",
+            "hostId": "host-1",
+            "workspaceId": "workspace-1",
+            "outputPath": "report.md",
+            "sha256": hashlib.sha256(self.content).hexdigest(),
+            "exitCode": 0,
+            "workflowId": "mm:generated",
+            "runId": "run-1",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+        }
+        self.checkpoint = {
+            "boundary": "after_execution",
+            "source": {
+                "workflowId": "mm:generated",
+                "runId": "run-1",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+            "workspace": {
+                "archiveRef": "artifact://archive",
+                "archiveDigest": "sha256:" + hashlib.sha256(self.archive).hexdigest(),
+            },
+        }
+        self.cleanup = {
+            "bindingId": "binding-1",
+            "results": {
+                "host": {"containerRemoved": True, "stateVolumeRemoved": True},
+                "canonicalCleanup": {"status": "completed"},
+            },
+        }
+        self.metadata = [
+            ("compute", "first-run-generated-compute.json"),
+            ("checkpoint", "step_execution_checkpoint"),
+            ("cleanup", "generic-host-cleanup.json"),
+        ]
+        self.status = "completed"
+        self.requests = []
+
+    def json(self, method, path, **kwargs):
+        self.requests.append((method, path, kwargs))
+        if path.endswith("/artifacts"):
+            return {
+                "artifacts": [
+                    {
+                        "artifact_id": ref,
+                        "status": "complete",
+                        "metadata": {"name": name},
+                    }
+                    for ref, name in self.metadata
+                ]
+            }
+        if path.endswith("/download"):
+            return getattr(self, path.split("/")[-2])
+        return {
+            "workflowId": "mm:generated",
+            "runId": "run-1",
+            "namespace": "default",
+            "status": self.status,
+        }
+
+    def request(self, method, path, **kwargs):
+        self.requests.append((method, path, kwargs))
+        return 200, self.archive
+
+
+def test_generated_output_verifies_compute_save_and_download_separately():
+    api = _GeneratedApi()
+    state = {"generatedOutput": {"workflowId": "mm:generated", "marker": api.marker}}
+    journey.verify_generated_output(api, state)
+    saved = state["generatedOutput"]
+    assert saved["bindingId"] == "binding-1"
+    assert saved["archiveRef"] == "artifact://archive"
+    assert saved["checkpointRef"] == "artifact://checkpoint"
+    assert saved["sha256"] == api.compute["sha256"]
+    assert not any(method != "GET" for method, _, _ in api.requests)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["failed", "compute", "checkpoint", "cleanup", "bytes", "digest", "identity"],
+)
+def test_generated_output_never_accepts_missing_or_failed_boundaries(fault):
+    api = _GeneratedApi()
+    if fault == "failed":
+        api.status = "failed"
+    elif fault in {"compute", "checkpoint", "cleanup"}:
+        api.metadata = [(ref, name) for ref, name in api.metadata if ref != fault]
+    elif fault == "bytes":
+        api.archive = b"not an archive"
+    elif fault == "digest":
+        api.compute["sha256"] = "0" * 64
+    else:
+        api.checkpoint["source"]["workflowId"] = "someone-else"
+    state = {"generatedOutput": {"workflowId": "mm:generated", "marker": api.marker}}
+    with pytest.raises(journey.JourneyFailure):
+        journey.verify_generated_output(api, state)
+
+
+def test_generated_output_requires_owned_workspace_cleanup_before_final_pass(tmp_path):
+    api = _GeneratedApi()
+    state = {"generatedOutput": {"workflowId": "mm:generated", "marker": api.marker}}
+    journey.verify_generated_output(api, state)
+    receipt = tmp_path / "cleanup.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "bindingId": "other",
+                "workspaceId": "workspace-1",
+                "workspaceRemoved": True,
+                "hostRemoved": True,
+            }
+        )
+    )
+    with pytest.raises(journey.JourneyFailure, match="cleanup"):
+        journey.verify_generated_output(api, state, cleanup_receipt=receipt)
+    receipt.write_text(
+        json.dumps(
+            {
+                "bindingId": "binding-1",
+                "workspaceId": "workspace-1",
+                "workspaceRemoved": True,
+                "hostRemoved": True,
+            }
+        )
+    )
+    journey.verify_generated_output(api, state, cleanup_receipt=receipt)
+    assert state["generatedOutput"]["downloadAfterCleanup"] is True
+
+
+def test_generated_receipt_redelivery_is_safe_but_conflicting_compute_is_not():
+    api = _GeneratedApi()
+    api.metadata.append(("compute", "first-run-generated-compute.json"))
+    state = {"generatedOutput": {"workflowId": "mm:generated", "marker": api.marker}}
+    journey.verify_generated_output(api, state)
+    api.other_compute = {**api.compute, "sessionId": "unexpected-second-session"}
+    api.metadata.append(("other_compute", "first-run-generated-compute.json"))
+    with pytest.raises(journey.JourneyFailure, match="consistent"):
+        journey.verify_generated_output(api, state)
+
+
+def test_generate_submits_immediate_scratch_defaults_and_redelivers_same_request(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    api = _GeneratedApi()
+    monkeypatch.setattr(journey.uuid, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
+    monkeypatch.setattr(
+        journey, "wait_for_default_agent_profile", lambda *args, **kwargs: None
+    )
+    state = {}
+    journey.generate_output(api, state, label="fresh", timeout=5)
+    posts = [
+        kwargs["body"] for method, path, kwargs in api.requests if method == "POST"
+    ]
+    assert len(posts) == 2 and posts[0] == posts[1]
+    payload = posts[0]["payload"]
+    assert payload["publishMode"] == "none"
+    assert api.marker in payload["task"]["instructions"]
+    assert (
+        not {
+            "schedule",
+            "repository",
+            "targetRuntime",
+            "agentProfile",
+            "providerProfile",
+        }
+        & payload.keys()
+    )
+    assert state["generatedOutput"]["archiveRef"] == "artifact://archive"
+
+
+def test_generated_save_and_cleanup_acknowledgement_retries_accept_equivalent_evidence():
+    import copy
+
+    api = _GeneratedApi()
+    api.other_checkpoint = copy.deepcopy(api.checkpoint)
+    api.other_checkpoint["workspace"]["archiveRef"] = "artifact://retry-archive"
+    api.other_cleanup = {"bindingId": "binding-1", "results": {}}
+    api.metadata.extend(
+        [
+            ("other_checkpoint", "step_execution_checkpoint"),
+            ("other_cleanup", "generic-host-cleanup.json"),
+        ]
+    )
+    state = {"generatedOutput": {"workflowId": "mm:generated", "marker": api.marker}}
+    journey.verify_generated_output(api, state)
+    api.other_checkpoint["workspace"]["archiveDigest"] = "sha256:conflicting"
+    with pytest.raises(journey.JourneyFailure, match="consistent"):
+        journey.verify_generated_output(api, state)
+    api.other_checkpoint = copy.deepcopy(api.checkpoint)
+    api.other_cleanup["results"]["host"] = {"containerRemoved": False}
+    with pytest.raises(journey.JourneyFailure, match="cleanup"):
+        journey.verify_generated_output(api, state)

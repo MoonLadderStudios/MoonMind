@@ -393,6 +393,24 @@ function capture(overrides: { summary?: Record<string, unknown> | null } = {}) {
 }
 
 describe('the committed saved-work manifest is one saved unit', () => {
+  it('exposes generic recovery bytes only through their committed saved index', () => {
+    const saved = capture({ summary: {
+      required_formats: ['full_snapshot'],
+      outputs: [{ format: 'full_snapshot', status: 'self_contained', artifact_id: 'art-archive' }],
+    } });
+    saved.archive.links = [{ linkType: 'evidence.recovery', label: 'Recovery archive' }];
+    saved.fileManifest.links = [{ linkType: 'evidence.recovery', label: 'Recovery manifest' }];
+    saved.manifest.links = [{ linkType: 'checkpoint.saved_work', label: 'Saved work' }];
+    const parts = [saved.archive, saved.fileManifest];
+    expect(project({ artifacts: parts }).entries).toEqual([]);
+    const [unit] = project({ artifacts: [...parts, saved.manifest] }).entries;
+    expect(unit?.artifactId).toBe('art-manifest');
+    expect(unit?.complete).toBe(true);
+    expect(unit?.savedWork?.parts.map((part) => part.artifactId)).toEqual(['art-archive']);
+    expect(canPublishSavedWork(unit!)).toBe(true);
+    expect(project({ artifacts: [saved.manifest] }).entries[0]?.complete).toBe(false);
+  });
+
   it('groups the parts it names and surfaces the server summary', () => {
     const saved = capture();
     const projection = project({
@@ -600,9 +618,23 @@ describe('Publish Saved Work uses the saved-work publication contract', () => {
       objective: 'branch',
       baseBranch: 'main',
       headBranch: 'saved-work/mm-wf-4020',
-      strategy: 'baseline_delta',
+      strategy: 'additive_import',
       pullRequestTitle: '',
     });
+  });
+
+  it.each([
+    [{}, 'baseline_delta'],
+    [{ status: 'PENDING' }, 'additive_import'],
+    [{ rawAccessAllowed: false }, 'additive_import'],
+    [{ expiresAt: '2020-01-01T00:00:00Z' }, 'additive_import'],
+  ])('derives the strategy from usable saved delta bytes %j', (overrides, strategy) => {
+    const saved = capture();
+    const [entry] = project({
+      artifacts: [saved.manifest, saved.archive, { ...saved.delta, ...overrides }],
+    }).entries;
+    expect(defaultSavedWorkDestination(execution(), 'wf-4020', ['pr'], entry).strategy)
+      .toBe(strategy);
   });
 
   it('authors only the saved result and its destination', () => {

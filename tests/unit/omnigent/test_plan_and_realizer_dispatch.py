@@ -357,16 +357,30 @@ def _codex_plan_inputs(launch_policy_ref: str = "codex-on-demand@1") -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["execution_realizer_ref", "executionRealizerRef"])
-async def test_workflow_cannot_author_realizer(field):
+@pytest.mark.parametrize("legacy_default", [False, True])
+async def test_workflow_cannot_author_realizer(field, legacy_default, monkeypatch):
+    if legacy_default:
+        monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    else:
+        monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", raising=False)
+    expected = "codex-profile-bound@1" if legacy_default else "generic-omnigent-host@1"
     plan_inputs = _codex_plan_inputs()
-    plan_inputs[field] = "generic-omnigent-host@1"
+    plan_inputs[field] = (
+        "generic-omnigent-host@1" if legacy_default else "codex-profile-bound@1"
+    )
     store = InMemoryExecutionPlanStore()
     envelope = await store.load_or_compile(
         compile_fn=compile_execution_plan,
         compile_kwargs=plan_inputs,
     )
-    assert envelope.payload.executionRealizerRef == "codex-profile-bound@1"
+    assert envelope.payload.executionRealizerRef == expected
     assert await store.load(envelope.planRef) == envelope
+
+
+@pytest.fixture
+def retained_codex_realizer(monkeypatch):
+    """Compile legacy authority for tests that invoke the retained coordinator."""
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
 
 
 def _codex_dispatch_request(plan, *, target: str, policy: str):
@@ -400,6 +414,7 @@ def _codex_coordinator(plan):
 
 
 @pytest.mark.parametrize("policy", ["codex-on-demand@2", "codex-static@2"])
+@pytest.mark.usefixtures("retained_codex_realizer")
 def test_codex_dispatch_accepts_an_admitted_policy_other_than_the_target_default(
     policy,
 ):
@@ -423,6 +438,7 @@ def test_codex_dispatch_accepts_an_admitted_policy_other_than_the_target_default
         ("omnigent-codex@9", "codex-on-demand@1"),
     ],
 )
+@pytest.mark.usefixtures("retained_codex_realizer")
 def test_codex_dispatch_rejects_a_target_outside_the_admitted_plan(target, policy):
     from moonmind.omnigent.harness_platform.failures import (
         HarnessPlatformError,
@@ -682,11 +698,12 @@ def test_select_execution_realizer_codex_gate(monkeypatch):
         select_execution_realizer,
     )
 
-    # Unqualified (default): codex keeps the retained profile-bound realizer.
+    # All three harnesses use the shared realizer without a Codex opt-in.
+    monkeypatch.delenv(_GATE_ENV, raising=False)
     monkeypatch.delenv(_CLAUDE_GATE_ENV, raising=False)
     assert (
         select_execution_realizer(harness_id="codex-native", is_codex=True)
-        == "codex-profile-bound@1"
+        == "generic-omnigent-host@1"
     )
     # Claude Code has no legacy lane, so it is admitted on the generic realizer
     # by default and an explicit stop fails closed rather than falling back.
@@ -704,15 +721,15 @@ def test_select_execution_realizer_codex_gate(monkeypatch):
     )
 
 
-def test_codex_plan_keeps_profile_bound_until_qualified(monkeypatch):
+def test_codex_plan_keeps_profile_bound_when_explicitly_disabled(monkeypatch):
     from moonmind.omnigent.harness_platform.planner import (
         select_execution_realizer,
     )
     from moonmind.omnigent.settings import generic_codex_qualified
 
-    monkeypatch.delenv(_GATE_ENV, raising=False)
+    monkeypatch.setenv(_GATE_ENV, "false")
     assert generic_codex_qualified() is False
-    # Default trusted selection stays on the retained profile-bound realizer.
+    # Explicit compatibility selection stays on the retained profile-bound realizer.
     assert (
         select_execution_realizer(harness_id="codex-native", is_codex=True)
         == "codex-profile-bound@1"
@@ -783,7 +800,9 @@ def test_repository_codex_default_rejects_before_persisting_unrunnable_plan():
     async def compile_candidate():
         store = InMemoryExecutionPlanStore()
         inputs = _codex_repository_plan_inputs()
-        inputs["rollout_policy"] = default_runtime_provider_rollout_policy(env={})
+        inputs["rollout_policy"] = default_runtime_provider_rollout_policy(
+            env={_GATE_ENV: "false"}
+        )
         with pytest.raises(HarnessPlatformError, match="realizer.*repository"):
             await store.load_or_compile(
                 compile_fn=compile_execution_plan,
@@ -883,11 +902,11 @@ def test_repository_codex_default_preserves_deployment_rollback(control):
         compile_execution_plan(**inputs)
 
 
-def test_generic_codex_gate_env_is_explicit_only(monkeypatch):
+def test_generic_codex_default_honors_explicit_values(monkeypatch):
     from moonmind.omnigent.settings import generic_codex_qualified
 
     monkeypatch.delenv(_GATE_ENV, raising=False)
-    assert generic_codex_qualified() is False
+    assert generic_codex_qualified() is True
     monkeypatch.setenv(_GATE_ENV, "1")
     assert generic_codex_qualified() is True
     monkeypatch.setenv(_GATE_ENV, "true")
@@ -1031,8 +1050,8 @@ def test_plan_freezes_the_runtime_provider_rollout_decision(
     assert payload.executionRealizerRef == "generic-omnigent-host@1"
 
 
-def test_plan_records_the_legacy_row_before_codex_promotion(monkeypatch):
-    monkeypatch.delenv(_GATE_ENV, raising=False)
+def test_plan_records_the_explicit_legacy_compatibility_row(monkeypatch):
+    monkeypatch.setenv(_GATE_ENV, "false")
     payload = _compile_codex_plan().payload
     record = payload.runtimeProviderRollout
     assert record is not None
@@ -1055,7 +1074,7 @@ def test_frozen_rollout_record_is_not_reinterpreted_by_a_later_policy(
     admitted_ref = compute_plan_ref(admitted.payload)
     # Rolling the deployment back cannot change the admitted plan's identity or
     # its recorded rollout authority.
-    monkeypatch.delenv(_GATE_ENV, raising=False)
+    monkeypatch.setenv(_GATE_ENV, "false")
     assert compute_plan_ref(admitted.payload) == admitted_ref
     assert admitted.payload.runtimeProviderRollout.state == "new_work_default"
 
@@ -1326,6 +1345,7 @@ def _codex_authority_realizer(session_factory):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("authority", ["typed", "typed_and_flat", "legacy_flat"])
+@pytest.mark.usefixtures("retained_codex_realizer")
 async def test_codex_dispatch_preserves_admitted_plan_and_checkpoint_authority(
     durable_artifact_storage, authority
 ):
@@ -1606,6 +1626,7 @@ async def _write_durable_skill_snapshot(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("retained_codex_realizer")
 async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
     tmp_path, durable_artifact_storage, monkeypatch
 ):
@@ -1669,6 +1690,7 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("retained_codex_realizer")
 async def test_production_composition_installs_the_durable_artifact_gateway(
     durable_artifact_storage, monkeypatch, production_transport_pool,
 ):

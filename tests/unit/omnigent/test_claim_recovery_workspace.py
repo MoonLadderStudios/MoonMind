@@ -93,6 +93,10 @@ async def capture_saved_workspace(
     git("commit", "-m", "source", cwd=workspace)
     git("push", "origin", "main", cwd=workspace)
     head = git("rev-parse", "HEAD", cwd=workspace)
+    if change == "submodule":
+        (workspace / "module").mkdir()
+        (workspace / "module" / "valuable.txt").write_text("submodule output\n")
+        git("update-index", "--add", "--cacheinfo", f"160000,{head},module", cwd=workspace)
     if change == "tracked":
         (workspace / "work.txt").write_text("valuable unfinished work\n")
     if change == "untracked":
@@ -179,3 +183,12 @@ async def test_checkpoint_distinguishes_no_work_from_preserved_or_unknown_work(
         assert (workspace / "work.txt").read_text() == "valuable unfinished work\n"
     if change == "untracked":
         assert (workspace / "new.txt").read_text() == "valuable new work\n"
+
+
+@pytest.mark.asyncio
+async def test_generic_save_refuses_omitted_gitlink_contents(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="submodule"):
+        await capture_saved_workspace(tmp_path, monkeypatch, "submodule")
+    retained = list(tmp_path.glob("temporal_sandbox/*/repo/module/valuable.txt"))
+    assert len(retained) == 1
+    assert retained[0].read_text() == "submodule output\n"

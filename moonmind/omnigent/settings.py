@@ -145,20 +145,17 @@ def opencode_support_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
 
 
 def generic_codex_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
-    """Return whether generic Codex admission is qualified for this deployment.
+    """Return whether generic Codex admission is enabled for this deployment.
 
-    The trusted planner routes ``codex-native`` to ``codex-profile-bound@1``
-    until the exact shared-image Codex row passes its conformance gates
-    (#3832). This operator flag is the explicit-only admission switch for
-    ``generic-omnigent-host@1`` Codex plans; it is fail-closed (default false)
-    and never turns an explicit generic selection into a silent fallback.
-
-    Source: MoonLadderStudios/MoonMind#3830.
+    Ordinary Codex work uses the shared realizer without a rollout opt-in.
+    Explicit false preserves the supported profile-bound compatibility choice;
+    rollback controls independently stop new admission or restore a legacy
+    default. Runtime, credential and optional strict evidence checks still apply.
     """
 
     source = env if env is not None else os.environ
     return _parse_bool_with_default(
-        source.get(OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV), default=False
+        source.get(OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV), default=True
     )
 
 

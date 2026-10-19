@@ -438,6 +438,7 @@ async def test_default_resolution_records_independent_build_provenance(
     assert resolved.omnigent_build_digest == BUILD_DIGEST
     assert resolved.details == {
         "serverImageDigest": server_image_digest,
+        "sharedHostImageSelection": None,
         "hostImageProvenance": {
             HOST_REF: {"buildDigest": BUILD_DIGEST, "version": "0.12.0"}
         },
@@ -1099,8 +1100,19 @@ def _admitted_previous(host: str = ADMITTED_HOST) -> ResolvedOmnigentDeploymentS
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        {},
+        {
+            "OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+            "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+        },
+    ],
+)
 async def test_newer_host_with_failed_bootstrap_keeps_the_admitted_host(
     monkeypatch: pytest.MonkeyPatch,
+    configuration,
 ) -> None:
     """Replay: registry host moved to 0.13.0 while Compose still runs 0.12.0."""
 
@@ -1114,7 +1126,7 @@ async def test_newer_host_with_failed_bootstrap_keeps_the_admitted_host(
         bootstrap_fail_hosts=frozenset({NEWER_HOST}),
     )
 
-    resolved = await image_resolution.resolve_omnigent_images({})
+    resolved = await image_resolution.resolve_omnigent_images(configuration)
 
     assert resolved.opencode_host_image_ref == ADMITTED_HOST
     # The shared host follows the admitted digest after the fresh image fails.
@@ -1369,3 +1381,322 @@ def test_pending_host_remediation_matches_the_failure(
     assert prescribes_update is expects_server_update
     if not expects_server_update:
         assert "repair or republish" in remediation or "OMNIGENT_BUILD_DIGEST" in remediation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key", ["OMNIGENT_SHARED_HOST_IMAGE_REF", "OMNIGENT_HOST_IMAGE_REF"]
+)
+@pytest.mark.parametrize("available", [True, False])
+async def test_shared_image_resolution_honors_explicit_static_coordinate(
+    monkeypatch, key, available
+):
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent.bootstrap import store
+
+    previous = "registry.example/old-host@sha256:" + "7" * 64
+    selected = "registry.example/operator-host@sha256:" + "8" * 64
+    monkeypatch.setattr(
+        store, "load_resolved_state", lambda: _state(sharedHostImageRef=previous)
+    )
+    pulls = []
+
+    async def pull(image, tag):
+        pulls.append((image, tag))
+        return selected if available else None
+
+    monkeypatch.setattr(image_resolution, "_resolve_via_docker_pull", pull)
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_inspect", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(image_resolution, "_run", AsyncMock(return_value=(1, "", "")))
+    monkeypatch.setattr(
+        image_resolution, "_image_build_identity", AsyncMock(return_value=BUILD_DIGEST)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_image_omnigent_version", AsyncMock(return_value="1.0.0")
+    )
+    monkeypatch.setattr(
+        image_resolution,
+        "_image_opencode_bootstrap_ready",
+        AsyncMock(return_value=True),
+    )
+    state = await image_resolution.resolve_omnigent_images(
+        {
+            "OMNIGENT_IMAGE_REF": SERVER_REF,
+            "OMNIGENT_SHARED_HOST_IMAGE": "registry.example/default-host",
+            "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+            key: "registry.example/operator-host:chosen",
+        }
+    )
+    assert pulls == [("registry.example/operator-host", "chosen")]
+    assert state.shared_host_image_ref == (selected if available else None)
+
+
+@pytest.mark.asyncio
+async def test_image_cache_fallback_does_not_substitute_another_tag(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    wrong = "registry.example/host:other@sha256:" + "9" * 64
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_pull", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_inspect", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_run", AsyncMock(return_value=(0, wrong + " image-id", ""))
+    )
+    ref, _ = await image_resolution._resolve_image(
+        "IMAGE", "TAG", "REF", {"IMAGE": "registry.example/host", "TAG": "chosen"}
+    )
+    assert ref is None
+
+
+@pytest.mark.asyncio
+async def test_failed_shared_resolution_does_not_reexport_stale_selection(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent.bootstrap import store
+
+    chosen = "registry.example/selected:chosen"
+    monkeypatch.setattr(
+        image_resolution,
+        "operator_image_configuration",
+        lambda: {"OMNIGENT_SHARED_HOST_IMAGE_REF": chosen},
+    )
+    monkeypatch.setattr(
+        image_resolution,
+        "resolve_omnigent_images",
+        AsyncMock(return_value=_state(sharedHostImageRef=None)),
+    )
+    monkeypatch.setattr(store, "save_resolved_state", lambda state: None)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", HOST_REF)
+    await image_resolution.publish_resolved_omnigent_images()
+    import os
+
+    assert os.environ["OMNIGENT_SHARED_HOST_IMAGE_REF"] == chosen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        {"OMNIGENT_HOST_IMAGE_REF": NEWER_HOST},
+        {"OMNIGENT_HOST_IMAGE_REF": "registry.example/host:chosen"},
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": "registry.example/host:chosen"},
+    ],
+)
+async def test_explicit_shared_choice_does_not_follow_opencode_fallback(
+    monkeypatch, configuration
+):
+    _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=NEWER_HOST,
+        shared_host=NEWER_HOST,
+        previous=_admitted_previous(),
+        bootstrap_fail_hosts=frozenset({NEWER_HOST}),
+    )
+    resolved = await image_resolution.resolve_omnigent_images(configuration)
+    assert resolved.opencode_host_image_ref == ADMITTED_HOST
+    assert resolved.shared_host_image_ref == NEWER_HOST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configuration, previous_selection, previous_ref, retained",
+    [
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE": HOST_REPOSITORY,
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+            },
+            None,
+            ADMITTED_HOST,
+            True,
+        ),
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE": HOST_REPOSITORY,
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "chosen",
+            },
+            HOST_REPOSITORY + ":chosen",
+            ADMITTED_HOST,
+            True,
+        ),
+        (
+            {"OMNIGENT_SHARED_HOST_IMAGE_REF": HOST_REPOSITORY + ":chosen"},
+            HOST_REPOSITORY + ":chosen",
+            ADMITTED_HOST,
+            True,
+        ),
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE": HOST_REPOSITORY,
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "new",
+            },
+            HOST_REPOSITORY + ":old",
+            ADMITTED_HOST,
+            False,
+        ),
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE": "registry.example/new",
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+            },
+            None,
+            ADMITTED_HOST,
+            False,
+        ),
+        (
+            {"OMNIGENT_SHARED_HOST_IMAGE_REF": HOST_REPOSITORY + ":chosen"},
+            None,
+            ADMITTED_HOST,
+            False,
+        ),
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE": HOST_REPOSITORY,
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+            },
+            None,
+            HOST_REPOSITORY + ":old@sha256:" + "a" * 64,
+            False,
+        ),
+    ],
+)
+async def test_shared_resolution_failure_retains_only_the_installed_selection(
+    monkeypatch, configuration, previous_selection, previous_ref, retained
+):
+    from unittest.mock import AsyncMock
+    from moonmind.omnigent.bootstrap import store
+
+    previous = _state(
+        sharedHostImageRef=previous_ref,
+        details={"sharedHostImageSelection": previous_selection},
+    )
+    monkeypatch.setattr(store, "load_resolved_state", lambda: previous)
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_pull", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_inspect", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(image_resolution, "_run", AsyncMock(return_value=(1, "", "")))
+    monkeypatch.setattr(
+        image_resolution, "_image_build_identity", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_image_omnigent_version", AsyncMock(return_value=None)
+    )
+    result = await image_resolution.resolve_omnigent_images(configuration)
+    assert result.shared_host_image_ref == (previous_ref if retained else None)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: result)
+    repeated = await image_resolution.resolve_omnigent_images(configuration)
+    assert repeated.shared_host_image_ref == (previous_ref if retained else None)
+    if retained:
+        monkeypatch.setattr(
+            image_resolution,
+            "_resolve_via_docker_pull",
+            AsyncMock(return_value=NEWER_HOST),
+        )
+        refreshed = await image_resolution.resolve_omnigent_images(configuration)
+        assert refreshed.shared_host_image_ref == NEWER_HOST
+
+
+@pytest.mark.asyncio
+async def test_shared_selection_survives_immutable_record_refresh(monkeypatch):
+    from unittest.mock import AsyncMock
+    from moonmind.omnigent.bootstrap import store
+
+    selection = HOST_REPOSITORY + ":chosen"
+    previous = _state(
+        sharedHostImageRef=ADMITTED_HOST,
+        details={"sharedHostImageSelection": selection},
+    )
+    monkeypatch.setattr(store, "load_resolved_state", lambda: previous)
+    monkeypatch.setattr(image_resolution, "_run", AsyncMock(return_value=(1, "", "")))
+    monkeypatch.setattr(
+        image_resolution, "_image_build_identity", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_image_omnigent_version", AsyncMock(return_value=None)
+    )
+    refreshed = await image_resolution.resolve_omnigent_images(
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": ADMITTED_HOST}
+    )
+    assert refreshed.shared_host_image_ref == ADMITTED_HOST
+    assert refreshed.details["sharedHostImageSelection"] == selection
+    monkeypatch.setattr(store, "load_resolved_state", lambda: refreshed)
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_pull", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_inspect", AsyncMock(return_value=None)
+    )
+    retried = await image_resolution.resolve_omnigent_images(
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": selection}
+    )
+    assert retried.shared_host_image_ref == ADMITTED_HOST
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_shared_retention_does_not_invent_selection(monkeypatch):
+    from unittest.mock import AsyncMock
+    from moonmind.omnigent.bootstrap import store
+
+    previous = _state(sharedHostImageRef=HOST_REPOSITORY + ":old@sha256:" + "a" * 64)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: previous)
+    monkeypatch.setattr(image_resolution, "_run", AsyncMock(return_value=(1, "", "")))
+    monkeypatch.setattr(
+        image_resolution, "_image_build_identity", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_image_omnigent_version", AsyncMock(return_value=None)
+    )
+    result = await image_resolution.resolve_omnigent_images({})
+    assert result.shared_host_image_ref == previous.shared_host_image_ref
+    assert result.details["sharedHostImageSelection"] is None
+    monkeypatch.setattr(store, "load_resolved_state", lambda: result)
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_pull", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        image_resolution, "_resolve_via_docker_inspect", AsyncMock(return_value=None)
+    )
+    retried = await image_resolution.resolve_omnigent_images(
+        {
+            "OMNIGENT_SHARED_HOST_IMAGE": HOST_REPOSITORY,
+            "OMNIGENT_SHARED_HOST_IMAGE_TAG": "latest",
+        }
+    )
+    assert retried.shared_host_image_ref is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": "registry.example/host:"},
+        {"OMNIGENT_SHARED_HOST_IMAGE": "registry.example/host/"},
+        {
+            "OMNIGENT_SHARED_HOST_IMAGE": "registry.example/host",
+            "OMNIGENT_SHARED_HOST_IMAGE_TAG": "chosen/",
+        },
+    ],
+)
+async def test_malformed_shared_selection_never_pulls_a_substituted_image(
+    monkeypatch, configuration
+):
+    from unittest.mock import AsyncMock
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+    pull = AsyncMock(return_value=None)
+    monkeypatch.setattr(image_resolution, "_resolve_via_docker_pull", pull)
+    result = await image_resolution.resolve_omnigent_images(configuration)
+    assert result.shared_host_image_ref is None
+    pull.assert_not_awaited()

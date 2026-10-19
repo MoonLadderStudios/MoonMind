@@ -1,20 +1,22 @@
-"""Scratch work is admitted, saved and downloadable after its host is gone.
+"""Scratch work survives host loss and separately admitted publication retries.
 
 MoonLadderStudios/MoonMind#4003 (outcome 1, owned by #2615). A scratch task
 compiles through the real admission writer, prepares its sandbox through the
 production generic-host composition, saves the generated output through the
 generic realizer's own finalization and cleanup owners into the production
 artifact service, and is downloaded through the authorized artifact endpoint
-after the worker workspace is deleted. Only the Docker daemon and the agent
-process are substituted. The deployment holds a selected connection and an
-ambient token throughout; neither is resolved, acquired or delivered.
+after the worker workspace is deleted. Publication then uses the existing
+saved-work journey with a local bare destination and a controlled GitHub provider.
+Docker, the agent process and Temporal dispatch are substituted. Scratch does not
+resolve repository credentials; later publication admits destination B over
+ambient A and reconciles a lost push acknowledgment without repeating compute.
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
-import shutil
+import os
 import tarfile
 import uuid
 from types import SimpleNamespace
@@ -25,6 +27,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 
+from api_service.api.routers import executions
 from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     _resolve_principal,
@@ -49,6 +52,21 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+from moonmind.workflows.temporal.client import WorkflowStartResult
+from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
+from tests.helpers.repository_connections import (
+    github_pat_connection,
+    github_repository_assignment,
+    record_repository_connections,
+)
+from tests.support.saved_work_capture import CapturedSavedWork
+from tests.unit.api.routers.test_executions import _saved_work_app
+from tests.unit.publish.test_saved_work_publication_journey import (
+    REPOSITORY,
+    _WorkerLost,
+    _tree,
+    journey,
+)
 from tests.integration.reliability.test_repository_authority_handoffs_4009 import (  # noqa: F401
     _WORKFLOW,
     _compile,
@@ -111,15 +129,13 @@ async def _serialize_finalization_on_sqlite(sessions) -> None:
 
     @event.listens_for(engine.sync_engine, "connect")
     def _register(dbapi_connection, _record):
-        dbapi_connection.create_function(
-            "pg_try_advisory_xact_lock", 1, lambda _key: 1
-        )
+        dbapi_connection.create_function("pg_try_advisory_xact_lock", 1, lambda _key: 1)
 
     await engine.dispose()
 
 
 async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
-    authority_context, monkeypatch, tmp_path
+    authority_context, monkeypatch, tmp_path, request, authenticated_mode  # noqa: F811
 ):
     sessions, _plan_artifacts, _plan_reader = authority_context
     await _serialize_finalization_on_sqlite(sessions)
@@ -137,7 +153,11 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
     plan = await reader._load_verified_execution_plan(compiled.binding)
     assert set(plan.payload.credentialBindings) == {"primary-model"}
     assert not plan.payload.resolvedTools.get("repositoryAccess")
-    forbidden = _forbid_repository_credentials(monkeypatch)
+    real_access = managed_api_key_resolve.select_github_access_for_launch
+    real_ambient = github_credentials.resolve_github_credential
+    credential_patch = pytest.MonkeyPatch()
+    request.addfinalizer(credential_patch.undo)
+    forbidden = _forbid_repository_credentials(credential_patch)
 
     daemon_calls: list[list[str]] = []
 
@@ -213,7 +233,9 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
         request=request,
         plan=plan,
         host_class=SimpleNamespace(
-            runtime={"uid": 0, "gid": 0}, imageRef="host-image", omnigentVersion=""
+            runtime={"uid": os.getuid(), "gid": os.getgid()},
+            imageRef="host-image",
+            omnigentVersion="",
         ),
         launch_policy=SimpleNamespace(),
         repository_owner_ref=owner,
@@ -263,9 +285,10 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
     assert cleaned.state is RuntimeBindingState.cleaned
     saved = cleaned.phaseResults["saved"]
     assert saved == finished.metadata["savedWorkspaceCheckpoint"]
-
-    # The host, its workspace and the worker's local state are gone.
-    shutil.rmtree(worker_root)
+    assert saved[
+        "savedWorkRef"
+    ], "generic saved output must be publishable without compute"
+    assert saved["savedWorkDigest"].startswith("sha256:")
 
     archive_id = saved["archiveRef"].removeprefix("artifact://")
     operator = str(uuid.UUID(int=4003))
@@ -274,19 +297,150 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
             TemporalArtifactRepository(session),
             store=LocalTemporalArtifactStore(blob_root),
         )
-        app = FastAPI()
-        app.include_router(artifact_router)
-        app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
-        app.dependency_overrides[_resolve_principal] = lambda: operator
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            response = await client.get(f"/api/artifacts/{archive_id}/download")
-    assert response.status_code == 200, response.text
-    assert "sha256:" + hashlib.sha256(response.content).hexdigest() == saved[
-        "archiveDigest"
-    ]
-    with tarfile.open(fileobj=io.BytesIO(response.content)) as archive:
-        member = archive.extractfile("report.md")
-        assert member is not None and member.read() == _GENERATED
-    assert forbidden == []
+
+        async def captured(_service):
+            assert _service is service
+            return CapturedSavedWork(
+                saved_work_ref=saved["savedWorkRef"],
+                saved_work_digest=saved["savedWorkDigest"],
+                baseline_commit="",
+                source_repo=worker_root,
+                workflow_id=_WORKFLOW,
+                run_id="run-1",
+            )
+
+        # Reuse the existing publication journey, including its source deletion
+        # and fail-if-used agent/restore owners. Only the provider transport and
+        # Temporal Activity dispatcher are substituted here.
+        assert forbidden == []
+        credential_patch.undo()
+        async with journey(
+            tmp_path,
+            monkeypatch,
+            artifact_service=service,
+            saved_work_factory=captured,
+            destination_files={"README.md": "destination only\n"},
+        ) as state:
+            assert not worker_root.exists()
+            state.artifacts_root = blob_root
+            artifact, _links, _pinned, _policy = await service.get_metadata(
+                artifact_id=saved["savedWorkRef"]
+                .removeprefix("artifact://")
+                .removeprefix("artifact:"),
+                principal=operator,
+            )
+            summary = artifact.metadata_json["saved_work_summary"]
+            assert summary["outputs"][0]["artifact_id"] == archive_id
+            assert summary["outputs"][0]["status"] == "self_contained"
+            app = FastAPI()
+            app.include_router(artifact_router)
+            app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
+            app.dependency_overrides[_resolve_principal] = lambda: operator
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                app.dependency_overrides[_resolve_principal] = lambda: "workflow:mm:unrelated"
+                denied = await client.get(f"/api/artifacts/{archive_id}/download")
+                assert denied.status_code in {403, 404}, denied.text
+                app.dependency_overrides[_resolve_principal] = lambda: operator
+                response = await client.get(f"/api/artifacts/{archive_id}/download")
+            assert response.status_code == 200, response.text
+            assert (
+                "sha256:" + hashlib.sha256(response.content).hexdigest()
+                == saved["archiveDigest"]
+            )
+            with tarfile.open(fileobj=io.BytesIO(response.content)) as archive:
+                member = archive.extractfile("report.md")
+                assert member is not None and member.read() == _GENERATED
+
+            # Publication is separately admitted using the newly selected
+            # destination connection B, never ambient A or source credentials.
+            monkeypatch.setattr(
+                managed_api_key_resolve, "select_github_access_for_launch", real_access
+            )
+            monkeypatch.setattr(
+                github_credentials, "resolve_github_credential", real_ambient
+            )
+            monkeypatch.setenv("DESTINATION_PAT_B", "destination-b-fixture")
+            connection = github_pat_connection(
+                DEFAULT_GIT_CONNECTION_REF, "DESTINATION_PAT_B"
+            )
+            (tmp_path / "destination-authority").mkdir()
+            destination_engine = await record_repository_connections(
+                monkeypatch,
+                tmp_path / "destination-authority",
+                connection,
+                assignments=(
+                    github_repository_assignment(
+                        DEFAULT_GIT_CONNECTION_REF, REPOSITORY
+                    ),
+                ),
+            )
+            try:
+                app, adapter, record, user = _saved_work_app(
+                    monkeypatch, service, connection
+                )
+                record.workflow_id = _WORKFLOW
+                record.run_id = "run-1"
+                record.search_attributes["mm_owner_id"] = str(user.id)
+                monkeypatch.setattr(
+                    executions, "_execution_principal", lambda _user: operator
+                )
+                adapter.start_workflow.side_effect = (
+                    lambda **kwargs: WorkflowStartResult(
+                        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+                    )
+                )
+                body = {
+                    "savedWorkRef": saved["savedWorkRef"],
+                    "sourceRunId": "run-1",
+                    "destination": {
+                        "repository": REPOSITORY,
+                        "objective": "pr",
+                        "baseBranch": "main",
+                        "headBranch": "saved/work",
+                        "strategy": "additive_import",
+                    },
+                }
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as client:
+                    admitted = await client.post(
+                        f"/api/executions/{_WORKFLOW}/retry-publication", json=body
+                    )
+                assert admitted.status_code == 201, admitted.text
+                contract = adapter.start_workflow.await_args.kwargs["input_args"]
+                assert contract["savedWorkDigest"] == saved["savedWorkDigest"]
+                before = state.saved_bytes()
+                assert before, "the original saved bytes must be checked after retry"
+
+                async def lose_push_ack(attempt):
+                    if attempt == 1:
+                        raise _WorkerLost()
+
+                state.after["publication_recovery.saved_work_push"] = lose_push_ack
+                result = await state.run(contract)
+                assert result["outcome"] == "published"
+                assert result["implementationRerun"] is False
+                assert result["push"]["status"] == "reconciled"
+                assert _tree(state.remote, "refs/heads/saved/work") == {
+                    "README.md": "destination only",
+                    "report.md": _GENERATED.decode().strip(),
+                }
+                assert len(state.pushes()) == len(state.provider.creates) == 1
+                assert set(state.provider.tokens) == {"destination-b-fixture"}
+                assert (
+                    state.provider.creates[0]["github_token"] == "destination-b-fixture"
+                )
+                assert state.saved_objects_unchanged(before)
+                assert await state.use_claims() == []
+                again = await state.run(contract)
+                assert again["outcome"] == "published"
+                assert again["candidate"] == result["candidate"]
+                assert len(state.pushes()) == len(state.provider.creates) == 1
+                assert state.saved_objects_unchanged(before)
+                assert all(
+                    name.startswith("publication_recovery.") for name in state.calls
+                )
+            finally:
+                await destination_engine.dispose()
