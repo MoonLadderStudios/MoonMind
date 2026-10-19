@@ -801,7 +801,13 @@ async def evaluate_disposition(
                                 deployment_owned_tables,
                                 operator_authorized=operator_authorized)
     inv = await collect_inventory(session)
+    return _decision_from_inventory(inv, options)
 
+
+def _decision_from_inventory(
+    inv: ConversionInventory, options: ConversionOptions
+) -> ConversionDecision:
+    """Evaluate the same snapshot that binds preflight or locked apply."""
     alias_of: dict[str, int] = {}
     for idx, group in enumerate(options.alias_groups):
         for member in group:
@@ -971,13 +977,7 @@ async def preflight(
                                 operator_authorized=operator_authorized)
     inv = await collect_inventory(session)
     fingerprint = inv.fingerprint()
-    decision = await evaluate_disposition(
-        session,
-        alias_groups=alias_groups,
-        collision_resolutions=collision_resolutions,
-        deployment_owned_tables=deployment_owned_tables,
-        operator_authorized=operator_authorized,
-    )
+    decision = _decision_from_inventory(inv, options)
     digest = compute_digest(fingerprint, options)
     try:
         await session.rollback()
@@ -1072,7 +1072,97 @@ def _replay_stored_result(
     )
 
 
+def _is_production_completion(result: dict[str, Any]) -> bool:
+    """Require current committed production proof, not truthy serialized data."""
+    if result.get("schema_revision") != SCHEMA_REVISION:
+        return False
+    decision = result.get("decision")
+    if (
+        result.get("production_transforms_completed") is not True
+        or result.get("published") is not True
+        or not isinstance(decision, dict)
+        or decision.get("eligible") is not True
+    ):
+        return False
+    outcomes = result.get("transforms")
+    if not isinstance(outcomes, dict) or any(
+        not isinstance(outcomes.get(name), dict)
+        for name in DEFAULT_SUBSYSTEM_TRANSFORMS
+    ):
+        return False
+    artifact_outcome = outcomes["artifacts"]
+    if any(
+        type(artifact_outcome.get(name)) is not int
+        for name in ("recovery_grants", "preserved")
+    ):
+        return False
+    if decision.get("disposition") not in {"fresh_init", "eligible_conversion"}:
+        return False
+    return (
+        0 <= artifact_outcome["recovery_grants"] <= artifact_outcome["preserved"]
+    )
+
+
+async def _completed_production_result(session: AsyncSession) -> ApplyResult | None:
+    """Read one certified current cutover without materializing retained history.
+
+    The marker is committed only after the exact production transforms run.
+    Generic completion rows, custom transforms and older revisions cannot
+    establish that artifact recovery was converted. This replays a past
+    cutover; it never grants recovery to resources added after that cutover.
+    """
+    ledger_cls = _ledger_class()
+    stored = ledger_cls.result_json
+    try:
+        async with session.begin_nested():
+            row = (
+                await session.execute(
+                    select(ledger_cls)
+                    .where(
+                        ledger_cls.status == "complete",
+                        stored["schema_revision"].as_string() == SCHEMA_REVISION,
+                        stored["published"].as_boolean().is_(True),
+                        stored["decision"]["eligible"].as_boolean().is_(True),
+                        stored["decision"]["disposition"].as_string().in_(
+                            ("fresh_init", "eligible_conversion")
+                        ),
+                        stored["production_transforms_completed"]
+                        .as_boolean().is_(True),
+                        stored["transforms"]["artifacts"]["recovery_grants"]
+                        .as_integer() >= 0,
+                        stored["transforms"]["artifacts"]["preserved"]
+                        .as_integer() >= 0,
+                    )
+                    .limit(1)
+                )
+            ).scalars().first()
+    except Exception as exc:
+        if _is_absent_table_error(exc):
+            return None
+        raise
+    if row is None:
+        return None
+    result = dict(row.result_json)
+    if not _is_production_completion(result):
+        return None
+    return _replay_stored_result(
+        row.preflight_digest,
+        ConversionDecision(
+            disposition="unresolved_refusal", eligible=False,
+            reason_code="missing_completion",
+        ),
+        result,
+    )
+
+
 TransformFn = Callable[..., Any]
+
+
+def _uses_production_transforms(transforms: dict[str, TransformFn]) -> bool:
+    return transforms.keys() == DEFAULT_SUBSYSTEM_TRANSFORMS.keys() and all(
+        transforms[name] is fn
+        for name, fn in DEFAULT_SUBSYSTEM_TRANSFORMS.items()
+    )
 
 
 async def _run_transform(fn: TransformFn, session: AsyncSession, eligible: list[str]):
@@ -1123,14 +1213,16 @@ async def apply_conversion(
     holding the conversion claim (which proves no live writer exists);
     without the claim it fails closed with
     :class:`ConcurrentConversionError` rather than stealing a live writer.
-    Reruns with the same digest replay the recorded result, and a missing
-    stored completion replays as unpublished, never as success.
+    Custom reruns with the same digest replay the recorded result. The
+    exact production transforms repair an uncertified completion in place,
+    atomically with their effects, rather than replaying an unproven cutover.
     """
     if not operator_authorized:
         raise ConversionAuthorizationError(
             "single-user conversion apply requires explicit operator authorization"
         )
     transforms = dict(transforms or {})
+    production_transforms = _uses_production_transforms(transforms)
     options = preflight_result.options
 
     claimed = None
@@ -1154,13 +1246,13 @@ async def apply_conversion(
                 "preflight digest no longer binds the current source and options"
             )
 
-        decision = await evaluate_disposition(
-            session,
-            alias_groups=[set(g) for g in options.alias_groups],
-            collision_resolutions=dict(options.collision_resolutions),
-            deployment_owned_tables=set(options.deployment_owned_tables),
+        decision_options = normalize_options(
+            options.alias_groups,
+            options.collision_resolutions,
+            options.deployment_owned_tables,
             operator_authorized=True,
         )
+        decision = _decision_from_inventory(fresh, decision_options)
         if not decision.eligible:
             return ApplyResult(
                 digest=preflight_result.digest, published=False, decision=decision
@@ -1196,10 +1288,14 @@ async def apply_conversion(
             if existing is not None:
                 if str(getattr(existing, "status", "")) == "complete":
                     stored = dict(getattr(existing, "result_json", None) or {})
-                    return _replay_stored_result(
-                        preflight_result.digest, decision, stored
-                    )
-                if claimed is True:
+                    if not production_transforms or _is_production_completion(stored):
+                        return _replay_stored_result(
+                            preflight_result.digest, decision, stored
+                        )
+                    # An uncertified completion can come from custom/no-op
+                    # transforms. Under the locked, current eligibility proof,
+                    # run the real defaults before replacing that old result.
+                elif claimed is True:
                     # We hold the conversion-wide claim, so no live writer
                     # can own this row: it is a stale remnant of an older
                     # revision that committed ``in_progress`` before
@@ -1210,6 +1306,7 @@ async def apply_conversion(
                     )
                     await session.delete(existing)
                     await session.flush()
+                    existing = None
                 else:
                     raise ConcurrentConversionError(
                         "a conversion ledger row is in progress and liveness "
@@ -1241,14 +1338,24 @@ async def apply_conversion(
                 decision=decision,
                 transforms=outcomes,
             )
+            stored_result = result.to_sanitized_dict()
+            if production_transforms:
+                # Persist proof of actual production execution, not merely a
+                # complete row or caller-supplied transform outcome shape.
+                stored_result["production_transforms_completed"] = True
             try:
-                session.add(
-                    ledger_cls(
-                        preflight_digest=preflight_result.digest,
-                        status="complete",
-                        result_json=result.to_sanitized_dict(),
+                if existing is None:
+                    session.add(
+                        ledger_cls(
+                            preflight_digest=preflight_result.digest,
+                            status="complete",
+                            result_json=stored_result,
+                        )
                     )
-                )
+                else:
+                    # Repair and grants commit together; any failure retains
+                    # the prior completion and rolls back the new authority.
+                    existing.result_json = stored_result
                 await session.commit()
             except IntegrityError:
                 # A concurrent writer committed a ledger row for this digest
@@ -1267,9 +1374,10 @@ async def apply_conversion(
                     getattr(raced, "status", "")
                 ) == "complete":
                     stored = dict(getattr(raced, "result_json", None) or {})
-                    return _replay_stored_result(
-                        preflight_result.digest, decision, stored
-                    )
+                    if not production_transforms or _is_production_completion(stored):
+                        return _replay_stored_result(
+                            preflight_result.digest, decision, stored
+                        )
                 raise ConcurrentConversionError(
                     "conversion ledger conflicted without a completed winner"
                 )
@@ -1296,6 +1404,10 @@ async def startup_guard_decision(
     deployment_owned_tables=None,
 ) -> ConversionDecision:
     """Read-only guard for startup/upgrade routes: never writes, never seeds."""
+    if not (alias_groups or collision_resolutions or deployment_owned_tables):
+        completed = await _completed_production_result(session)
+        if completed is not None:
+            return completed.decision
     return await evaluate_disposition(
         session,
         alias_groups=alias_groups,
@@ -1507,15 +1619,28 @@ async def run_guarded_upgrade(
 ) -> ApplyResult:
     """Shared transaction/cutover entrypoint for every upgrade/startup route.
 
-    This is the only supported way to publish a conversion candidate:
-    capture a consistent preflight, then apply it with real subsystem
-    transforms through versioned migration 386 + ledger idempotency.
+    New candidates capture a consistent preflight, then apply it with real
+    subsystem transforms through versioned migration 386 + ledger idempotency.
+    Default restarts reuse certified current production completion without
+    rescanning retained history. Explicit evidence or transforms always take
+    the authoritative preflight/apply path.
     Alembic revision 386 creates only the ledger table and never applies a
     destructive conversion as a schema-upgrade side effect; CLI, worker, and
     HTTP startup routes must call this entrypoint instead of invoking
     subsystem conversions directly. Refusals perform no conversion-side
     writes; stale sources raise :class:`StaleAttributionError`.
     """
+    if not operator_authorized:
+        raise ConversionAuthorizationError(
+            "single-user conversion apply requires explicit operator authorization"
+        )
+    if transforms is None and not (
+        alias_groups or collision_resolutions or deployment_owned_tables
+    ):
+        completed = await _completed_production_result(session)
+        if completed is not None:
+            await session.rollback()
+            return completed
     selected = (
         dict(DEFAULT_SUBSYSTEM_TRANSFORMS) if transforms is None else dict(transforms)
     )

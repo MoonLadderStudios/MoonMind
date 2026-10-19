@@ -78,13 +78,29 @@ async def test_guarded_conversion_preserves_recovery_and_restarts(tmp_path, monk
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path)
+            raw = await session.get(TemporalArtifact, artifact_id)
+            preview_id = raw.metadata_json["preview_artifact_id"]
+            assert preview_id != artifact_id
+            retained = (await session.execute(select(TemporalArtifact))).scalars().all()
+            assert {row.artifact_id for row in retained} == {artifact_id, preview_id}
+            assert all(row.created_by_principal == owner and not row.operator_recovery_granted
+                       for row in retained)
+            preview = await session.get(TemporalArtifact, preview_id)
+            assert preview.redaction_level is TemporalArtifactRedactionLevel.PREVIEW_ONLY
+            assert preview.metadata_json == {"preview_of": artifact_id, "policy": "auto-generated"}
             artifacts = service(session, tmp_path)
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await artifacts.read(artifact_id=artifact_id, principal="operator")
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert result.published, result.to_sanitized_dict()
+            assert result.transforms["artifacts"]["recovery_grants"] == 2
         # A new service/session represents restart, without an account lookup.
         async with maker() as session:
+            retained = (await session.execute(select(TemporalArtifact))).scalars().all()
+            assert {row.artifact_id for row in retained if row.operator_recovery_granted} == {
+                artifact_id, preview_id}
+            assert {row.artifact_id for row in retained} == {artifact_id, preview_id}
+            assert all(row.created_by_principal == owner for row in retained)
             artifacts = service(session, tmp_path)
             for principal, admitted in [("operator", None), (owner, None),
                                         ("service:restore", owner),
@@ -187,13 +203,13 @@ async def test_same_count_artifact_authority_change_rejects_stale_preflight(tmp_
                     transforms=conversion.DEFAULT_SUBSYSTEM_TRANSFORMS)
 
 
-async def test_old_published_ledger_does_not_admit_until_real_conversion(tmp_path):
+async def test_old_published_ledger_preserves_admission_without_recovery_grant(tmp_path):
     from api_service.auth_providers import _disabled_account_free_allowed
     async with database(tmp_path) as maker:
         async with maker() as session:
-            await seed(session, tmp_path)
+            artifact_id, _owner = await seed(session, tmp_path)
             bound = await conversion.preflight(session)
-            # Historical completion is a negative fixture, never proof of success.
+            # Historical admission is not proof of the new artifact recovery.
             session.add(conversion.SingleUserConversionRun(
                 preflight_digest=conversion.compute_digest(bound.fingerprint, bound.options,
                     schema_revision="386_single_user_conversion_4346"),
@@ -201,10 +217,14 @@ async def test_old_published_ledger_does_not_admit_until_real_conversion(tmp_pat
                     "decision": {"disposition": "eligible_conversion"}},
             ))
             await session.commit()
-            assert await _disabled_account_free_allowed(session) is False
+            assert await _disabled_account_free_allowed(session) is True
+            assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert result.published, result.to_sanitized_dict()
             assert await _disabled_account_free_allowed(session) is True
+            assert (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
 
 
 async def test_interrupted_real_conversion_rolls_back_grant_and_retries(tmp_path):
@@ -297,7 +317,7 @@ async def test_machine_creator_and_caller_metadata_cannot_grant_recovery(tmp_pat
                 await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
 
 
-async def test_old_fresh_completion_requires_current_real_guarded_upgrade(tmp_path):
+async def test_old_fresh_admission_is_not_artifact_recovery_proof(tmp_path):
     from api_service.auth_providers import _disabled_account_free_allowed
     async with database(tmp_path) as maker:
         async with maker() as session:
@@ -306,10 +326,15 @@ async def test_old_fresh_completion_requires_current_real_guarded_upgrade(tmp_pa
                 result_json={"published": True, "decision": {"disposition": "fresh_init"}},
             ))
             await session.commit()
-            assert not await _disabled_account_free_allowed(session)
+            artifact_id, _owner = await seed(session, tmp_path)
+            assert await _disabled_account_free_allowed(session)
+            assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
             assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
         async with maker() as restarted:
             assert await _disabled_account_free_allowed(restarted)
+            assert (await restarted.get(TemporalArtifact, artifact_id)).operator_recovery_granted
 
 
 async def test_quarantine_short_circuits_linked_execution_raw_fallback(tmp_path, monkeypatch):
