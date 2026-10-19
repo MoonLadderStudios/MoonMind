@@ -19,6 +19,20 @@ from moonmind.security.auth_modes_4120 import (
 
 logger = logging.getLogger(__name__)
 
+# Request-local proof of the existing disabled-mode admission, never a header,
+# UUID convention, persisted account flag, or caller-supplied artifact metadata.
+_DISABLED_OPERATOR_ADMISSION = object()
+
+
+def get_operator_recovery_principal(request: Request) -> str | None:
+    """Carry admitted local-operator identity into protected artifact recovery."""
+    if (
+        getattr(request.state, "_disabled_operator_admission", None)
+        is _DISABLED_OPERATOR_ADMISSION
+    ):
+        return "operator"
+    return None
+
 
 def _extract_session_credentials(request: Request) -> tuple[str | None, str | None]:
     """Extract the MoonMind session cookie and bearer credentials.
@@ -107,22 +121,20 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
     """Migration-state gate for account-free disabled-mode access (#4346).
 
     Returns True only when the guarded conversion ledger records a
-    completed, published current-revision fresh-init or eligible conversion: migration
+    completed, published fresh-init or eligible conversion: migration
     state proves the source needed no account (or converted cleanly), so
     ordinary disabled-mode routes may serve a transient local-operator
     principal without minting a synthetic User row. Fresh installations
     initialize without a person and successful restarts no longer require
     live account tables. Any error -- including a missing ledger table on
-    pre-386 schemas -- fails closed to False: failed required conversion
-    must not expose ordinary account-free data.
+    pre-386 schemas -- fails closed to False. A later subsystem conversion
+    must not revoke already-established admission; its new access authority
+    is proved separately by that subsystem's protected conversion state.
     """
     try:
         from sqlalchemy import select as _select
 
-        from api_service.services.single_user_conversion import (
-            SCHEMA_REVISION,
-            SingleUserConversionRun,
-        )
+        from api_service.services.single_user_conversion import SingleUserConversionRun
 
         rows = (await session.execute(_select(SingleUserConversionRun))).scalars().all()
     except Exception:
@@ -133,8 +145,6 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
         if str(getattr(row, "status", "")) != "complete":
             continue
         stored = dict(getattr(row, "result_json", None) or {})
-        if stored.get("schema_revision") != SCHEMA_REVISION:
-            continue
         if not stored.get("published", False):
             continue
         decision = dict(stored.get("decision", None) or {})
@@ -309,7 +319,9 @@ async def _strict_current_user(
     application JWTs fail closed as ``auth_invalid``.
     """
     if is_disabled_local_mode():
-        return await _load_disabled_user(session)
+        user = await _load_disabled_user(session)
+        request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
+        return user
     user = await _resolve_session_principal(request, session, optional=False)
     assert user is not None
     return user
@@ -340,7 +352,9 @@ async def _optional_current_user(
     if isinstance(marker, str) and marker.strip() == "v1":
         return None
     if is_disabled_local_mode():
-        return await _load_disabled_user(session)
+        user = await _load_disabled_user(session)
+        request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
+        return user
     return await _resolve_session_principal(request, session, optional=True)
 
 

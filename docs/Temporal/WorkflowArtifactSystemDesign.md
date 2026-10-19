@@ -529,7 +529,9 @@ one human operator (including explicitly attested same-person UUID aliases).
 It records a protected, server-owned recovery disposition on artifacts with a
 proven human creator. Only the exact stable `operator` principal, or a service
 carrying that explicitly admitted principal, may use this disposition for
-restricted raw recovery. Caller metadata cannot grant recovery. Quarantined
+restricted raw recovery. HTTP reads carry this identity only after successful
+existing local-operator admission, separately from creator and consumer-claim
+principals. Caller metadata or headers cannot grant recovery. Quarantined
 bytes remain preview-only, and machine-created artifacts receive no human
 recovery grant. Original creator provenance, quota scopes, links, pins, and
 in-flight claim owners remain unchanged; the operator cannot release a legacy
@@ -538,14 +540,18 @@ expired claims remain provenance; their actor labels do not require live account
 
 The grant and current-revision completion record commit atomically. Authority
 writers are excluded while the guarded inventory is checked and transformed;
-interruption rolls both back. Historical ledger completion alone is not current
-readiness. Missing or malformed creators refuse conversion, including null
-creators with only deployment-ownership attestation. Retained live execution or
+interruption rolls both back. Historical ledger completion preserves established
+operator admission but grants no new artifact recovery authority. Missing or
+malformed creators refuse conversion, including null creators with only
+deployment-ownership attestation. Retained live execution or
 workflow parents require their own registered transforms and refuse before any
 artifact mutation when those transforms are absent. Historical links without a
 live execution remain intact and do not invalidate independently proven creator
 attribution. Schema installation itself grants no recovery access. Once recovery grants
 exist, schema downgrade refuses rather than silently losing them; repair forward.
+Default restarts replay certified production completion without rescanning
+retained history or granting recovery to later artifacts. Explicit preflight and
+apply still inspect current source evidence under the conversion guard.
 
 ---
 

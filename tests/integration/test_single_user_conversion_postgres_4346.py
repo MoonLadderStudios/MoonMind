@@ -578,6 +578,17 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         artifact_id = artifact.artifact_id
         await artifacts.write_complete(artifact_id=artifact_id, principal=owner,
             payload=b"retained postgres bytes", content_type="application/octet-stream")
+        # Restricted completion creates a separate preview under the same
+        # creator. Conversion must preserve and grant exactly this pair.
+        preview_id = artifact.metadata_json["preview_artifact_id"]
+        assert preview_id != artifact_id
+        retained = (await session.execute(select(TemporalArtifact))).scalars().all()
+        assert {row.artifact_id for row in retained} == {artifact_id, preview_id}
+        preview = await session.get(TemporalArtifact, preview_id)
+        assert preview.redaction_level is TemporalArtifactRedactionLevel.PREVIEW_ONLY
+        assert preview.metadata_json == {"preview_of": artifact_id, "policy": "auto-generated"}
+        assert all(row.created_by_principal == owner and not row.operator_recovery_granted
+                   for row in retained)
         session.add(TemporalArtifactPin(artifact_id=artifact_id, pinned_by_principal=owner))
         session.add(TemporalArtifactUseClaim(artifact_id=artifact_id,
             owner_principal=owner, request_id="retained", operation_kind="restore",
@@ -620,9 +631,18 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
             release.set()
         result = await asyncio.wait_for(converting, 10)
         assert result.published
-        assert result.transforms["artifacts"]["recovery_grants"] == 1
+        assert result.transforms["artifacts"]["recovery_grants"] == 2
 
     async with pg_maker() as restarted:
+        retained = (await restarted.execute(select(TemporalArtifact))).scalars().all()
+        assert {row.artifact_id for row in retained if row.operator_recovery_granted} == {
+            artifact_id, preview_id}
+        assert {row.artifact_id for row in retained} == {artifact_id, preview_id}
+        assert all(row.created_by_principal == owner for row in retained)
+        assert (await restarted.get(TemporalArtifact, artifact_id)).metadata_json[
+            "preview_artifact_id"] == preview_id
+        assert (await restarted.get(TemporalArtifact, preview_id)).metadata_json == {
+            "preview_of": artifact_id, "policy": "auto-generated"}
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
         row, payload = await artifacts.read(artifact_id=artifact_id, principal="operator")
         assert payload == b"retained postgres bytes"
@@ -648,7 +668,8 @@ async def test_postgres_artifact_conversion_rollback_and_old_ledger(pg_maker, mo
         session.add(SingleUserConversionRun(preflight_digest="historical", status="complete",
             result_json={"published": True, "decision": {"disposition": "eligible_conversion"}}))
         await session.commit()
-        assert not await _disabled_account_free_allowed(session)
+        assert await _disabled_account_free_allowed(session)
+        assert not (await session.get(TemporalArtifact, "retained")).operator_recovery_granted
         real_commit = session.commit
 
         async def interrupted_commit():
@@ -663,7 +684,7 @@ async def test_postgres_artifact_conversion_rollback_and_old_ledger(pg_maker, mo
         monkeypatch.setattr(session, "commit", real_commit)
     async with pg_maker() as restarted:
         assert not (await restarted.get(TemporalArtifact, "retained")).operator_recovery_granted
-        assert not await _disabled_account_free_allowed(restarted)
+        assert await _disabled_account_free_allowed(restarted)
         assert (await suc.run_guarded_upgrade(restarted, operator_authorized=True)).published
     async with pg_maker() as restarted:
         assert (await restarted.get(TemporalArtifact, "retained")).operator_recovery_granted
@@ -707,8 +728,11 @@ async def test_postgres_conversion_claim_ends_with_transaction(
     other_engine = create_async_engine(conversion_postgres_url)
     try:
         async with pg_maker() as session:
-            for replay in (False, True):
-                assert (await suc.run_guarded_upgrade(session, operator_authorized=True)).published
+            # Explicit production transforms exercise authoritative apply and
+            # digest replay, rather than the scan-free default startup replay.
+            for _ in range(2):
+                assert (await suc.run_guarded_upgrade(session, operator_authorized=True,
+                    transforms=suc.DEFAULT_SUBSYSTEM_TRANSFORMS)).published
                 async with other_engine.connect() as other:
                     assert (await other.execute(text("SELECT pg_try_advisory_xact_lock(:key)"),
                         {"key": suc._conversion_advisory_key()})).scalar() is True
@@ -716,7 +740,8 @@ async def test_postgres_conversion_claim_ends_with_transaction(
             await _mk_user(session)
             await _mk_user(session)
             await session.commit()
-            assert not (await suc.run_guarded_upgrade(session, operator_authorized=True)).published
+            assert not (await suc.run_guarded_upgrade(session, operator_authorized=True,
+                transforms=suc.DEFAULT_SUBSYSTEM_TRANSFORMS)).published
             async with other_engine.connect() as other:
                 assert (await other.execute(text("SELECT pg_try_advisory_xact_lock(:key)"),
                     {"key": suc._conversion_advisory_key()})).scalar() is True
