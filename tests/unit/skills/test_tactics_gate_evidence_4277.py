@@ -25,7 +25,12 @@ SCRIPT = (
     / "scripts"
     / "run_dood_unreal_tactics.sh"
 )
-_MANAGED_MARKERS = ("MOONMIND_AGENT_RUN_ID", "MOONMIND_RUNTIME_ID", "MOONMIND_URL")
+_MANAGED_MARKERS = (
+    "MOONMIND_AGENT_RUN_ID",
+    "MOONMIND_RUNTIME_ID",
+    "MOONMIND_URL",
+    "MOONMIND_CONTAINER_JOBS_SESSION_ID",
+)
 _PRIOR_PASS = '{"status":"PASS","resultsDir":"prior-verified-run"}\n'
 _NO_TESTS = "LogAutomationCommandLine: Display: No automation tests matched 'Tactics.Unit.Missing'"
 _FAILED = (
@@ -82,12 +87,11 @@ def _run(
     tmp_path: Path, repo: Path, *args: str, bin_dir: Path, managed: bool
 ) -> subprocess.CompletedProcess[str]:
     env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in _MANAGED_MARKERS
+        key: value for key, value in os.environ.items() if key not in _MANAGED_MARKERS
     }
     env["PATH"] = f"{bin_dir}{os.pathsep}{_system_tools_without_docker(tmp_path)}"
     env["HOME"] = str(tmp_path / "home")
+    env["MOONMIND_UNREAL_ENGINE_IMAGE"] = "example.invalid/unreal:configured"
     (tmp_path / "home").mkdir(exist_ok=True)
     if managed:
         env.update(
@@ -95,6 +99,7 @@ def _run(
                 "MOONMIND_AGENT_RUN_ID": "run-1",
                 "MOONMIND_RUNTIME_ID": "runtime-1",
                 "MOONMIND_URL": "http://api:8000",
+                "MOONMIND_REPO_DIR": str(repo),
             }
         )
     return subprocess.run(
@@ -112,14 +117,35 @@ def _managed_test_phase(tmp_path: Path, log_line: str) -> tuple[int, dict]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "python3").symlink_to(shutil.which("python3") or "/usr/bin/python3")
-    _stub(
-        bin_dir,
-        "moonmind",
-        f"[stdout] {log_line}\ncontainer job job-1: succeeded (exitCode=0)",
+    result = {
+        "job_id": "job-1",
+        "state": "succeeded",
+        "exit_code": 0,
+        "logs_ref": "artifact:logs",
+        "artifacts_ref": "artifact:outputs",
+        "log_tail": [log_line],
+        "log_error": None,
+    }
+    stub = bin_dir / "moonmind"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import hashlib, json, os, pathlib, sys\n"
+        "spec = json.loads(pathlib.Path(sys.argv[sys.argv.index('--spec') + 1]).read_text())\n"
+        f"result = {result!r}\n"
+        "for arg in spec['command']:\n"
+        "    if arg.startswith('-abslog='):\n"
+        "        path = pathlib.Path(os.environ['MOONMIND_REPO_DIR']) / "
+        "pathlib.Path(arg.split('=', 1)[1]).relative_to('/workspace')\n"
+        "        path.parent.mkdir(parents=True, exist_ok=True)\n"
+        f"        path.write_text({log_line!r} + '\\n')\n"
+        "        result['artifacts'] = [{**spec['outputs'][0], "
+        "'artifactRef': 'artifact:test-log', 'collectionStatus': 'collected', "
+        "'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}]\n"
+        "print(json.dumps(result))\n",
+        encoding="utf-8",
     )
-    completed = _run(
-        tmp_path, repo, "--phase", "test", bin_dir=bin_dir, managed=True
-    )
+    stub.chmod(0o755)
+    completed = _run(tmp_path, repo, "--phase", "test", bin_dir=bin_dir, managed=True)
     return completed.returncode, json.loads(gate.read_text(encoding="utf-8"))
 
 
@@ -202,9 +228,7 @@ def test_standalone_zero_test_run_is_not_test_success(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     _stub(bin_dir, "docker", _NO_TESTS)
 
-    completed = _run(
-        tmp_path, repo, "--phase", "test", bin_dir=bin_dir, managed=False
-    )
+    completed = _run(tmp_path, repo, "--phase", "test", bin_dir=bin_dir, managed=False)
 
     current = json.loads(gate.read_text(encoding="utf-8"))
     assert (current["status"], current["testStatus"]) == ("FAIL", "no_tests")

@@ -19,6 +19,20 @@ from moonmind.security.auth_modes_4120 import (
 
 logger = logging.getLogger(__name__)
 
+# Request-local proof of the existing disabled-mode admission, never a header,
+# UUID convention, persisted account flag, or caller-supplied artifact metadata.
+_DISABLED_OPERATOR_ADMISSION = object()
+
+
+def get_operator_recovery_principal(request: Request) -> str | None:
+    """Carry admitted local-operator identity into protected artifact recovery."""
+    if (
+        getattr(request.state, "_disabled_operator_admission", None)
+        is _DISABLED_OPERATOR_ADMISSION
+    ):
+        return "operator"
+    return None
+
 
 def _extract_session_credentials(request: Request) -> tuple[str | None, str | None]:
     """Extract the MoonMind session cookie and bearer credentials.
@@ -113,15 +127,14 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
     principal without minting a synthetic User row. Fresh installations
     initialize without a person and successful restarts no longer require
     live account tables. Any error -- including a missing ledger table on
-    pre-386 schemas -- fails closed to False: failed required conversion
-    must not expose ordinary account-free data.
+    pre-386 schemas -- fails closed to False. A later subsystem conversion
+    must not revoke already-established admission; its new access authority
+    is proved separately by that subsystem's protected conversion state.
     """
     try:
         from sqlalchemy import select as _select
 
-        from api_service.services.single_user_conversion import (
-            SingleUserConversionRun,
-        )
+        from api_service.services.single_user_conversion import SingleUserConversionRun
 
         rows = (await session.execute(_select(SingleUserConversionRun))).scalars().all()
     except Exception:
@@ -306,7 +319,9 @@ async def _strict_current_user(
     application JWTs fail closed as ``auth_invalid``.
     """
     if is_disabled_local_mode():
-        return await _load_disabled_user(session)
+        user = await _load_disabled_user(session)
+        request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
+        return user
     user = await _resolve_session_principal(request, session, optional=False)
     assert user is not None
     return user
@@ -325,17 +340,32 @@ async def _optional_current_user(
     the same ``Authorization: Bearer`` header plus the
     ``X-MoonMind-Execution-Fanout: v1`` marker. The session extractor
     would reject that bearer as ``auth_invalid`` before the route can
-    verify it, so a marked request skips session validation here and the
-    route authorizes via ``resolve_execution_fanout_capability``.
+    verify it, so a marked request skips person/session resolution in every
+    mode and the route authorizes via ``resolve_execution_fanout_capability``.
+    The marker itself grants no authority; other optional-user consumers must
+    reject a missing user instead of substituting operator access.
     """
-    if is_disabled_local_mode():
-        return await _load_disabled_user(session)
     try:
         marker = request.headers.get("x-moonmind-execution-fanout", "")
     except Exception:
         marker = ""
     if isinstance(marker, str) and marker.strip() == "v1":
         return None
+    if is_disabled_local_mode():
+        user = await _load_disabled_user(session)
+        request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
+        return user
+    if get_request_production_mode() == "header":
+        from moonmind.security.advanced_identity_4124 import trusted_proxy_header_name
+
+        if trusted_proxy_header_name() in request.headers:
+            from api_service.api.routers.advanced_auth_4124 import get_trusted_proxy_user
+
+            # Presence selects the existing authority, including an empty or
+            # invalid assertion. Absent assertions retain optional session and
+            # separately authenticated machine behavior. Proxy admission never
+            # mints the disabled-mode recovery sentinel.
+            return await get_trusted_proxy_user(request)
     return await _resolve_session_principal(request, session, optional=True)
 
 

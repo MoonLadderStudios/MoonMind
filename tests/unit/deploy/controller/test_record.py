@@ -72,6 +72,24 @@ def test_explicit_retry_starts_fresh_attempt_with_history_retained(
     assert len(store.load(op["operationId"])["attempts"]) == record.MAX_AUTO_ATTEMPTS + 1
 
 
+def test_exhausted_verification_recovery_keeps_partial_installation(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    operation = store.begin(stack="moonmind", desired_image="img", source_revision="")
+    store.confirm_installed(operation["operationId"], image="img", verification_pending=True)
+    installed = store.load(operation["operationId"])["installed"]
+
+    for _ in range(record.MAX_AUTO_ATTEMPTS):
+        store.record_attempt_error(operation["operationId"], error="verification unavailable")
+
+    final = store.load(operation["operationId"])
+    assert final["installed"] == installed
+    assert final["status"] == "partially_verified"
+    assert final["autoAttemptsExhausted"] is True
+
+
 def test_retry_is_refused_for_every_non_failed_status(controller_path, tmp_path):
     import pytest
 

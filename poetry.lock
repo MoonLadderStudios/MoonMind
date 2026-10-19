@@ -277,14 +277,14 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "1.13.0"
+version = "1.15.0"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "anthropic-1.13.0-py3-none-any.whl", hash = "sha256:157bd74dbf6a595cf9e5fcac557c791fd297924dc48261f57470c2ed6f4e6671"},
-    {file = "anthropic-1.13.0.tar.gz", hash = "sha256:ad11d9bb9adafdfea26113943bcde9973e2a439ebeeda6c89ff3e3d85bb2f5c1"},
+    {file = "anthropic-1.15.0-py3-none-any.whl", hash = "sha256:10189a7993c5c71a0a2d4bb80020ca6a2fd27679f51e627405da37251d15ff49"},
+    {file = "anthropic-1.15.0.tar.gz", hash = "sha256:90caa9df83e2fc8bddb4ddeb83b7191bce255f635c03eae055deec521741df08"},
 ]
 
 [package.dependencies]
@@ -292,6 +292,7 @@ anyio = ">=4.1.0,<5"
 docstring-parser = ">=0.15,<1"
 httpx2 = ">=2.0.0,<3"
 jiter = ">=0.4.0,<1"
+opentelemetry-api = ">=1.1.0,<2"
 pydantic = ">=1.10.0,<3"
 sniffio = ">=1,<2"
 typing-extensions = ">=4.14,<5"
@@ -5012,4 +5013,4 @@ tests = ["aiosqlite", "jsonschema", "pytest", "pytest-asyncio", "pytest-mock", "
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.16"
-content-hash = "9d6a944393956ba5d4320d8f9211822e123bd840ef1546fed8584a26ce2addef"
+content-hash = "d239ea4e2cd5bd446787f3fb416d796da81902bacb6a44d8e30a9a4b7b1af953"
