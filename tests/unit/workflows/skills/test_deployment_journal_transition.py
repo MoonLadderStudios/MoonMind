@@ -136,6 +136,59 @@ async def test_compaction_failure_leaves_recoverable_consumers_stopped(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_failed_apply_keeps_single_image_consumers_running(monkeypatch):
+    # Compose recreated every consumer on one image before failing. Nothing
+    # can mix journal formats, so a failed update must not strand them.
+    rows = [
+        consumer("writer", "agent_runtime", image="sha256:desired"),
+        consumer("sweeper", "artifacts", running=False, image="sha256:desired"),
+    ]
+    actions = []
+
+    async def docker(*args, **kwargs):
+        actions.append(args[0])
+        if args[0] == "ps":
+            return "\n".join(row["Id"] for row in rows)
+        if args[0] == "inspect":
+            return json.dumps(rows)
+        assert args == ("start", "sweeper")
+        rows[1]["State"] = {"Running": True, "Status": "running"}
+        return ""
+
+    monkeypatch.setattr(release, "docker", docker)
+    receipt = await release.prepare_journal_transition("moonmind-test", compact=False)
+    assert receipt == {
+        "status": "resumed", "consumers": ["writer", "sweeper"], "image": "sha256:desired",
+    }
+    assert "stop" not in actions
+    assert all(row["State"]["Running"] for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_failed_apply_stops_mixed_image_consumers_with_reason(monkeypatch):
+    rows = [
+        consumer("writer", "agent_runtime", image="sha256:desired"),
+        consumer("sweeper", "artifacts", image="sha256:source"),
+    ]
+
+    async def docker(*args, **kwargs):
+        if args[0] == "ps":
+            return "\n".join(row["Id"] for row in rows)
+        if args[0] == "inspect":
+            return json.dumps(rows)
+        assert args[0] == "stop"
+        for row in rows:
+            row["State"] = {"Running": False, "Status": "exited"}
+        return ""
+
+    monkeypatch.setattr(release, "docker", docker)
+    receipt = await release.prepare_journal_transition("moonmind-test", compact=False)
+    assert receipt["status"] == "quiesced"
+    assert receipt["images"] == ["sha256:desired", "sha256:source"]
+    assert "Retry the update" in receipt["reason"]
+
+
+@pytest.mark.asyncio
 async def test_controller_helper_holds_existing_deployment_lock(tmp_path, monkeypatch, capsys):
     from moonmind.workflows.skills.deployment_execution import (
         FileDeploymentUpdateLockManager,

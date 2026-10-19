@@ -1350,9 +1350,11 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
         )
         if receipt.get("status") == "unsupported":
             continue
-        expected = "prepared" if compact else "quiesced"
-        if receipt.get("status") != expected:
-            raise ValueError(f"Journal transition returned no {expected} receipt")
+        # A failed apply leaves single-image consumers running ("resumed");
+        # only mixed images stay fenced ("quiesced") until a retry.
+        expected = ("prepared",) if compact else ("quiesced", "resumed")
+        if receipt.get("status") not in expected:
+            raise ValueError(f"Journal transition returned no {expected[0]} receipt")
         store.record_journal_transition(operation_id, {"helperImage": helper_image, "receipt": receipt})
         return receipt
     raise ValueError("No installed or staged image can prepare the active recovery journals")
@@ -1685,9 +1687,11 @@ def production_apply(
         store.record_attempt_error(
             operation["operationId"], error=f"apply failed: {exc} {exc.output}"
         )
-        # Compose can recreate only part of the fleet before failing. Keep
-        # every writer/sweeper stopped until this same owner recompacts and
-        # retries; do not resume an old reader beside a new chunk writer.
+        # Compose can recreate only part of the fleet before failing. Never
+        # resume an old reader beside a new chunk writer: mixed-image
+        # writers/sweepers stay stopped until this owner recompacts and
+        # retries. Single-image consumers keep running so a terminal failure
+        # cannot strand agent launches.
         if store.load(operation["operationId"]).get("journalTransition"):
             try:
                 prepare_controller_journals(
