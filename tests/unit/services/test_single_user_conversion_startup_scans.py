@@ -46,7 +46,7 @@ async def database(tmp_path):
 
 async def seed(session):
     owner = uuid4()
-    session.add(User(id=owner, email="retained@example.invalid"))
+    session.add(User(id=owner, email=f"{owner}@example.invalid"))
     artifact = TemporalArtifact(
         artifact_id=f"retained-{uuid4().hex}",
         storage_key="retained-key",
@@ -99,6 +99,48 @@ async def test_explicit_preflight_and_apply_each_scan_once(tmp_path, monkeypatch
             )
             assert result.published
             assert collect.await_count == 1
+
+
+async def test_refused_upgrade_scans_once_without_locking_writers(
+    tmp_path, monkeypatch,
+):
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            await seed(session)
+            await seed(session)
+            collect = AsyncMock(wraps=conversion.collect_inventory)
+            monkeypatch.setattr(conversion, "collect_inventory", collect)
+            lock = AsyncMock(
+                side_effect=AssertionError("a refusal must not block writers"),
+            )
+            monkeypatch.setattr(conversion, "_lock_conversion_evidence", lock)
+
+            result = await conversion.run_guarded_upgrade(
+                session, operator_authorized=True,
+            )
+
+            assert not result.published
+            assert result.decision.disposition == "multi_person_refusal"
+            assert collect.await_count == 1
+            lock.assert_not_awaited()
+
+
+async def test_artifact_evidence_fingerprint_binds_values_not_order(tmp_path):
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            artifact_id, _owner = await seed(session)
+            await seed(session)
+            before = (await conversion.collect_inventory(session)).fingerprint()
+            artifact = await session.get(TemporalArtifact, artifact_id)
+            artifact.storage_key = "changed-key"
+            await session.commit()
+            changed = (await conversion.collect_inventory(session)).fingerprint()
+            artifact.storage_key = "retained-key"
+            await session.commit()
+            restored = (await conversion.collect_inventory(session)).fingerprint()
+
+    assert changed != before
+    assert restored == before
 
 
 @pytest.mark.parametrize("retained", [False, True])

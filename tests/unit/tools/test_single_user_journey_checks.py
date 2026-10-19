@@ -397,12 +397,6 @@ def test_preset_read_back_requires_the_saved_version(api_server, tmp_path):
         journey.verify_preset(api, state)
 
 
-GUARD_ELIGIBLE = (
-    "Single-user conversion guard: disposition=eligible_conversion "
-    "reason=single_operator (no further detail)"
-)
-
-
 def _conversion(tmp_path, log_text):
     api_log = tmp_path / "api.log"
     api_log.write_text(log_text)
@@ -449,7 +443,7 @@ def test_missing_transform_coverage_is_recorded_as_unpublished(tmp_path, capsys)
         "Single-user guarded upgrade blocked (missing_transform_coverage: "
         "retained subsystems lack registered transforms: schedules,temporal); "
         "preserving source data, serving release, and operator access without "
-        "conversion-side mutation.\n" + GUARD_ELIGIBLE + "\n",
+        "conversion-side mutation.\n",
     )
 
     assert code == 0
@@ -459,16 +453,6 @@ def test_missing_transform_coverage_is_recorded_as_unpublished(tmp_path, capsys)
         "pendingSubsystems": ["schedules", "temporal"],
     }
     assert "NOT published" in capsys.readouterr().out
-
-
-def test_missing_coverage_without_single_operator_attribution_fails(tmp_path):
-    code, _ = _conversion(
-        tmp_path,
-        "Single-user guarded upgrade blocked (missing_transform_coverage: "
-        "retained subsystems lack registered transforms: temporal); ...\n",
-    )
-
-    assert code == 1
 
 
 @pytest.mark.parametrize(
@@ -487,7 +471,7 @@ def test_missing_coverage_without_single_operator_attribution_fails(tmp_path):
     ],
 )
 def test_refused_deferred_or_unobserved_conversion_fails(tmp_path, line):
-    code, _ = _conversion(tmp_path, line + "\n" + GUARD_ELIGIBLE + "\n")
+    code, _ = _conversion(tmp_path, line + "\n")
 
     assert code == 1
 
