@@ -32,7 +32,6 @@ from moonmind.workflows.temporal.artifacts import (
 from tests.unit.api.routers.test_executions import (
     _build_execution_record,
     _override_temporal_client,
-    _override_user_dependencies,
 )
 
 
@@ -89,14 +88,11 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
     app.include_router(router)
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
-    _override_user_dependencies(app, is_superuser=False)
-    for dependency in tuple(app.dependency_overrides):
-        if getattr(dependency, "__name__", "") in {
-            "_current_user_fallback",
-            "_strict_current_user",
-            "_optional_current_user",
-        }:
-            app.dependency_overrides[dependency] = lambda: None
+    # Exercise the real machine-first boundary, not an auth=None override.
+    # This populated catalog has no account or completed account conversion.
+    from moonmind.security import auth_modes_4120
+
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
 
     async def session_dependency():
         async with sessions() as session:

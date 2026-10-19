@@ -159,7 +159,10 @@ closed even when the main config still matches. The Omnigent-only listener permi
 HTTP control-plane exceptions to `omnigent:8000` and to `api:8000` for the
 container Tool call, execution creation, and child execution description paths.
 Execution routes require both the fan-out version marker and a bearer header;
-the API then verifies the workflow-scoped capability and child relationship.
+the API then verifies the workflow-scoped capability and child relationship
+without first resolving an application person, including in local disabled mode.
+The marker alone grants no access, and these credentials do not authorize the
+operator artifact API.
 No other workload network can reach this listener, and all other MoonMind API
 paths, methods, and control-plane destinations are denied. The transport route
 is always available to compatible hosts but grants no authority without the
