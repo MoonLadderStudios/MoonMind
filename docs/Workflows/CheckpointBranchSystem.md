@@ -306,7 +306,7 @@ One durable owner validates pinned source/lineage/digests, instructions, binding
 
 Retries reuse one server-derived workflow/branch/turn launch identity and cannot send a second first message. Fresh session authority never copies the source OAuth lease. The operation ledger claims launch before artifacts; turn-plus-kind ownership reuses and byte-validates committed artifacts after partial failures.
 
-Terminal acceptance resolves, validates, links, and pins retained artifacts, including nested checkpoints and copied Omnigent evidence. Reject local paths, raw credentials, provider grants, and unrestricted authority; live handles remain runtime-owned. If bounded retention/validation retries exhaust, record sanitized blocked state with only the unchanged terminal payload's digest.
+Terminal acceptance resolves, validates, links, and pins retained artifacts, including nested checkpoints and copied Omnigent evidence. The actual Activity must match the stored turn launch before reads can use its source, turn, or recorded AgentRun workflow scope; artifact references cannot add authority, and raw/quarantine gates remain in force. Reject local paths, raw credentials, provider grants, and unrestricted authority; live handles remain runtime-owned. If bounded retention/validation retries exhaust, record sanitized blocked state with only the unchanged terminal payload's digest.
 
 ### 8.6 Compare branches
 

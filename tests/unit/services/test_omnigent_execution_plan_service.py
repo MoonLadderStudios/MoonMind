@@ -29,6 +29,7 @@ from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_COMPATIBILITY_VERSION,
     OMNIGENT_SESSION_FEATURE_GENERATION,
@@ -118,6 +119,24 @@ class _ArtifactService:
     async def write_complete(self, *, artifact_id: str, payload: bytes, **_kwargs):
         self.payloads[artifact_id] = payload
         return SimpleNamespace(artifact_id=artifact_id)
+
+
+def _resolver_request(plan, *, workflow_id: str) -> AgentExecutionRequest:
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=workflow_id,
+        idempotencyKey=f"{workflow_id}:step",
+        parameters={"executionPlanRef": plan.planRef},
+        stepExecution={
+            "workflowId": workflow_id,
+            "runId": "run-1",
+            "logicalStepId": "step",
+            "executionOrdinal": 1,
+            "stepExecutionId": f"{workflow_id}:run-1:step:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+    )
 
 
 class _PlanStore:
@@ -840,8 +859,13 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
     await db_session.commit()
     await db_session.close()
 
+    execution_request = _resolver_request(
+        envelope, workflow_id="mm:test-profile-catalog-build"
+    )
+
     class Gateway:
-        async def read_bytes(self, ref):
+        async def read_admitted_input(self, ref, *, request):
+            assert request is execution_request
             return artifacts.payloads[ref.removeprefix("artifact:")]
 
     # The next worker must be able to resolve the admitted plan from durable
@@ -849,7 +873,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
     host_class, policy = await OmnigentPlannedHostResolver(
         catalog_repository=DbHarnessCatalogRepository(factory),
         artifact_gateway=Gateway(),
-    )(envelope)
+    )(envelope, request=execution_request)
     assert host_class.ref == envelope.payload.hostClassRef
     assert policy.ref == envelope.payload.launchPolicyRef
 
@@ -1180,15 +1204,20 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
         codex.implementation.implementation_ref()
     )
 
+    persisted = await plan_store.load(result.envelope.planRef)
+    execution_request = _resolver_request(
+        persisted, workflow_id="mm:test-codex-synchronized-inventory"
+    )
+
     class Gateway:
-        async def read_bytes(self, ref):
+        async def read_admitted_input(self, ref, *, request):
+            assert request is execution_request
             return artifacts.payloads[ref.removeprefix("artifact:")]
 
-    persisted = await plan_store.load(result.envelope.planRef)
     host_class, policy = await OmnigentPlannedHostResolver(
         catalog_repository=DbHarnessCatalogRepository(factory),
         artifact_gateway=Gateway(),
-    )(persisted)
+    )(persisted, request=execution_request)
     assert host_class.imageRef == host_image_ref
     assert host_class.omnigentBuildDigest == host_build_digest
     assert policy.ref == "codex-on-demand@2"

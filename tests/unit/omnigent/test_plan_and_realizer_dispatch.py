@@ -1646,15 +1646,22 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
     monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
     monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
 
-    plan = compile_execution_plan(**_codex_plan_inputs())
-    request = _durable_skill_snapshot_request(plan)
+    from tests.unit.omnigent.test_admitted_input_authority import (
+        _admitted_plan,
+        _request,
+    )
+
     durable_gateway = TemporalOmnigentArtifactGateway(durable_artifact_storage)
     skillset_ref = await _write_durable_skill_snapshot(
-        durable_artifact_storage,
-        request.correlation_id,
-        "run-codex-skill",
+        durable_artifact_storage, "workflow-codex-skill", "run-codex-skill"
     )
     assert skillset_ref.startswith("art_")
+    skills = SimpleNamespace(manifest_id=skillset_ref)
+    plan, binding = await _admitted_plan(durable_artifact_storage, skills)
+    request = _request(
+        plan, binding, workflow_id="workflow-codex-skill", skills=skills
+    )
+    await durable_gateway.admit_execution_plan_inputs(request=request, plan=plan)
 
     installed: dict[str, Any] = {}
 
@@ -1683,6 +1690,7 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
         workspace_key="workflow-codex-skill:step-codex-skill",
         resolved_skillset_ref=skillset_ref,
         artifact_gateway=installed["artifact_gateway"],
+        request=request,
     )
 
     assert (projection / "_manifest.json").is_file()

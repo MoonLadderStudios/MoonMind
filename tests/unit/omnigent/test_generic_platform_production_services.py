@@ -890,8 +890,11 @@ async def test_planned_host_resolver_uses_exact_launch_artifact(
                 )
             )
 
+    request = _request()
+
     class Artifacts:
-        async def read_bytes(self, ref: str) -> bytes:
+        async def read_admitted_input(self, ref: str, *, request) -> bytes:
+            assert request.correlation_id == "workflow-1"
             assert ref == "artifact:launch-1"
             return raw if defect != "changed-artifact" else raw + b"changed"
 
@@ -902,13 +905,13 @@ async def test_planned_host_resolver_uses_exact_launch_artifact(
     )
     if defect != "none":
         with pytest.raises(HarnessPlatformError) as failure:
-            await resolver(plan)
+            await resolver(plan, request=request)
         assert (
             failure.value.code
             == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
         )
         return
-    host, policy = await resolver(plan)
+    host, policy = await resolver(plan, request=request)
     assert host.omnigentBuildDigest == plan.payload.omnigentHostBuildDigest
     assert host.omnigentVersion == "1.0.0"
 
@@ -3589,7 +3592,7 @@ async def _generic_publication_harness(
         }
     )
 
-    async def resolve_host(_plan):
+    async def resolve_host(_plan, *, request):
         return host_class, get_launch_policy("omnigent-on-demand@1")
 
     async def session_driver(request, *, session_authority_sink):
@@ -4590,7 +4593,7 @@ async def test_generic_realizer_reports_a_launch_that_never_became_ready() -> No
 
     harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
 
-    async def _unavailable_host(_plan_envelope):
+    async def _unavailable_host(_plan_envelope, *, request):
         raise RuntimeError("host class is unavailable")
 
     harness.realizer._resolve_host = _unavailable_host
