@@ -107,6 +107,7 @@ async def test_verifier_docker_discovery_tool_replay(tmp_path, monkeypatch, case
     requests = []
     states = iter(case.get("serviceStates", []))
     job_id = "container-job:" + "a" * 32
+    automation_report = b'<testsuite name="native-smoke" tests="3" failures="0"/>\n'
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -147,6 +148,25 @@ async def test_verifier_docker_discovery_tool_replay(tmp_path, monkeypatch, case
                             "text": "native-smoke: 3 passed",
                         }],
                         "nextCursor": None,
+                    }
+                }
+            elif tool == "container.artifacts":
+                assert body["arguments"]["jobId"] == job_id
+                response = {
+                    "result": {
+                        "jobId": job_id,
+                        "artifacts": [
+                            {
+                                "name": "automation-report",
+                                "relativePath": "artifacts/automation.xml",
+                                "artifactRef": "artifact:automation-report",
+                                "collectionStatus": "collected",
+                                "sha256": hashlib.sha256(automation_report).hexdigest(),
+                                "sizeBytes": len(automation_report),
+                            }
+                        ],
+                        "nextCursor": None,
+                        "publication": {"state": "succeeded"},
                     }
                 }
             else:
@@ -214,7 +234,7 @@ async def test_verifier_docker_discovery_tool_replay(tmp_path, monkeypatch, case
     documented_spec = json.loads(documents["tools/automation-job.json"])
     assert submission["spec"]["command"] == documented_spec["command"]
     if case_name == "available":
-        assert observed[-9:] == [
+        assert observed[-10:] == [
             "container.status",
             "state:queued",
             "container.status",
@@ -222,9 +242,11 @@ async def test_verifier_docker_discovery_tool_replay(tmp_path, monkeypatch, case
             "container.status",
             "state:succeeded",
             "container.logs",
+            "container.artifacts",
             "tool.evidence-returned",
             "provider.report",
         ]
+        assert "Warning: output artifacts could not be read" not in output.output
         assert "NOT RUN" not in report_path.read_text()
     else:
         assert [request["tool"] for request in requests] == ["container.submit"]

@@ -37,7 +37,7 @@ UP_TIMEOUT_SECONDS = 900
 MAX_COMMAND_TIMEOUT_SECONDS = 900
 SERVICE_OBSERVATION_FORMAT = (
     '{"Service":{{json .Service}},"State":{{json .State}},'
-    '"ExitCode":{{json .ExitCode}},"Labels":{'
+    '"Health":{{json .Health}},"ExitCode":{{json .ExitCode}},"Labels":{'
     '"com.docker.compose.oneoff":{{json (.Label "com.docker.compose.oneoff")}}}}'
 )
 
@@ -264,8 +264,9 @@ def observe_services(
     """Observe which selected services are up after an apply.
 
     Read-only: runs ``docker compose ps --all`` and reports a selected
-    service as up when a service container is ``running``, or ``exited``
-    with exit code 0. Docker restarts ``always``/``unless-stopped``
+    service as up when a service container is ``running`` with a healthy
+    or absent healthcheck, or ``exited`` with exit code 0. Docker restarts
+    ``always``/``unless-stopped``
     containers instead of leaving them exited, so a clean exit is a
     run-to-completion service (``init-db``) that finished; a non-zero exit
     stays a failure. One-off ``compose run`` containers are not service
@@ -310,18 +311,33 @@ def observe_services(
                 records.append(item)
     running: set[str] = set()
     completed: set[str] = set()
+    unready: set[str] = set()
+    health: dict[str, str] = {}
     for item in records:
         service = str(item.get("Service") or "")
         if service not in targets or _is_one_off(item):
             continue
         state = str(item.get("State") or "").lower()
         if state == "running":
-            running.add(service)
+            current_health = str(item.get("Health") or "").lower()
+            if current_health not in ("", "healthy"):
+                unready.add(service)
+                health[service] = current_health
+            else:
+                running.add(service)
+                if service not in unready:
+                    health[service] = current_health
         elif state == "exited" and str(item.get("ExitCode")) == "0":
             completed.add(service)
-    completed -= running
-    observed = {name: name in running or name in completed for name in targets}
-    return {"services": observed, "completed": sorted(completed)}
+        else:
+            unready.add(service)
+            health.pop(service, None)
+    completed -= running | unready
+    observed = {
+        name: (name in running or name in completed) and name not in unready
+        for name in targets
+    }
+    return {"services": observed, "completed": sorted(completed), "health": health}
 
 
 def _is_one_off(item: Mapping[str, Any]) -> bool:
@@ -376,12 +392,16 @@ def post_apply_checks(
     dispatch_ok: bool | None,
     operator_access: Mapping[str, str] | None = None,
     completed_services: Sequence[str] = (),
+    service_health: Mapping[str, str] | None = None,
 ) -> dict:
     """Verify after apply. Failed/unavailable mandatory checks stay explicit."""
     checks = []
     completed = set(completed_services)
     for service, running in services_running.items():
-        if not running:
+        health = (service_health or {}).get(service, "")
+        if not running and health:
+            detail = f"health check {health} after apply"
+        elif not running:
             detail = "not running (or exited non-zero) after apply"
         elif service in completed:
             detail = "completed (exit 0)"

@@ -52,6 +52,12 @@ class _FakeClient:
         self.calls.append((tool, arguments))
         if tool == "container.submit":
             return {"jobId": "container-job:" + "1" * 32, "state": "queued"}
+        if tool == "container.artifacts":
+            return {
+                "jobId": "container-job:" + "1" * 32,
+                "artifacts": [],
+                "publication": {"state": "succeeded"},
+            }
         if tool == "container.logs":
             return {
                 "jobId": "container-job:" + "1" * 32,
@@ -434,6 +440,7 @@ def test_run_python_tests_polls_to_authoritative_terminal_evidence() -> None:
         "container.status",
         "container.status",
         "container.logs",
+        "container.artifacts",
     ]
 
 
@@ -506,3 +513,163 @@ def test_container_cli_prints_authoritative_terminal_cause(
     assert result.exit_code == 1
     assert "failureClass=image_not_found" in result.output
     assert "message=deployment image source is absent" in result.output
+
+
+
+@pytest.mark.parametrize("state,exit_code", [("succeeded", 0), ("failed", 1)])
+def test_container_cli_json_preserves_result_and_exit_status(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, state: str, exit_code: int
+) -> None:
+    from dataclasses import asdict
+
+    spec_path = tmp_path / "job.json"
+    spec_path.write_text(
+        '{"imageSourceRef":"tactics-unreal","command":["true"],'
+        '"resources":{"cpuMillis":1000,"memoryMiB":512}}'
+    )
+    receipt = ContainerJobResult(
+        job_id="container-job:receipt",
+        state=state,
+        exit_code=exit_code,
+        failure_class="execution_failed" if exit_code else None,
+        message="build failed" if exit_code else None,
+        logs_ref="artifact:logs",
+        artifacts_ref="artifact:outputs",
+        log_tail=("terminal output",),
+        log_error="logs unavailable",
+    )
+    monkeypatch.setattr(
+        "moonmind.cli.run_container_job", lambda *_args, **_kwargs: receipt
+    )
+    result = CliRunner().invoke(
+        app, ["container", "run", "--spec", str(spec_path), "--json"]
+    )
+    assert result.exit_code == exit_code
+    assert json.loads(result.stdout) == json.loads(json.dumps(asdict(receipt)))
+
+
+def test_container_cli_json_redacts_failure_diagnostics(tmp_path, monkeypatch) -> None:
+    spec_path = tmp_path / "job.json"
+    spec_path.write_text(
+        '{"imageSourceRef":"tactics-unreal","command":["true"],"resources":{"cpuMillis":1000,"memoryMiB":512}}'
+    )
+    secret = "ghp_" + "x" * 40
+    receipt = ContainerJobResult(
+        job_id="container-job:receipt",
+        state="failed",
+        exit_code=1,
+        failure_class="execution_failed",
+        message=f"request rejected: {secret}",
+        logs_ref=None,
+        artifacts_ref=None,
+        log_tail=(f"failure: {secret}",),
+        log_error=f"unavailable: {secret}",
+        artifact_error=f"manifest unavailable: {secret}",
+    )
+    monkeypatch.setattr(
+        "moonmind.cli.run_container_job", lambda *_args, **_kwargs: receipt
+    )
+    result = CliRunner().invoke(
+        app, ["container", "run", "--spec", str(spec_path), "--json"]
+    )
+    assert result.exit_code == 1
+    assert secret not in result.stdout
+    assert json.loads(result.stdout)["state"] == "failed"
+
+
+def test_container_result_reads_authoritative_output_hashes_across_pages() -> None:
+    class ArtifactClient(_FakeClient):
+        def call(self, tool, arguments):
+            if tool != "container.artifacts":
+                return super().call(tool, arguments)
+            self.calls.append((tool, arguments))
+            return {
+                "jobId": "container-job:" + "1" * 32,
+                "artifacts": [
+                    {
+                        "name": "test-log",
+                        "relativePath": "artifacts/test.log",
+                        "artifactRef": "artifact:test-log",
+                        "sha256": "a" * 64,
+                        "sizeBytes": 12,
+                        "collectionStatus": "collected",
+                    }
+                ]
+                if arguments.get("cursor")
+                else [],
+                "nextCursor": None if arguments.get("cursor") else "next",
+                "publication": {"state": "succeeded"},
+            }
+
+    client = ArtifactClient(["succeeded"])
+    result = run_container_job(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+            "outputs": [{"name": "test-log", "relativePath": "artifacts/test.log"}],
+        },
+        env=_ENV,
+        client=client,
+    )
+    assert result.artifacts[0]["sha256"] == "a" * 64
+    assert result.artifacts[0]["relativePath"] == "artifacts/test.log"
+    assert result.artifact_error is None
+    assert [
+        args.get("cursor")
+        for tool, args in client.calls
+        if tool == "container.artifacts"
+    ] == [None, "next"]
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "repeated_cursor", "wrong_job"])
+def test_artifact_read_failure_preserves_authoritative_job_result(failure) -> None:
+    class ArtifactClient(_FakeClient):
+        def call(self, tool, arguments):
+            if tool != "container.artifacts":
+                return super().call(tool, arguments)
+            if failure == "unavailable":
+                raise ContainerJobCliError("manifest unavailable")
+            return {
+                "jobId": "container-job:"
+                + ("2" if failure == "wrong_job" else "1") * 32,
+                "artifacts": [],
+                "nextCursor": "again",
+                "publication": {"state": "succeeded"},
+            }
+
+    result = run_container_job(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+            "outputs": [{"name": "test-log", "relativePath": "artifacts/test.log"}],
+        },
+        env=_ENV,
+        client=ArtifactClient(["succeeded"]),
+    )
+    assert result.state == "succeeded"
+    assert result.exit_code == 0
+    assert result.artifacts == ()
+    assert result.artifact_error
+
+
+def test_artifact_reader_fails_closed_at_its_page_bound() -> None:
+    from moonmind.container_job_cli import _read_artifacts
+
+    class ArtifactClient:
+        count = 0
+
+        def call(self, tool, arguments):
+            self.count += 1
+            return {
+                "jobId": "container-job:" + "1" * 32,
+                "artifacts": [],
+                "nextCursor": str(self.count),
+                "publication": {"state": "succeeded"},
+            }
+
+    client = ArtifactClient()
+    with pytest.raises(ContainerJobCliError, match="bounded page limit"):
+        _read_artifacts(client, "container-job:" + "1" * 32, max_pages=2)
+    assert client.count == 2

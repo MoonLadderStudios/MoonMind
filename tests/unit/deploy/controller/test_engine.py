@@ -394,6 +394,50 @@ def test_service_observation_survives_verbose_compose_rows(controller_path, monk
     assert ".ExitCode" in projection and ".State" in projection
 
 
+def test_service_observation_checks_current_health(controller_path):
+    import json
+
+    engine = load("engine")
+    rows = [
+        {"Service": "healthy", "State": "running", "Health": "healthy"},
+        {"Service": "plain", "State": "running", "Health": ""},
+        {"Service": "unhealthy", "State": "running", "Health": "unhealthy"},
+        {"Service": "unhealthy", "State": "running", "Health": "healthy"},
+        {"Service": "starting", "State": "running", "Health": "healthy"},
+        {"Service": "starting", "State": "running", "Health": "starting"},
+        {"Service": "failed-replica", "State": "running", "Health": "healthy"},
+        {"Service": "failed-replica", "State": "exited", "ExitCode": 1},
+        {"Service": "stopped-replica", "State": "created"},
+        {"Service": "stopped-replica", "State": "running", "Health": "healthy"},
+        {"Service": "init-db", "State": "exited", "ExitCode": 0},
+    ]
+    commands = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            commands.append(args)
+            return {"exit": 0, "output": json.dumps(rows)}
+
+    observed = engine.observe_services(
+        Runner(), ("docker", "compose"), tuple(row["Service"] for row in rows),
+    )
+
+    assert observed["services"] == {
+        "healthy": True, "plain": True, "unhealthy": False,
+        "starting": False, "init-db": True,
+        "failed-replica": False, "stopped-replica": False,
+    }
+    assert observed["completed"] == ["init-db"]
+    assert ".Health" in commands[0][commands[0].index("--format") + 1]
+    checks = engine.post_apply_checks(
+        services_running=observed["services"], dispatch_ok=True,
+        completed_services=observed["completed"], service_health=observed["health"],
+    )["checks"]
+    by_name = {check["name"]: check for check in checks}
+    assert "unhealthy" in by_name["service:unhealthy"]["detail"]
+    assert "starting" in by_name["service:starting"]["detail"]
+
+
 def test_observe_services_rejects_destructive_or_empty_observation(controller_path):
     import pytest
 

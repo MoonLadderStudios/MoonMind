@@ -15,7 +15,7 @@ done
 if [[ ${#_mm_missing[@]} -eq 0 ]]; then
   exec python3 "$(dirname "${BASH_SOURCE[0]}")/run_moonmind_unreal_tactics.py" "$@"
 fi
-if [[ ${#_mm_missing[@]} -lt 3 ]]; then
+if [[ ${#_mm_missing[@]} -lt 3 || -n "${MOONMIND_CONTAINER_JOBS_SESSION_ID:-}" ]]; then
   echo "error: this looks like a MoonMind managed session, but the container-job" >&2
   echo "       handoff is incomplete. Missing: ${_mm_missing[*]}." >&2
   echo "       Unreal tests run through 'moonmind container', never a sandbox" >&2
@@ -32,9 +32,9 @@ Usage:
   run_dood_unreal_tactics.sh [options]
 
 Options:
-  --repo <path>               Absolute repo path (default: /mnt/d/Unreal/Tactics)
+  --repo <path>               Repo path (default: current working directory)
   --image <image>             Unreal runner image
-                              (default: ghcr.io/epicgames/unreal-engine:dev-5.5@sha256:3f7b292cda7f6066aeaea46fa95a520a0d26811810e0d082cfbf5dc85018bd82)
+                              (default: MOONMIND_UNREAL_ENGINE_IMAGE; required if unset)
   --platform <value>          Docker platform (default: linux/amd64)
   --phase <value>             all|build|test (default: all)
   --target <name>             UBT target (default: TacticsEditor)
@@ -65,6 +65,7 @@ EOF
 }
 
 fail() {
+  GATE_REASON="$*"
   echo "[ERROR] $*" >&2
   exit 1
 }
@@ -132,8 +133,8 @@ resolve_and_validate_gate_file() {
   printf '%s' "$normalized"
 }
 
-REPO_DIR="/mnt/d/Unreal/Tactics"
-IMAGE="ghcr.io/epicgames/unreal-engine:dev-5.5@sha256:3f7b292cda7f6066aeaea46fa95a520a0d26811810e0d082cfbf5dc85018bd82"
+REPO_DIR="$(pwd)"
+IMAGE="${MOONMIND_UNREAL_ENGINE_IMAGE:-}"
 PLATFORM="linux/amd64"
 PHASE="all"
 TARGET="TacticsEditor"
@@ -189,13 +190,16 @@ write_gate_result() {
     log_fields+=",
   \"testLog\": \"$(json_escape "$test_log")\""
   fi
-  cat >"$GATE_FILE" <<EOF
+  local temporary_gate
+  temporary_gate="$(mktemp "$(dirname "$GATE_FILE")/.gate.XXXXXX")" || return 1
+  cat >"$temporary_gate" <<EOF
 {
   "status": "$(json_escape "$GATE_STATUS")",
   "reason": "$(json_escape "$GATE_REASON")",
   "timestamp": "$(json_escape "$GATE_TIMESTAMP")",
   "source": "$(json_escape "$GATE_SOURCE")",
   "repo": "$(json_escape "$REPO_DIR")",
+  "image": "$(json_escape "$IMAGE")",
   "phase": "$(json_escape "$PHASE")",
   "dockerStatus": "$(json_escape "$GATE_DOCKER_STATUS")",
   "buildStatus": "$(json_escape "$GATE_BUILD_STATUS")",
@@ -203,6 +207,11 @@ write_gate_result() {
   "resultsDir": "$(json_escape "$results_host_dir")"$log_fields
 }
 EOF
+  # Keep each run's evidence independently of the mutable latest gate.
+  if [[ -n "$results_host_dir" && -d "$results_host_dir" ]]; then
+    cp "$temporary_gate" "$results_host_dir/gate.json"
+  fi
+  mv "$temporary_gate" "$GATE_FILE"
 }
 
 finalize_gate() {
@@ -345,11 +354,19 @@ if [[ -n "$GATE_FILE_INPUT" ]]; then
 else
   GATE_FILE="$REPO_DIR/$RESULTS_SUBDIR/latest/gate.json"
 fi
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+results_host_dir="$REPO_DIR/$RESULTS_SUBDIR/$timestamp"
+if [[ "$DRY_RUN" -ne 1 ]]; then
+  mkdir -p "$REPO_DIR/$RESULTS_SUBDIR"
+  # Atomically reserve a fresh directory even for concurrent/same-second runs.
+  results_host_dir="$(mktemp -d "${results_host_dir}.XXXXXX")"
+fi
 # Replace any earlier gate before further checks or work so a failed or
 # interrupted run never leaves a prior PASS readable as its result.
 write_gate_result
 
 [[ -f "$REPO_DIR/$UPROJECT_PATH" ]] || fail "Uproject not found: $REPO_DIR/$UPROJECT_PATH"
+[[ -n "${IMAGE//[[:space:]]/}" ]] || fail "Unreal runner image is not configured. Set MOONMIND_UNREAL_ENGINE_IMAGE or pass --image."
 
 if ! command -v docker >/dev/null 2>&1; then
   fail "docker command not found on PATH. Inside a MoonMind managed session
@@ -410,8 +427,6 @@ else
   GATE_DOCKER_STATUS="skipped"
 fi
 
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-results_host_dir="$REPO_DIR/$RESULTS_SUBDIR/$timestamp"
 # Phase-aware log paths: only phases that run name a log file.
 if [[ "$PHASE" == "all" || "$PHASE" == "build" ]]; then
   build_log="$results_host_dir/build.log"
@@ -424,8 +439,9 @@ else
   test_log=""
 fi
 
-build_container_name="mm-dood-tactics-build-${timestamp,,}"
-test_container_name="mm-dood-tactics-test-${timestamp,,}"
+run_id="${results_host_dir##*/}"
+build_container_name="mm-dood-tactics-build-${run_id,,}"
+test_container_name="mm-dood-tactics-test-${run_id,,}"
 
 UNREAL_BUILD="/home/ue4/UnrealEngine/Engine/Build/BatchFiles/Linux/Build.sh"
 UNREAL_EDITOR="/home/ue4/UnrealEngine/Engine/Binaries/Linux/UnrealEditor-Cmd"
@@ -510,8 +526,6 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-mkdir -p "$results_host_dir"
-
 if [[ "$PHASE" == "all" || "$PHASE" == "build" ]]; then
   if ! run_with_log "$build_log" "${build_cmd[@]}"; then
     GATE_BUILD_STATUS="fail"
@@ -544,6 +558,13 @@ if [[ "$PHASE" == "all" || "$PHASE" == "test" ]]; then
     GATE_TEST_STATUS="no_tests"
     GATE_REASON="No automation tests matched the test filter"
     echo "[FAIL] No automation tests ran. Log: $test_log"
+    exit 1
+  fi
+  if ! grep -qiE 'Test Completed\. Result=\{Success\}' "$test_log"; then
+    GATE_STATUS="INCOMPLETE"
+    GATE_TEST_STATUS="incomplete"
+    GATE_REASON="No completed automation test success was recorded"
+    echo "[FAIL] Automation test completion is unverified. Log: $test_log"
     exit 1
   fi
   GATE_TEST_STATUS="pass"
