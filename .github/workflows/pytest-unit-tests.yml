@@ -901,17 +901,18 @@ jobs:
           cache-from: type=gha,scope=integration-ci-test-runtime
           cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
       - name: Run hermetic integration CI suite
-        # Healthy runs take about 4-5.5 minutes. The wrapper's 10-minute
-        # cooperative budget lets pytest write its report, then bounded
-        # diagnostics and teardown finish inside the native step bound.
+        # Healthy pytest execution can take about 10 minutes before Compose
+        # startup overhead. Allow 15 minutes for the combined run, then 30s
+        # to interrupt and 3 * (120s + 10s kill grace) for diagnostics and
+        # teardown, leaving another minute before the native step deadline.
         # Ordinary runs stop at the first failure; schedules keep collecting.
         if: matrix.suite == 'hermetic'
-        timeout-minutes: 18
+        timeout-minutes: 23
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
           MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
           MOONMIND_INTEGRATION_FAIL_FAST: ${{ github.event_name != 'schedule' && '1' || '0' }}
-          MOONMIND_INTEGRATION_TIMEOUT: "600"
+          MOONMIND_INTEGRATION_TIMEOUT: "900"
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
