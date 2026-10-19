@@ -842,7 +842,7 @@ def test_ensure_replaces_a_stopped_controller_on_wsl_spelled_binds(
     composes = [call for call in calls if call[0] == "compose"]
     assert [call[1] for call in composes] == [
         ("rm", "--force", "controller"),
-        ("up", "-d", "--wait", "--pull", "never", "controller"),
+        ("up", "-d", "--wait", "--wait-timeout", "60", "--pull", "never", "controller"),
     ]
     # The link network exists before Compose resolves it by name.
     kinds = [call[:2] for call in calls]
@@ -1624,3 +1624,75 @@ def test_bootstrap_restore_never_replaces_a_controller_that_owns_the_stack(
     assert held_during_compose == []
     assert bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={}) == 0
     assert held_during_compose and all(held_during_compose)
+
+
+@pytest.mark.parametrize("restore_timeout", [False, True])
+def test_handoff_startup_timeout_restores_saved_controller_and_keeps_failure(
+    controller_path, tmp_path, monkeypatch, capsys, restore_timeout
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    record = load("record")
+    state, compose, store = _handoff_installation(bootstrap, record, tmp_path)
+    before = compose.read_text()
+    recorded = bootstrap.load_controller_image(state)
+    docker = _HandoffDocker()
+    ups = []
+
+    def run(command, **kwargs):
+        if command[:2] != ["docker", "compose"]:
+            return docker.run(command, **kwargs)
+        assert 0 < kwargs["timeout"] <= 120
+        if "up" in command:
+            assert command[command.index("--wait-timeout") + 1] == "60"
+            ups.append(compose.read_text())
+            if len(ups) == 1 or restore_timeout:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", run)
+    receipt = _handoff(bootstrap, state, capsys)
+
+    assert receipt["status"] == "unavailable"
+    assert "timed out" in receipt["reason"]
+    assert ("restore failed" if restore_timeout else "previous controller restored") in receipt["reason"]
+    assert len(ups) == 2 and ups[1] == before
+    assert compose.read_text() == before
+    restored = bootstrap.load_controller_image(state)
+    assert (restored["requested"], restored["pinned"]) == (recorded["requested"], recorded["pinned"])
+    assert store.load("ui-handoff")["controllerHandoff"]["attemptGroup"] == 1
+
+
+def test_controller_startup_cancellation_is_not_a_failed_handoff(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+
+    def interrupted(command, **kwargs):
+        assert kwargs["timeout"] == 120
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        bootstrap._compose_up(tmp_path, "moonmind-test-cancel", "--pull", "never")
+
+
+def test_cold_controller_start_does_not_apply_handoff_budget_to_image_download(
+    controller_path, tmp_path, monkeypatch
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if "up" in command:
+            assert kwargs["timeout"] is None
+            assert command[command.index("--wait-timeout") + 1] == "60"
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", run)
+    assert bootstrap._compose_up(tmp_path, "moonmind-test-cold") == 0
+    assert any("up" in command for command in calls)
