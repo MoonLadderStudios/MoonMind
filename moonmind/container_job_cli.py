@@ -16,10 +16,10 @@ from uuid import uuid4
 import httpx
 
 from moonmind.schemas.container_job_models import (
+    ContainerJobArtifactPage,
     ContainerJobSpec,
     ContainerJobSubmitRequest,
 )
-
 
 TERMINAL_STATES = frozenset(
     {"succeeded", "failed", "canceled", "timed_out", "rejected"}
@@ -41,6 +41,8 @@ class ContainerJobResult:
     artifacts_ref: str | None
     log_tail: tuple[str, ...] = ()
     log_error: str | None = None
+    artifacts: tuple[dict[str, Any], ...] = ()
+    artifact_error: str | None = None
 
 
 class ContainerJobMcpClient:
@@ -150,7 +152,7 @@ def _mcp_endpoint(source: Mapping[str, str]) -> str:
     explicit = str(source.get("MOONMIND_CONTAINER_JOBS_MCP_URL") or "").strip()
     if explicit:
         return explicit
-    return _required_env(source, "MOONMIND_URL").rstrip("/") + "/mcp"
+    return _required_env(source, "MOONMIND_URL").rstrip("/") + "/mcp/container"
 
 
 def _mcp_bearer_token(source: Mapping[str, str]) -> str | None:
@@ -485,6 +487,14 @@ def run_container_job(
             # Log retrieval is auxiliary evidence and must not overwrite the
             # authoritative job result.
             log_error = str(exc)
+        artifacts: tuple[dict[str, Any], ...] = ()
+        artifact_error: str | None = None
+        if submission["spec"].get("outputs"):
+            try:
+                artifacts = _read_artifacts(active_client, job_id)
+            except ContainerJobCliError as exc:
+                # Missing auxiliary evidence does not change execution status.
+                artifact_error = str(exc)
         return ContainerJobResult(
             job_id=job_id,
             state=state,
@@ -501,6 +511,8 @@ def run_container_job(
             artifacts_ref=str(snapshot.get("artifactsRef") or "").strip() or None,
             log_tail=log_tail,
             log_error=log_error,
+            artifacts=artifacts,
+            artifact_error=artifact_error,
         )
     finally:
         if owned_client:
@@ -530,6 +542,42 @@ def run_python_tests(
         poll_seconds=poll_seconds,
         client=client,
     )
+
+
+def _read_artifacts(
+    client: ContainerJobMcpClient, job_id: str, *, max_pages: int = 100
+) -> tuple[dict[str, Any], ...]:
+    """Read the existing durable output manifest, including collected hashes."""
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    artifacts: list[dict[str, Any]] = []
+    for _ in range(max_pages):
+        arguments: dict[str, Any] = {"jobId": job_id, "limit": 200}
+        if cursor is not None:
+            arguments["cursor"] = cursor
+        try:
+            page = ContainerJobArtifactPage.model_validate(
+                client.call("container.artifacts", arguments)
+            )
+        except ValueError as exc:
+            raise ContainerJobCliError(
+                "container.artifacts returned an invalid manifest"
+            ) from exc
+        if page.job_id != job_id:
+            raise ContainerJobCliError(
+                "container.artifacts returned another job's manifest"
+            )
+        artifacts.extend(
+            artifact.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for artifact in page.artifacts
+        )
+        if page.next_cursor is None:
+            return tuple(artifacts)
+        if page.next_cursor in seen_cursors:
+            raise ContainerJobCliError("container.artifacts returned a repeated cursor")
+        seen_cursors.add(page.next_cursor)
+        cursor = page.next_cursor
+    raise ContainerJobCliError("container.artifacts exceeded the bounded page limit")
 
 
 def _read_log_tail(

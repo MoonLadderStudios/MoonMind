@@ -1838,6 +1838,13 @@ def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
         loaded.append(document)
     return loaded
 
+
+def _is_deployment_seed(template: Preset) -> bool:
+    # Account-free operator presets also have no creator. Only recorded seed
+    # provenance permits refresh; a matching slug cannot establish ownership.
+    return template.created_by is None and bool(str(template.seed_source or "").strip())
+
+
 @dataclass(slots=True)
 class SeedSyncResult:
     """Summary of a seed synchronization run."""
@@ -3375,7 +3382,7 @@ class PresetCatalogService:
         )
         _METRICS.increment("delete")
 
-    async def deactivate_templates(
+    async def deactivate_seed_templates(
         self,
         *,
         slugs: Sequence[str],
@@ -3398,7 +3405,7 @@ class PresetCatalogService:
                 Preset.is_active.is_(True),
             )
         )
-        templates = result.scalars().all()
+        templates = [row for row in result.scalars() if _is_deployment_seed(row)]
         for template in templates:
             template.is_active = False
 
@@ -3515,10 +3522,8 @@ class PresetCatalogService:
             item.pop("presetVersion", None)
             scope = _normalize_scope(str(item.get("scope", "global")).strip() or "global")
             scope_ref = _normalize_scope_ref(scope, item.get("scopeRef"))
-            # Same deployment-provenance marker as import_seed_templates:
-            # seed-synced rows are deployment-owned, never unattested
-            # unowned human data. Existing rows without a marker are
-            # backfilled on the next sync below.
+            # Record provenance for new seeds. An existing unmarked row may
+            # contain operator work and must not be adopted by slug alone.
             seed_source = item.get("seedSource") or "seed-catalog"
             slug = str(item.get("slug") or _slugify_from_title(item.get("title", "")))
             normalized_slug = _normalize_slug(slug)
@@ -3569,6 +3574,9 @@ class PresetCatalogService:
                 result.created += 1
                 continue
 
+            if not _is_deployment_seed(template):
+                continue
+
             try:
                 validate_model_selection_authoring(
                     validated_steps, saved_payload=template.steps, field_name="steps"
@@ -3590,10 +3598,6 @@ class PresetCatalogService:
             if list(template.required_capabilities or []) != list(derived_capabilities):
                 template.required_capabilities = list(derived_capabilities)
                 updated = True
-            if not template.is_active:
-                template.is_active = True
-                updated = True
-
             if list(template.inputs_schema or []) != validated_inputs:
                 template.inputs_schema = validated_inputs
                 updated = True
@@ -3606,9 +3610,6 @@ class PresetCatalogService:
             max_step_count = max(25, len(validated_steps))
             if int(template.max_step_count or 0) != max_step_count:
                 template.max_step_count = max_step_count
-                updated = True
-            if template.release_status is not PresetReleaseStatus.ACTIVE:
-                template.release_status = PresetReleaseStatus.ACTIVE
                 updated = True
             if template.seed_source != seed_source:
                 template.seed_source = seed_source

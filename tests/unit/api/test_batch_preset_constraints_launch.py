@@ -230,3 +230,20 @@ async def test_explicit_empty_max_workflows_matches_omitted_default(tmp_path, sl
         parsed[label] = helper["_parse_args"](argv).max_workflows
 
     assert parsed == {"omitted": 25, "empty": 25}
+
+
+@pytest.mark.parametrize("slug", sorted(_PRESET_INPUTS))
+async def test_rendered_launch_preserves_explicit_no_publish_false_and_zero(tmp_path, slug):
+    async with _catalog_service(tmp_path, slug) as service:
+        expanded = await service.expand_template(
+            slug=slug, scope="global", scope_ref=None,
+            inputs={**_PRESET_INPUTS[slug], "publish_mode": "none", "run_verify": False,
+                    "max_workflows": "0", "constraints": ""},
+        )
+    argv = _run_rendered_command(tmp_path, _rendered_helper_command(expanded["steps"][0]["instructions"]))
+    args = _load_helper(slug)["_parse_args"](argv)
+    assert expanded["publish"] == {"mode": "none"}
+    assert args.publish_mode == "none"
+    assert args.run_verify is False
+    assert args.max_workflows == 0
+    assert args.constraints_file is None

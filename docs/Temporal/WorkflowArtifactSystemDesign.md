@@ -460,7 +460,8 @@ A worker's service identity names the caller; it is not a read grant. Under ever
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
-* Omnigent admission verifies the persisted execution plan and links its artifact inputs to the Step Execution, including the Skill bodies named by the admitted resolved Skill manifest. Snapshots produced by another execution or left unlinked by the operator become readable this way without copying bytes, rewriting owners or backfilling history.
+* Omnigent admission verifies the persisted execution plan and links its artifact inputs to the Step Execution, including the admitted Skill bodies and required strict support evidence. Plan and strict-evidence pointers must match their persisted digests before receiving grants; ordinary optional certificates remain outside the required input closure. Snapshots produced by another execution or left unlinked by the operator become readable without copying bytes or rewriting owners.
+* Session-supervisor resolve and continuation reads reuse that execution's existing grant. Continuations bind the sealed intent and plan to the canonical session; mutating commands validate ownership, revision and fence before reading plan inputs. Retries and cleanup never create replacement input grants.
 * `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Generic-host and Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
 * Workspace checkpoint, restore-input and attachment projection and managed-runtime Skill loading carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope.
 * Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.
@@ -515,12 +516,62 @@ binding facade, not an unrestricted upstream proxy.
 ## 9.6 Single-user operation
 
 Artifacts are instance resources for the admitted operator: the stable
-`operator`/`system` principal (and legacy human-owner UUID strings as
+`operator` principal (and legacy human-owner UUID strings as
 provenance) inspects and controls instance artifacts and saved-work reads
 without a human-owner lookup. `workflow:`/`service:` machine principals
 stay execution-bound via owner-equality and linked-execution checks.
 Restricted raw bytes, quarantine, redaction, and explicit-grant gates are
-unchanged. See [Single-User Application Design](../SingleUserApplicationDesign.md).
+enforced independently of ordinary artifact visibility. See
+[Single-User Application Design](../SingleUserApplicationDesign.md).
+
+The guarded upgrade can convert an artifact-only retained dataset after proving
+one human operator (including explicitly attested same-person UUID aliases).
+It records a protected, server-owned recovery disposition on artifacts with a
+proven human creator. Only the exact stable `operator` principal, or a service
+carrying that explicitly admitted principal, may use this disposition for
+restricted raw recovery. HTTP reads carry this identity only after successful
+existing local-operator admission, separately from creator and consumer-claim
+principals. That identity also satisfies literal `operator` ownership without
+a conversion grant; it does not satisfy unrelated machine ownership. Direct
+artifact and durable session-resource reads share this proof and read policy.
+Profile bundle and workflow evidence readers carry it only after their own
+admission and resource-scope checks. Authenticated modes retain their own UUID
+identity: trusted-header reads use the existing ingress and live identity-mapping
+checks, without acquiring disabled-mode recovery authority. An absent proxy
+assertion preserves optional session/machine admission; a presented invalid
+assertion fails closed. Caller metadata or headers cannot grant recovery.
+Quarantined bytes remain preview-only, and machine-created artifacts receive no human
+recovery grant. Original creator provenance, quota scopes, links, pins, and
+in-flight claim owners remain unchanged; the operator cannot release a legacy
+claim merely by receiving recovery access. Historical pin/deletion actors and
+expired claims remain provenance; their actor labels do not require live accounts.
+
+The grant and current-revision completion record commit atomically. Authority
+writers are excluded while the guarded inventory is checked and transformed;
+interruption rolls both back. Historical ledger completion preserves established
+operator admission but grants no new artifact recovery authority. Missing or
+malformed creators refuse conversion, including null creators with only
+deployment-ownership attestation. Retained live execution or
+workflow parents require their own registered transforms and refuse before any
+artifact mutation when those transforms are absent. Historical links without a
+live execution remain intact and do not invalidate independently proven creator
+attribution. Schema installation itself grants no recovery access. Once recovery grants
+exist, schema downgrade refuses rather than silently losing them; repair forward.
+Default restarts probe for outstanding human or ambiguous artifact creators
+before replaying certified completion. Later artifacts, including OIDC writes
+before an account-free switch, require current guarded attribution and atomic
+conversion. The probe never grants access. Established machine owners and the
+exact disabled-mode creator who already has owner access need no new recovery
+grant. With no pending recovery, startup avoids loading retained histories into
+Python; the bounded-result SQL probe may still scan the artifact table.
+When disabled mode uses its built-in zero UUID and no retained User has that
+ID, exact zero-owned artifacts and active claims remain deployment scope during
+conversion, unchanged and without new recovery grants. A retained zero User still
+counts as a person. Nonzero configured defaults require ordinary attribution
+evidence when mixed with newly pending historical recovery; configuration alone
+does not prove a historical identity or alias.
+Explicit preflight and apply inspect current source evidence, and unresolved
+aliases or unsupported live parents still require their existing dispositions.
 
 ---
 

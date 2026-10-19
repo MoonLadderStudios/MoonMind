@@ -18,16 +18,16 @@ Documentation wording itself is reviewed, not unit tested.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-TACTICS_SCRIPT_DIR = (
-    REPO_ROOT / ".agents" / "skills" / "tactics-test" / "scripts"
-)
+TACTICS_SCRIPT_DIR = REPO_ROOT / ".agents" / "skills" / "tactics-test" / "scripts"
 MANAGED_RUNNER = TACTICS_SCRIPT_DIR / "run_moonmind_unreal_tactics.py"
 
 
@@ -56,15 +56,14 @@ def test_managed_dry_run_is_non_mutating_and_reports_skipped_preview(
     tmp_path: Path,
 ) -> None:
     assert MANAGED_RUNNER.is_file(), f"missing runner: {MANAGED_RUNNER}"
-    repo, gate, prior_gate = _init_repo(
-        tmp_path, subdir="moonmind-unreal-tactics"
-    )
+    repo, gate, prior_gate = _init_repo(tmp_path, subdir="moonmind-unreal-tactics")
     before = sorted(p.relative_to(repo) for p in repo.rglob("*"))
 
     completed = subprocess.run(
         [sys.executable, str(MANAGED_RUNNER), "--repo", str(repo), "--dry-run"],
         capture_output=True,
         text=True,
+        env={**os.environ, "MOONMIND_REPO_DIR": str(repo)},
         timeout=120,
     )
 
@@ -76,7 +75,7 @@ def test_managed_dry_run_is_non_mutating_and_reports_skipped_preview(
     assert after == before
 
 
-def test_managed_gate_omits_skipped_phase_logs(tmp_path: Path) -> None:
+def test_managed_gate_omits_skipped_phase_logs(tmp_path: Path, monkeypatch) -> None:
     module = _load_managed_runner()
 
     for phase, expected_log, absent_log in (
@@ -86,14 +85,31 @@ def test_managed_gate_omits_skipped_phase_logs(tmp_path: Path) -> None:
         repo = tmp_path / f"repo-{phase}"
         repo.mkdir(parents=True)
         (repo / "Tactics.uproject").write_text("{}\n", encoding="utf-8")
+        monkeypatch.setenv("MOONMIND_REPO_DIR", str(repo))
 
-        def _fake_run_job(
-            spec, *, request_id, log_path, dry_run=False
-        ):  # noqa: ANN001, ANN202
+        def _fake_run_job(spec, *, request_id, log_path, dry_run=False):  # noqa: ANN001, ANN202
             assert not dry_run
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(log_path).write_text("ok\n", encoding="utf-8")
-            return 0
+            line = "Test Completed. Result={Success} Name={Ready}"
+            Path(log_path).write_text(line + "\n", encoding="utf-8")
+            return {
+                "job_id": request_id,
+                "state": "succeeded",
+                "exit_code": 0,
+                "logs_ref": "artifact:logs",
+                "artifacts_ref": "artifact:outputs",
+                "log_tail": [line],
+                "log_error": None,
+                "artifacts": [
+                    {
+                        **output,
+                        "artifactRef": "artifact:test-log",
+                        "collectionStatus": "collected",
+                        "sha256": hashlib.sha256(Path(log_path).read_bytes()).hexdigest(),
+                    }
+                    for output in spec.get("outputs", [])
+                ],
+            }
 
         module._run_job = _fake_run_job  # type: ignore[attr-defined]
         argv = [
@@ -110,7 +126,9 @@ def test_managed_gate_omits_skipped_phase_logs(tmp_path: Path) -> None:
         finally:
             sys.argv = old_argv
 
-        gate_path = repo / ".artifacts" / "moonmind-unreal-tactics" / "latest" / "gate.json"
+        gate_path = (
+            repo / ".artifacts" / "moonmind-unreal-tactics" / "latest" / "gate.json"
+        )
         gate = json.loads(gate_path.read_text(encoding="utf-8"))
         assert gate["status"] == "PASS"
         assert gate["phase"] == phase
