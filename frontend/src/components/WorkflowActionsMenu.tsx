@@ -165,6 +165,11 @@ export function WorkflowActionsMenu({
     }
   };
   const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Native focus can move before React commits activeKey. Keyboard actions
+    // belong to the event's item, not the previous render's roving tab stop.
+    const focusedKey = [...itemRefs.current].find(([, item]) =>
+      item.contains(event.target as Node),
+    )?.[0] ?? activeKey;
     if (event.key === 'Escape') {
       event.preventDefault();
       closeMenu();
@@ -173,18 +178,22 @@ export function WorkflowActionsMenu({
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       if (navKeys.length === 0) return;
-      const current = activeKey ? navKeys.indexOf(activeKey) : -1;
+      const current = focusedKey ? navKeys.indexOf(focusedKey) : -1;
       const direction = event.key === 'ArrowDown' ? 1 : -1;
       const next =
         current < 0
           ? direction > 0 ? 0 : navKeys.length - 1
           : (current + direction + navKeys.length) % navKeys.length;
-      setActiveKey(navKeys[next] ?? null);
+      const nextKey = navKeys[next] ?? null;
+      setActiveKey(nextKey);
+      // The next key may equal the previous render's key, so a state effect
+      // alone cannot restore native focus after an intervening focus event.
+      if (nextKey) itemRefs.current.get(nextKey)?.focus();
       return;
     }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      if (activeKey) itemRefs.current.get(activeKey)?.click();
+      if (focusedKey) itemRefs.current.get(focusedKey)?.click();
     }
   };
 
