@@ -1374,6 +1374,11 @@ _INFRASTRUCTURE_FAILURE_PATTERNS = (
 _MISSING_UPSTREAM_ARTIFACT_PATTERN = re.compile(
     r"Unable to download artifact\(s\): Artifact not found", re.IGNORECASE
 )
+# Kinds that describe a job failing because of another job's platform failure.
+# They never make a run infrastructure-only on their own.
+_DEPENDENT_FAILURE_KINDS = frozenset(
+    {"missing_upstream_artifact", "upstream_job_failure"}
+)
 _GENERIC_EXIT_PATTERN = re.compile(
     r"^Process completed with exit code \d+\.?$", re.IGNORECASE
 )
@@ -1383,11 +1388,12 @@ _ACTIONS_JOB_URL_PATTERN = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 def _classify_failure_annotations(annotations: list[dict]) -> str | None:
     """Return the infrastructure kind when every failure annotation is one.
 
-    ``missing_upstream_artifact`` is provisional: it only counts when another
-    job in the same run has a confirmed infrastructure failure. A generic step
-    exit is tolerated only beside that gate case; next to a platform failure it
-    may be a real test failure followed by an ``if: always()`` upload, so the
-    job fails closed.
+    ``missing_upstream_artifact`` and ``upstream_job_failure`` (only bare exit
+    statuses) are provisional: they count only beside a confirmed platform
+    failure in another job of the same run. A generic step exit is tolerated
+    only in those gate cases; next to a platform failure in the same job it may
+    be a real test failure followed by an ``if: always()`` upload, so the job
+    fails closed.
     """
 
     messages = [
@@ -1415,12 +1421,12 @@ def _classify_failure_annotations(annotations: list[dict]) -> str | None:
         if kind is None:
             return None
         kinds.add(kind)
-    platform_kinds = sorted(kinds - {"missing_upstream_artifact"})
+    platform_kinds = sorted(kinds - _DEPENDENT_FAILURE_KINDS)
     if platform_kinds:
         return None if generic_exit else platform_kinds[0]
     if kinds:
         return "missing_upstream_artifact"
-    return None
+    return "upstream_job_failure" if generic_exit else None
 
 
 def summarize_ci_infrastructure(
@@ -1436,6 +1442,7 @@ def summarize_ci_infrastructure(
     """
 
     classified: list[dict] = []
+    windows: list[tuple[datetime | None, datetime | None]] = []
     for check in failed_check_runs:
         match = _ACTIONS_JOB_URL_PATTERN.search(
             str(check.get("details_url") or check.get("detailsUrl") or "")
@@ -1449,16 +1456,21 @@ def summarize_ci_infrastructure(
         )
         if kind is None:
             return {"infrastructureOnly": False}
+        failure_messages = [
+            str(item.get("message") or "").strip()
+            for item in annotations
+            if isinstance(item, dict)
+            and str(item.get("annotation_level") or "").lower() == "failure"
+        ]
+        # A gate's bare exit status is its only evidence; elsewhere prefer the
+        # specific platform message.
         message = next(
             (
-                str(item.get("message") or "").strip()
-                for item in annotations
-                if str(item.get("annotation_level") or "").lower() == "failure"
-                and not _GENERIC_EXIT_PATTERN.match(
-                    str(item.get("message") or "").strip()
-                )
+                text
+                for text in failure_messages
+                if not _GENERIC_EXIT_PATTERN.match(text)
             ),
-            "",
+            failure_messages[0] if kind == "upstream_job_failure" else "",
         )
         classified.append(
             {
@@ -1468,16 +1480,41 @@ def summarize_ci_infrastructure(
                 "runId": int(match.group(1)),
             }
         )
+        windows.append(
+            (
+                _parse_utc_timestamp(check.get("started_at")),
+                _parse_utc_timestamp(check.get("completed_at")),
+            )
+        )
 
     platform_runs = {
         item["runId"]
         for item in classified
-        if item["kind"] != "missing_upstream_artifact"
+        if item["kind"] not in _DEPENDENT_FAILURE_KINDS
     }
     if not platform_runs or any(
         item["runId"] not in platform_runs for item in classified
     ):
         return {"infrastructureOnly": False}
+
+    # GitHub starts a job that ``needs`` others only after they complete. A bare
+    # exit counts as a gate on the platform failure only when its job started
+    # after every platform failure in its run had finished; a job that ran
+    # alongside them failed on its own.
+    for item, (started_at, _) in zip(classified, windows):
+        if item["kind"] != "upstream_job_failure":
+            continue
+        platform_finished = [
+            completed_at
+            for other, (_, completed_at) in zip(classified, windows)
+            if other["runId"] == item["runId"]
+            and other["kind"] not in _DEPENDENT_FAILURE_KINDS
+        ]
+        if started_at is None or any(
+            completed_at is None or started_at < completed_at
+            for completed_at in platform_finished
+        ):
+            return {"infrastructureOnly": False}
 
     runs: list[dict] = []
     for run_id in sorted(platform_runs):
