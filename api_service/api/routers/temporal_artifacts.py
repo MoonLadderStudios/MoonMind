@@ -10,7 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user_optional
+from api_service.auth_providers import (
+    get_current_user_optional, get_operator_recovery_principal,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.schemas.temporal_artifact_models import (
@@ -211,6 +213,15 @@ async def _resolve_principal(
         )
     return str(user.id)
 
+
+async def _resolve_recovery_principal(
+    request: Request,
+    _principal: str = Depends(_resolve_principal),
+) -> str | None:
+    # Resolve ordinary authentication first. This server-minted admission is
+    # only for the protected conversion grant, not creator/claim/quota scope.
+    return get_operator_recovery_principal(request)
+
 @router.post(
     "/api/artifacts",
     response_model=CreateArtifactResponse,
@@ -388,12 +399,14 @@ async def get_artifact_metadata(
     artifact_id: str,
     include_download: bool = Query(False, alias="include_download"),
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactMetadataModel:
     try:
         artifact, links, pinned, read_policy = await service.get_metadata(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
         download_url = None
         download_expires_at = None
@@ -401,6 +414,7 @@ async def get_artifact_metadata(
             _artifact, expires_at, url = await service.presign_download(
                 artifact_id=artifact_id,
                 principal=principal,
+                recovery_principal=recovery_principal,
             )
             download_url = url
             download_expires_at = expires_at
@@ -423,12 +437,14 @@ async def get_artifact_metadata(
 async def presign_artifact_download(
     artifact_id: str,
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> PresignDownloadResponse:
     try:
         _artifact, expires_at, url = await service.presign_download(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except Exception as exc:  # pragma: no cover - mapped below
         _raise_temporal_artifact_http(exc)
@@ -471,12 +487,14 @@ async def download_artifact(
         description="Preview inert content types instead of downloading them.",
     ),
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ):
     try:
         artifact, path = await service.read_path(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
         is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
         filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
@@ -500,6 +518,7 @@ async def download_artifact(
         artifact, chunks = await service.read_chunks(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except Exception as exc:  # pragma: no cover - mapped below
         _raise_temporal_artifact_http(exc)
@@ -524,6 +543,7 @@ async def link_artifact(
     artifact_id: str,
     payload: LinkArtifactRequest,
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactMetadataModel:
     try:
@@ -535,6 +555,7 @@ async def link_artifact(
         artifact, links, pinned, read_policy = await service.get_metadata(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except Exception as exc:  # pragma: no cover - mapped below
         _raise_temporal_artifact_http(exc)
@@ -557,6 +578,7 @@ async def list_execution_artifacts(
     link_type: str | None = Query(None),
     latest_only: bool = Query(False),
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactListResponse:
     try:
@@ -573,6 +595,7 @@ async def list_execution_artifacts(
             item, links, pinned, read_policy = await service.get_metadata(
                 artifact_id=artifact.artifact_id,
                 principal=principal,
+                recovery_principal=recovery_principal,
             )
             serialized.append(
                 _serialize_metadata(
@@ -592,6 +615,7 @@ async def pin_artifact(
     artifact_id: str,
     payload: PinArtifactRequest,
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactMetadataModel:
     try:
@@ -603,6 +627,7 @@ async def pin_artifact(
         artifact, links, pinned, read_policy = await service.get_metadata(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except Exception as exc:  # pragma: no cover - mapped below
         _raise_temporal_artifact_http(exc)
@@ -618,6 +643,7 @@ async def pin_artifact(
 async def unpin_artifact(
     artifact_id: str,
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactMetadataModel:
     try:
@@ -625,6 +651,7 @@ async def unpin_artifact(
         artifact, links, pinned, read_policy = await service.get_metadata(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except Exception as exc:  # pragma: no cover - mapped below
         _raise_temporal_artifact_http(exc)
@@ -640,6 +667,7 @@ async def unpin_artifact(
 async def delete_artifact(
     artifact_id: str,
     principal: str = Depends(_resolve_principal),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactMetadataModel:
     try:
@@ -647,6 +675,7 @@ async def delete_artifact(
         artifact, links, pinned, read_policy = await service.get_metadata(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except Exception as exc:  # pragma: no cover - mapped below
         _raise_temporal_artifact_http(exc)

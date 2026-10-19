@@ -18,7 +18,9 @@ import pytest
 
 from api_service.api.routers import sessions as sessions_router
 from api_service.api.routers.sessions import router
-from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
+from api_service.api.routers.temporal_artifacts import (
+    _get_temporal_artifact_service, _resolve_principal,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
@@ -36,6 +38,7 @@ def client(test_user: User) -> Iterator[tuple[TestClient, AsyncMock]]:
     artifact_service = AsyncMock()
 
     app.dependency_overrides[get_current_user()] = lambda: test_user
+    app.dependency_overrides[_resolve_principal] = lambda: str(test_user.id)
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
 
     with TestClient(app) as test_client:
