@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from api_service.api.routers import executions, temporal_artifacts
 from api_service.db.base import get_async_session
 from api_service.db.models import User
+from api_service.services.single_user_conversion import SCHEMA_REVISION
 from moonmind.config.settings import settings
 from moonmind.security import auth_modes_4120
 from moonmind.security.execution_fanout_capabilities import (
@@ -319,6 +320,7 @@ def test_completed_conversion_admits_account_free_artifact_operator(
             SimpleNamespace(
                 status="complete",
                 result_json={
+                    "schema_revision": SCHEMA_REVISION,
                     "published": True,
                     "decision": {"disposition": "fresh_init"},
                 },
