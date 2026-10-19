@@ -2016,6 +2016,8 @@ class TemporalArtifactService:
             return True
         # HTTP operator recovery is access-only: unlike admitted_principal it
         # never replaces the owner of observed claims or quota accounting.
+        if owner == "operator" and recovery_principal == "operator":
+            return True
         if ("operator" in candidates or recovery_principal == "operator") and getattr(
             artifact, "operator_recovery_granted", False
         ):
@@ -3207,8 +3209,9 @@ class TemporalArtifactService:
         without ``admitted_principal`` is denied.
 
         ``recovery_principal`` carries trusted HTTP admission only to the
-        protected conversion grant; it is never a request payload field or
-        an alternative delegation/consumer-accounting scope.
+        literal operator ownership or protected conversion grant; it is never
+        a request payload field or an alternative delegation/consumer-accounting
+        scope.
         """
         artifact = await self._repository.get_artifact(artifact_id)
         await self._assert_artifact_read_access(

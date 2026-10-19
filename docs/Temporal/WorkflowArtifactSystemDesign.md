@@ -531,7 +531,12 @@ proven human creator. Only the exact stable `operator` principal, or a service
 carrying that explicitly admitted principal, may use this disposition for
 restricted raw recovery. HTTP reads carry this identity only after successful
 existing local-operator admission, separately from creator and consumer-claim
-principals. Caller metadata or headers cannot grant recovery. Quarantined
+principals. That identity also satisfies literal `operator` ownership without
+a conversion grant; it does not satisfy unrelated machine ownership. Direct
+artifact and durable session-resource reads share this proof and read policy.
+Profile bundle and workflow evidence readers carry it only after their own
+admission and resource-scope checks. Caller metadata or headers cannot grant
+recovery. Quarantined
 bytes remain preview-only, and machine-created artifacts receive no human
 recovery grant. Original creator provenance, quota scopes, links, pins, and
 in-flight claim owners remain unchanged; the operator cannot release a legacy

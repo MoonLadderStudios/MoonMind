@@ -1,6 +1,7 @@
 """Mounted artifact recovery preserves admission and retained accounting."""
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -10,7 +11,8 @@ from fastapi import FastAPI
 from sqlalchemy import select
 
 from api_service.api.routers import temporal_artifacts
-from api_service.auth_providers import get_current_user_optional
+from api_service.api.routers import agent_runs, sessions
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     TemporalArtifact, TemporalArtifactRedactionLevel, TemporalArtifactUseClaim,
@@ -19,8 +21,10 @@ from api_service.db.models import (
 from api_service.services import single_user_conversion as conversion
 from moonmind.config.settings import settings
 from moonmind.security import auth_modes_4120
+from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.artifacts import (
-    LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactValidationError,
+    LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService, TemporalArtifactValidationError,
 )
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
@@ -31,11 +35,142 @@ DEFAULT_OPERATOR = "00000000-0000-0000-0000-000000000000"
 def mounted_app(session, tmp_path):
     app = FastAPI()
     app.include_router(temporal_artifacts.router)
+    app.include_router(agent_runs.sessions_router, prefix="/api")
+    app.include_router(agent_runs.router, prefix="/api")
+    app.include_router(sessions.router, prefix="/api")
     app.dependency_overrides[get_async_session] = lambda: session
     app.dependency_overrides[temporal_artifacts._get_temporal_artifact_service] = (
         lambda: service(session, tmp_path)
     )
     return app
+
+
+@pytest.mark.parametrize("creator", ["historical", "operator"])
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_session_and_direct_recovery_share_trusted_operator_scope(
+    tmp_path, monkeypatch, creator, streamed,
+):
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR)
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "runtime"))
+    monkeypatch.setattr(settings.feature_flags, "session_api_compat_enabled", True)
+    metadata_principals = set()
+    read_metadata = TemporalArtifactService.get_metadata
+
+    async def observe_metadata(self, *, artifact_id, principal, **kwargs):
+        metadata_principals.add(principal)
+        return await read_metadata(self, artifact_id=artifact_id, principal=principal, **kwargs)
+
+    monkeypatch.setattr(TemporalArtifactService, "get_metadata", observe_metadata)
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            original_id, historical_owner = await seed(session, tmp_path)
+            owner = historical_owner if creator == "historical" else "operator"
+            artifacts = service(session, tmp_path)
+            rows = {}
+            for label, principal, metadata in [
+                ("main", owner, {}), ("quarantined", owner, {"quarantine": True}),
+                ("machine", "service:session-producer", {}),
+            ]:
+                row, _ = await artifacts.create(principal=principal,
+                    content_type="application/octet-stream",
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                    metadata_json=metadata)
+                row = await artifacts.write_complete(artifact_id=row.artifact_id,
+                    principal=principal, payload=f"session {label} bytes".encode(),
+                    content_type="application/octet-stream")
+                rows[label] = row.artifact_id
+            assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
+            main = await session.get(TemporalArtifact, rows["main"])
+            assert main.operator_recovery_granted is (creator == "historical")
+            quota = await TemporalArtifactRepository(session).quota_usage_for_scope(owner)
+        record = CodexManagedSessionRecord(
+            sessionId="sess:retained:codex_cli", sessionEpoch=1, agentRunId="retained-agent",
+            containerId="retained-container", threadId="retained-thread", runtimeId="codex_cli",
+            imageRef="moonmind:latest", controlUrl="docker-exec://retained-container",
+            status="degraded", workspacePath="/retained/repo", sessionWorkspacePath="/retained/session",
+            artifactSpoolPath="/retained/artifacts", latestSummaryRef=rows["main"],
+            latestCheckpointRef=rows["quarantined"], diagnosticsRef=rows["machine"],
+            startedAt=datetime.now(UTC), updatedAt=datetime.now(UTC))
+        ManagedSessionStore(tmp_path / "runtime" / "managed_sessions").save(record)
+        if streamed:
+            def no_local_path(*_args, **_kwargs):
+                raise TemporalArtifactValidationError("path unavailable")
+            monkeypatch.setattr(LocalTemporalArtifactStore, "read_path", no_local_path)
+        async with maker() as session:
+            app = mounted_app(session, tmp_path)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                        base_url="http://localhost") as client:
+                # The same admitted request must work through the direct
+                # artifact path and the durable workflow UI session projection.
+                response = await client.get(f"/api/artifacts/{rows['main']}/download")
+                assert response.status_code == 200, response.text
+                assert response.content == b"session main bytes"
+                response = await client.get(f"/api/artifacts/{rows['main']}?include_download=true")
+                assert response.status_code == 200, response.text
+                assert response.json()["raw_access_allowed"] is True
+                response = await client.post(f"/api/artifacts/{rows['main']}/presign-download")
+                assert response.status_code == 200, response.text
+                for action in ("content", "download"):
+                    response = await client.get(
+                        f"/api/sessions/{record.session_id}/resources/{rows['main']}/{action}")
+                    assert response.status_code == 200, response.text
+                    assert response.content == b"session main bytes"
+                    assert response.headers["x-content-type-options"] == "nosniff"
+                    assert "sandbox" in response.headers["content-security-policy"]
+                    if action == "download":
+                        assert response.headers["content-disposition"].startswith("attachment;")
+                    for label, expected in [("quarantined", 409), ("machine", 403)]:
+                        response = await client.get(
+                            f"/api/sessions/{record.session_id}/resources/{rows[label]}/{action}")
+                        assert response.status_code == expected, response.text
+                response = await client.get(
+                    f"/api/sessions/{record.session_id}/resources/{original_id}/content")
+                assert response.status_code == 404, response.text
+                response = await client.get(
+                    f"/api/agent-runs/{record.agent_run_id}/artifact-sessions/{record.session_id}")
+                assert response.status_code == 200, response.text
+                projected = {item["artifact_id"]: item
+                             for group in response.json()["grouped_artifacts"]
+                             for item in group["artifacts"]}
+                assert projected[rows["main"]]["raw_access_allowed"] is True
+                assert projected[rows["quarantined"]]["raw_access_allowed"] is False
+                assert projected[rows["machine"]]["raw_access_allowed"] is False
+                snapshot = await client.get(f"/api/sessions/{record.session_id}")
+                assert snapshot.status_code == 200, snapshot.text
+                projected = {item["artifact_id"]: item
+                             for group in snapshot.json()["artifactRefs"]["groupedArtifacts"]
+                             for item in group["artifacts"]}
+                assert projected[rows["main"]]["raw_access_allowed"] is True
+                assert projected[rows["quarantined"]]["raw_access_allowed"] is False
+                assert projected[rows["machine"]]["raw_access_allowed"] is False
+                assert metadata_principals == {DEFAULT_OPERATOR}
+                for headers in [
+                    {"X-MoonMind-Execution-Fanout": "v1"},
+                    {"X-MoonMind-Execution-Fanout": "v1", "X-MoonMind-Admitted-Principal": "operator"},
+                ]:
+                    response = await client.get(
+                        f"/api/sessions/{record.session_id}/resources/{rows['main']}/content", headers=headers)
+                    assert response.status_code == 401, response.text
+            claims = (await session.execute(select(TemporalArtifactUseClaim))).scalars().all()
+            assert {c.owner_principal for c in claims if c.operation_kind == "download"} == {DEFAULT_OPERATOR}
+            assert {c.owner_principal for c in claims if c.request_id == "ongoing-recovery"} == {historical_owner}
+            assert await TemporalArtifactRepository(session).quota_usage_for_scope(owner) == quota
+            assert (await session.get(TemporalArtifact, rows["main"])).created_by_principal == owner
+            assert (await session.get(TemporalArtifact, rows["main"])).operator_recovery_granted is (creator == "historical")
+            assert await session.get(User, UUID(DEFAULT_OPERATOR)) is None
+            # UUID identity and caller headers alone do not mint the private
+            # request admission proof, for either literal or historical owners.
+            untrusted = mounted_app(session, tmp_path)
+            local_identity = User(id=UUID(DEFAULT_OPERATOR), email="operator@example.invalid")
+            untrusted.dependency_overrides[get_current_user()] = lambda: local_identity
+            untrusted.dependency_overrides[get_current_user_optional()] = lambda: local_identity
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=untrusted),
+                                        base_url="http://localhost") as client:
+                for path in [f"/api/artifacts/{rows['main']}/download",
+                             f"/api/sessions/{record.session_id}/resources/{rows['main']}/content"]:
+                    response = await client.get(path, headers={"X-MoonMind-Admitted-Principal": "operator"})
+                    assert response.status_code == 403, response.text
 
 
 @pytest.mark.parametrize("create_default_artifact", [False, True])
