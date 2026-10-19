@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
+    Base,
     ManagedSecret,
     Preset,
     PresetScopeType,
@@ -119,15 +120,13 @@ def conversion_postgres_url():
 async def pg_maker(conversion_postgres_url):
     engine = create_async_engine(conversion_postgres_url)
     async with engine.begin() as conn:
-        for table in _TABLES:
-            await conn.run_sync(table.create, checkfirst=True)
+        await conn.run_sync(Base.metadata.create_all, tables=list(_TABLES), checkfirst=True)
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
         yield maker
     finally:
         async with engine.begin() as conn:
-            for table in reversed(_TABLES):
-                await conn.run_sync(table.drop, checkfirst=True)
+            await conn.run_sync(Base.metadata.drop_all, tables=list(_TABLES), checkfirst=True)
         await engine.dispose()
 
 
