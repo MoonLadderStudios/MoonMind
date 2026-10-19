@@ -439,6 +439,29 @@ async def test_postgres_same_count_value_change_is_stale(pg_maker) -> None:
 
 
 @pytest.mark.asyncio
+async def test_postgres_same_count_artifact_change_is_stale(pg_maker) -> None:
+    """Retained artifact values bind preflight without loading rows in Python."""
+    from api_service.services import single_user_conversion as suc
+
+    async with pg_maker() as session:
+        u = await _mk_user(session)
+        artifact = TemporalArtifact(
+            artifact_id="pg-bound", storage_key="before",
+            created_by_principal=str(u.id),
+        )
+        session.add(artifact)
+        await session.commit()
+        pre = await suc.preflight(session)
+        assert (await suc.preflight(session)).fingerprint == pre.fingerprint
+        artifact.storage_key = "after"
+        await session.commit()
+        with pytest.raises(suc.StaleAttributionError):
+            await suc.apply_conversion(
+                session, pre, operator_authorized=True, transforms={}
+            )
+
+
+@pytest.mark.asyncio
 async def test_postgres_concurrent_proposals_serialize(pg_maker) -> None:
     """Two different conversion proposals for one database serialize."""
     import asyncio
