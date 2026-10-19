@@ -9,8 +9,8 @@ from typer.testing import CliRunner
 
 from moonmind.cli import app
 from moonmind.container_job_cli import (
-    ContainerJobMcpClient,
     ContainerJobCliError,
+    ContainerJobMcpClient,
     ContainerJobResult,
     container_job_submission,
     load_container_job_spec,
@@ -18,7 +18,6 @@ from moonmind.container_job_cli import (
     run_container_job,
     run_python_tests,
 )
-
 
 _ENV = {
     "MOONMIND_URL": "http://api:8000",
@@ -319,7 +318,7 @@ def test_run_python_tests_passes_scoped_bearer_token_to_transport(
 
     assert result.state == "succeeded"
     assert captured == {
-        "endpoint": "http://api:8000/mcp",
+        "endpoint": "http://api:8000/mcp/container",
         "bearer_token": "scoped-token",
     }
 
@@ -354,7 +353,7 @@ def test_run_python_tests_reads_scoped_bearer_token_file(
 
     assert result.state == "succeeded"
     assert captured == {
-        "endpoint": "http://api:8000/mcp",
+        "endpoint": "http://api:8000/mcp/container",
         "bearer_token": "scoped-file-token",
     }
 
