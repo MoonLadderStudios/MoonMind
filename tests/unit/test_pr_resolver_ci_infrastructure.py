@@ -52,7 +52,6 @@ def _check_run(
     name: str,
     *,
     run_id: int = 36790876840,
-    started_at: str | None = None,
     completed_at: str | None = None,
 ) -> dict:
     check = {
@@ -65,8 +64,6 @@ def _check_run(
             f"{run_id}/job/{check_id}"
         ),
     }
-    if started_at is not None:
-        check["started_at"] = started_at
     if completed_at is not None:
         check["completed_at"] = completed_at
     return check
@@ -85,6 +82,7 @@ def _summarize(
     checks: list[dict],
     annotations: dict[int, list[dict]],
     *,
+    jobs: dict[int, dict] | None = None,
     run_attempt: int = 1,
     updated_at: str = "2026-09-30T23:27:40Z",
 ) -> dict:
@@ -99,6 +97,7 @@ def _summarize(
             "conclusion": "failure",
             "updated_at": updated_at,
         },
+        fetch_job=lambda job_id: (jobs or {}).get(job_id),
     )
 
 
@@ -143,12 +142,16 @@ def test_quota_failure_and_its_dependent_gate_are_infrastructure_only(
     ]
 
 
-def test_gate_that_ran_after_a_quota_failure_is_infrastructure_only(
+def _job(created_at: str) -> dict:
+    return {"created_at": created_at}
+
+
+def test_gate_queued_by_a_quota_failure_is_infrastructure_only(
     snapshot_module: dict[str, Any],
 ) -> None:
     # Observed Tactics run 39193540093: PR Preflight passed its tests but its
-    # report upload hit the quota; CI Gate then failed on ``needs.preflight``
-    # with nothing but a bare exit status.
+    # report upload hit the quota; CI Gate, created the moment preflight
+    # finished, then failed on ``needs.preflight`` with only a bare exit.
     summary = _summarize(
         snapshot_module,
         [
@@ -156,14 +159,12 @@ def test_gate_that_ran_after_a_quota_failure_is_infrastructure_only(
                 117884346304,
                 "PR Preflight",
                 run_id=39193540093,
-                started_at="2026-10-19T04:06:44Z",
                 completed_at="2026-10-19T04:10:23Z",
             ),
             _check_run(
                 117885240310,
                 "CI Gate",
                 run_id=39193540093,
-                started_at="2026-10-19T04:10:26Z",
                 completed_at="2026-10-19T04:10:37Z",
             ),
         ],
@@ -171,6 +172,7 @@ def test_gate_that_ran_after_a_quota_failure_is_infrastructure_only(
             117884346304: [_failure(QUOTA_MESSAGE), _failure(QUOTA_MESSAGE)],
             117885240310: [_failure("Process completed with exit code 1.")],
         },
+        jobs={117885240310: _job("2026-10-19T04:10:24Z")},
     )
 
     assert summary["infrastructureOnly"] is True
@@ -190,26 +192,35 @@ def test_gate_that_ran_after_a_quota_failure_is_infrastructure_only(
     ]
 
 
-def test_bare_exit_job_running_alongside_a_quota_failure_stays_a_ci_failure(
+def test_bare_exit_job_delayed_only_by_runner_scheduling_stays_a_ci_failure(
     snapshot_module: dict[str, Any],
 ) -> None:
-    # A job that started before the platform failure finished cannot be
-    # waiting on it, so its exit status is its own.
+    # The unit-test job was queued with the attempt and only started once a
+    # runner freed up after the quota-failed job; start order is not ``needs``.
     summary = _summarize(
         snapshot_module,
         [
-            _check_run(
-                1,
-                "Build",
-                started_at="2026-10-19T04:06:44Z",
-                completed_at="2026-10-19T04:10:23Z",
-            ),
-            _check_run(
-                2,
-                "Unit tests",
-                started_at="2026-10-19T04:06:45Z",
-                completed_at="2026-10-19T04:12:00Z",
-            ),
+            _check_run(1, "Build", completed_at="2026-10-19T04:10:23Z"),
+            _check_run(2, "Unit tests", completed_at="2026-10-19T04:14:00Z"),
+        ],
+        {
+            1: [_failure(QUOTA_MESSAGE)],
+            2: [_failure("Process completed with exit code 1.")],
+        },
+        jobs={2: _job("2026-10-19T04:06:42Z")},
+    )
+
+    assert summary["infrastructureOnly"] is False
+
+
+def test_bare_exit_job_without_job_record_stays_a_ci_failure(
+    snapshot_module: dict[str, Any],
+) -> None:
+    summary = _summarize(
+        snapshot_module,
+        [
+            _check_run(1, "Build", completed_at="2026-10-19T04:10:23Z"),
+            _check_run(2, "CI Gate", completed_at="2026-10-19T04:10:37Z"),
         ],
         {
             1: [_failure(QUOTA_MESSAGE)],
@@ -225,15 +236,9 @@ def test_bare_exit_gate_without_platform_cause_is_a_real_failure(
 ) -> None:
     summary = _summarize(
         snapshot_module,
-        [
-            _check_run(
-                2,
-                "CI Gate",
-                started_at="2026-10-19T04:10:26Z",
-                completed_at="2026-10-19T04:10:37Z",
-            )
-        ],
+        [_check_run(2, "CI Gate", completed_at="2026-10-19T04:10:37Z")],
         {2: [_failure("Process completed with exit code 1.")]},
+        jobs={2: _job("2026-10-19T04:10:24Z")},
     )
 
     assert summary["infrastructureOnly"] is False
