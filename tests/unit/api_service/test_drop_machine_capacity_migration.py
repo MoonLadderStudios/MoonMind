@@ -54,8 +54,8 @@ def test_migration_graph_keeps_single_head_at_new_revision() -> None:
     # OpenCode validation repair (#4526), the account-free preset catalog
     # (#4350), the legacy GitHub credential mapping (#4023), the runtime
     # evidence retention backfill, the default-connection grants, and the
-    # remediation link target now extend it further as the single head.
-    assert tuple(script.get_heads()) == ("395_remediation_link_target",)
+    # remediation link target and artifact recovery extend the single head.
+    assert tuple(script.get_heads()) == ("396_artifact_operator_recovery",)
 
 
 def test_upgrade_drops_only_retired_table_and_keeps_unrelated_rows(

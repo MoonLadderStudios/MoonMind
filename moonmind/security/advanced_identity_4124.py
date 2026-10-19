@@ -1094,6 +1094,17 @@ class TrustedProxyConfig:
             )
 
 
+def trusted_proxy_header_name(environ: Mapping[str, str] | None = None) -> str:
+    """Select the configured assertion header without making a trust decision."""
+    import os
+
+    env = os.environ if environ is None else environ
+    return (
+        str(env.get("MOONMIND_TRUSTED_PROXY_HEADER", "") or "").strip()
+        or DEFAULT_TRUSTED_PROXY_HEADER
+    )
+
+
 def resolve_trusted_proxy_config(
     environ: Mapping[str, str] | None = None,
 ) -> TrustedProxyConfig:
@@ -1104,10 +1115,7 @@ def resolve_trusted_proxy_config(
 
     env: Mapping[str, str] = os.environ if environ is None else environ
     namespace = str(env.get("MOONMIND_TRUSTED_PROXY_NAMESPACE", "") or "").strip()
-    header_name = (
-        str(env.get("MOONMIND_TRUSTED_PROXY_HEADER", "") or "").strip()
-        or DEFAULT_TRUSTED_PROXY_HEADER
-    )
+    header_name = trusted_proxy_header_name(env)
     trusted_ingress = _env_flag(env, "MOONMIND_TRUSTED_INGRESS")
     proxies = validate_trusted_proxy_config(env.get("MOONMIND_TRUSTED_PROXIES", ""))
     return TrustedProxyConfig(
@@ -1332,6 +1340,7 @@ __all__ = [
     "resolve_oidc_provider_config",
     "resolve_trusted_proxy_config",
     "strip_asserted_identity_headers",
+    "trusted_proxy_header_name",
     "trusted_proxy_logout_note",
     "validate_id_token",
     "validate_return_path",

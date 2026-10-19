@@ -20,8 +20,16 @@ IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 
 def normalize_publish_mode(value: str | None) -> str:
-    candidate = str(value or "").strip().lower()
-    return candidate if candidate in SUPPORTED_CHILD_PUBLISH_MODES else "pr"
+    # Omitted/empty legacy inputs retain the documented direct-CLI default.
+    # Explicit unsupported values must never gain publication authority.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "pr"
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in SUPPORTED_CHILD_PUBLISH_MODES:
+            return candidate
+    supported = ", ".join(sorted(SUPPORTED_CHILD_PUBLISH_MODES))
+    raise ValueError(f"publish mode must be one of: {supported}")
 
 
 def normalize_runtime_id(value: str | None) -> str | None:

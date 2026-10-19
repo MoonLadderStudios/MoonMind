@@ -3116,6 +3116,11 @@ class TemporalArtifact(Base):
         Text,
         nullable=True,
     )
+    # Server-owned recovery disposition written only by guarded conversion.
+    # Never accepted from artifact requests or metadata.
+    operator_recovery_granted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+    )
     content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     sha256: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)

@@ -667,6 +667,85 @@ def _validate_plan_support_authority(plan: Any) -> None:
         raise ValueError("persisted exact-artifact evidence is incomplete")
 
 
+def _session_artifact_read_principal(
+    request: OmnigentSessionActivityRequest,
+    session: Any,
+    binding: OmnigentExecutionPlanBinding,
+    *,
+    intent_payload: Mapping[str, Any] | None = None,
+) -> str:
+    """Use the canonical session's existing grant, never create a new one.
+
+    Mutating callers validate their command/revision/fence before this read.
+    Reconciliation validates immutable authority without requiring a current
+    mutation revision, so retries can still inspect the latest durable state.
+    """
+    if (
+        session.session_id != request.session_id
+        or session.intent_ref != request.compiled_execution_intent_ref
+        or session.intent_digest != request.compiled_execution_intent_digest
+    ):
+        raise ValueError("canonical session conflicts with compiled intent authority")
+    metadata = session.metadata or {}
+    if (
+        session.execution_plan_ref or metadata.get("executionPlanRef")
+    ) != binding.plan_ref:
+        raise ValueError("canonical session conflicts with persisted execution plan")
+    for key, expected in (
+        ("executionPlanRef", binding.plan_ref),
+        ("executionPlanDigest", binding.plan_digest),
+        ("executionPlanArtifactRef", binding.plan_artifact_ref),
+        ("taskInputSnapshotRef", binding.task_input_snapshot_ref),
+    ):
+        if key in metadata and metadata[key] != expected:
+            raise ValueError("canonical session conflicts with execution-plan binding")
+    if intent_payload is not None and any(
+        intent_payload.get(key) != expected
+        for key, expected in (
+            ("sessionId", session.session_id),
+            ("workflowId", session.moonmind_workflow_id),
+            ("stepExecutionId", session.step_execution_id),
+            ("agentRunId", session.moonmind_agent_run_id),
+        )
+    ):
+        raise ValueError("intent snapshot conflicts with canonical session identity")
+    if not session.moonmind_workflow_id:
+        raise ValueError("canonical session lacks execution artifact authority")
+    return f"workflow:{session.moonmind_workflow_id}"
+
+
+async def _load_session_execution_plan(
+    request: OmnigentSessionActivityRequest,
+    binding: OmnigentExecutionPlanBinding | None = None,
+    *,
+    session: Any | None = None,
+    intent_payload: Mapping[str, Any] | None = None,
+):
+    binding = binding or request.omnigent_execution_plan
+    if binding is None:
+        return None
+    if (
+        request.omnigent_execution_plan is not None
+        and binding != request.omnigent_execution_plan
+    ):
+        raise ValueError("request snapshot execution-plan authority mismatch")
+    if session is None:
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+
+        store = OmnigentControlPlaneStore(async_session_maker)
+        async with store.transaction() as repos:
+            session = await repos.sessions.get(request.session_id)
+    if session is None:
+        raise KeyError(request.session_id)
+    return await _load_verified_execution_plan(
+        binding,
+        admitted_principal=_session_artifact_read_principal(
+            request, session, binding, intent_payload=intent_payload
+        ),
+    )
+
+
 async def _load_intent_request(
     request: OmnigentSessionActivityRequest | Mapping[str, Any],
 ) -> AgentExecutionRequest:
@@ -679,6 +758,8 @@ async def _load_intent_request(
     body = _json_bytes(payload)
     if _digest_bytes(body) != parsed.compiled_execution_intent_digest:
         raise ValueError("agent execution request snapshot digest mismatch")
+    if payload.get("sessionId") != parsed.session_id:
+        raise ValueError("intent snapshot belongs to a different session")
     raw_request = payload.get("request")
     if isinstance(raw_request, Mapping):
         # Replay path for request snapshots created before the compact
@@ -692,7 +773,9 @@ async def _load_intent_request(
         binding_from_intent = OmnigentExecutionPlanBinding.model_validate(
             binding_payload
         )
-        plan = await _load_verified_execution_plan(binding_from_intent)
+        plan = await _load_session_execution_plan(
+            parsed, binding_from_intent, intent_payload=payload
+        )
         agent_request = await _reconstruct_plan_bound_request(
             binding=binding_from_intent,
             plan=plan,
@@ -722,7 +805,9 @@ async def _load_intent_request(
     if binding is not None:
         if agent_request.omnigent_execution_plan != binding:
             raise ValueError("request snapshot execution-plan authority mismatch")
-        plan = await _load_verified_execution_plan(binding)
+        plan = await _load_session_execution_plan(
+            parsed, binding, intent_payload=payload
+        )
         agent_request = _bind_request_to_execution_plan(agent_request, plan)
     return agent_request
 
@@ -743,7 +828,9 @@ async def _reconstruct_plan_bound_request(
 ) -> AgentExecutionRequest:
     """Reload authored input and project it through immutable plan authority."""
 
-    snapshot = await _read_json_artifact(binding.task_input_snapshot_ref)
+    snapshot = await _read_json_artifact(
+        binding.task_input_snapshot_ref, admitted_principal=f"workflow:{workflow_id}"
+    )
     if _digest_bytes(_json_bytes(snapshot)) != binding.task_input_snapshot_digest:
         raise ValueError("task-input snapshot digest conflicts with execution plan")
     authority = plan.payload.authority
@@ -1017,7 +1104,9 @@ class _AdmissionCertificateError(ValueError):
     """
 
 
-async def _validate_plan_admission_authority(persisted: Any) -> None:
+async def _validate_plan_admission_authority(
+    persisted: Any, *, admitted_principal: str | None = None
+) -> None:
     """Load and validate support, replay, and rollback evidence from the plan.
 
     MoonLadderStudios/MoonMind#4560: ordinary certificate-independent
@@ -1073,7 +1162,13 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
         "artifact:"
     )
     try:
-        support_evidence = await _read_json_artifact(support_ref)
+        support_evidence = (
+            await _read_json_artifact(
+                support_ref, admitted_principal=admitted_principal
+            )
+            if admitted_principal is not None
+            else await _read_json_artifact(support_ref)
+        )
     except Exception as exc:
         raise _AdmissionCertificateError(
             f"execution support evidence is unavailable: {exc}"
@@ -1274,7 +1369,9 @@ async def _load_verified_execution_plan(
             "execution plan binding conflicts with task-input snapshot authority"
         )
     try:
-        await _validate_plan_admission_authority(persisted)
+        await _validate_plan_admission_authority(
+            persisted, admitted_principal=admitted_principal
+        )
     except _AdmissionCertificateError as exc:
         persisted = await _migrate_stranded_pre_upgrade_plan(
             persisted,
@@ -1911,7 +2008,9 @@ async def omnigent_resolve_intent_activity(
         plan_binding = resolved.omnigent_execution_plan
         if plan_binding is None:
             raise ValueError("resolve intent lacks persisted plan authority")
-        execution_plan = await _load_verified_execution_plan(plan_binding)
+        execution_plan = await _load_verified_execution_plan(
+            plan_binding, admitted_principal=f"workflow:{resolved.workflow_id}"
+        )
         request = await _reconstruct_plan_bound_request(
             binding=plan_binding,
             plan=execution_plan,
@@ -1938,7 +2037,8 @@ async def omnigent_resolve_intent_activity(
     execution_plan = None
     if request.omnigent_execution_plan is not None:
         execution_plan = await _load_verified_execution_plan(
-            request.omnigent_execution_plan
+            request.omnigent_execution_plan,
+            admitted_principal=f"workflow:{resolved.workflow_id}",
         )
         request = _bind_request_to_execution_plan(request, execution_plan)
 
@@ -2503,11 +2603,6 @@ async def _claim_command(request: OmnigentSessionActivityRequest) -> tuple[Any, 
 
     if not request.command_id:
         raise ValueError("bounded side effect requires commandId")
-    execution_plan = (
-        await _load_verified_execution_plan(request.omnigent_execution_plan)
-        if request.omnigent_execution_plan is not None
-        else None
-    )
     store = OmnigentControlPlaneStore(async_session_maker)
     claim_token = f"omnigent-session:{request.session_id}:{request.command_id}"
     runtime_binding_ref = ""
@@ -2522,20 +2617,6 @@ async def _claim_command(request: OmnigentSessionActivityRequest) -> tuple[Any, 
             raise KeyError(f"Unknown canonical Omnigent session {request.session_id!r}")
         if command.session_id != request.session_id:
             raise ValueError("Omnigent command belongs to a different session")
-        if execution_plan is not None:
-            if session.metadata.get("executionPlanRef") != execution_plan.planRef:
-                raise ValueError(
-                    "canonical session conflicts with persisted execution plan"
-                )
-            runtime_binding_ref = str(
-                session.metadata.get("runtimeBindingRef") or ""
-            )
-            projected_runtime_revision = session.metadata.get(
-                "runtimeBindingRevision"
-            )
-            projected_runtime_fence = session.metadata.get(
-                "runtimeBindingFencingGeneration"
-            )
         if (
             command.expected_session_revision != request.expected_revision
             or command.fencing_generation != request.fencing_generation
@@ -2555,6 +2636,21 @@ async def _claim_command(request: OmnigentSessionActivityRequest) -> tuple[Any, 
         ):
             raise RevisionConflictError(
                 "Omnigent command expected revision is no longer current"
+            )
+        execution_plan = await _load_session_execution_plan(request, session=session)
+        if execution_plan is not None:
+            if session.metadata.get("executionPlanRef") != execution_plan.planRef:
+                raise ValueError(
+                    "canonical session conflicts with persisted execution plan"
+                )
+            runtime_binding_ref = str(
+                session.metadata.get("runtimeBindingRef") or ""
+            )
+            projected_runtime_revision = session.metadata.get(
+                "runtimeBindingRevision"
+            )
+            projected_runtime_fence = session.metadata.get(
+                "runtimeBindingFencingGeneration"
             )
         claim = await repos.commands.claim_command(
             request.command_id,
@@ -2692,11 +2788,6 @@ async def omnigent_persist_signal_intents_activity(
     )
 
     request = OmnigentPersistSignalsRequest.model_validate(payload)
-    execution_plan = (
-        await _load_verified_execution_plan(request.omnigent_execution_plan)
-        if request.omnigent_execution_plan is not None
-        else None
-    )
     store = OmnigentControlPlaneStore(async_session_maker)
     applied = 0
     async with store.transaction() as repos:
@@ -2708,18 +2799,17 @@ async def omnigent_persist_signal_intents_activity(
         # signals all enter through this journal. Once a plan-bound session has
         # live authority, reject an old supervisor task instead of applying its
         # intent to a replacement host/session binding.
-        if execution_plan is not None:
-            if session.metadata.get("executionPlanRef") != execution_plan.planRef:
-                raise ValueError(
-                    "signal session conflicts with persisted execution plan"
-                )
+        if request.omnigent_execution_plan is not None:
+            _session_artifact_read_principal(
+                request, session, request.omnigent_execution_plan
+            )
             recorded_runtime_ref = str(
                 session.metadata.get("runtimeBindingRef") or ""
             )
             if recorded_runtime_ref:
                 _runtime_store, runtime_state = (
                     await _load_current_runtime_binding(
-                        execution_plan_ref=execution_plan.planRef,
+                        execution_plan_ref=request.omnigent_execution_plan.plan_ref,
                         execution_scope_ref=str(
                             session.moonmind_workflow_id or ""
                         ),
@@ -2798,6 +2888,7 @@ async def omnigent_persist_signal_intents_activity(
             raise RevisionConflictError(
                 "Omnigent signal intent expected revision is no longer current"
             )
+        await _load_session_execution_plan(request, session=session)
         for item in request.signals:
             kind = str(item.get("kind") or "")
             raw = item.get("payload")
@@ -2892,7 +2983,7 @@ async def omnigent_ensure_provider_profile_lease_activity(
     agent_request = await _load_intent_request(request)
     agent_plan_binding = getattr(agent_request, "omnigent_execution_plan", None)
     execution_plan = (
-        await _load_verified_execution_plan(agent_plan_binding)
+        await _load_session_execution_plan(request, agent_plan_binding)
         if agent_plan_binding is not None
         else None
     )
@@ -3343,7 +3434,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     agent_request = await _load_intent_request(request)
     agent_plan_binding = getattr(agent_request, "omnigent_execution_plan", None)
     execution_plan = (
-        await _load_verified_execution_plan(agent_plan_binding)
+        await _load_session_execution_plan(request, agent_plan_binding)
         if agent_plan_binding is not None
         else None
     )
@@ -3430,7 +3521,10 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         effective_launch = await _read_json_artifact(
             execution_plan.payload.effectiveLaunchSnapshotRef.removeprefix(
                 "artifact:"
-            )
+            ),
+            admitted_principal=_session_artifact_read_principal(
+                request, session, agent_plan_binding
+            ),
         )
         if (
             effective_launch.get("providerProfileId")
@@ -4912,9 +5006,7 @@ async def omnigent_persist_failure_activity(
         )
     runtime_state = None
     if request.omnigent_execution_plan is not None:
-        execution_plan = await _load_verified_execution_plan(
-            request.omnigent_execution_plan
-        )
+        execution_plan = await _load_session_execution_plan(request, session=session)
         recorded_runtime_ref = str(
             session.metadata.get("runtimeBindingRef")
             or request.runtime_binding_ref
@@ -5236,7 +5328,7 @@ async def omnigent_publish_workspace_activity(
                 metadata_patch={"publicationEvidenceRef": publication_ref},
             )
     execution_plan = (
-        await _load_verified_execution_plan(request.omnigent_execution_plan)
+        await _load_session_execution_plan(request, session=session)
         if request.omnigent_execution_plan is not None
         else None
     )
@@ -5460,7 +5552,7 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
         return {"commandId": request.command_id, "outcome": "cleanup_not_owned"}
     cleanup_evidence: Mapping[str, Any] = {}
     plan = (
-        await _load_verified_execution_plan(request.omnigent_execution_plan)
+        await _load_session_execution_plan(request, session=session)
         if request.omnigent_execution_plan is not None
         else None
     )
@@ -5573,9 +5665,7 @@ async def omnigent_release_leases_activity(
             execution_scope_ref=str(session.moonmind_workflow_id or ""),
             recorded_runtime_binding_ref=runtime_ref,
         )
-        plan = await _load_verified_execution_plan(
-            request.omnigent_execution_plan
-        )
+        plan = await _load_session_execution_plan(request, session=session)
         if plan.payload.executionRealizerRef == "generic-omnigent-host@1":
             raise ValueError(
                 "generic credential cleanup belongs to the AgentRun realizer, "
