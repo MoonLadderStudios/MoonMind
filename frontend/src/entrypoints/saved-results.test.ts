@@ -393,6 +393,24 @@ function capture(overrides: { summary?: Record<string, unknown> | null } = {}) {
 }
 
 describe('the committed saved-work manifest is one saved unit', () => {
+  it('exposes generic recovery bytes only through their committed saved index', () => {
+    const saved = capture({ summary: {
+      required_formats: ['full_snapshot'],
+      outputs: [{ format: 'full_snapshot', status: 'self_contained', artifact_id: 'art-archive' }],
+    } });
+    saved.archive.links = [{ linkType: 'evidence.recovery', label: 'Recovery archive' }];
+    saved.fileManifest.links = [{ linkType: 'evidence.recovery', label: 'Recovery manifest' }];
+    saved.manifest.links = [{ linkType: 'checkpoint.saved_work', label: 'Saved work' }];
+    const parts = [saved.archive, saved.fileManifest];
+    expect(project({ artifacts: parts }).entries).toEqual([]);
+    const [unit] = project({ artifacts: [...parts, saved.manifest] }).entries;
+    expect(unit?.artifactId).toBe('art-manifest');
+    expect(unit?.complete).toBe(true);
+    expect(unit?.savedWork?.parts.map((part) => part.artifactId)).toEqual(['art-archive']);
+    expect(canPublishSavedWork(unit!)).toBe(true);
+    expect(project({ artifacts: [saved.manifest] }).entries[0]?.complete).toBe(false);
+  });
+
   it('groups the parts it names and surfaces the server summary', () => {
     const saved = capture();
     const projection = project({

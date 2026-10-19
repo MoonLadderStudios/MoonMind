@@ -321,6 +321,8 @@ class OmnigentWorkspacePublicationService:
         self.resolve_request_workspace(request)
         workflow_id, step_id = execution_identity(request)
 
+        verified_manifests = {}
+
         class Capture(TemporalSandboxActivities):
             async def _put_checkpoint_bytes(self, payload, *, content_type, metadata=None):
                 ref = await gateway.write_bytes(
@@ -330,7 +332,10 @@ class OmnigentWorkspacePublicationService:
                 restored = await gateway.read_bytes(ref)
                 if hashlib.sha256(restored).digest() != hashlib.sha256(payload).digest():
                     raise ValueError("Remote checkpoint bytes differ from the saved candidate")
-                return "artifact://" + ref.removeprefix("artifact:").removeprefix("//")
+                compact = "artifact://" + ref.removeprefix("artifact:").removeprefix("//")
+                if (metadata or {}).get("artifact_kind") == "checkpoint_manifest":
+                    verified_manifests[compact] = restored
+                return compact
 
         identity = request.step_execution
         if identity is None:
@@ -382,12 +387,122 @@ class OmnigentWorkspacePublicationService:
             recovery = await self._repository_recovery_evidence(
                 request, workspace_evidence
             )
-            return {
+            workspace_evidence = {
                 **workspace_evidence,
                 "checkpointRef": ref,
                 "recoveryEvidence": recovery,
             }
-        return workspace_evidence
+        return {
+            **workspace_evidence,
+            **await self._index_saved_workspace(
+                request, workspace_evidence,
+                manifest_bytes=verified_manifests[workspace_evidence["manifestRef"]],
+            ),
+        }
+
+    async def _index_saved_workspace(self, request, saved, *, manifest_bytes):
+        """Index already verified checkpoint bytes for independent publication.
+
+        Sandbox checkpoints keep their existing restore schema. Publication's
+        file identity uses the managed capture entry shape, so normalize that
+        identity without capturing files again or inventing a Git delta.
+        """
+        from moonmind.schemas.saved_work_models import (
+            build_saved_work_manifest,
+            commit_saved_work_manifest,
+            describe_output_claim,
+            workspace_content_digest,
+        )
+        from moonmind.security.outbound_scan import (
+            OutboundBundleItem,
+            resolve_high_security_mode,
+            scan_outbound_bundle,
+        )
+
+        if "sha256:" + hashlib.sha256(manifest_bytes).hexdigest() != saved["manifestDigest"]:
+            raise ValueError("Saved checkpoint manifest differs from its capture")
+        checkpoint = json.loads(manifest_bytes)
+        if (
+            checkpoint.get("archiveRef") != saved["archiveRef"]
+            or checkpoint.get("archiveDigest") != saved["archiveDigest"]
+            or workspace_content_digest(checkpoint["entries"]) != saved["workspaceDigest"]
+        ):
+            raise ValueError("Saved checkpoint does not index the captured archive")
+        entries = []
+        for entry in checkpoint["entries"]:
+            normalized = {
+                "path": entry["path"],
+                "type": entry["type"],
+                "mode": format(int(entry["mode"], 8), "06o"),
+            }
+            if entry["type"] == "file":
+                normalized.update(size=entry["bytes"], sha256=entry["digest"].removeprefix("sha256:"))
+            elif entry["type"] == "symlink":
+                target = entry["target"].encode()
+                normalized.update(size=len(target), sha256=hashlib.sha256(target).hexdigest(), linkTarget=entry["target"])
+            else:
+                raise ValueError("Saved checkpoint contains an unsupported entry")
+            entries.append(normalized)
+        identity = request.step_execution
+        high_security = resolve_high_security_mode()
+        manifest = build_saved_work_manifest(
+            capture_id=f"{request.idempotency_key}:saved-work",
+            identity={
+                "workflowId": identity.workflow_id,
+                "runId": identity.run_id,
+                "logicalStepId": identity.logical_step_id,
+                "executionOrdinal": identity.execution_ordinal,
+                "boundary": "after_execution",
+            },
+            source={"kind": "sandbox-workspace"},
+            content_digest=saved["archiveDigest"],
+            file_manifest_digest=workspace_content_digest(entries),
+            capture_policy={"includeUntracked": True, "includeIgnored": False},
+            required_formats=["full_snapshot"],
+            outputs=[describe_output_claim(
+                fmt="full_snapshot", status="self_contained",
+                ref=saved["archiveRef"], digest=saved["archiveDigest"],
+            )],
+            exclusions=[
+                {"path": path, "reason": "capture-policy"}
+                for path in checkpoint.get("excludedPaths", [])
+            ],
+            # The checkpoint owner rejects blocked exports but does not retain
+            # its aggregate scan result (binary coverage can be limited).
+            scan={
+                "disposition": "unknown" if high_security else "not_scanned",
+                "manifestScan": "allow" if high_security else "not_scanned",
+            },
+            quiescence={"verified": True, "mechanism": "checked archive file fingerprints"},
+            artifact_scope="checkpoint_archive",
+            retention_ref="artifact-ownership",
+        )
+        manifest["limitations"] = [
+            "Capture exclusions are enforced, but the checkpoint does not enumerate every excluded path."
+        ]
+        manifest.pop("manifestDigest", None)
+        manifest["manifestDigest"] = "sha256:" + hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        payload = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        if not scan_outbound_bundle(
+            [OutboundBundleItem(location="checkpoint.saved-work", content=payload.decode())],
+            high_security_mode=high_security,
+        ).allowed:
+            raise ValueError("Saved-work metadata failed outbound secret scanning")
+        committed = commit_saved_work_manifest(
+            manifest, required_refs_available={"checkpoint_archive": True, "checkpoint_manifest": True},
+        )
+        if committed["status"] != "committed":
+            raise ValueError("Saved-work manifest is incomplete")
+        # All referenced bytes have been saved and verified before the index
+        # becomes a listed output. Failure still belongs to save-or-retain.
+        ref = await self._artifacts.write_bytes(
+            request=request, name="saved_work_manifest", payload=payload,
+            content_type="application/vnd.moonmind.saved-work-manifest+json;version=1",
+            link_type="checkpoint.saved_work",
+        )
+        return {"savedWorkRef": ref, "savedWorkDigest": "sha256:" + hashlib.sha256(payload).hexdigest()}
 
     async def _repository_recovery_evidence(self, request, saved):
         """Bind clean-worktree observation to the remotely verified archive.
