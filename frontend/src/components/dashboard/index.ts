@@ -1,3 +1,5 @@
+export { Button, buttonClassName } from './Button';
+export type { ButtonProps, ButtonSize, ButtonStyleOptions, ButtonVariant } from './Button';
 export { DashboardErrorDetails } from './DashboardErrorDetails';
 export type { DashboardErrorDetailsProps } from './DashboardErrorDetails';
 export { DashboardToastProvider, useDashboardToast } from './DashboardToast';

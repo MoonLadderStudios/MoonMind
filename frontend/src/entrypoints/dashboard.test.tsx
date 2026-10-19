@@ -888,6 +888,17 @@ describe('Dashboard shared entry', () => {
     });
   });
 
+  it('does not make the routed page panel a live region so table refreshes are not announced', async () => {
+    window.history.replaceState({}, '', '/workflows');
+    renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+    await screen.findByText('Workflow list route loaded', {}, { timeout: 10000 });
+
+    const panel = document.querySelector<HTMLElement>('.dashboard-content > .panel');
+    expect(panel).not.toBeNull();
+    expect(panel?.hasAttribute('aria-live')).toBe(false);
+    expect(panel?.closest('[aria-live]')).toBeNull();
+  });
+
   it('MoonLadderStudios/MoonMind#4870 opens no update stream and leaves list refresh to the list query', async () => {
     window.history.replaceState({}, '', '/workflows');
     const eventSourceSpy = vi.fn();
@@ -2244,7 +2255,9 @@ describe('Dashboard shared entry', () => {
 
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Loading MoonMind...' })).toBeTruthy();
+    const loadingHeading = await screen.findByRole('heading', { level: 1, name: 'Loading MoonMind...' });
+    // Route loading is its own status message now that the panel is not a live region.
+    expect(loadingHeading.closest('[role="status"]')).not.toBeNull();
     expect(screen.queryByText('Workflow start route loaded')).toBeNull();
 
     resolveUiInfo({
@@ -3565,39 +3578,9 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.workflow-list-filter-chip')).toContain(
       'color: rgb(var(--mm-ink))',
     );
-    const primaryButtonBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
-      const selectors = rule.selector.split(',').map(normalizeCssSelector);
-      return (
-        selectors.some(
-          (selector) =>
-            selector.startsWith('button:not(') || selector.startsWith('button:where(:not('),
-        ) &&
-        rule.nodes.some((node) => node.type === 'decl' && node.prop === 'color' && node.value === '#fff')
-      );
-    });
-    expect(primaryButtonBlock).toContain('color: #fff');
     expect(cssRuleBlock(dashboardCss, '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility')).toContain(
       'background: var(--mm-glass-fill)',
     );
-  });
-
-  it('enforces MM-429 focus visibility across representative interactive surfaces', async () => {
-    const focusSelectors = [
-      'button:focus-visible',
-      '.button:focus-visible',
-      'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible',
-      '.route-nav a:focus-visible',
-      '.table-sort-button:focus-visible',
-      '.queue-action:focus-visible,\n.queue-submit-primary:focus-visible',
-      '.queue-step-attachment-add-button:focus-visible',
-      '.live-logs-artifact-link:focus-visible',
-      '.td-instructions-toggle:focus-visible',
-    ];
-
-    for (const selector of focusSelectors) {
-      const block = cssRuleBlock(dashboardCss, selector);
-      expect(block).toContain('box-shadow: var(--mm-control-focus-ring)');
-    }
   });
 
   it('enforces MM-429 reduced-motion suppression for live and premium effects', async () => {
@@ -3720,7 +3703,7 @@ describe('Dashboard shared entry', () => {
     }
   });
 
-  it('colors only Moon white in the masthead brand', async () => {
+  it('renders the masthead brand halves as separately styled spans', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardShellSource = readFileSync(
       `${process.cwd()}/frontend/src/entrypoints/dashboard-app.tsx`,
@@ -3729,7 +3712,6 @@ describe('Dashboard shared entry', () => {
 
     expect(dashboardShellSource).toContain('className="masthead-brand-moon"');
     expect(dashboardShellSource).toContain('className="masthead-brand-mind"');
-    expect(cssRuleBlock(dashboardCss, '.masthead-brand-moon')).toContain('color: rgb(255 255 255)');
     expect(cssRuleBlock(dashboardCss, '.masthead-brand-mind')).toContain('color: inherit');
   });
 
@@ -3738,7 +3720,6 @@ describe('Dashboard shared entry', () => {
       dashboardCss,
       '.status-queued, .status-scheduled',
     ).join('\n');
-    expect(dashboardCss).toContain('--mm-status-queued: 124 58 237');
     expect(dashboardCss).toContain('--mm-status-queued: 167 139 250');
     expect(queueBlock).toContain('color: rgb(var(--mm-status-queued))');
     expect(queueBlock).toContain('rgb(var(--mm-status-queued) / 0.14)');
@@ -3753,7 +3734,6 @@ describe('Dashboard shared entry', () => {
     expect(waitBlock).toContain('rgb(var(--mm-status-waiting) / 0.14)');
 
     const setupBlock = cssRuleBlocks(dashboardCss, '.status-initializing, .status-awaiting-slot, .status-planning, .status-finalizing').join('\n');
-    expect(dashboardCss).toContain('--mm-status-setup: 37 99 235');
     expect(dashboardCss).toContain('--mm-status-setup: 96 165 250');
     expect(setupBlock).toContain('color: rgb(var(--mm-status-setup))');
     expect(setupBlock).toContain('rgb(var(--mm-status-setup) / 0.14)');
@@ -3761,9 +3741,6 @@ describe('Dashboard shared entry', () => {
       'color: rgb(var(--mm-muted))',
     );
     expect(cssRuleBlock(dashboardCss, '.status-no-commit')).toContain('color: rgb(var(--mm-muted))');
-    expect(cssRuleBlock(dashboardCss, '.status-running, .status-running.is-executing')).toContain(
-      'color: rgb(var(--mm-accent-2))',
-    );
   });
 
 
@@ -4030,8 +4007,6 @@ describe('Dashboard shared entry', () => {
 
   it('defines shared interaction tokens for routine controls', async () => {
     const requiredTokens = [
-      '--mm-control-hover-scale',
-      '--mm-control-press-scale',
       '--mm-control-transition',
       '--mm-control-focus-ring',
       '--mm-control-disabled-opacity',
@@ -4045,50 +4020,7 @@ describe('Dashboard shared entry', () => {
     }
   });
 
-  it('uses scale-only glow and grow states for routine buttons', async () => {
-    const routineBlocks = [
-      cssRuleBlock(
-        dashboardCss,
-        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover',
-      ),
-      cssRuleBlock(dashboardCss, 'button.secondary:hover'),
-      cssRuleBlock(
-        dashboardCss,
-        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover',
-      ),
-      cssRuleBlock(dashboardCss, '.button.secondary:hover'),
-      cssRuleBlock(dashboardCss, '.queue-action:hover,\n.queue-submit-primary:hover'),
-      cssRuleBlock(dashboardCss, '.queue-step-extension-button:hover'),
-      cssRuleBlock(dashboardCss, '.queue-step-icon-button:hover'),
-      cssRuleBlock(dashboardCss, '.queue-step-icon-button.destructive:hover'),
-    ];
-
-    for (const block of routineBlocks) {
-      expect(block).toContain('scale(var(--mm-control-hover-scale))');
-      expect(block).not.toContain('translateY');
-    }
-
-    const pressedBlocks = [
-      cssRuleBlock(
-        dashboardCss,
-        'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active',
-      ),
-      cssRuleBlock(
-        dashboardCss,
-        '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active',
-      ),
-      cssRuleBlock(dashboardCss, '.queue-action:active,\n.queue-submit-primary:active'),
-      cssRuleBlock(dashboardCss, '.queue-step-icon-button:active'),
-      cssRuleBlock(dashboardCss, '.queue-step-icon-button.destructive:active'),
-    ];
-
-    for (const block of pressedBlocks) {
-      expect(block).toContain('scale(var(--mm-control-press-scale))');
-      expect(block).not.toContain('translateY');
-    }
-  });
-
-  it('aligns compact controls, focus rings, disabled states, and reduced motion', async () => {
+  it('aligns compact controls, forced-colors focus, and reduced motion', async () => {
     const inlineToggleBlock = cssRuleBlock(dashboardCss, '.queue-inline-toggle {');
     expect(inlineToggleBlock).toContain('padding: 0');
     expect(inlineToggleBlock).not.toContain('background: var(--mm-control-shell)');
@@ -4125,23 +4057,11 @@ describe('Dashboard shared entry', () => {
     expect(cssRuleBlock(dashboardCss, '.workflow-list-filter-actions')).toContain(
       'border-top: 1px solid rgb(var(--mm-border) / 0.7)',
     );
-    expect(cssRuleBlock(dashboardCss, '.queue-inline-filter:focus-within')).toContain(
-      'box-shadow: var(--mm-control-focus-ring)',
-    );
-    expect(cssRuleBlock(dashboardCss, 'button:focus-visible')).toContain(
-      'box-shadow: var(--mm-control-focus-ring)',
-    );
-    expect(cssRuleBlock(dashboardCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
-      'box-shadow: var(--mm-control-focus-ring)',
-    );
-    expect(cssRuleBlock(dashboardCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"],\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"]:hover')).toMatch(
-      /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter,[^}]*\.queue-page-size-selector\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
     );
     expect(dashboardCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter,[^}]*\.queue-page-size-selector\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.route-nav a:focus-visible,[^}]*\.live-logs-artifact-link:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,
+      /@media \(forced-colors: active\)\s*\{\s*:focus-visible\s*\{[^}]*outline:\s*2px solid CanvasText;[^}]*outline-offset:\s*2px;/s,
     );
   });
 

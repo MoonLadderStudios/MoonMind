@@ -1289,9 +1289,13 @@ describe('ProviderProfilesManager form controls', () => {
     // action with the specific reason instead of submitting.
     const action = screen.getByRole('button', { name: 'Create profile' });
     expect((action as HTMLButtonElement).disabled).toBe(true);
-    expect(
-      screen.getByText('Choose a supported authentication method to continue.'),
-    ).toBeTruthy();
+    const reason = screen.getByText('Choose a supported authentication method to continue.');
+    // The disabled reason is visible text the action is described by, not a tooltip.
+    expect(reason.id).not.toBe('');
+    expect(action.getAttribute('aria-describedby')).toBe(reason.id);
+    expect(action.getAttribute('title')).toBeNull();
+    expect(action.classList.contains('button')).toBe(true);
+    expect(action.className).not.toMatch(/button--(secondary|ghost|danger)/);
     fireEvent.click(action);
 
     expect(onNotice).not.toHaveBeenCalled();
@@ -1596,6 +1600,58 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('Setup required')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'OAuth codex-openai-oauth' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Enable' })).toHaveProperty('disabled', true);
+  });
+
+  it('shows why Enable is unavailable as visible text the button is described by', () => {
+    renderProviderProfilesManager([claudeCredentialProfile, profile]);
+
+    const enable = screen.getByRole('button', { name: 'Enable' });
+    expect(enable).toHaveProperty('disabled', true);
+    const reason = screen.getByText('Complete credential setup before enabling this profile.');
+    expect(reason.id).not.toBe('');
+    expect(enable.getAttribute('aria-describedby')).toBe(reason.id);
+    expect(enable.getAttribute('title')).toBeNull();
+
+    const disable = screen.getByRole('button', { name: 'Disable' });
+    expect(disable).toHaveProperty('disabled', false);
+    expect(disable.getAttribute('aria-describedby')).toBeNull();
+    expect(screen.getAllByText('Complete credential setup before enabling this profile.')).toHaveLength(1);
+  });
+
+  it('renders every provider-row action as a shared Button with a deliberate variant', () => {
+    renderProviderProfilesManager([connectedClaudeCredentialProfile, codexOauthProfile]);
+
+    const actionCells = Array.from(document.querySelectorAll<HTMLElement>('td[data-label="Actions"]'));
+    expect(actionCells).toHaveLength(2);
+    for (const cell of actionCells) {
+      const buttons = within(cell).getAllByRole('button');
+      expect(buttons.length).toBeGreaterThan(0);
+      for (const button of buttons) {
+        expect(button.classList.contains('button')).toBe(true);
+        expect(button.classList.contains('button--sm')).toBe(true);
+        expect(button.className).toMatch(/\bbutton--(secondary|danger)\b/);
+      }
+    }
+
+    const variantOf = (button: HTMLElement) =>
+      button.classList.contains('button--danger') ? 'danger' : button.classList.contains('button--secondary') ? 'secondary' : 'other';
+
+    expect(variantOf(screen.getByRole('button', { name: 'OAuth codex-oauth' }))).toBe('secondary');
+    expect(variantOf(screen.getByRole('button', { name: 'OAuth claude-anthropic-connected' }))).toBe('secondary');
+    expect(
+      variantOf(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-connected' })),
+    ).toBe('secondary');
+    expect(variantOf(screen.getByRole('button', { name: 'Validate OAuth claude-anthropic-connected' }))).toBe(
+      'secondary',
+    );
+    expect(variantOf(screen.getByRole('button', { name: 'Disconnect OAuth claude-anthropic-connected' }))).toBe(
+      'danger',
+    );
+    for (const cell of actionCells) {
+      expect(variantOf(within(cell).getByRole('button', { name: 'Edit' }))).toBe('secondary');
+      expect(variantOf(within(cell).getByRole('button', { name: 'Disable' }))).toBe('secondary');
+      expect(variantOf(within(cell).getByRole('button', { name: 'Delete' }))).toBe('danger');
+    }
   });
 
   it('enrolls a Codex OpenAI API key through the provider API-key endpoint', async () => {

@@ -5,10 +5,13 @@
 // links to captured evidence / diagnostics.
 import type { MouseEvent } from 'react';
 
+import { Button, buttonClassName } from '../../components/dashboard/Button';
 import {
   nativeChatStateCopy,
   type NativeChatStatus,
 } from './chatBindingModel';
+
+const ACTION_LINK_CLASS = buttonClassName({ variant: 'secondary', size: 'sm' });
 
 interface NativeChatUnavailableStateProps {
   status: NativeChatStatus;
@@ -70,18 +73,18 @@ export function NativeChatUnavailableState({
       <p className="small wf-native-chat__state-desc">{copy.description}</p>
       <div className="wf-native-chat__state-actions">
         {copy.canRetry && onRetry ? (
-          <button type="button" className="button secondary small" onClick={onRetry}>
+          <Button variant="secondary" size="sm" onClick={onRetry}>
             Retry
-          </button>
+          </Button>
         ) : null}
         {fullPageHref ? (
-          <a className="button secondary small" href={fullPageHref}>
+          <a className={ACTION_LINK_CLASS} href={fullPageHref}>
             Open in Omnigent
           </a>
         ) : null}
         {evidenceHref ? (
           <a
-            className="button secondary small"
+            className={ACTION_LINK_CLASS}
             href={evidenceHref}
             onClick={handleInternal(evidenceHref)}
           >
@@ -90,7 +93,7 @@ export function NativeChatUnavailableState({
         ) : null}
         {diagnosticsHref ? (
           <a
-            className="button secondary small"
+            className={ACTION_LINK_CLASS}
             href={diagnosticsHref}
             onClick={handleInternal(diagnosticsHref)}
           >

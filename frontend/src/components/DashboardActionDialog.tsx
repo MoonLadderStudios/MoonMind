@@ -9,6 +9,7 @@ import {
 } from 'react';
 
 import { focusableElementsWithin, trapTabWithin } from '../lib/focusTrap';
+import { Button } from './dashboard/Button';
 
 type DashboardActionDialogProps = {
   open: boolean;
@@ -100,6 +101,7 @@ export function DashboardActionDialog({
 }: DashboardActionDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const disabledReasonId = useId();
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const [value, setValue] = useState(initialValue);
@@ -178,20 +180,20 @@ export function DashboardActionDialog({
                 {compactId ? <code>{compactId}</code> : null}
               </p>
             </div>
-            <button
-              type="button"
-              className="secondary dashboard-dialog-close"
+            <Button
+              variant="secondary"
+              className="dashboard-dialog-close"
               aria-label={`Close ${title}`}
               onClick={onCancel}
             >
               x
-            </button>
+            </Button>
           </div>
           <div id={descriptionId} className="dashboard-dialog-consequence">
             {consequence}
           </div>
           {disabledReason ? (
-            <div className="notice pending" role="note">
+            <div id={disabledReasonId} className="notice pending" role="note">
               {disabledReason}
             </div>
           ) : null}
@@ -229,23 +231,24 @@ export function DashboardActionDialog({
           {error ? (
             <div className="notice error dashboard-dialog-error" role="alert">
               <span>{error}</span>
-              <button type="button" className="secondary" onClick={() => void copyDiagnostics()}>
+              <Button variant="secondary" size="sm" onClick={() => void copyDiagnostics()}>
                 {copyLabel}
-              </button>
+              </Button>
             </div>
           ) : null}
           <div className="dashboard-dialog-actions">
-            <button type="button" className="secondary" onClick={onCancel}>
+            <Button variant="secondary" onClick={onCancel}>
               {cancelLabel}
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className={danger ? 'button dashboard-dialog-danger' : 'button'}
+              variant={danger ? 'danger' : 'primary'}
               disabled={confirmDisabled}
               aria-busy={confirmPending}
+              aria-describedby={disabledReason ? disabledReasonId : undefined}
             >
               {confirmLabel}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

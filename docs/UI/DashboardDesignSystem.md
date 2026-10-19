@@ -44,9 +44,9 @@ Each page should have a single primary spectacle or premium-effect surface. Exam
 
 The rest of the page should support that focal effect rather than compete with it.
 
-### 3.4 Brighten on hover, do not darken
+### 3.4 Quiet hover, distinct press
 
-Interactive elements should feel more alive on hover. Hover states should generally increase brightness, border light, or glow rather than collapsing into darker states.
+Hover is a small tint and applies only on devices that can hover (`@media (hover: hover)`), so a tap never leaves a sticky hover. Press is darker or inset and never louder than hover. Disabled controls do not react to either.
 
 ### 3.5 Motion should be restrained and intentional
 
@@ -120,7 +120,7 @@ Recommended liquidGL targets:
 
 ## 5. Color system and token contract
 
-Tokens must be defined as RGB triplets so alpha composition stays flexible.
+Colour tokens are RGB triplets so alpha composition stays flexible. Read them only inside `rgb()`; used bare, the declaration is invalid and dropped.
 
 ### 5.1 Core tokens
 
@@ -137,7 +137,8 @@ Tokens must be defined as RGB triplets so alpha composition stays flexible.
 | Success | `--mm-ok` | `34 197 94` | `74 222 128` | Completed / healthy states |
 | Warning | `--mm-warn` | `245 158 11` | `251 191 36` | Queue, caution, attention |
 | Danger | `--mm-danger` | `244 63 94` | `251 113 133` | Failure, destructive actions |
-| Commit action | `--mm-action-primary` | `21 147 118` | `26 153 123` | Real-action create/apply/launch pathways |
+| Status text | `--mm-{running,ok,warn,danger}-text` | darker shades | base accent | Text on status tints; bright accents fail 4.5:1 on light surfaces |
+| Focus | `--mm-focus-ring` | `109 40 217` | `125 249 255` | The shared focus outline, 3:1 or more against the page |
 | Shadow | `--mm-shadow` | `0 18px 32px -26px rgb(10 8 30 / 0.55)` | `0 24px 52px -34px rgb(0 0 0 / 0.88)` | Base elevation shadow |
 
 ### 5.2 Accent balance
@@ -326,12 +327,7 @@ Preferred transition ranges:
 
 ### 9.2 Motion model
 
-Use small scale changes and glow changes. Prefer:
-
-- hover: `scale(1.02-1.03)`
-- active press: `scale(0.98-0.99)`
-
-Avoid `translateY` lift behavior on core buttons and nav pills. The dashboard should feel precise, not floaty.
+Hover and press change colour and shadow only: no scale, brightness filter, or `translateY` lift on buttons and nav pills. The dashboard should feel precise, not floaty.
 
 ### 9.3 Live-state motion
 
@@ -407,24 +403,9 @@ Collection-sidebar rules:
 
 ### 10.2 Buttons
 
-The dashboard uses one consistent **glow + grow** interaction system.
+Use the shared `Button` (`components/dashboard/Button.tsx`), or `buttonClassName()` for button-styled links. The bare `<button>` is a neutral reset (no fill, border, or padding), so nothing becomes an accidental call to action.
 
-Rules:
-
-- buttons are slightly translucent, never fully dead/flat by default
-- hover gets brighter and slightly larger
-- press state uses subtle scale-down, not translate
-- focus-visible must remain crisp and high contrast
-- disabled buttons lose glow and motion emphasis
-
-Variants:
-
-- **Default / brand**: purple
-- **Secondary / safe**: glass or satin surface
-- **Commit / create / apply**: `--mm-action-primary`
-- **Danger**: `--mm-danger`
-
-A thin outline and faint edge-light are required so buttons do not disappear into glass backgrounds.
+Variants, in sizes `md` and `sm`: **primary** (brand purple, the one main action of a form or panel), **secondary** (ordinary actions), **ghost** (low-emphasis inline actions), **danger** (irreversible or high-consequence only; pause and drain stay secondary), and **icon** (needs an accessible name). `aria-pressed="true"` or `.active` marks a selected button; disabled buttons dim and ignore hover and press.
 
 ### 10.3 Inputs, selects, and comboboxes
 
@@ -637,7 +618,7 @@ All decorative styling must maintain clear contrast for:
 
 ### 12.2 Keyboard and focus
 
-Every interactive surface must provide a visible, high-contrast `:focus-visible` state. Focus is a first-class design element, not an implementation afterthought.
+Every interactive surface shares one `:focus-visible` outline (2px `--mm-focus-ring`) with at least 3:1 contrast in both themes. Do not replace it with a box-shadow ring: hover rules can override box-shadow, and forced-colors mode drops it.
 
 ### 12.3 Blur and WebGL fallbacks
 
@@ -691,6 +672,7 @@ Rules:
 - avoid hardcoded opaque colors when token-based values will do
 - avoid scattering many `dark:*` overrides when a token-based surface will adapt automatically
 - light and dark themes should remain behaviorally identical, with tokens swapping the atmosphere and surface values
+- the HTML shell follows the operating-system colour scheme, including changes while the page is open; there is no stored theme override
 
 ### 13.3 Tailwind and source scanning
 

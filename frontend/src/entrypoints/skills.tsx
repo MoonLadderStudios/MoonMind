@@ -2,6 +2,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { marked } from 'marked';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { Button } from '../components/dashboard/Button';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
 import { PageHeader, useDocumentTitle } from '../components/dashboard/PageHeader';
 import {
@@ -49,6 +51,29 @@ export interface SkillCatalogItem {
 }
 
 type PreviewTab = 'rendered' | 'raw' | 'metadata';
+
+const PREVIEW_TABS: ReadonlyArray<readonly [PreviewTab, string]> = [
+  ['rendered', 'Rendered'],
+  ['raw', 'Raw Markdown'],
+  ['metadata', 'Metadata'],
+];
+
+/** Index of the tab a WAI-ARIA tabs keyboard key moves to, or null for other keys. */
+function previewTabIndexForKey(key: string, index: number): number | null {
+  const last = PREVIEW_TABS.length - 1;
+  switch (key) {
+    case 'ArrowRight':
+      return index === last ? 0 : index + 1;
+    case 'ArrowLeft':
+      return index === 0 ? last : index - 1;
+    case 'Home':
+      return 0;
+    case 'End':
+      return last;
+    default:
+      return null;
+  }
+}
 
 type CollisionPolicy = 'reject';
 
@@ -528,9 +553,9 @@ function SkillsCatalogTable({
       errorMessage={(
         <>
           <span>Failed to load skills.</span>{' '}
-          <button type="button" className="secondary" onClick={() => void skillsQuery.refetch()}>
+          <Button variant="secondary" onClick={() => void skillsQuery.refetch()}>
             Retry
-          </button>
+          </Button>
         </>
       )}
       emptyMessage={filterText.trim() ? 'No skills match your filter.' : 'No skills available yet.'}
@@ -565,6 +590,17 @@ function SkillDetail({
   detailHeadingRef: React.RefObject<HTMLHeadingElement | null>;
 }) {
   useDocumentTitle(selectedSkill ? selectedSkill.label ?? selectedSkill.id : 'Skills');
+  const previewIdPrefix = useId();
+  const previewTabId = (tab: PreviewTab) => `${previewIdPrefix}-tab-${tab}`;
+  const previewPanelId = `${previewIdPrefix}-panel`;
+  const handlePreviewTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const nextIndex = previewTabIndexForKey(event.key, index);
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const [nextTab] = PREVIEW_TABS[nextIndex]!;
+    setPreviewTab(nextTab);
+    document.getElementById(previewTabId(nextTab))?.focus();
+  };
   return (
     <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm sm:p-6">
       {selectedSkill ? null : <PageHeader title="Skills" />}
@@ -585,74 +621,78 @@ function SkillDetail({
           </div>
 
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Skill preview tabs">
-            {(
-              [
-                ['rendered', 'Rendered'],
-                ['raw', 'Raw Markdown'],
-                ['metadata', 'Metadata'],
-              ] as Array<[PreviewTab, string]>
-            ).map(([tab, label]) => (
-              <button
+            {PREVIEW_TABS.map(([tab, label], index) => (
+              <Button
                 key={tab}
-                type="button"
+                variant="secondary"
+                id={previewTabId(tab)}
                 role="tab"
                 aria-selected={previewTab === tab}
+                aria-controls={previewPanelId}
                 tabIndex={previewTab === tab ? 0 : -1}
-                className={previewTab === tab ? 'queue-submit-primary' : 'secondary'}
+                className={previewTab === tab ? 'active' : undefined}
                 onClick={() => setPreviewTab(tab)}
+                onKeyDown={(event) => handlePreviewTabKeyDown(event, index)}
               >
                 {label}
-              </button>
+              </Button>
             ))}
           </div>
 
-          {previewTab === 'rendered' ? (
-            <div
-              className="min-w-0 break-words text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:break-words [&_a]:text-mm-accent [&_a]:underline [&_:not(pre)_>_code]:break-words [&_:not(pre)_>_code]:rounded [&_:not(pre)_>_code]:bg-slate-100 [&_:not(pre)_>_code]:px-1.5 [&_:not(pre)_>_code]:py-0.5 [&_:not(pre)_>_code]:font-mono [&_:not(pre)_>_code]:text-xs [&_:not(pre)_>_code]:text-slate-900 dark:[&_:not(pre)_>_code]:bg-slate-900 dark:[&_:not(pre)_>_code]:text-slate-100"
-              data-testid="skill-markdown-preview"
-            >
-              <MarkdownRenderer markdown={selectedSkill.markdown || ''} />
-            </div>
-          ) : previewTab === 'raw' ? (
-            <pre
-              className="min-w-0 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100"
-              data-testid="skill-raw-markdown"
-              tabIndex={0}
-              aria-label="Raw Markdown Content"
-            >
-              {selectedSkill.markdown || ''}
-            </pre>
-          ) : (
-            <dl
-              className="grid gap-2 text-sm text-slate-700 dark:text-slate-300"
-              data-testid="skill-metadata"
-            >
-              <div className="flex justify-between gap-4">
-                <dt className="font-semibold text-slate-900 dark:text-white">ID</dt>
-                <dd className="break-all text-right">{selectedSkill.id}</dd>
+          <div
+            role="tabpanel"
+            id={previewPanelId}
+            aria-labelledby={previewTabId(previewTab)}
+            tabIndex={previewTab === 'raw' ? -1 : 0}
+          >
+            {previewTab === 'rendered' ? (
+              <div
+                className="min-w-0 break-words text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:break-words [&_a]:text-mm-accent [&_a]:underline [&_:not(pre)_>_code]:break-words [&_:not(pre)_>_code]:rounded [&_:not(pre)_>_code]:bg-slate-100 [&_:not(pre)_>_code]:px-1.5 [&_:not(pre)_>_code]:py-0.5 [&_:not(pre)_>_code]:font-mono [&_:not(pre)_>_code]:text-xs [&_:not(pre)_>_code]:text-slate-900 dark:[&_:not(pre)_>_code]:bg-slate-900 dark:[&_:not(pre)_>_code]:text-slate-100"
+                data-testid="skill-markdown-preview"
+              >
+                <MarkdownRenderer markdown={selectedSkill.markdown || ''} />
               </div>
-              <div className="flex justify-between gap-4">
-                <dt className="font-semibold text-slate-900 dark:text-white">Source</dt>
-                <dd>{skillSourceLabel(selectedSkill.sourceKind)}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="font-semibold text-slate-900 dark:text-white">Structured inputs</dt>
-                <dd>{selectedSkill.hasInputSchema ? 'Yes' : 'No'}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="font-semibold text-slate-900 dark:text-white">Characters</dt>
-                <dd>{(selectedSkill.markdown || '').length}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="font-semibold text-slate-900 dark:text-white">Lines</dt>
-                <dd>{selectedSkill.markdown ? selectedSkill.markdown.split('\n').length : 0}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="font-semibold text-slate-900 dark:text-white">Has content</dt>
-                <dd>{selectedSkill.markdown && selectedSkill.markdown.trim() ? 'Yes' : 'No'}</dd>
-              </div>
-            </dl>
-          )}
+            ) : previewTab === 'raw' ? (
+              <pre
+                className="min-w-0 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100"
+                data-testid="skill-raw-markdown"
+                tabIndex={0}
+                aria-label="Raw Markdown Content"
+              >
+                {selectedSkill.markdown || ''}
+              </pre>
+            ) : (
+              <dl
+                className="grid gap-2 text-sm text-slate-700 dark:text-slate-300"
+                data-testid="skill-metadata"
+              >
+                <div className="flex justify-between gap-4">
+                  <dt className="font-semibold text-slate-900 dark:text-white">ID</dt>
+                  <dd className="break-all text-right">{selectedSkill.id}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="font-semibold text-slate-900 dark:text-white">Source</dt>
+                  <dd>{skillSourceLabel(selectedSkill.sourceKind)}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="font-semibold text-slate-900 dark:text-white">Structured inputs</dt>
+                  <dd>{selectedSkill.hasInputSchema ? 'Yes' : 'No'}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="font-semibold text-slate-900 dark:text-white">Characters</dt>
+                  <dd>{(selectedSkill.markdown || '').length}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="font-semibold text-slate-900 dark:text-white">Lines</dt>
+                  <dd>{selectedSkill.markdown ? selectedSkill.markdown.split('\n').length : 0}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="font-semibold text-slate-900 dark:text-white">Has content</dt>
+                  <dd>{selectedSkill.markdown && selectedSkill.markdown.trim() ? 'Yes' : 'No'}</dd>
+                </div>
+              </dl>
+            )}
+          </div>
         </div>
       ) : skillsQuery.isLoading ? (
         <LoadingPlaceholder
@@ -942,14 +982,9 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
       >
         <header className="flex items-center justify-between gap-3">
           <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Create Skill</h3>
-          <button
-            type="button"
-            className="secondary"
-            onClick={closeDrawer}
-            aria-label="Close create skill"
-          >
+          <Button variant="icon" onClick={closeDrawer} aria-label="Close create skill">
             <span aria-hidden="true">×</span>
-          </button>
+          </Button>
         </header>
 
         <form
@@ -976,19 +1011,15 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
             />
           </label>
           <div className="actions">
-            <button type="submit" className="queue-submit-primary" disabled={createMutation.isPending}>
+            <Button type="submit" disabled={createMutation.isPending}>
               {createMutation.isPending ? 'Saving...' : 'Save Skill'}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => setShowCreatePreview((value) => !value)}
-            >
+            </Button>
+            <Button variant="secondary" onClick={() => setShowCreatePreview((value) => !value)}>
               {showCreatePreview ? 'Hide Preview' : 'Show Preview'}
-            </button>
-            <button type="button" className="secondary" onClick={closeDrawer}>
+            </Button>
+            <Button variant="secondary" onClick={closeDrawer}>
               Cancel
-            </button>
+            </Button>
           </div>
           {showCreatePreview ? (
             <div className="mt-4 rounded-lg border border-mm-border/80 p-3">
@@ -1039,14 +1070,13 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
             {COLLISION_POLICIES.find((policy) => policy.value === collisionPolicy)?.description}
           </p>
           <div className="actions">
-            <button
-              type="button"
-              className="secondary"
+            <Button
+              variant="secondary"
               disabled={uploadMutation.isPending}
               onClick={() => uploadMutation.mutate()}
             >
               {uploadMutation.isPending ? 'Uploading...' : 'Upload Zip'}
-            </button>
+            </Button>
           </div>
         </details>
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { apiErrorKind, type ApiErrorKind } from '../lib/api/client';
+import { Button } from './dashboard/Button';
 
 /**
  * Styled dashboard error card (MM-960).
@@ -41,9 +42,7 @@ export function DashboardErrorState({
         ) : null}
         {onRetry ? (
           <div className="mt-4">
-            <button type="button" onClick={onRetry}>
-              {retryLabel}
-            </button>
+            <Button onClick={onRetry}>{retryLabel}</Button>
           </div>
         ) : null}
       </div>

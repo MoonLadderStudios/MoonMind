@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { Button } from '../components/dashboard/Button';
 import { useDocumentTitle } from '../components/dashboard/PageHeader';
 import { responseError } from '../lib/api/client';
 import { formatBytes } from '../utils/formatters';
@@ -68,14 +69,14 @@ function EvidenceSection({ category, apiBase }: { category: Category; apiBase: s
     <section className="evidence-collection" aria-labelledby={`${category}-heading`}>
       <header className="evidence-collection__header">
         <div><h2 id={`${category}-heading`}>{definition.label}</h2><p>{definition.description}</p></div>
-        <button type="button" onClick={() => void result.refetch()} disabled={result.isFetching}>Refresh</button>
+        <Button variant="secondary" onClick={() => void result.refetch()} disabled={result.isFetching}>Refresh</Button>
       </header>
       <label className="evidence-collection__filter">
         <span>Filter {definition.label.toLowerCase()}</span>
         <input value={query} onChange={(event) => setSearch(event.target.value)} type="search" />
       </label>
       {result.isPending ? <p role="status">Loading {definition.label.toLowerCase()}…</p> : null}
-      {result.isError ? <div role="alert"><p>{result.error.message}</p><button type="button" onClick={() => void result.refetch()}>Try again</button></div> : null}
+      {result.isError ? <div role="alert"><p>{result.error.message}</p><Button variant="secondary" onClick={() => void result.refetch()}>Try again</Button></div> : null}
       {result.data && result.data.items.length === 0 ? <p>{query ? `No ${definition.label.toLowerCase()} match this filter.` : `No authorized ${definition.label.toLowerCase()} are available.`}</p> : null}
       {result.data?.items.length ? (
         <div className="evidence-collection__table-wrap stacked-records-wrap"><table className="stacked-records"><thead><tr><th>Evidence</th><th>Provenance</th><th>Freshness</th><th>Size</th><th>Actions</th></tr></thead>
@@ -87,7 +88,7 @@ function EvidenceSection({ category, apiBase }: { category: Category; apiBase: s
             <td data-label="Actions"><a href={row.download_url}>Download</a></td>
           </tr>)}</tbody></table></div>
       ) : null}
-      {result.data ? <footer className="evidence-collection__pagination"><span>{result.data.items.length ? `Showing ${offset + 1}–${offset + result.data.items.length}` : `Page ${page}`} · refreshed <time dateTime={result.data.refreshed_at}>{new Date(result.data.refreshed_at).toLocaleTimeString()}</time></span><div><button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button><button type="button" disabled={!result.data.has_more} onClick={() => setPage(page + 1)}>Next</button></div></footer> : null}
+      {result.data ? <footer className="evidence-collection__pagination"><span>{result.data.items.length ? `Showing ${offset + 1}–${offset + result.data.items.length}` : `Page ${page}`} · refreshed <time dateTime={result.data.refreshed_at}>{new Date(result.data.refreshed_at).toLocaleTimeString()}</time></span><div><Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</Button><Button variant="secondary" size="sm" disabled={!result.data.has_more} onClick={() => setPage(page + 1)}>Next</Button></div></footer> : null}
     </section>
   );
 }

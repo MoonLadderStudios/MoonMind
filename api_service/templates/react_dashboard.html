@@ -7,25 +7,18 @@
   <title>MoonMind</title>
   <script>
     (() => {
-      const key = "moonmind.theme";
+      // Follow the operating-system theme, including changes while the page is open.
       const root = document.documentElement;
-      let stored = null;
-
-      try {
-        const raw = window.localStorage ? window.localStorage.getItem(key) : null;
-        stored = raw === "dark" || raw === "light" ? raw : null;
-        if (raw && !stored && window.localStorage) {
-          window.localStorage.removeItem(key);
-        }
-      } catch (_error) {
-        stored = null;
+      const query = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+      const apply = () => {
+        const mode = query && query.matches ? "dark" : "light";
+        root.classList.toggle("dark", mode === "dark");
+        root.dataset.theme = mode;
+      };
+      apply();
+      if (query && query.addEventListener) {
+        query.addEventListener("change", apply);
       }
-
-      const prefersDark =
-        window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-      const mode = stored || (prefersDark ? "dark" : "light");
-      root.classList.toggle("dark", mode === "dark");
-      root.dataset.theme = mode;
     })();
   </script>
   {{ assets_html | safe }}

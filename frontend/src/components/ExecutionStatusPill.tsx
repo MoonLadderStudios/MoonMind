@@ -97,8 +97,13 @@ function StatusPill({ label, pillProps }: { label: string; pillProps: ExecutionS
 
   const count = Math.max(glyphs.length, 1);
 
+  // The per-letter wave is decorative and hidden from assistive technology.
+  // The real label is ordinary text so screen readers announce it (an
+  // aria-label on a generic span is often ignored) and copying the pill
+  // yields the word rather than one letter per line.
   return (
-    <span {...pillProps} aria-label={label}>
+    <span {...pillProps}>
+      <span className="sr-only">{label}</span>
       <span className="status-letter-wave" aria-hidden="true" data-label={label}>
         {glyphs.map((glyph, index) => {
           return (

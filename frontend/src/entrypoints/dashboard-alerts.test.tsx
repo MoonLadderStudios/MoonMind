@@ -53,6 +53,10 @@ describe("DashboardAlerts", () => {
     expect(document.body.textContent).not.toMatch(
       /ANTHROPIC_API_KEY|OPENAI_API_KEY|MINIMAX_API_KEY/,
     );
+    const settingsLink = screen.getByRole("link", { name: "Open Settings" });
+    expect(settingsLink.getAttribute("href")).toBe("/settings/providers-secrets");
+    expect(settingsLink.className).toBe("button button--secondary button--sm");
+    expect(settingsLink.closest(".notice.warning")).not.toBeNull();
   });
 
   it.each(["oauth", "api-backed"])(
@@ -109,5 +113,8 @@ describe("DashboardAlerts", () => {
       screen.queryByText(/Set up and enable at least one provider profile/i),
     ).toBeNull();
     expect(document.body.textContent).not.toMatch(/API key/i);
+    const settingsLink = screen.getByRole("link", { name: "Open Settings" });
+    expect(settingsLink.className).toBe("button button--secondary button--sm");
+    expect(settingsLink.closest(".notice.warning")).not.toBeNull();
   });
 });

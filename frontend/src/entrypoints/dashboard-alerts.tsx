@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { buttonClassName } from "../components/dashboard/Button";
+
 interface ProviderProfileResponse {
   profile_id: string;
   enabled: boolean;
@@ -33,13 +35,13 @@ export function DashboardAlerts() {
 
   if (profilesError) {
     return (
-      <div className="notice notice-warning" style={{ marginBottom: "20px" }}>
+      <div className="notice warning" style={{ marginBottom: "20px" }}>
         MoonMind could not verify provider profile readiness. Review Provider
         Profiles in Settings.
         <div style={{ marginTop: "12px" }}>
           <a
             href="/settings/providers-secrets"
-            className="btn btn-sm btn-outline"
+            className={buttonClassName({ variant: "secondary", size: "sm" })}
           >
             Open Settings
           </a>
@@ -57,7 +59,7 @@ export function DashboardAlerts() {
   }
 
   return (
-    <div className="notice notice-warning" style={{ marginBottom: "20px" }}>
+    <div className="notice warning" style={{ marginBottom: "20px" }}>
       <strong>First-Run Setup:</strong> Complete setup before running agent
       tasks.
       <ul
@@ -68,7 +70,7 @@ export function DashboardAlerts() {
       <div style={{ marginTop: "12px" }}>
         <a
           href="/settings/providers-secrets"
-          className="btn btn-sm btn-outline"
+          className={buttonClassName({ variant: "secondary", size: "sm" })}
         >
           Open Settings
         </a>

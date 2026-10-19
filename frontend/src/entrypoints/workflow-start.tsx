@@ -10,6 +10,7 @@ import {
   summarizeReport,
   summarizeSchedule,
 } from "../components/workflows/createDisclosureSummaries";
+import { Button } from "../components/dashboard/Button";
 import { PageHeader } from "../components/dashboard/PageHeader";
 import { readModelSelection, inheritModelSelection, hasModelSelection } from "../lib/modelSelection";
 import type { ModelSelection } from "../lib/modelSelection";
@@ -213,6 +214,7 @@ export const BranchInputField = memo(function BranchInputField({
   draftRef,
   syncToken,
   datalistId,
+  inputId,
   inputName,
   ariaLabel,
   title,
@@ -226,8 +228,10 @@ export const BranchInputField = memo(function BranchInputField({
   draftRef: { current: string };
   syncToken: number;
   datalistId: string;
+  // Lets a visible <label htmlFor> name the input instead of ariaLabel.
+  inputId?: string;
   inputName: string;
-  ariaLabel: string;
+  ariaLabel?: string;
   title: string;
   placeholder: string;
   disabled: boolean;
@@ -295,6 +299,7 @@ export const BranchInputField = memo(function BranchInputField({
   return (
     <>
       <input
+        id={inputId}
         name={inputName}
         aria-label={ariaLabel}
         title={title}
@@ -3154,6 +3159,31 @@ function isValidRepositoryInput(value: string): boolean {
 
 const PUBLICATION_OUTCOME_ID = "workflow-publication-outcome";
 const SUBMIT_MESSAGE_ID = "queue-submit-message";
+const SUBMIT_BLOCKED_REASON_ID = "queue-submit-blocked-reason";
+const PROFILE_SUBMIT_ERROR_ID = "queue-profile-submit-error";
+const OMNIGENT_SUBMIT_ERROR_ID = "queue-omnigent-submit-error";
+const HARNESS_SELECT_ID = "queue-harness-select";
+const HARNESS_SETUP_STATUS_ID = "queue-harness-setup-status";
+const HARNESS_UNAVAILABLE_STATUS_ID = "queue-harness-unavailable-status";
+const REPOSITORY_INPUT_ID = "queue-repository-input";
+const BRANCH_INPUT_ID = "queue-branch-input";
+const PUBLISH_MODE_SELECT_ID = "queue-publish-mode-select";
+
+// Adds or removes one id in an element's aria-describedby, keeping the ids
+// React or another owner already put there.
+function setDescribedByToken(element: HTMLElement, id: string, present: boolean) {
+  const tokens = (element.getAttribute("aria-describedby") || "")
+    .split(/\s+/)
+    .filter((token) => token && token !== id);
+  if (present) {
+    tokens.push(id);
+  }
+  if (tokens.length > 0) {
+    element.setAttribute("aria-describedby", tokens.join(" "));
+  } else {
+    element.removeAttribute("aria-describedby");
+  }
+}
 
 function destinationPublishLabel(selection: string): string {
   const mode = normalizePublishModeSelection(selection);
@@ -4421,6 +4451,7 @@ function serializeToolInputValues(values: Record<string, unknown>): string {
 }
 
 function SchemaCapabilityFields({
+  idPrefix,
   fields,
   detail,
   values,
@@ -4431,6 +4462,9 @@ function SchemaCapabilityFields({
   onChange,
   onGitHubIssueRepositoryChange,
 }: {
+  // Unique per rendering (step and field group): several steps render the
+  // same schema field names, and label/datalist/error links resolve by id.
+  idPrefix: string;
   fields: Array<[string, unknown]>;
   detail: Pick<PresetDetail, "uiSchema" | "defaults">;
   values: Record<string, unknown>;
@@ -4455,8 +4489,9 @@ function SchemaCapabilityFields({
         const widget = capabilityWidgetName(fieldSchema, uiSchema);
         const label = capabilityFieldLabel(name, fieldSchema);
         const value = capabilityInputValue(values, effectiveDefaults, name);
-        const inputId = `queue-capability-input-${name}`;
+        const inputId = `${idPrefix}-${name}`;
         const error = errors[name];
+        const errorId = `${inputId}-error`;
         const description = String(fieldSchema.description || "").trim();
         const choices = schemaChoiceOptions(fieldSchema);
         const hasTypeSafeRenderer =
@@ -4478,12 +4513,13 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
                 onChange={(event) => onChange(name, event.target.value)}
               />
               <span className="notice small">
                 Widget {widget} is unavailable; using a text field.
               </span>
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span className="notice small" id={errorId}>{error}</span> : null}
             </label>
           );
         }
@@ -4505,6 +4541,7 @@ function SchemaCapabilityFields({
                 placeholder={placeholder}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
                 onChange={(event) => {
                   if (provider === "github") {
                     const normalizedIssue = normalizeGitHubIssueInput(
@@ -4537,7 +4574,7 @@ function SchemaCapabilityFields({
                 }}
               />
               {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span className="notice small" id={errorId}>{error}</span> : null}
             </label>
           );
         }
@@ -4552,10 +4589,11 @@ function SchemaCapabilityFields({
                 checked={Boolean(value)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
                 onChange={(event) => onChange(name, event.target.checked)}
               />
               {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span className="notice small" id={errorId}>{error}</span> : null}
             </label>
           );
         }
@@ -4586,6 +4624,7 @@ function SchemaCapabilityFields({
                 value={selectedValues}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
                 onChange={(event) => {
                   const selected = Array.from(event.currentTarget.selectedOptions)
                     .map((option) => {
@@ -4604,7 +4643,7 @@ function SchemaCapabilityFields({
                 ))}
               </select>
               {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span className="notice small" id={errorId}>{error}</span> : null}
             </label>
           );
         }
@@ -4628,6 +4667,7 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
                 onChange={(event) => {
                   const selected = options.find(
                     (option) => String(option.value) === event.target.value,
@@ -4642,7 +4682,7 @@ function SchemaCapabilityFields({
                 ))}
               </select>
               {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span className="notice small" id={errorId}>{error}</span> : null}
             </label>
           );
         }
@@ -4659,6 +4699,7 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
                 onChange={(event) =>
                   onChange(
                     name,
@@ -4669,7 +4710,7 @@ function SchemaCapabilityFields({
                 }
               />
               {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span className="notice small" id={errorId}>{error}</span> : null}
             </label>
           );
         }
@@ -4683,12 +4724,13 @@ function SchemaCapabilityFields({
                 value={complexCapabilityTextValue(value)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={error ? errorId : undefined}
                 onChange={(event) =>
                   onChange(name, parseComplexCapabilityValue(event.target.value))
                 }
               />
               {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span className="notice small" id={errorId}>{error}</span> : null}
             </label>
           );
         }
@@ -4712,6 +4754,7 @@ function SchemaCapabilityFields({
               value={capabilityInputTextValue(values, effectiveDefaults, name)}
               disabled={disabled}
               aria-invalid={Boolean(error)}
+              aria-describedby={error ? errorId : undefined}
               onChange={(event) =>
                 onChange(
                   name,
@@ -4749,7 +4792,7 @@ function SchemaCapabilityFields({
               </datalist>
             ) : null}
             {description ? <span className="small">{description}</span> : null}
-            {error ? <span className="notice small">{error}</span> : null}
+            {error ? <span className="notice small" id={errorId}>{error}</span> : null}
           </label>
         );
       })}
@@ -6304,6 +6347,9 @@ function WorkflowStartPageContent({
     markedInvalidFieldRef.current = null;
     element?.removeAttribute("aria-invalid");
     element?.removeAttribute("aria-errormessage");
+    if (element) {
+      setDescribedByToken(element, SUBMIT_MESSAGE_ID, false);
+    }
   }, []);
   useEffect(() => {
     if (!invalidFieldTarget) {
@@ -6328,6 +6374,8 @@ function WorkflowStartPageContent({
     if (element.getAttribute("aria-invalid") !== "true") {
       element.setAttribute("aria-invalid", "true");
       element.setAttribute("aria-errormessage", SUBMIT_MESSAGE_ID);
+      // aria-errormessage support is uneven; the description is announced.
+      setDescribedByToken(element, SUBMIT_MESSAGE_ID, true);
       markedInvalidFieldRef.current = element;
     }
     // A field inside a collapsed <details> cannot take focus until it opens.
@@ -7917,6 +7965,11 @@ function WorkflowStartPageContent({
   const omnigentSelectionEligible = runtime !== "omnigent" || (
     Boolean(selectedConfiguredProfile) && !runtimeProfileMismatch && selectedConfiguredProfile?.enabled !== false &&
     selectedConfiguredProfile?.launch_ready !== false && !selectedConfiguredProfile?.execution_selection_error && !configurationSelectionError && !configurationDetailsUnavailable
+  );
+  const harnessNeedsOmnigentSetup = runtime === "omnigent" && Boolean(selectedOmnigentAgentProfileVersion) && (
+    selectedProfileIsGenericV2
+      ? selectedGenericOmnigentTarget?.available === false
+      : omnigentCatalogQuery.data?.available === false
   );
 
   const selectedProviderProfileForPreview = providerProfilesQuery.isPlaceholderData
@@ -11599,6 +11652,27 @@ function WorkflowStartPageContent({
   const isSubmitBlocked =
     isTemporalFormBlocked || Boolean(selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ||
     (runtime === "omnigent" && !omnigentSelectionEligible);
+  const profileSubmitErrorShown =
+    runtime !== "omnigent" &&
+    Boolean(selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error);
+  const omnigentSubmitErrorShown =
+    runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && Boolean(profileSelectionError);
+  // The disabled Start button says why next to it (the detailed Profile error
+  // stays in Execution context, linked as part of the description).
+  const submitBlockedReason = !isSubmitBlocked
+    ? null
+    : isTemporalFormBlocked
+      ? modeLoadError
+        ? "The workflow draft could not be loaded."
+        : "Loading the workflow draft…"
+      : runtime === "omnigent"
+        ? "Omnigent is not ready to start. See Execution context."
+        : "Fix the Provider Profile in Execution context to start.";
+  const submitDescribedBy = [
+    submitBlockedReason ? SUBMIT_BLOCKED_REASON_ID : null,
+    profileSubmitErrorShown ? PROFILE_SUBMIT_ERROR_ID : null,
+    omnigentSubmitErrorShown ? OMNIGENT_SUBMIT_ERROR_ID : null,
+  ].filter(Boolean).join(" ") || undefined;
   // Closing Advanced mode hides its controls but keeps and submits their
   // values, so the collapsed toggle names each non-default value it holds.
   const advancedOverridesSummary = summarizeOverrides({
@@ -11775,9 +11849,8 @@ function WorkflowStartPageContent({
               {REMEDIATION_DRAFT_LOAD_MESSAGES[remediationDraftFailure.status]}
             </p>
             <div className="actions">
-              <button
-                type="button"
-                className="secondary"
+              <Button
+                variant="secondary"
                 onClick={() => {
                   clearRemediationCreateDraft(remediationDraftFailure.draftId);
                   setRemediationDraftFailure(null);
@@ -11796,7 +11869,7 @@ function WorkflowStartPageContent({
                 }}
               >
                 Discard draft reference
-              </button>
+              </Button>
             </div>
           </section>
         ) : null}
@@ -11814,9 +11887,8 @@ function WorkflowStartPageContent({
                   Target {remediationDraft.target.title || remediationDraft.target.workflowId}
                 </p>
               </div>
-              <button
-                type="button"
-                className="secondary"
+              <Button
+                variant="danger"
                 aria-label="Discard remediation draft"
                 onClick={() => {
                   clearRemediationCreateDraft(remediationDraftIdRef.current);
@@ -11837,7 +11909,7 @@ function WorkflowStartPageContent({
                 }}
               >
                 Discard draft
-              </button>
+              </Button>
             </div>
             <fieldset
               className="queue-remediation-pinned-target stack"
@@ -12463,6 +12535,9 @@ function WorkflowStartPageContent({
               ];
               const isStepDropTarget =
                 attachmentPolicy.enabled && attachmentDropStepId === step.localId;
+              const presetStatusText = stepPresetStatusText(step);
+              const presetStatusId = `queue-step-${step.localId}-preset-status`;
+              const expandReasonId = `queue-step-${step.localId}-expand-reason`;
               return (
                 <section
                   key={step.localId}
@@ -12613,14 +12688,9 @@ function WorkflowStartPageContent({
                                 {group.tools.map((tool) => {
                                   const toolId = toolDefinitionId(tool);
                                   return (
-                                    <button
+                                    <Button
                                       key={`${step.localId}-tool-${toolId}`}
-                                      type="button"
-                                      className={
-                                        step.toolId.trim() === toolId
-                                          ? "secondary active"
-                                          : "secondary"
-                                      }
+                                      variant="secondary"
                                       aria-pressed={step.toolId.trim() === toolId}
                                       title={tool.description || toolId}
                                       onClick={() =>
@@ -12628,7 +12698,7 @@ function WorkflowStartPageContent({
                                       }
                                     >
                                       {toolId}
-                                    </button>
+                                    </Button>
                                   );
                                 })}
                               </div>
@@ -12656,6 +12726,7 @@ function WorkflowStartPageContent({
                       {selectedToolDetail && visibleToolSchemaFields.length > 0 ? (
                         <div className="stack">
                           <SchemaCapabilityFields
+                            idPrefix={`queue-step-${step.localId}-tool-input`}
                             fields={requiredToolSchemaFields}
                             detail={selectedToolDetail}
                             values={step.toolInputValues}
@@ -12674,6 +12745,7 @@ function WorkflowStartPageContent({
                             <details>
                               <summary>Optional inputs</summary>
                               <SchemaCapabilityFields
+                                idPrefix={`queue-step-${step.localId}-tool-input`}
                                 fields={optionalToolSchemaFields}
                                 detail={selectedToolDetail}
                                 values={step.toolInputValues}
@@ -12745,15 +12817,14 @@ function WorkflowStartPageContent({
                       )}
                       {showJiraTransitionOptions ? (
                         <div className="stack queue-tool-dynamic-options">
-                          <button
-                            type="button"
-                            className="secondary"
+                          <Button
+                            variant="secondary"
                             aria-busy={Boolean(jiraTransitionState?.isLoading)}
                             disabled={Boolean(jiraTransitionState?.isLoading)}
                             onClick={() => void loadJiraTransitionOptions(step)}
                           >
                             Load Jira target statuses
-                          </button>
+                          </Button>
                           {jiraTransitionState?.error ? (
                             <p className="notice small">
                               {jiraTransitionState.error}
@@ -12887,6 +12958,7 @@ function WorkflowStartPageContent({
                             </p>
                           ) : null}
                         <SchemaCapabilityFields
+                          idPrefix={`queue-step-${step.localId}-skill-input`}
                           fields={visibleSkillSchemaFields}
                           detail={selectedSkillDetail}
                           values={step.presetInputValues}
@@ -12948,6 +13020,7 @@ function WorkflowStartPageContent({
                     >
                       {visiblePresetSchemaFields.length > 0 && step.presetDetail ? (
                         <SchemaCapabilityFields
+                          idPrefix={`queue-step-${step.localId}-preset-schema-input`}
                           fields={visiblePresetSchemaFields}
                           detail={step.presetDetail}
                           values={step.presetInputValues}
@@ -13067,13 +13140,17 @@ function WorkflowStartPageContent({
                             })}
                         </div>
                       ) : null}
-                      <button
-                        type="button"
+                      <Button
+                        variant="secondary"
                         aria-disabled={
                           isApplyingPreset ||
                           !step.presetKey
                         }
                         aria-busy={isApplyingPreset}
+                        aria-describedby={[
+                          !step.presetKey ? expandReasonId : null,
+                          presetStatusText ? presetStatusId : null,
+                        ].filter(Boolean).join(" ") || undefined}
                         title={expandStepPresetTooltip}
                         disabled={
                           isApplyingPreset ||
@@ -13082,9 +13159,14 @@ function WorkflowStartPageContent({
                         onClick={() => handleExpandStepPreset(step.localId)}
                       >
                         Expand
-                      </button>
-                      {stepPresetStatusText(step) ? (
-                        <p className="small">{stepPresetStatusText(step)}</p>
+                      </Button>
+                      {!step.presetKey ? (
+                        <p className="small" id={expandReasonId}>
+                          Choose a preset template to expand.
+                        </p>
+                      ) : null}
+                      {presetStatusText ? (
+                        <p className="small" id={presetStatusId}>{presetStatusText}</p>
                       ) : null}
                     </div>
                   ) : null}
@@ -13347,11 +13429,17 @@ function WorkflowStartPageContent({
           aria-label="Execution context"
         >
         <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
-          <div className="stack"><label>
-            Harness
+          <div className="stack">
+          <div className="queue-labeled-field">
+            <label htmlFor={HARNESS_SELECT_ID}>Harness</label>
             <select
+              id={HARNESS_SELECT_ID}
               name="harness"
               value={harness}
+              aria-describedby={[
+                harnessNeedsOmnigentSetup ? HARNESS_SETUP_STATUS_ID : null,
+                selectedRuntimeUnavailableReason ? HARNESS_UNAVAILABLE_STATUS_ID : null,
+              ].filter(Boolean).join(" ") || undefined}
               onChange={(event) => selectHarness(event.target.value)}
             >
               {!harness ? (
@@ -13369,26 +13457,31 @@ function WorkflowStartPageContent({
                 </option>
               ))}
             </select>
-            {runtime === "omnigent" && selectedOmnigentAgentProfileVersion && (
-              selectedProfileIsGenericV2
-                ? selectedGenericOmnigentTarget?.available === false
-                : omnigentCatalogQuery.data?.available === false
-            ) ? (
-              <span className="small" role="status">
-                Omnigent needs setup: {omnigentSelectionGateReason || "readiness checks failed."}{" "}
-                <button type="button" onClick={() => { void omnigentCatalogQuery.refetch(); void omnigentExecutionReadinessQuery.refetch(); }}>
-                  Refresh readiness
-                </button>
-              </span>
-            ) : null}
-          </label>
+          </div>
+          {harnessNeedsOmnigentSetup ? (
+            <span className="small" role="status" id={HARNESS_SETUP_STATUS_ID}>
+              Omnigent needs setup: {omnigentSelectionGateReason || "readiness checks failed."}{" "}
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => { void omnigentCatalogQuery.refetch(); void omnigentExecutionReadinessQuery.refetch(); }}
+              >
+                Refresh readiness
+              </Button>
+            </span>
+          ) : null}
           {runtime !== "omnigent" && !(showAdvancedStepOptions && backendSelectable) ? (
             <span className="small" data-backend-summary>
               Backend: {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)}
             </span>
           ) : null}
           {selectedRuntimeUnavailableReason ? (
-            <span className="small" role="status" data-runtime-unavailable>
+            <span
+              className="small"
+              role="status"
+              id={HARNESS_UNAVAILABLE_STATUS_ID}
+              data-runtime-unavailable
+            >
               {selectedRuntimeUnavailableReason}
             </span>
           ) : null}
@@ -13524,13 +13617,13 @@ function WorkflowStartPageContent({
           </div>
         ) : null}
 
-        {runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ? (
-          <div className="notice error small" role="alert">
+        {profileSubmitErrorShown ? (
+          <div className="notice error small" role="alert" id={PROFILE_SUBMIT_ERROR_ID}>
             Profile cannot be submitted: {profileSelectionError}
           </div>
         ) : null}
-        {runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? (
-          <div className="notice error small" role="alert">
+        {omnigentSubmitErrorShown ? (
+          <div className="notice error small" role="alert" id={OMNIGENT_SUBMIT_ERROR_ID}>
             Omnigent cannot be submitted: {profileSelectionError}
           </div>
         ) : null}
@@ -13901,87 +13994,110 @@ function WorkflowStartPageContent({
           >
             {publicationOutcome}
           </p>
+          {submitBlockedReason ? (
+            <p
+              id={SUBMIT_BLOCKED_REASON_ID}
+              className="queue-authoring-controls-status small"
+            >
+              {submitBlockedReason}
+            </p>
+          ) : null}
           <div className="queue-floating-bar-row">
             <div
               className="queue-inline-selector queue-inline-selector--repo"
               title={repositoryTooltip}
             >
-              <RepoIcon />
-              <input
-                name="repository"
-                aria-label="Repository"
-                title={repositoryTooltip}
-                list={REPOSITORY_OPTIONS_DATALIST_ID}
-                value={repository}
-                placeholder="owner/repo (optional)"
-                onChange={(event) =>
-                  handleRepositoryChange(event.target.value)
-                }
-              />
+              <label className="queue-inline-selector-label" htmlFor={REPOSITORY_INPUT_ID}>
+                Repository
+              </label>
+              <div className="queue-inline-selector-control">
+                <RepoIcon />
+                <input
+                  id={REPOSITORY_INPUT_ID}
+                  name="repository"
+                  title={repositoryTooltip}
+                  list={REPOSITORY_OPTIONS_DATALIST_ID}
+                  value={repository}
+                  placeholder="owner/repo (optional)"
+                  onChange={(event) =>
+                    handleRepositoryChange(event.target.value)
+                  }
+                />
+              </div>
             </div>
             <div
               className="queue-inline-selector queue-inline-selector--branch"
               title={branchTooltip}
             >
-              <BranchIcon />
-              <BranchInputField
-                draftRef={branchDraftRef}
-                syncToken={branchInputSyncToken}
-                datalistId={BRANCH_OPTIONS_DATALIST_ID}
-                inputName="branch"
-                ariaLabel="Branch"
-                title={branchTooltip}
-                placeholder={
-                  branchMetadataQuery.isLoading
-                    ? "Loading branches..."
-                    : "Branch"
-                }
-                disabled={branchControlDisabled}
-                baseSuggestions={branchOptions}
-                onSettled={commitBranchSettled}
-                extraOnChange={markBranchTouchedLive}
-              />
+              <label className="queue-inline-selector-label" htmlFor={BRANCH_INPUT_ID}>
+                Branch
+              </label>
+              <div className="queue-inline-selector-control">
+                <BranchIcon />
+                <BranchInputField
+                  draftRef={branchDraftRef}
+                  syncToken={branchInputSyncToken}
+                  datalistId={BRANCH_OPTIONS_DATALIST_ID}
+                  inputId={BRANCH_INPUT_ID}
+                  inputName="branch"
+                  title={branchTooltip}
+                  placeholder={
+                    branchMetadataQuery.isLoading
+                      ? "Loading branches..."
+                      : "Branch"
+                  }
+                  disabled={branchControlDisabled}
+                  baseSuggestions={branchOptions}
+                  onSettled={commitBranchSettled}
+                  extraOnChange={markBranchTouchedLive}
+                />
+              </div>
             </div>
             <div
               className="queue-inline-selector queue-inline-selector--publish"
               title={publishModeTooltip}
             >
-              <PublishIcon />
-              <select
-                name="publishMode"
-                aria-label="Publish Mode"
-                aria-describedby={PUBLICATION_OUTCOME_ID}
-                title={publishModeTooltip}
-                value={sourcePublishMode}
-                onChange={(event) => {
-                  setPublishModeTouched(true);
-                  setPublishMode(event.target.value);
-                }}
-              >
-                <option
-                  value="auto"
-                  disabled={!autoPublishAvailable}
-                  title="Auto — selected skill decides"
+              <label className="queue-inline-selector-label" htmlFor={PUBLISH_MODE_SELECT_ID}>
+                Publish Mode
+              </label>
+              <div className="queue-inline-selector-control">
+                <PublishIcon />
+                <select
+                  id={PUBLISH_MODE_SELECT_ID}
+                  name="publishMode"
+                  aria-describedby={PUBLICATION_OUTCOME_ID}
+                  title={publishModeTooltip}
+                  value={sourcePublishMode}
+                  onChange={(event) => {
+                    setPublishModeTouched(true);
+                    setPublishMode(event.target.value);
+                  }}
                 >
-                  Auto
-                </option>
-                <option value="none">None</option>
-                <option
-                  value="branch"
-                  disabled={!destinationPublishAvailable}
-                >
-                  Branch
-                </option>
-                <option value="pr" disabled={!destinationPublishAvailable}>
-                  PR
-                </option>
-                <option
-                  value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
-                  disabled={!destinationPublishAvailable}
-                >
-                  PR with Merge Automation
-                </option>
-              </select>
+                  <option
+                    value="auto"
+                    disabled={!autoPublishAvailable}
+                    title="Auto — selected skill decides"
+                  >
+                    Auto
+                  </option>
+                  <option value="none">None</option>
+                  <option
+                    value="branch"
+                    disabled={!destinationPublishAvailable}
+                  >
+                    Branch
+                  </option>
+                  <option value="pr" disabled={!destinationPublishAvailable}>
+                    PR
+                  </option>
+                  <option
+                    value={PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE}
+                    disabled={!destinationPublishAvailable}
+                  >
+                    PR with Merge Automation
+                  </option>
+                </select>
+              </div>
             </div>
             <button
               type="submit"
@@ -13999,6 +14115,7 @@ function WorkflowStartPageContent({
               aria-disabled={isSubmitting || isSubmitBlocked}
               aria-busy={isSubmitting}
               aria-label={primaryCta}
+              aria-describedby={submitDescribedBy}
               title={primaryCtaTooltip}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
@@ -14124,13 +14241,9 @@ function WorkflowStartPageContent({
               </p>
             ) : null}
             <div className="actions queue-template-actions">
-              <button
-                type="button"
-                className="secondary"
-                onClick={closePresetDialog}
-              >
+              <Button variant="secondary" onClick={closePresetDialog}>
                 Cancel
-              </button>
+              </Button>
               <button
                 type="button"
                 className={

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
 import type { components } from '../../generated/openapi';
+import { Button } from '../dashboard/Button';
 
 type ProbeMode = 'publish' | 'readiness' | 'full_pr_automation';
 type ReadObservation = 'verified' | 'denied' | 'not_found' | 'unavailable' | 'not_checked';
@@ -282,15 +283,16 @@ export function GithubTokenProbePanel({
           />
         </label>
         <div className="flex items-end">
-          <button
+          <Button
             type="submit"
+            variant="primary"
             disabled={
               !canRunProbe || isRunning || repo.trim().length === 0 || connection.lifecycle !== 'active'
             }
-            className="inline-flex w-full items-center justify-center rounded-xl bg-mm-accent px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-mm-accent/90 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
+            className="w-full md:w-auto"
           >
             {isRunning ? 'Testing…' : 'Test connection'}
-          </button>
+          </Button>
         </div>
       </form>
 

@@ -821,7 +821,7 @@ describe('Workflows Entrypoint', () => {
     expect(within(idleRow).getByText('Idle').className).toContain('status-neutral');
     expect(within(idleRow).queryByText('Completed')).toBeNull();
     expect(within(screen.getByRole('row', { name: /Verified no-commit work/ })).getByText('No commit')).toBeTruthy();
-    expect(within(screen.getByRole('row', { name: /Live workflow/ })).getByLabelText('Executing')).toBeTruthy();
+    expect(within(screen.getByRole('row', { name: /Live workflow/ })).getByText('Executing')).toBeTruthy();
     expect(within(screen.getByRole('row', { name: /Older objective contract/ })).getByText('Completed')).toBeTruthy();
   });
 
@@ -1387,8 +1387,9 @@ describe('Workflows Entrypoint', () => {
       expect(pill.className).toContain(`is-${label}`);
       expect(pill.className).toContain(`status-${label === 'executing' ? 'running' : label}`);
       expect(pill.dataset.shimmerLabel).toBe(visibleLabel);
-      expect(pill.getAttribute('aria-label')).toBe(visibleLabel);
-      expect(pill.textContent).toBe(visibleLabel);
+      // The name is ordinary text beside the decorative letter wave, not an aria-label.
+      expect(pill.getAttribute('aria-label')).toBeNull();
+      expect(pill.querySelector('.sr-only')?.textContent).toBe(visibleLabel);
       expect(pill.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
       const glyphs = Array.from(pill.querySelectorAll<HTMLElement>('.status-letter-wave__glyph'));
       expect(glyphs).toHaveLength(visibleLabel.length);
@@ -1472,7 +1473,7 @@ describe('Workflows Entrypoint', () => {
     for (const pill of pills) {
       expect(pill.className).toContain('status-running');
       expect(pill.className).toContain('is-executing');
-      expect(pill.getAttribute('aria-label')).toBe('Executing');
+      expect(within(pill).getByText('Executing')).toBeTruthy();
       expect(pill.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Executing');
     }
   });

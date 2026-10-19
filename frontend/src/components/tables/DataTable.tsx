@@ -56,6 +56,13 @@ export interface DataTableProps<T> {
   responsive?: boolean;
   /** Initial sort applied when a sortable column is present. */
   defaultSort?: SortState;
+  /**
+   * Controlled sort for rows the caller already orders (for example, sorted by
+   * the server). With `onSortChange`, header activation reports the column key
+   * and the table renders this sort state without reordering the rows.
+   */
+  sort?: SortState | null | undefined;
+  onSortChange?: ((key: string) => void) | undefined;
 }
 
 function compareValues(
@@ -99,8 +106,12 @@ export function DataTable<T>({
   rowActionsHeader = 'Actions',
   responsive = false,
   defaultSort,
+  sort: controlledSort,
+  onSortChange,
 }: DataTableProps<T>) {
-  const [sort, setSort] = useState<SortState | null>(defaultSort ?? null);
+  const [uncontrolledSort, setUncontrolledSort] = useState<SortState | null>(defaultSort ?? null);
+  const sortControlled = onSortChange !== undefined;
+  const sort = sortControlled ? controlledSort ?? null : uncontrolledSort;
 
   const columnByKey = useMemo(() => {
     const map = new Map<string, Column<T>>();
@@ -111,7 +122,7 @@ export function DataTable<T>({
   }, [columns]);
 
   const sortedData = useMemo(() => {
-    if (!data || !sort) return data ?? [];
+    if (!data || !sort || sortControlled) return data ?? [];
     const column = columnByKey.get(sort.key);
     if (!column || !column.sortable) return data;
     const getValue = column.sortValue
@@ -119,10 +130,14 @@ export function DataTable<T>({
       : (item: T) => defaultSortValue(item, sort.key);
     const factor = sort.direction === 'asc' ? 1 : -1;
     return [...data].sort((a, b) => compareValues(getValue(a), getValue(b)) * factor);
-  }, [data, sort, columnByKey]);
+  }, [data, sort, sortControlled, columnByKey]);
 
   const handleSort = (key: string) => {
-    setSort((current) => {
+    if (onSortChange) {
+      onSortChange(key);
+      return;
+    }
+    setUncontrolledSort((current) => {
       if (current && current.key === key) {
         return { key, direction: nextDirection(current.direction) };
       }

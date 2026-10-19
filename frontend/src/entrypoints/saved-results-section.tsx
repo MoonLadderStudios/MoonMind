@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { Button, buttonClassName } from '../components/dashboard/Button';
 import {
   ContinuationRequestError,
   continuationWorkflowHref,
@@ -138,7 +139,7 @@ function SavedWorkParts({
             {part.expired ? ' · expired' : ''}{' '}
             {source && part.present && !part.expired && canDownloadSavedResultRaw(source) ? (
               <a
-                className="button secondary"
+                className={buttonClassName({ variant: 'secondary', size: 'sm' })}
                 href={buildSavedResultDownloadHref(apiBase, source)}
                 title={`Download ${part.role}`}
               >
@@ -213,6 +214,10 @@ export function SavedResultsSection({
   onRefresh: () => void;
   actionsEnabled: boolean;
 }) {
+  const reasonIdPrefix = useId();
+  const publicationNoteId = `${reasonIdPrefix}-publication-unavailable`;
+  const publishSubmitReasonId = `${reasonIdPrefix}-publish-submit-reason`;
+  const continueReasonId = `${reasonIdPrefix}-continue-reason`;
   // `/continue` authorizes only the source's captured-evidence refs, so only
   // those saved outputs are submitted with a continuation.
   const capturedEvidenceQuery = useQuery({
@@ -486,27 +491,27 @@ export function SavedResultsSection({
             {error ? ` ${error.message}` : ''}
           </div>
           <div className="actions">
-            <button type="button" className="secondary" onClick={onRefresh}>
+            <Button variant="secondary" onClick={onRefresh}>
               Refresh
-            </button>
+            </Button>
           </div>
         </div>
       ) : projection.state === 'pending' ? (
         <div className="stack">
           <p className="small">Saved result evidence is pending.</p>
           <div className="actions">
-            <button type="button" className="secondary" onClick={onRefresh}>
+            <Button variant="secondary" onClick={onRefresh}>
               Refresh
-            </button>
+            </Button>
           </div>
         </div>
       ) : projection.state === 'stale' ? (
         <div className="stack">
           <div className="notice">Saved result evidence is stale.</div>
           <div className="actions">
-            <button type="button" className="secondary" onClick={onRefresh}>
+            <Button variant="secondary" onClick={onRefresh}>
               Refresh
-            </button>
+            </Button>
           </div>
         </div>
       ) : projection.entries.length === 0 ? (
@@ -524,7 +529,7 @@ export function SavedResultsSection({
             </Card>
           </div>
           {hasSavedWork && actionsEnabled && publicationUnavailable ? (
-            <p className="small" role="note">
+            <p id={publicationNoteId} className="small" role="note">
               Publish saved work is unavailable: {publicationUnavailable} Download,
               preview, and Continue working are not affected.
             </p>
@@ -540,12 +545,25 @@ export function SavedResultsSection({
                 </tr>
               </thead>
               <tbody>
-                {projection.entries.map((entry) => {
+                {projection.entries.map((entry, index) => {
                   const source = artifacts.find(
                     (item) => item.artifactId === entry.artifactId,
                   );
                   const rawAllowed = source ? canDownloadSavedResultRaw(source) : false;
                   const publishable = canPublishSavedWork(entry);
+                  // Row-specific reasons render beside the button; a server-wide
+                  // publication outage is described once by the note above.
+                  const publishRowReason = !actionsEnabled
+                    ? 'Workflow actions are disabled.'
+                    : !publishable
+                      ? 'Only complete, unexpired saved work with raw access can be published.'
+                      : null;
+                  const publishRowReasonId = `${reasonIdPrefix}-publish-reason-${index}`;
+                  const publishDescribedBy = publishRowReason
+                    ? publishRowReasonId
+                    : publicationUnavailable
+                      ? publicationNoteId
+                      : undefined;
                   return (
                     <tr key={entry.artifactId}>
                       <td>
@@ -584,7 +602,7 @@ export function SavedResultsSection({
                         <div className="actions">
                           {source && !entry.expired ? (
                             <a
-                              className="button secondary"
+                              className={buttonClassName({ variant: 'secondary', size: 'sm' })}
                               href={buildSavedResultPreviewHref(apiBase, source)}
                               title="Open safe preview"
                             >
@@ -595,7 +613,7 @@ export function SavedResultsSection({
                             <span className="small">Expired</span>
                           ) : source && rawAllowed ? (
                             <a
-                              className="button secondary"
+                              className={buttonClassName({ variant: 'secondary', size: 'sm' })}
                               href={buildSavedResultDownloadHref(apiBase, source)}
                               title="Download saved output"
                             >
@@ -605,24 +623,24 @@ export function SavedResultsSection({
                             <span className="small">Raw unavailable</span>
                           )}
                           {entry.savedWork ? (
-                            <button
-                              type="button"
-                              className="secondary"
+                            <Button
+                              variant="secondary"
+                              size="sm"
                               disabled={!actionsEnabled || !publishable || !publication.available}
-                              title={
-                                !actionsEnabled
-                                  ? 'Workflow actions are disabled.'
-                                  : !publishable
-                                    ? 'Only complete, unexpired saved work with raw access can be published.'
-                                    : publicationUnavailable ?? undefined
-                              }
+                              title={publishRowReason ?? publicationUnavailable ?? undefined}
+                              aria-describedby={publishDescribedBy}
                               aria-expanded={publishTarget === entry.artifactId}
                               onClick={() => openPublish(entry.artifactId)}
                             >
                               Publish saved work
-                            </button>
+                            </Button>
                           ) : null}
                         </div>
+                        {entry.savedWork && publishRowReason ? (
+                          <p id={publishRowReasonId} className="small">
+                            {publishRowReason}
+                          </p>
+                        ) : null}
                       </td>
                     </tr>
                   );
@@ -735,13 +753,9 @@ export function SavedResultsSection({
                 <p className="small">
                   Base branch <code>{draft.baseBranch.trim()}</code> ·{' '}
                   {STRATEGY_LABELS[draft.strategy]}.{' '}
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => setAdvancedRequested(true)}
-                  >
+                  <Button variant="ghost" size="sm" onClick={() => setAdvancedRequested(true)}>
                     Change base or how saved work is applied
-                  </button>
+                  </Button>
                 </p>
               )}
               {draft.objective !== 'branch' ? (
@@ -756,7 +770,7 @@ export function SavedResultsSection({
                 </label>
               ) : null}
               <div className="actions">
-                <button
+                <Button
                   type="submit"
                   disabled={
                     publishPending ||
@@ -765,17 +779,19 @@ export function SavedResultsSection({
                     !draft.headBranch.trim()
                   }
                   title={publicationUnavailable ?? undefined}
+                  aria-describedby={publicationUnavailable ? publishSubmitReasonId : undefined}
                 >
                   {publishPending ? 'Publishing...' : 'Publish to this destination'}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setPublishTarget(null)}
-                >
+                </Button>
+                <Button variant="secondary" onClick={() => setPublishTarget(null)}>
                   Close
-                </button>
+                </Button>
               </div>
+              {publicationUnavailable ? (
+                <p id={publishSubmitReasonId} className="small">
+                  Publishing is unavailable: {publicationUnavailable}
+                </p>
+              ) : null}
               {destinationChanged ? (
                 <p className="small">
                   The destination changed since the last request; publishing
@@ -785,16 +801,21 @@ export function SavedResultsSection({
             </form>
           ) : null}
           <div className="actions">
-            <button
-              type="button"
-              className="secondary"
+            <Button
+              variant="secondary"
               disabled={Boolean(continueDisabledReason)}
               title={continueDisabledReason ?? undefined}
+              aria-describedby={continueDisabledReason ? continueReasonId : undefined}
               aria-expanded={continueOpen}
               onClick={() => setContinueOpen((open) => !open)}
             >
               Continue working
-            </button>
+            </Button>
+            {continueDisabledReason ? (
+              <span id={continueReasonId} className="small">
+                {continueDisabledReason}
+              </span>
+            ) : null}
           </div>
           {continueOpen ? (
             <form
@@ -827,12 +848,12 @@ export function SavedResultsSection({
                 />
               </label>
               <div className="actions">
-                <button
+                <Button
                   type="submit"
                   disabled={continuePending || Boolean(continueDisabledReason) || !continueInstructions.trim()}
                 >
                   {continuePending ? 'Starting continuation...' : 'Start continuation'}
-                </button>
+                </Button>
               </div>
             </form>
           ) : null}

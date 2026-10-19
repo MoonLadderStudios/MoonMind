@@ -618,6 +618,46 @@ describe('Skills Entrypoint', () => {
     });
   });
 
+  it('moves focus and selection between preview tabs with the arrow, Home, and End keys', async () => {
+    renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
+
+    const renderedTab = await screen.findByRole('tab', { name: 'Rendered' });
+    const rawTab = screen.getByRole('tab', { name: 'Raw Markdown' });
+    const metadataTab = screen.getByRole('tab', { name: 'Metadata' });
+    const expectSelected = (tab: HTMLElement) => {
+      for (const candidate of [renderedTab, rawTab, metadataTab]) {
+        expect(candidate.getAttribute('aria-selected')).toBe(String(candidate === tab));
+        expect(candidate.tabIndex).toBe(candidate === tab ? 0 : -1);
+      }
+      expect(document.activeElement).toBe(tab);
+      const panel = screen.getByRole('tabpanel');
+      expect(tab.getAttribute('aria-controls')).toBe(panel.id);
+      expect(panel.getAttribute('aria-labelledby')).toBe(tab.id);
+      expect(screen.getByRole('tabpanel', { name: tab.textContent ?? '' })).toBe(panel);
+    };
+
+    renderedTab.focus();
+    fireEvent.keyDown(renderedTab, { key: 'ArrowRight' });
+    await waitFor(() => expectSelected(rawTab));
+    expect(screen.getByLabelText('Raw Markdown Content').textContent).toContain('# Speckit');
+
+    fireEvent.keyDown(rawTab, { key: 'ArrowRight' });
+    await waitFor(() => expectSelected(metadataTab));
+    expect(screen.getByTestId('skill-metadata')).toBeTruthy();
+
+    fireEvent.keyDown(metadataTab, { key: 'ArrowRight' });
+    await waitFor(() => expectSelected(renderedTab));
+
+    fireEvent.keyDown(renderedTab, { key: 'ArrowLeft' });
+    await waitFor(() => expectSelected(metadataTab));
+
+    fireEvent.keyDown(metadataTab, { key: 'Home' });
+    await waitFor(() => expectSelected(renderedTab));
+
+    fireEvent.keyDown(renderedTab, { key: 'End' });
+    await waitFor(() => expectSelected(metadataTab));
+  });
+
   it('validates the skill name before submitting a create request', async () => {
     renderSkills({ path: '/skills' });
 

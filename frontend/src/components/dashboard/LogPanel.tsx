@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { copyTextToClipboard } from '../../utils/clipboard';
+import { Button, buttonClassName } from './Button';
 
 /**
  * Shared monospace text / log viewer (MM-959).
@@ -62,17 +63,12 @@ function LogPanelControls({
         />
         <span className="small">Wrap lines</span>
       </label>
-      <button
-        type="button"
-        className="secondary small"
-        onClick={onCopy}
-        disabled={!canCopy}
-      >
+      <Button variant="secondary" size="sm" onClick={onCopy} disabled={!canCopy}>
         {copied ? 'Copied' : 'Copy'}
-      </button>
+      </Button>
       {downloadUrl ? (
         <a
-          className="button secondary small"
+          className={buttonClassName({ variant: 'secondary', size: 'sm' })}
           href={downloadUrl}
           download={downloadFileName}
           target="_blank"

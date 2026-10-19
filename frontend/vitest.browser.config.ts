@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import type { BrowserCommand } from 'vitest/node';
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 
@@ -25,6 +26,17 @@ for (const engine of engines) {
   }
 }
 
+// userEvent cannot hold a mouse button, so computed-style checks of :active
+// press and release the real Playwright mouse over an element.
+const pressPointer: BrowserCommand<[selector: string]> = async (context, selector) => {
+  const frame = await context.frame();
+  await frame.locator(selector).hover();
+  await context.page.mouse.down();
+};
+const releasePointer: BrowserCommand<[]> = async (context) => {
+  await context.page.mouse.up();
+};
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -33,6 +45,7 @@ export default defineConfig({
       enabled: true,
       headless: true,
       provider: playwright(),
+      commands: { pressPointer, releasePointer },
       // Local runs default to both engines. CI assigns one engine per matrix leg.
       instances: engines.map((browser) => ({
         browser,

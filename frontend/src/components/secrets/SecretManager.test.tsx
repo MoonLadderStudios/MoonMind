@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SecretManager } from './SecretManager';
@@ -288,6 +288,26 @@ describe('SecretManager', () => {
     await expectRequest(`${encoded}/usage`);
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('renders secret row actions as shared Buttons, with Delete as the only danger action', () => {
+    renderSecretManager();
+
+    const row = screen.getByText('github-pat-main').closest('tr');
+    expect(row).not.toBeNull();
+    const buttons = within(row!).getAllByRole('button');
+    expect(buttons.map((button) => button.textContent)).toEqual(['View usage', 'Copy', 'Edit', 'Rotate', 'Delete']);
+    for (const button of buttons) {
+      expect(button.classList.contains('button')).toBe(true);
+      expect(button.classList.contains('button--sm')).toBe(true);
+      const expectedVariant = button.textContent === 'Delete' ? 'button--danger' : 'button--secondary';
+      expect(button.classList.contains(expectedVariant)).toBe(true);
+    }
+
+    const submit = screen.getByRole('button', { name: 'Encrypt and store secret' });
+    expect(submit.getAttribute('type')).toBe('submit');
+    expect(submit.classList.contains('button')).toBe(true);
+    expect(submit.className).not.toMatch(/button--/);
   });
 
   // MoonLadderStudios/MoonMind#4559: the stored-secrets table degrades to

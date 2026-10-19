@@ -57,9 +57,6 @@ describe('CollectionWorkspace', () => {
     const css = readFileSync(`${process.cwd()}/frontend/src/styles/dashboard.css`, 'utf8');
 
     expect(css).toMatch(/\.workflow-workspace-shell,\s*\.collection-workspace--edge-rail\s*\{/);
-    // Defensive reset: any button-backed sidebar row must stay a flat table
-    // slice with no primary-button pill radius, shadow, or press scale.
-    expect(css).toMatch(/button\.workflow-workspace-sidebar-row[^{]*\{[^}]*border-radius:\s*0;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;/s);
   });
 
   it('keeps required collection adapters on the shared sidebar primitive', () => {

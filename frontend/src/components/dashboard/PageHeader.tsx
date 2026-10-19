@@ -1,5 +1,7 @@
 import { useEffect, type HTMLAttributes, type ReactNode } from 'react';
 
+import { Button } from './Button';
+
 const DOCUMENT_TITLE_SUFFIX = 'MoonMind';
 
 export function documentTitleFor(title: string | null | undefined): string {
@@ -61,15 +63,14 @@ export function PageHeader({
           <div className="page-header__actions">
             {actions}
             {onRefresh ? (
-              <button
-                type="button"
-                className="secondary"
+              <Button
+                variant="secondary"
                 onClick={onRefresh}
                 disabled={refreshing}
                 aria-busy={refreshing || undefined}
               >
                 {refreshing ? 'Refreshing…' : refreshLabel}
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : null}

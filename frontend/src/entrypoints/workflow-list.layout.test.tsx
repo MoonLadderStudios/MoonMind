@@ -146,7 +146,7 @@ describe('Workflows Entrypoint layout', () => {
 
   it('keeps the workflow list surfaces to one data slab without an empty notices deck', async () => {
     renderWithClient(
-      <section className="panel" aria-live="polite">
+      <section className="panel">
         <WorkflowListPage payload={mockPayload} />
       </section>,
     );

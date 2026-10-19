@@ -4,6 +4,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { Button } from '../components/dashboard/Button';
 import { useDocumentTitle } from '../components/dashboard/PageHeader';
 import { formatStatusLabel } from '../utils/formatters';
 
@@ -679,16 +680,16 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <h1>Provider Login Terminal</h1>
         </div>
         <div className="oauth-terminal-actions">
-          <button type="button" className="secondary" onClick={copyTerminalSelection}>
+          <Button variant="secondary" onClick={copyTerminalSelection}>
             Copy selection
-          </button>
-          <button type="button" className="secondary" onClick={selectTerminalText}>
+          </Button>
+          <Button variant="secondary" onClick={selectTerminalText}>
             Select terminal text
-          </button>
+          </Button>
           {showAuthenticationPasteBox ? (
-            <button type="button" className="secondary" onClick={pasteClipboardToTerminal}>
+            <Button variant="secondary" onClick={pasteClipboardToTerminal}>
               Paste from clipboard
-            </button>
+            </Button>
           ) : null}
           <span className="oauth-terminal-status">{formatStatusLabel(status)}</span>
         </div>
@@ -708,9 +709,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
             readOnly
             value={selectableOutput}
           />
-          <button type="button" className="secondary" onClick={() => setSelectableOutput(null)}>
+          <Button variant="secondary" onClick={() => setSelectableOutput(null)}>
             Close selectable text
-          </button>
+          </Button>
         </section>
       ) : null}
       {showAuthenticationPasteBox ? (
@@ -737,9 +738,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
                 }
               }}
             />
-            <button type="button" className="primary" onClick={sendPastedInput}>
+            <Button className="justify-self-start" onClick={sendPastedInput}>
               Send to terminal
-            </button>
+            </Button>
           </div>
         </section>
       ) : null}
@@ -747,36 +748,31 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         <section className="oauth-terminal-session-panel" aria-label="OAuth session status and actions">
           <div className="oauth-terminal-session-actions">
             {TERMINAL_FINALIZE_STATUSES.includes(session.status) && !awaitingFinalizeOutcome ? (
-              <button
-                type="button"
-                className="primary"
+              <Button
                 onClick={() => runSessionAction('finalize', 'Failed to finalize OAuth session.')}
                 disabled={actionPending !== null}
               >
                 Finalize
-              </button>
+              </Button>
             ) : null}
             {['pending', 'starting', 'bridge_ready', 'awaiting_user', 'verifying'].includes(
               session.status,
             ) ? (
-              <button
-                type="button"
-                className="secondary"
+              <Button
+                variant="secondary"
                 onClick={() => runSessionAction('cancel', 'Failed to cancel OAuth session.')}
                 disabled={actionPending !== null}
               >
                 Cancel
-              </button>
+              </Button>
             ) : null}
             {['failed', 'cancelled', 'expired'].includes(session.status) ? (
-              <button
-                type="button"
-                className="secondary"
+              <Button
                 onClick={() => runSessionAction('reconnect', 'Failed to reconnect OAuth session.')}
                 disabled={actionPending !== null}
               >
                 Reconnect
-              </button>
+              </Button>
             ) : null}
           </div>
           {session.failure_reason ? (

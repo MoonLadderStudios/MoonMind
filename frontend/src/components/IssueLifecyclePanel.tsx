@@ -14,9 +14,10 @@
  * patterns (real buttons, aria-live result regions).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 
 import { responseError } from '../lib/api/client';
+import { Button } from './dashboard/Button';
 
 export type IssueLifecycleEvidence = {
   repository?: string | undefined;
@@ -156,6 +157,7 @@ export function IssueLifecyclePanel({
   const [writerStoppedConfirmed, setWriterStoppedConfirmed] = useState(false);
   const [actionResult, setActionResult] = useState<{ message: string; failed: boolean } | null>(null);
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const actionReasonIdPrefix = useId();
 
   const requestBody = useMemo(
     () =>
@@ -224,6 +226,16 @@ export function IssueLifecyclePanel({
   const attention = data?.attention_category;
   const actions = data?.actions ?? [];
   const variants = data?.continue_variants ?? [];
+  const actionStates = actions.map((entry) => {
+    const needsStopProof = entry.action === 'continue_work' || entry.action === 'authorize_retry';
+    const blockedByMissingProof = needsStopProof && entry.enabled && !writerStoppedConfirmed;
+    const disabledReason = blockedByMissingProof
+      ? 'Confirm prior writer stop proof first.'
+      : entry.enabled
+        ? null
+        : (entry.disabled_reason || 'unavailable').replaceAll('_', ' ');
+    return { entry, label: ACTION_LABELS[entry.action] ?? entry.action, blockedByMissingProof, disabledReason };
+  });
 
   async function submitAction(action: string) {
     setSubmitting(action);
@@ -394,25 +406,31 @@ export function IssueLifecyclePanel({
               Prior writer is conclusively stopped (required stop proof for continuation or retry)
             </label>
           ) : null}
-          <div className="issue-lifecycle-actions">
-            {actions.map((entry) => {
-              const needsStopProof = entry.action === 'continue_work' || entry.action === 'authorize_retry';
-              const blockedByMissingProof = needsStopProof && entry.enabled && !writerStoppedConfirmed;
-              return (
-                <button
-                  key={entry.action}
-                  type="button"
-                  className="secondary"
-                  disabled={!entry.enabled || blockedByMissingProof || submitting !== null}
-                  title={blockedByMissingProof ? 'Confirm prior writer stop proof first' : entry.enabled ? undefined : entry.disabled_reason || 'Unavailable'}
-                  onClick={() => void submitAction(entry.action)}
-                  aria-label={ACTION_LABELS[entry.action] ?? entry.action}
-                >
-                  {submitting === entry.action ? 'Submitting…' : (ACTION_LABELS[entry.action] ?? entry.action)}
-                </button>
-              );
-            })}
+          <div className="issue-lifecycle-actions button-row">
+            {actionStates.map(({ entry, label, blockedByMissingProof, disabledReason }) => (
+              <Button
+                key={entry.action}
+                variant={entry.action === 'abandon_work' ? 'danger' : 'secondary'}
+                disabled={!entry.enabled || blockedByMissingProof || submitting !== null}
+                onClick={() => void submitAction(entry.action)}
+                aria-label={label}
+                aria-describedby={disabledReason ? `${actionReasonIdPrefix}-${entry.action}` : undefined}
+              >
+                {submitting === entry.action ? 'Submitting…' : label}
+              </Button>
+            ))}
           </div>
+          {actionStates.some((state) => state.disabledReason) ? (
+            <ul className="small issue-lifecycle-action-reasons">
+              {actionStates.map(({ entry, label, disabledReason }) =>
+                disabledReason ? (
+                  <li key={entry.action} id={`${actionReasonIdPrefix}-${entry.action}`}>
+                    {label}: {disabledReason}
+                  </li>
+                ) : null,
+              )}
+            </ul>
+          ) : null}
           {actionResult ? (
             <div className={`notice${actionResult.failed ? ' error' : ''}`} role="status" aria-live="polite">
               {actionResult.message}

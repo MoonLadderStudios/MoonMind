@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import type { components } from '../../generated/openapi';
 import { responseError } from '../../lib/api/client';
+import { Button } from '../dashboard/Button';
 import { GithubTokenProbePanel } from './GithubTokenProbePanel';
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from './SettingsDraftGuard';
 
@@ -152,10 +153,6 @@ function canPublish(operations: readonly string[]): boolean {
 
 const inputClass =
   'w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-hidden focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white';
-const primaryButton =
-  'inline-flex items-center justify-center rounded-xl bg-mm-accent px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-mm-accent/90 disabled:cursor-not-allowed disabled:opacity-50';
-const secondaryButton =
-  'inline-flex items-center justify-center rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800';
 
 function ErrorText({ children }: { children: string | null }) {
   if (!children) return null;
@@ -308,20 +305,18 @@ export function SourceControlConnections({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={secondaryButton}
+          <Button
+            variant="secondary"
             onClick={() => showPane({ adding: 'pat', selectedId: null })}
           >
             Add token connection
-          </button>
-          <button
-            type="button"
-            className={secondaryButton}
+          </Button>
+          <Button
+            variant="secondary"
             onClick={() => showPane({ adding: 'app', selectedId: null })}
           >
             Connect GitHub App
-          </button>
+          </Button>
         </div>
       </header>
 
@@ -506,19 +501,18 @@ function PatCreateForm({
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
-        <button type="submit" className={primaryButton} disabled={saving || !name.trim() || !token}>
+        <Button type="submit" variant="primary" disabled={saving || !name.trim() || !token}>
           {saving ? 'Saving…' : 'Save connection'}
-        </button>
-        <button
-          type="button"
-          className={secondaryButton}
+        </Button>
+        <Button
+          variant="secondary"
           onClick={() => {
             discard();
             onCancel();
           }}
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -638,12 +632,12 @@ function AppConnectForm({
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
-        <button type="submit" className={primaryButton} disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim() || !validRepositories}>
+        <Button type="submit" variant="primary" disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim() || !validRepositories}>
           {starting ? 'Opening GitHub…' : 'Install on GitHub'}
-        </button>
-        <button type="button" className={secondaryButton} onClick={() => { discard(); onCancel(); }}>
+        </Button>
+        <Button variant="secondary" onClick={() => { discard(); onCancel(); }}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -920,13 +914,13 @@ function ConnectionDetail({
                   </span>
                 </span>
                 {assignment.providerRepoId ? (
-                  <button
-                    type="button"
-                    className={secondaryButton}
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => void unassign(assignment.repository, assignment.providerRepoId as string)}
                   >
                     Remove
-                  </button>
+                  </Button>
                 ) : null}
               </li>
             ))}
@@ -942,13 +936,13 @@ function ConnectionDetail({
               <input type="checkbox" checked={assignPublish} onChange={(e) => setAssignPublish(e.target.checked)} />
               Publish
             </label>
-            <button type="submit" className={primaryButton} disabled={assigning || !repository.trim()}>
+            <Button type="submit" variant="primary" disabled={assigning || !repository.trim()}>
               {assigning ? 'Checking…' : 'Assign'}
-            </button>
+            </Button>
             {assignmentChanged ? (
-              <button type="button" className={secondaryButton} onClick={discardAssignment} disabled={assigning}>
+              <Button variant="secondary" onClick={discardAssignment} disabled={assigning}>
                 Cancel assignment
-              </button>
+              </Button>
             ) : null}
           </form>
         ) : null}
@@ -988,21 +982,20 @@ function ConnectionDetail({
         ) : null}
         <ErrorText>{saveError}</ErrorText>
         <div className="flex flex-wrap gap-2">
-          <button type="submit" className={primaryButton} disabled={saving || !changed || !name.trim() || (rotationPending && !token)}>
+          <Button type="submit" variant="primary" disabled={saving || !changed || !name.trim() || (rotationPending && !token)}>
             {saving ? 'Saving…' : 'Save changes'}
-          </button>
+          </Button>
           {changed ? (
-            <button type="button" className={secondaryButton} onClick={discardEdit} disabled={saving}>
+            <Button variant="secondary" onClick={discardEdit} disabled={saving}>
               Cancel changes
-            </button>
+            </Button>
           ) : null}
-          <button
-            type="button"
-            className={secondaryButton}
+          <Button
+            variant="secondary"
             onClick={() => void setLifecycle(isActive ? 'disable' : 'enable')}
           >
             {isActive ? 'Disable connection' : 'Enable connection'}
-          </button>
+          </Button>
         </div>
       </form>
     </div>

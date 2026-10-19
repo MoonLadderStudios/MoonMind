@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react';
 import { copyTextToClipboard } from '../../utils/clipboard';
+import { Button } from './Button';
 
 /**
  * Friendly error surface with collapsible technical disclosure (MM-959).
@@ -142,13 +143,9 @@ export function DashboardErrorDetails({
               <pre className="dashboard-error-details__raw">{rawError}</pre>
             ) : null}
             <div className="dashboard-error-details__actions">
-              <button
-                type="button"
-                className="secondary small"
-                onClick={handleCopy}
-              >
+              <Button variant="secondary" size="sm" onClick={handleCopy}>
                 {copied ? 'Copied' : copyLabel}
-              </button>
+              </Button>
             </div>
           </div>
         </details>

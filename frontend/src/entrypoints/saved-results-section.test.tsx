@@ -197,6 +197,10 @@ function calls(suffix: string) {
   return fetchSpy.mock.calls.filter(([input]) => String(input).endsWith(suffix));
 }
 
+function describedByText(element: HTMLElement): string | undefined {
+  return document.getElementById(element.getAttribute('aria-describedby') || '')?.textContent ?? undefined;
+}
+
 function bodyOf(call: unknown[] | undefined) {
   return JSON.parse(String((call?.[1] as RequestInit | undefined)?.body));
 }
@@ -625,16 +629,19 @@ describe('Saved Results section', () => {
     const publish = screen.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
     expect(publish.title).toMatch(/raw access/);
+    // The reason is visible text linked to the button, not only a tooltip.
+    expect(describedByText(publish)).toMatch(/raw access/);
+    expect(screen.getByText(/with raw access can be published/)).toBeTruthy();
   });
 
   it('keeps actions unavailable when workflow actions are disabled', () => {
     renderSection({ actionsEnabled: false });
-    expect(
-      (screen.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(
-      (screen.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    const publish = screen.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    expect(describedByText(publish)).toBe('Workflow actions are disabled.');
+    const continueButton = screen.getByRole('button', { name: 'Continue working' }) as HTMLButtonElement;
+    expect(continueButton.disabled).toBe(true);
+    expect(describedByText(continueButton)).toBe('Workflow actions are disabled.');
   });
 
   it('reports a server-disabled publication without blocking download or continue', async () => {
@@ -652,6 +659,7 @@ describe('Saved Results section', () => {
     const publish = screen.getByRole('button', { name: 'Publish saved work' }) as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
     expect(publish.title).toMatch(/publication rollout policy/);
+    expect(publish.getAttribute('aria-describedby')).toBe(note.id);
     fireEvent.click(publish);
     expect(screen.queryByRole('form', { name: 'Publish saved work' })).toBeNull();
     expect(calls('/retry-publication')).toHaveLength(0);
