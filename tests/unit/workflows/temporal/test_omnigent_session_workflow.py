@@ -1076,6 +1076,10 @@ async def test_side_effect_rejects_obsolete_runtime_binding_fence(
         status="pending",
     )
     session = SimpleNamespace(
+        session_id="oms_123",
+        intent_ref="art_intent_123",
+        intent_digest="sha256:" + "d" * 64,
+        execution_plan_ref=plan_ref,
         fencing_generation=1,
         revision=7,
         moonmind_workflow_id="workflow-1",

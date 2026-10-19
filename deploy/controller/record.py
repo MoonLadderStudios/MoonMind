@@ -244,8 +244,6 @@ class OperationStore:
         operation = self.load(operation_id)
         if operation.get("status") in TERMINAL_STATUSES:
             return operation
-        if operation.get("installed") is not None:
-            return operation
         operation["status"] = "superseded"
         operation["supersededReason"] = reason
         operation["supersededAt"] = _utc_now()
@@ -280,7 +278,10 @@ class OperationStore:
         )
         if group_attempts >= MAX_AUTO_ATTEMPTS:
             operation["autoAttemptsExhausted"] = True
-            if operation.get("status") not in ("succeeded",):
+            if operation.get("installed") is not None:
+                if operation.get("status") in OPEN_STATUSES:
+                    operation["status"] = "partially_verified"
+            elif operation.get("status") != "succeeded":
                 operation["status"] = "failed"
         elif operation.get("status") == "failed" and not operation.get("autoAttemptsExhausted"):
             operation["status"] = "pending"
@@ -369,11 +370,22 @@ class OperationStore:
                 return operation
         return None
 
-    def confirm_installed(self, operation_id: str, *, image: str) -> dict:
-        """Record a confirmed installation. Append-only: nothing clears it."""
+    def confirm_installed(
+        self, operation_id: str, *, image: str, verification_pending: bool = False
+    ) -> dict:
+        """Keep installation durable while required verification remains open."""
         operation = self.load(operation_id)
-        operation["installed"] = {"image": image, "confirmedAt": _utc_now()}
-        operation["status"] = "succeeded"
+        if operation.get("installed") is None:
+            operation["installed"] = {"image": image, "confirmedAt": _utc_now()}
+        operation["status"] = "applying" if verification_pending else "succeeded"
+        return self._write(operation)
+
+    def finish_verification(self, operation_id: str, *, complete: bool) -> dict:
+        """Publish a terminal result only after the installed checks finish."""
+        operation = self.load(operation_id)
+        if operation.get("installed") is None:
+            raise ValueError("Verification cannot finish before installation")
+        operation["status"] = "succeeded" if complete else "partially_verified"
         return self._write(operation)
 
     def record_verification(

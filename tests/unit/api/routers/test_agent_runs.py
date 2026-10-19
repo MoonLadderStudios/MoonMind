@@ -49,6 +49,7 @@ def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tu
     artifact_service = AsyncMock()
 
     app.dependency_overrides[get_current_user()] = lambda: test_user
+    app.dependency_overrides[agent_runs_router._resolve_principal] = lambda: str(test_user.id)
     app.dependency_overrides[_require_worker_auth] = lambda: test_worker_auth
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
 
@@ -2950,6 +2951,7 @@ def _app_with_agent_and_session_routers(user: object, artifact_service: AsyncMoc
 
 def test_get_agent_run_artifact_session_projection_returns_grouped_projection(
     client: tuple[TestClient, AsyncMock],
+    test_user: User,
 ) -> None:
     test_client, artifact_service = client
     record = _build_session_record()
@@ -2964,8 +2966,8 @@ def test_get_agent_run_artifact_session_projection_returns_grouped_projection(
         "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:agent_runs"
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
+        assert principal == str(test_user.id)
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -3001,6 +3003,7 @@ def test_get_agent_run_artifact_session_projection_returns_grouped_projection(
 
 def test_get_agent_run_artifact_session_projection_reads_durable_state_only(
     client: tuple[TestClient, AsyncMock],
+    test_user: User,
 ) -> None:
     test_client, artifact_service = client
     record = _build_session_record().model_copy(update={"status": "degraded"})
@@ -3014,8 +3017,8 @@ def test_get_agent_run_artifact_session_projection_reads_durable_state_only(
         "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:agent_runs"
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
+        assert principal == str(test_user.id)
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -3045,7 +3048,7 @@ def test_list_session_resources_returns_authorized_redacted_artifact_projection(
         "password": "secret-password",
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         assert principal == str(user_id)
         if artifact_id in {"art_stderr", "art_diag", "art_checkpoint", "art_control", "art_reset"}:
             raise TemporalArtifactAuthorizationError("not authorized")
@@ -3090,7 +3093,7 @@ def test_list_session_resources_encodes_advertised_resource_urls() -> None:
         update={"session_id": "sess?foo#bar", "latest_summary_ref": "art?summary#1"}
     )
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         assert principal == str(user_id)
         if artifact_id != "art?summary#1":
             raise TemporalArtifactAuthorizationError("not authorized")
@@ -3128,7 +3131,7 @@ def test_list_session_resource_files_alias_reads_durable_degraded_session() -> N
     app = _app_with_agent_and_session_routers(user, artifact_service)
     record = _build_session_record().model_copy(update={"status": "degraded"})
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         assert principal == str(user_id)
         return _build_artifact(artifact_id, "session.summary", label=artifact_id)
 
@@ -3166,7 +3169,7 @@ def test_list_session_resources_allows_operator_cross_owner_access() -> None:
         "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -3192,7 +3195,7 @@ def test_session_resource_content_requires_artifact_in_session_projection() -> N
     artifact_service = AsyncMock()
     app = _app_with_agent_and_session_routers(user, artifact_service)
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         assert principal == str(user_id)
         return _build_artifact(artifact_id, "session.summary", label=artifact_id)
 
@@ -3233,13 +3236,13 @@ def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_p
     artifact_path = tmp_path / "summary.json"
     artifact_path.write_text('{"summary":"done"}', encoding="utf-8")
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         assert principal == str(user_id)
         if artifact_id != "art_summary":
             raise TemporalArtifactAuthorizationError("not authorized")
         return _build_artifact(artifact_id, "session.summary", label=artifact_id)
 
-    async def _read_path(*, artifact_id: str, principal: str):
+    async def _read_path(*, artifact_id: str, principal: str, recovery_principal=None):
         assert artifact_id == "art_summary"
         assert principal == str(user_id)
         if streamed:
@@ -3248,7 +3251,7 @@ def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_p
         artifact.content_type = media_type
         return artifact, artifact_path
 
-    async def _read_chunks(*, artifact_id: str, principal: str):
+    async def _read_chunks(*, artifact_id: str, principal: str, recovery_principal=None):
         assert artifact_id == "art_summary"
         assert principal == str(user_id)
         artifact = _build_artifact(artifact_id, "session.summary", label=artifact_id)[0]
@@ -3289,13 +3292,13 @@ def test_session_resource_download_returns_attachment(tmp_path) -> None:
     artifact_path = tmp_path / "summary.json"
     artifact_path.write_text('{"summary":"done"}', encoding="utf-8")
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         assert principal == str(user_id)
         if artifact_id != "art_summary":
             raise TemporalArtifactAuthorizationError("not authorized")
         return _build_artifact(artifact_id, "session.summary", label=artifact_id)
 
-    async def _read_path(*, artifact_id: str, principal: str):
+    async def _read_path(*, artifact_id: str, principal: str, recovery_principal=None):
         assert artifact_id == "art_summary"
         assert principal == str(user_id)
         return (
@@ -3376,6 +3379,7 @@ def test_get_agent_run_artifact_session_projection_allows_owner_access() -> None
         is_superuser=False,
     )
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
+    app.dependency_overrides[agent_runs_router._resolve_principal] = lambda: str(owner_id)
 
     artifact_payloads = {
         "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
@@ -3387,8 +3391,8 @@ def test_get_agent_run_artifact_session_projection_allows_owner_access() -> None
         "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:agent_runs"
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
+        assert principal == str(owner_id)
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -3421,6 +3425,7 @@ def test_get_agent_run_artifact_session_projection_allows_operator_cross_owner_a
         is_superuser=False,
     )
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
+    app.dependency_overrides[agent_runs_router._resolve_principal] = lambda: str(other_id)
 
     artifact_payloads = {
         "art_stdout": _build_artifact("art_stdout", "runtime.stdout", label="stdout"),
@@ -3432,7 +3437,7 @@ def test_get_agent_run_artifact_session_projection_allows_operator_cross_owner_a
         "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -3454,6 +3459,7 @@ def test_get_agent_run_artifact_session_projection_allows_operator_cross_owner_a
 
 def test_post_agent_run_artifact_session_control_routes_same_session_continuation_and_returns_projection(
     client: tuple[TestClient, AsyncMock],
+    test_user: User,
 ) -> None:
     test_client, artifact_service = client
     record = _build_session_record()
@@ -3468,8 +3474,8 @@ def test_post_agent_run_artifact_session_control_routes_same_session_continuatio
         "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:agent_runs"
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
+        assert principal == str(test_user.id)
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata
@@ -3509,6 +3515,7 @@ def test_post_agent_run_artifact_session_control_routes_same_session_continuatio
 
 def test_post_agent_run_artifact_session_control_routes_clear_session_and_returns_projection(
     client: tuple[TestClient, AsyncMock],
+    test_user: User,
 ) -> None:
     test_client, artifact_service = client
     record = _build_session_record().model_copy(
@@ -3530,8 +3537,8 @@ def test_post_agent_run_artifact_session_control_routes_clear_session_and_return
         "art_reset": _build_artifact("art_reset", "session.reset_boundary", label="reset"),
     }
 
-    async def _get_metadata(*, artifact_id: str, principal: str):
-        assert principal == "service:agent_runs"
+    async def _get_metadata(*, artifact_id: str, principal: str, recovery_principal=None):
+        assert principal == str(test_user.id)
         return artifact_payloads[artifact_id]
 
     artifact_service.get_metadata.side_effect = _get_metadata

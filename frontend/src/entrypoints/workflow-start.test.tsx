@@ -15839,7 +15839,10 @@ describe("Task Create MM-578 Preset expansion", () => {
         "PR publishing needs a repository. Add one, or choose None to keep results save-only.",
       ),
     ).toBeTruthy();
-    expect(document.activeElement).toBe(repoInput);
+    // Validation text can render before the invalid-field focus effect runs.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(repoInput);
+    });
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
     ).toBe(false);

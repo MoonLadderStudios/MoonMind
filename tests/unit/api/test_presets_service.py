@@ -2522,7 +2522,7 @@ async def test_soft_delete_template_not_found(tmp_path):
                     scope_ref=str(user_id),
                 )
 
-async def test_deactivate_templates_marks_matching_rows_inactive(tmp_path, monkeypatch):
+async def test_deactivate_seed_templates_marks_matching_rows_inactive(tmp_path, monkeypatch):
     increment_calls: list[tuple[str, int]] = []
 
     class _FakeMetrics:
@@ -2547,6 +2547,7 @@ async def test_deactivate_templates_marks_matching_rows_inactive(tmp_path, monke
                 inputs_schema=[],
                 steps=[{"instructions": "Legacy orchestration"}],
                 created_by=None,
+                seed_source="seed-catalog",
             )
             await service.create_template(
                 slug="legacy-checklist",
@@ -2558,6 +2559,7 @@ async def test_deactivate_templates_marks_matching_rows_inactive(tmp_path, monke
                 inputs_schema=[],
                 steps=[{"instructions": "Legacy checklist orchestration"}],
                 created_by=None,
+                seed_source="seed-catalog",
             )
             await service.create_template(
                 slug="moonspec-orchestrate",
@@ -2569,10 +2571,23 @@ async def test_deactivate_templates_marks_matching_rows_inactive(tmp_path, monke
                 inputs_schema=[],
                 steps=[{"instructions": "Current orchestration"}],
                 created_by=None,
+                seed_source="seed-catalog",
             )
 
-            deactivated = await service.deactivate_templates(
-                slugs=["speckit-orchestrate", "legacy-checklist"],
+            await service.create_template(
+                slug="operator-legacy",
+                title="Operator Legacy",
+                description="Keep this workflow",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "Operator workflow"}],
+                created_by=None,
+            )
+
+            deactivated = await service.deactivate_seed_templates(
+                slugs=["speckit-orchestrate", "legacy-checklist", "operator-legacy"],
                 scope="global",
                 scope_ref=None,
             )
@@ -4603,6 +4618,7 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
                 annotations={"sourceSkill": "composed-seed"},
                 required_capabilities=[],
                 created_by=None,
+                seed_source="seed-catalog",
             )
             template = await service._get_template_for_scope(
                 slug="composed-seed",
@@ -4622,6 +4638,189 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
 
     assert result.updated == 1
     assert template.max_step_count == 25
+
+@pytest.mark.parametrize(
+    ("created_by", "seed_source"),
+    [
+        (None, None),
+        (None, ""),
+        (None, "  "),
+        (uuid4(), None),
+        (uuid4(), "old/seeds/custom.yaml"),
+    ],
+)
+async def test_seed_refresh_preserves_custom_collision_through_expansion(
+    tmp_path, created_by, seed_source
+):
+    seed_dir = tmp_path / "seeds"
+    _write_seed_template(
+        seed_dir,
+        {
+            "slug": "custom",
+            "title": "Shipped preset",
+            "description": "New built-in with a colliding name",
+            "steps": [{"instructions": "Run shipped work"}],
+        },
+    )
+    async with template_db(tmp_path) as maker, maker() as session:
+        service = PresetCatalogService(session)
+        await service.create_template(
+            slug="custom",
+            title="Operator preset",
+            description="Keep my work",
+            scope="global",
+            scope_ref=None,
+            tags=["custom"],
+            inputs_schema=[],
+            steps=[{"instructions": "Run operator work"}],
+            created_by=created_by,
+            seed_source=seed_source,
+            release_status=PresetReleaseStatus.ACTIVE,
+        )
+        before = await service.expand_template(
+            slug="custom", scope="global", scope_ref=None, inputs={}
+        )
+        result = await service.sync_seed_templates(seed_dir=seed_dir)
+        after = await service.expand_template(
+            slug="custom", scope="global", scope_ref=None, inputs={}
+        )
+        row = await service._get_template_for_scope(
+            slug="custom", scope=PresetScopeType.GLOBAL, scope_ref=None
+        )
+        assert after["steps"] == before["steps"]
+        assert (
+            after["appliedTemplate"]["presetDigest"]
+            == before["appliedTemplate"]["presetDigest"]
+        )
+        assert (row.title, row.tags, row.created_by, row.seed_source) == (
+            "Operator preset",
+            ["custom"],
+            created_by,
+            seed_source,
+        )
+        assert (result.created, result.updated) == (0, 0)
+        # The startup cleanup must not disable the same operator-owned row.
+        assert (
+            await service.deactivate_seed_templates(
+                slugs=["custom"], scope="global", scope_ref=None
+            )
+            == 0
+        )
+        assert row.is_active
+
+
+async def test_seed_refresh_reaches_expansion_without_rewriting_admitted_work(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    seed = {
+        "slug": "refreshable",
+        "title": "Refreshable",
+        "description": "A shipped workflow",
+        "inputs": [
+            {"name": "confirm", "label": "Confirm", "type": "boolean", "default": True},
+            {
+                "name": "notes",
+                "label": "Notes",
+                "type": "text",
+                "default": "default notes",
+            },
+        ],
+        "steps": [
+            {
+                "instructions": "Old implementation",
+                "skill": {
+                    "id": "auto",
+                    "args": {
+                        "confirm": "{{ inputs.confirm }}",
+                        "notes": "{{ inputs.notes }}",
+                    },
+                },
+            }
+        ],
+    }
+    _write_seed_template(seed_dir, seed)
+    async with template_db(tmp_path) as maker, maker() as session:
+        service = PresetCatalogService(session)
+        assert (await service.sync_seed_templates(seed_dir=seed_dir)).created == 1
+        admitted = await service.expand_template(
+            slug="refreshable", scope="global", scope_ref=None, inputs={}
+        )
+        retained = deepcopy(admitted)
+        row = await service._get_template_for_scope(
+            slug="refreshable", scope=PresetScopeType.GLOBAL, scope_ref=None
+        )
+        # Seed paths may change between installations; provenance is not a path lock.
+        row.seed_source = "/previous/install/refreshable.yaml"
+        await session.commit()
+        seed["steps"][0]["instructions"] = "Updated implementation"
+        _write_seed_template(seed_dir, seed)
+        assert (await service.sync_seed_templates(seed_dir=seed_dir)).updated == 1
+        latest = await service.expand_template(
+            slug="refreshable",
+            scope="global",
+            scope_ref=None,
+            inputs={"confirm": False, "notes": ""},
+        )
+        assert latest["steps"][0]["instructions"] == "Updated implementation"
+        assert latest["steps"][0]["skill"]["args"] == {
+            "confirm": False,
+            "notes": "",
+        }
+        assert admitted == retained
+        assert admitted["steps"][0]["skill"]["args"] == {
+            "confirm": True,
+            "notes": "default notes",
+        }
+        assert (
+            latest["appliedTemplate"]["presetDigest"]
+            != admitted["appliedTemplate"]["presetDigest"]
+        )
+        assert (await service.sync_seed_templates(seed_dir=seed_dir)).updated == 0
+
+
+@pytest.mark.parametrize("override", ["review", "delete"])
+async def test_seed_refresh_preserves_operator_availability_override(
+    tmp_path, override
+):
+    seed_dir = tmp_path / "seeds"
+    seed = {
+        "slug": "reviewed",
+        "title": "Reviewed",
+        "description": "A shipped workflow",
+        "steps": [{"instructions": "Old implementation"}],
+    }
+    _write_seed_template(seed_dir, seed)
+    async with template_db(tmp_path) as maker, maker() as session:
+        service = PresetCatalogService(session)
+        await service.sync_seed_templates(seed_dir=seed_dir)
+        reviewer = uuid4()
+        if override == "review":
+            await service.set_release_status(
+                slug="reviewed",
+                scope="global",
+                scope_ref=None,
+                release_status=PresetReleaseStatus.INACTIVE,
+                reviewer_id=reviewer,
+            )
+        else:
+            await service.soft_delete_template(
+                slug="reviewed", scope="global", scope_ref=None
+            )
+        seed["steps"][0]["instructions"] = "Updated implementation"
+        _write_seed_template(seed_dir, seed)
+        await service.sync_seed_templates(seed_dir=seed_dir)
+        row = await service._get_template_for_scope(
+            slug="reviewed",
+            scope=PresetScopeType.GLOBAL,
+            scope_ref=None,
+            include_inactive=True,
+        )
+        assert row.steps[0]["instructions"] == "Updated implementation"
+        if override == "review":
+            assert row.release_status == PresetReleaseStatus.INACTIVE
+            assert row.reviewed_by == reviewer
+        else:
+            assert row.is_active is False
+
 
 async def test_sync_seed_templates_updates_existing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
@@ -4669,6 +4868,7 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
                 annotations={"sourceSkill": "legacy-orchestrate"},
                 required_capabilities=[],
                 created_by=None,
+                seed_source="seed-catalog",
                 release_status=PresetReleaseStatus.ACTIVE,
             )
 

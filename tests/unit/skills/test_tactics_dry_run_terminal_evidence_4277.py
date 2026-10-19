@@ -41,9 +41,7 @@ def test_tactics_dry_run_is_non_mutating_and_reports_skipped_preview(
     fake_bin.mkdir()
     docker_stub = fake_bin / "docker"
     docker_stub.write_text(
-        f"#!{bash}\n"
-        'printf "docker %s\\n" "$*" >> "$COMMAND_LOG"\n'
-        "exit 0\n",
+        f"#!{bash}\n" 'printf "docker %s\\n" "$*" >> "$COMMAND_LOG"\n' "exit 0\n",
         encoding="utf-8",
     )
     docker_stub.chmod(0o755)
@@ -61,6 +59,7 @@ def test_tactics_dry_run_is_non_mutating_and_reports_skipped_preview(
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
         "COMMAND_LOG": str(tmp_path / "commands.log"),
+        "MOONMIND_UNREAL_ENGINE_IMAGE": "example.invalid/unreal:configured",
         # Isolate the dry-run from the real home directory: the entrypoint
         # must not require or mutate shared worker cache dirs for a preview.
         "HOME": str(tmp_path / "fake-home"),
@@ -72,6 +71,7 @@ def test_tactics_dry_run_is_non_mutating_and_reports_skipped_preview(
     env.pop("MOONMIND_AGENT_RUN_ID", None)
     env.pop("MOONMIND_RUNTIME_ID", None)
     env.pop("MOONMIND_URL", None)
+    env.pop("MOONMIND_CONTAINER_JOBS_SESSION_ID", None)
 
     completed = subprocess.run(
         [bash, str(SCRIPT), "--repo", str(repo), "--dry-run"],

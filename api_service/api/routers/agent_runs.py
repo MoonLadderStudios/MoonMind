@@ -18,6 +18,7 @@ from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     _raise_temporal_artifact_http,
     _resolve_principal,
+    _resolve_recovery_principal,
     _serialize_metadata,
 )
 from api_service.auth_providers import get_current_user
@@ -203,6 +204,7 @@ async def _resolve_projection_artifact(
     artifact_id: str | None,
     service: TemporalArtifactService,
     principal: str = "service:agent_runs",
+    recovery_principal: str | None = None,
 ) -> ArtifactMetadataModel | None:
     normalized = str(artifact_id or "").strip()
     if not normalized:
@@ -211,6 +213,7 @@ async def _resolve_projection_artifact(
         artifact, links, pinned, read_policy = await service.get_metadata(
             artifact_id=normalized,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except (
         TemporalArtifactAuthorizationError,
@@ -231,6 +234,7 @@ async def _build_agent_run_artifact_session_projection(
     session_id: str,
     service: TemporalArtifactService,
     principal: str = "service:agent_runs",
+    recovery_principal: str | None = None,
 ) -> ArtifactSessionProjectionModel | None:
     store = ManagedSessionStore(_get_managed_session_store_root())
     try:
@@ -251,6 +255,7 @@ async def _build_agent_run_artifact_session_projection(
                 artifact_id=normalized,
                 service=service,
                 principal=principal,
+                recovery_principal=recovery_principal,
             )
         return cache[normalized]
 
@@ -320,6 +325,7 @@ async def _load_session_projection_for_alias(
     user: User,
     principal: str,
     service: TemporalArtifactService,
+    recovery_principal: str | None = None,
 ) -> ArtifactSessionProjectionModel | None:
     store = ManagedSessionStore(_get_managed_session_store_root())
     try:
@@ -335,6 +341,7 @@ async def _load_session_projection_for_alias(
         session_id=record.session_id,
         service=service,
         principal=principal,
+        recovery_principal=recovery_principal,
     )
 
 _SECRET_METADATA_FRAGMENTS = frozenset(
@@ -475,12 +482,14 @@ async def _read_session_resource_artifact(
     user: User,
     principal: str,
     service: TemporalArtifactService,
+    recovery_principal: str | None = None,
     as_attachment: bool,
 ):
     projection = await _load_session_projection_for_alias(
         session_id=session_id,
         user=user,
         principal=principal,
+        recovery_principal=recovery_principal,
         service=service,
     )
     if projection is None:
@@ -490,6 +499,7 @@ async def _read_session_resource_artifact(
         artifact, path = await service.read_path(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
         disposition, headers = artifact_read_response_policy(artifact, as_attachment=as_attachment)
         return FileResponse(
@@ -508,6 +518,7 @@ async def _read_session_resource_artifact(
         artifact, chunks = await service.read_chunks(
             artifact_id=artifact_id,
             principal=principal,
+            recovery_principal=recovery_principal,
         )
     except Exception as exc:
         _raise_temporal_artifact_http(exc)
@@ -1451,12 +1462,15 @@ async def get_agent_run_artifact_session(
     agent_run_id: str,
     session_id: str,
     _user: User = Depends(get_current_user()),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
     ),
 ) -> ArtifactSessionProjectionModel:
     await _require_agent_run_access(agent_run_id, _user)
     projection = await _build_agent_run_artifact_session_projection(
+        principal=str(_user.id),
+        recovery_principal=recovery_principal,
         agent_run_id=agent_run_id,
         session_id=session_id,
         service=artifact_service,
@@ -1476,12 +1490,14 @@ async def get_agent_run_artifact_session(
 async def list_session_resources(
     session_id: str,
     _user: User = Depends(get_current_user()),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
     ),
 ) -> SessionResourceListResponse:
     projection = await _load_session_projection_for_alias(
+        recovery_principal=recovery_principal,
         session_id=session_id,
         user=_user,
         principal=principal,
@@ -1502,12 +1518,14 @@ async def list_session_resources(
 async def list_session_resource_files(
     session_id: str,
     _user: User = Depends(get_current_user()),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
     ),
 ) -> SessionResourceListResponse:
     return await list_session_resources(
+        recovery_principal=recovery_principal,
         session_id=session_id,
         _user=_user,
         principal=principal,
@@ -1525,12 +1543,14 @@ async def get_session_resource_content(
     session_id: str,
     artifact_id: str,
     _user: User = Depends(get_current_user()),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
     ),
 ):
     return await _read_session_resource_artifact(
+        recovery_principal=recovery_principal,
         session_id=session_id,
         artifact_id=artifact_id,
         user=_user,
@@ -1550,10 +1570,12 @@ async def download_session_resource(
     session_id: str,
     artifact_id: str,
     _user: User = Depends(get_current_user()),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ):
     return await _read_session_resource_artifact(
+        recovery_principal=recovery_principal,
         session_id=session_id,
         artifact_id=artifact_id,
         user=_user,
@@ -1576,6 +1598,7 @@ async def control_agent_run_artifact_session(
     session_id: str,
     payload: ArtifactSessionControlRequest,
     _user: User = Depends(get_current_user()),
+    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactSessionControlResponse:
     await _require_agent_run_access(agent_run_id, _user)
@@ -1660,6 +1683,8 @@ async def control_agent_run_artifact_session(
         )
 
     projection = await _build_agent_run_artifact_session_projection(
+        principal=str(_user.id),
+        recovery_principal=recovery_principal,
         agent_run_id=agent_run_id,
         session_id=session_id,
         service=artifact_service,
