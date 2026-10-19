@@ -764,6 +764,7 @@ class _BatchDoubleHandler(BaseHTTPRequestHandler):
     posts: list[dict[str, Any]] = []
     cancels: list[str] = []
     describe_status: dict[str, str] = {}
+    describe_http_status: int = 200
 
     def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(payload).encode()
@@ -789,7 +790,7 @@ class _BatchDoubleHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         workflow_id = self.path.rstrip("/").split("/")[-1]
         status = type(self).describe_status.get(workflow_id, "running")
-        self._send_json({"workflowId": workflow_id, "status": status})
+        self._send_json({"workflowId": workflow_id, "status": status}, type(self).describe_http_status)
 
     def log_message(self, *_args: Any) -> None:
         return None
@@ -919,8 +920,9 @@ def test_engine_refuses_dispatch_without_approved_digest(tmp_path: Path) -> None
     assert result["failure"]["code"] == "REPOSITORY_BATCH_APPROVAL_REQUIRED"
 
 
+@pytest.mark.parametrize("delayed_observation", [False, True])
 def test_engine_dispatch_verifies_restart_reuses_and_retry_advances(
-    tmp_path: Path,
+    tmp_path: Path, delayed_observation: bool,
 ) -> None:
     _BatchDoubleHandler.posts = []
     _BatchDoubleHandler.cancels = []
@@ -978,6 +980,7 @@ def test_engine_dispatch_verifies_restart_reuses_and_retry_advances(
             assert post["payload"]["runtimeInheritance"] == "caller"
         # A parent restart discovers the accepted children instead of
         # submitting the same work again.
+        _BatchDoubleHandler.describe_http_status = 404 if delayed_observation else 200
         restart = _run_helper(
             snapshot,
             workspace,
@@ -985,13 +988,18 @@ def test_engine_dispatch_verifies_restart_reuses_and_retry_advances(
             ["--approved-batch-digest", digest],
             env_extra={"MOONMIND_URL": url},
         )
-        assert restart.returncode == 0, restart.stderr + restart.stdout
+        assert restart.returncode == (1 if delayed_observation else 0), restart.stderr + restart.stdout
         assert len(_BatchDoubleHandler.posts) == 2
+        if delayed_observation:
+            _, observed = _artifacts(workspace)
+            assert {item["workflowId"] for item in observed["targets"]} == {"mm:child-1", "mm:child-2"}
+            assert {item["status"] for item in observed["targets"]} == {"unknown"}
+        _BatchDoubleHandler.describe_http_status = 200
         # Selected retry of one failed child admits a fresh child for that
         # target only and never republishes the completed sibling.
         retry_result_path = workspace / "artifacts" / "batch-repositories-result.json"
         prior = json.loads(retry_result_path.read_text())
-        assert prior["status"] == "queued"
+        assert prior["status"] == ("failed" if delayed_observation else "queued")
         for item in prior["targets"]:
             if item["repository"] == "acme/one":
                 item["status"] = "succeeded"
@@ -1028,7 +1036,55 @@ def test_engine_dispatch_verifies_restart_reuses_and_retry_advances(
         assert len(resubmitted) == 1 and resubmitted[0]["attempt"] == 1
         assert resubmitted[0]["idempotencyKey"] not in posted_keys
         assert retried_targets
+        if delayed_observation:
+            # An accepted retry must retain its full receipt across a restart
+            # while read-back is unavailable, not reset to the first attempt.
+            accepted_retry = dict(resubmitted[0])
+            _BatchDoubleHandler.describe_http_status = 404
+            retry_restart = _run_helper(
+                snapshot, workspace, targets_path,
+                ["--approved-batch-digest", digest],
+                env_extra={"MOONMIND_URL": url},
+            )
+            assert retry_restart.returncode == 1, retry_restart.stderr + retry_restart.stdout
+            assert len(_BatchDoubleHandler.posts) == 3
+            _, restarted = _artifacts(workspace)
+            preserved_retry = next(
+                item for item in restarted["targets"]
+                if item["targetRef"] == accepted_retry["targetRef"]
+            )
+            assert preserved_retry["status"] == "unknown"
+            assert preserved_retry["workflowId"] == accepted_retry["workflowId"]
+            assert preserved_retry["attempt"] == accepted_retry["attempt"]
+            assert preserved_retry["idempotencyKey"] == accepted_retry["idempotencyKey"]
+
+            # Once failure is confirmed, selected retry advances from that
+            # accepted attempt rather than colliding with its existing key.
+            _BatchDoubleHandler.describe_http_status = 200
+            _BatchDoubleHandler.describe_status[accepted_retry["workflowId"]] = "failed"
+            observed_failure = _run_helper(
+                snapshot, workspace, targets_path,
+                ["--approved-batch-digest", digest],
+                env_extra={"MOONMIND_URL": url},
+            )
+            assert observed_failure.returncode == 1
+            retry_again = _run_helper(
+                snapshot, workspace, targets_path,
+                ["--approved-batch-digest", digest, "--retry-failed-only"],
+                env_extra={"MOONMIND_URL": url},
+            )
+            assert retry_again.returncode == 0, retry_again.stderr + retry_again.stdout
+            assert len(_BatchDoubleHandler.posts) == 4
+            _, latest = _artifacts(workspace)
+            next_retry = next(
+                item for item in latest["targets"]
+                if item["targetRef"] == accepted_retry["targetRef"]
+            )
+            assert next_retry["attempt"] == 2
+            assert next_retry["idempotencyKey"] != accepted_retry["idempotencyKey"]
+            assert next_retry["idempotencyKey"] not in posted_keys
     finally:
+        _BatchDoubleHandler.describe_http_status = 200
         server.shutdown()
         thread.join(timeout=5)
 
