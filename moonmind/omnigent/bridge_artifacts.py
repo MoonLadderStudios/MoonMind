@@ -447,29 +447,71 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 "artifact_kind": "saved_work_manifest",
                 **saved_work_artifact_metadata("saved_work_manifest", payload),
             }
+        checkpoint_kind = (
+            name if link_type == "evidence.recovery" and name in {
+                "checkpoint_archive", "checkpoint_manifest", "checkpoint_history",
+                "checkpoint_index", "checkpoint_patch", "step_execution_checkpoint",
+            } else None
+        )
         digest = hashlib.sha256(payload).hexdigest()
         execution_link = self._execution_link(
             request, name=name, link_type=link_type
         )
         async with self._session_factory() as session:
             service = TemporalArtifactService(TemporalArtifactRepository(session))
-            if saved_metadata:
+            if saved_metadata or checkpoint_kind:
+                if execution_link is None:
+                    raise OmnigentArtifactError("Saved work requires execution ownership")
+                # Content-addressed storage alone still allocates logical rows.
+                # Reconcile this execution's accepted object before creating
+                # another row after a lost acknowledgement. Lookup/read errors
+                # remain failures, never permission to duplicate an output.
+                existing = await service.list_for_execution(
+                    namespace=execution_link.namespace,
+                    workflow_id=execution_link.workflow_id,
+                    run_id=execution_link.run_id,
+                    principal=self._principal,
+                    link_type=link_type,
+                )
+                for candidate in existing:
+                    metadata = candidate.metadata_json or {}
+                    same_kind = (
+                        metadata.get("artifact_kind") == "saved_work_manifest"
+                        if saved_metadata else metadata.get("name") == name
+                    )
+                    if (
+                        same_kind and candidate.content_type == content_type
+                        and candidate.sha256 == digest
+                        and str(getattr(candidate.status, "value", candidate.status)).lower() == "complete"
+                    ):
+                        _artifact, restored = await service.read(
+                            artifact_id=candidate.artifact_id, principal=self._principal,
+                            allow_restricted_raw=True,
+                        )
+                        if restored != payload:
+                            raise OmnigentArtifactError("Remote checkpoint differs from the saved candidate")
+                        return f"artifact:{candidate.artifact_id}"
+                # Stable part refs keep the index byte-identical when a save
+                # resumes after its link committed but its acknowledgement was
+                # lost. A new captured candidate still gets its own identity.
                 # A saved-work index is an output only after its immutable
                 # bytes are remotely readable. Interrupted uploads/readback
                 # remain unlinked and cannot become a falsely complete save.
                 completed, _reused = await service.put_content_addressed_payload_complete(
                     principal=self._principal, payload=payload,
-                    content_type=content_type, scope="saved_work_manifest",
-                    metadata_json=saved_metadata,
+                    content_type=content_type, scope=checkpoint_kind or "saved_work_manifest",
+                    metadata_json=saved_metadata or {
+                        "artifact_type": "omnigent.generic_host_evidence",
+                        "name": _safe_artifact_name(name),
+                        "link_type": link_type,
+                    },
                 )
                 _artifact, restored = await service.read(
                     artifact_id=completed.artifact_id, principal=self._principal,
                     allow_restricted_raw=True,
                 )
                 if restored != payload:
-                    raise OmnigentArtifactError("Remote saved-work manifest differs from the saved candidate")
-                if execution_link is None:
-                    raise OmnigentArtifactError("Saved work requires execution ownership")
+                    raise OmnigentArtifactError("Remote checkpoint differs from the saved candidate")
                 await service.link_artifact(
                     artifact_id=completed.artifact_id, principal=self._principal,
                     execution_ref=execution_link,

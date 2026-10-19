@@ -618,9 +618,23 @@ describe('Publish Saved Work uses the saved-work publication contract', () => {
       objective: 'branch',
       baseBranch: 'main',
       headBranch: 'saved-work/mm-wf-4020',
-      strategy: 'baseline_delta',
+      strategy: 'additive_import',
       pullRequestTitle: '',
     });
+  });
+
+  it.each([
+    [{}, 'baseline_delta'],
+    [{ status: 'PENDING' }, 'additive_import'],
+    [{ rawAccessAllowed: false }, 'additive_import'],
+    [{ expiresAt: '2020-01-01T00:00:00Z' }, 'additive_import'],
+  ])('derives the strategy from usable saved delta bytes %j', (overrides, strategy) => {
+    const saved = capture();
+    const [entry] = project({
+      artifacts: [saved.manifest, saved.archive, { ...saved.delta, ...overrides }],
+    }).entries;
+    expect(defaultSavedWorkDestination(execution(), 'wf-4020', ['pr'], entry).strategy)
+      .toBe(strategy);
   });
 
   it('authors only the saved result and its destination', () => {

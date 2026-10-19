@@ -3463,7 +3463,9 @@ class OmnigentOAuthHostRuntime:
                         raise blocked("current turn has not reached a trustworthy inactive boundary")
                 # Save before stopping, then re-observe the exact current turn.
                 # A new/active turn racing capture invalidates stop permission.
-                saved = await publisher.save_request_workspace(request)
+                saved = await publisher.save_request_workspace(
+                    request, publish_saved_work=False,
+                )
                 await record_progress(
                     checkpoint=saved if progress == "waiting" else None,
                 )

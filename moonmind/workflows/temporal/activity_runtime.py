@@ -2682,6 +2682,14 @@ class TemporalSandboxActivities:
     async def _workspace_archive_members(self, model, workspace: Path) -> set[str] | None:
         if not (workspace / ".git").exists():
             return None
+        # A gitlink names a separate repository; the regular-file archive skips
+        # its directory. Refuse an incomplete snapshot so save-or-retain keeps
+        # the authoritative workspace rather than publishing a partial tree.
+        staged = await _run_command(_sandbox_workspace_git_command(
+            workspace, "ls-files", "--stage", "-z"
+        ))
+        if any(entry.startswith("160000 ") for entry in staged.stdout.split("\x00")):
+            raise ValueError("Workspace snapshot cannot preserve submodule gitlinks")
         args = ["ls-files", "--cached", "--exclude-standard", "-z"]
         if model.include_untracked:
             args.append("--others")

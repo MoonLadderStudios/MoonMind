@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import os
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -32,11 +34,12 @@ class Artifacts:
         return "artifact:new"
 
 
-def fixture(tmp_path):
+def fixture(tmp_path, target=b"report.md"):
     source = tmp_path / "source"
     source.mkdir()
     (source / "report.md").write_text("generated report\n")
-    (source / "latest").symlink_to("report.md")
+    (source / os.fsdecode(target)).write_text("generated report\n")
+    (source / "latest").symlink_to(os.fsdecode(target))
     (source / "image.bin").write_bytes(b"\x00\xff\x01")
     archive, entries = build_workspace_archive(source, high_security_mode=False)
     artifacts = Artifacts()
@@ -59,15 +62,13 @@ def fixture(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_generic_index_materializes_files_and_links_without_source(tmp_path):
-    source, artifacts, saved, request = fixture(tmp_path)
+@pytest.mark.parametrize("target", [b"report.md", b"report-\xff.md"])
+async def test_generic_index_materializes_files_and_links_without_source(tmp_path, target):
+    source, artifacts, saved, request = fixture(tmp_path, target)
     refs = await OmnigentWorkspacePublicationService(
         tmp_path, artifact_gateway=artifacts,
     )._index_saved_workspace(request, saved, manifest_bytes=artifacts.objects["artifact:checkpoint"])
-    (source / "latest").unlink()
-    (source / "report.md").unlink()
-    (source / "image.bin").unlink()
-    source.rmdir()
+    shutil.rmtree(source)
 
     async def read(ref, _types):
         return await artifacts.read_bytes(ref)
@@ -78,6 +79,7 @@ async def test_generic_index_materializes_files_and_links_without_source(tmp_pat
     )
     assert (result.root / "report.md").read_text() == "generated report\n"
     assert (result.root / "latest").is_symlink()
+    assert os.readlink(os.fsencode(result.root / "latest")) == target
     assert (result.root / "image.bin").read_bytes() == b"\x00\xff\x01"
     manifest = json.loads(artifacts.objects[refs["savedWorkRef"]])
     assert "git" not in manifest
@@ -107,7 +109,7 @@ async def test_generic_index_failure_never_returns_saved_reference(tmp_path, fai
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "write", "read", "mismatch"])
+@pytest.mark.parametrize("failure", [None, "write", "read", "mismatch", "lookup"])
 async def test_durable_saved_index_is_linked_only_after_verified_readback(monkeypatch, failure):
     from contextlib import asynccontextmanager
     from unittest.mock import AsyncMock
@@ -124,8 +126,11 @@ async def test_durable_saved_index_is_linked_only_after_verified_readback(monkey
         ),
         read=AsyncMock(return_value=(None, payload)),
         link_artifact=AsyncMock(),
+        list_for_execution=AsyncMock(return_value=[]),
     )
-    if failure == "write":
+    if failure == "lookup":
+        service.list_for_execution.side_effect = OSError("lookup failed")
+    elif failure == "write":
         service.put_content_addressed_payload_complete.side_effect = OSError("write failed")
     elif failure == "read":
         service.read.side_effect = OSError("read failed")
@@ -138,7 +143,9 @@ async def test_durable_saved_index_is_linked_only_after_verified_readback(monkey
         yield SimpleNamespace()
 
     gateway = TemporalOmnigentArtifactGateway(sessions)
-    monkeypatch.setattr(gateway, "_execution_link", lambda *args, **kwargs: "owned-link")
+    monkeypatch.setattr(gateway, "_execution_link", lambda *args, **kwargs: SimpleNamespace(
+        namespace="default", workflow_id="workflow", run_id="run",
+    ))
     call = gateway.write_bytes(
         request=SimpleNamespace(), name="saved_work_manifest", payload=payload,
         content_type="application/vnd.moonmind.saved-work-manifest+json;version=1",
@@ -151,6 +158,83 @@ async def test_durable_saved_index_is_linked_only_after_verified_readback(monkey
     else:
         assert await call == "artifact:art_saved"
         service.link_artifact.assert_awaited_once()
+    if failure == "lookup":
+        service.put_content_addressed_payload_complete.assert_not_awaited()
+        return
     kwargs = service.put_content_addressed_payload_complete.call_args.kwargs
     assert "link" not in kwargs
     assert kwargs["metadata_json"]["artifact_kind"] == "saved_work_manifest"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_retry_reuses_durable_objects_before_saved_index(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+    from moonmind.workflows.temporal import artifacts as artifact_module
+    from moonmind.workflows.temporal.artifacts import ExecutionRef
+    from tests.unit.publish.test_saved_work_publication_journey import _artifact_service
+
+    async with _artifact_service(tmp_path) as service:
+        monkeypatch.setattr(artifact_module, "TemporalArtifactService", lambda _repo: service)
+
+        @asynccontextmanager
+        async def sessions():
+            yield SimpleNamespace()
+
+        gateway = TemporalOmnigentArtifactGateway(sessions)
+        request = SimpleNamespace(correlation_id="workflow", step_execution=None)
+        monkeypatch.setattr(gateway, "_execution_link", lambda *args, **kwargs: ExecutionRef(
+            namespace="default", workflow_id="workflow", run_id="run", link_type="evidence.recovery",
+        ))
+        first = await gateway.write_bytes(
+            request=request, name="checkpoint_archive", payload=b"unchanged captured bytes",
+            content_type="application/vnd.moonmind.worktree-archive", link_type="evidence.recovery",
+        )
+        second = await gateway.write_bytes(
+            request=request, name="checkpoint_archive", payload=b"unchanged captured bytes",
+            content_type="application/vnd.moonmind.worktree-archive", link_type="evidence.recovery",
+        )
+        assert second == first
+
+
+@pytest.mark.asyncio
+async def test_lost_saved_link_ack_reuses_one_saved_result(tmp_path, monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+    from moonmind.workflows.temporal import artifacts as artifact_module
+    from tests.unit.omnigent.test_legacy_github_host_recovery import _recovery_fixture
+    from tests.unit.publish.test_saved_work_publication_journey import _artifact_service
+
+    fixture = await _recovery_fixture(tmp_path, monkeypatch)
+    async with _artifact_service(tmp_path) as service:
+        monkeypatch.setattr(artifact_module, "TemporalArtifactService", lambda _repo: service)
+
+        @asynccontextmanager
+        async def sessions():
+            yield SimpleNamespace()
+
+        gateway = TemporalOmnigentArtifactGateway(sessions)
+        publisher = OmnigentWorkspacePublicationService(tmp_path, artifact_gateway=gateway)
+        link = service.link_artifact
+        lost = False
+
+        async def lost_ack(**kwargs):
+            nonlocal lost
+            await link(**kwargs)
+            if kwargs["execution_ref"].link_type == "checkpoint.saved_work" and not lost:
+                lost = True
+                raise OSError("worker lost after saved index was linked")
+
+        monkeypatch.setattr(service, "link_artifact", lost_ack)
+        with pytest.raises(OSError, match="worker lost"):
+            await publisher.save_request_workspace(fixture.request)
+        saved = await publisher.save_request_workspace(fixture.request)
+        listed = await service.list_for_execution(
+            namespace="default", workflow_id="workflow-1", run_id="run-1",
+            principal="service:omnigent-generic-host",
+        )
+        indexes = [item for item in listed if item.content_type.startswith("application/vnd.moonmind.saved-work-manifest")]
+        assert len(indexes) == 1
+        assert saved["savedWorkRef"] == "artifact:" + indexes[0].artifact_id
