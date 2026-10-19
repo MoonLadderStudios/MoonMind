@@ -535,9 +535,12 @@ principals. That identity also satisfies literal `operator` ownership without
 a conversion grant; it does not satisfy unrelated machine ownership. Direct
 artifact and durable session-resource reads share this proof and read policy.
 Profile bundle and workflow evidence readers carry it only after their own
-admission and resource-scope checks. Caller metadata or headers cannot grant
-recovery. Quarantined
-bytes remain preview-only, and machine-created artifacts receive no human
+admission and resource-scope checks. Authenticated modes retain their own UUID
+identity: trusted-header reads use the existing ingress and live identity-mapping
+checks, without acquiring disabled-mode recovery authority. An absent proxy
+assertion preserves optional session/machine admission; a presented invalid
+assertion fails closed. Caller metadata or headers cannot grant recovery.
+Quarantined bytes remain preview-only, and machine-created artifacts receive no human
 recovery grant. Original creator provenance, quota scopes, links, pins, and
 in-flight claim owners remain unchanged; the operator cannot release a legacy
 claim merely by receiving recovery access. Historical pin/deletion actors and
