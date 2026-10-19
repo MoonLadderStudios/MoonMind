@@ -22,7 +22,7 @@ MoonMind currently focuses on software engineering. Start with a repository task
 
 ![MoonMind workflow details in dark mode, showing the example task, summary, runtime, and source context](docs/assets/workflow-detail.png)
 
-These are captures of the current dashboard with synthetic example data. They show the interface, not live agent results. The [capture recipe](docs/UI/WorkflowConsoleArchitecture.md#20-readme-screenshot-recipe) explains how to refresh them.
+These are captures of the current dashboard with synthetic example data. They show the interface, not live agent results. The [capture recipe](docs/UI/WorkflowConsoleArchitecture.md#17-readme-screenshots) explains how to refresh them.
 
 ## Quick start
 
@@ -38,10 +38,10 @@ docker compose up -d
 Compose pulls published images. A fresh local install does not need an `.env` file or a local image build.
 
 1. Open [localhost:7000](http://localhost:7000). Wait for the dashboard to load and `curl -fsS http://localhost:7000/healthz` to succeed.
-2. In **Settings → Providers & Secrets**, connect a Provider Profile with an API key or a supported OAuth flow. For OAuth, complete the opened enrollment tab, then return and click **Finalize**.
+2. If no eligible model is available, connect a Provider Profile in **Settings → Providers & Secrets** with an API key or a supported OAuth flow. For OAuth, complete the opened enrollment tab, then return and click **Finalize**. Free or anonymous model availability is not guaranteed.
 3. For authenticated GitHub work, add a **Source Control** connection and assign the repositories it may access. Token and GitHub App connections are supported.
-4. Click **Create**. Select **Omnigent** under Runtime and a compatible Profile. Enter your task and repository details, or choose a Skill or Preset. Review the publishing option before submitting.
-5. Open the workflow to inspect its progress, outputs, artifacts, and logs. [Reading one engineering journey](docs/UI/WorkflowConsoleArchitecture.md#21-reading-one-engineering-journey) shows where a run's outcome, failure, output, and next action appear.
+4. Click **Create** and enter your task, using eligible **Harness** and **Provider Profile** defaults or choosing a compatible profile. Leave **Repository** blank and **Publish Mode** at **None** for save-only scratch work; no source-control connection is needed. For repository work, enter its details, or choose a Skill or Preset. Review the publishing option before submitting.
+5. Open the workflow to inspect its progress, outputs, artifacts, and logs. [Reading one engineering journey](docs/UI/WorkflowConsoleArchitecture.md#18-reading-one-engineering-journey) shows where a run's outcome, failure, output, and next action appear.
 
 Application login, model-provider credentials, and source-control access are separate settings. A healthy dashboard alone does not mean an agent is ready to run.
 
