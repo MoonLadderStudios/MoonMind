@@ -197,7 +197,7 @@ async def _resolve_image(
     if code == 0:
         for line in out.splitlines():
             part = line.strip().split()[0] if line.strip() else ""
-            if part.startswith(image) and _is_digest_pinned(part):
+            if part.partition("@")[0] == candidate and _is_digest_pinned(part):
                 return part, _extract_digest(part)
     return None, None
 
@@ -466,11 +466,48 @@ async def resolve_omnigent_images(
     # Shared neutral host image (optional until Codex/Claude Host Classes are
     # selected; resolution stays best-effort so OpenCode-only deployments do
     # not require it).
+    shared_source = dict(source)
+    shared_choice_keys = (
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "OMNIGENT_HOST_IMAGE_REF",
+        "OMNIGENT_SHARED_HOST_IMAGE",
+        "OMNIGENT_SHARED_HOST_IMAGE_TAG",
+    )
+    shared_choice_configured = any(
+        str(source.get(key) or "").strip() for key in shared_choice_keys
+    )
+    explicit_shared = (
+        str(source.get("OMNIGENT_SHARED_HOST_IMAGE_REF") or "").strip()
+        or str(source.get("OMNIGENT_HOST_IMAGE_REF") or "").strip()
+    )
+    if explicit_shared:
+        from moonmind.omnigent.harness_platform.static_hosts import (
+            classify_effective_static_host_image,
+        )
+
+        selected_image, supported, _ = classify_effective_static_host_image(source)
+        if not supported:
+            shared_source = {}
+        elif _is_digest_pinned(selected_image):
+            shared_source["OMNIGENT_SHARED_HOST_IMAGE_REF"] = selected_image
+        else:
+            # REF accepts an operator coordinate as well as a digest. Resolve
+            # that choice through the existing image owner, never the default
+            # IMAGE/TAG that may also be present in the deployment environment.
+            shared_source["OMNIGENT_SHARED_HOST_IMAGE_REF"] = ""
+            shared_source["OMNIGENT_SHARED_HOST_IMAGE"] = _image_repository(
+                selected_image
+            )
+            shared_source["OMNIGENT_SHARED_HOST_IMAGE_TAG"] = (
+                selected_image.rsplit(":", 1)[1]
+                if ":" in selected_image.rsplit("/", 1)[-1]
+                else "latest"
+            )
     shared_ref, _ = await _resolve_image(
         "OMNIGENT_SHARED_HOST_IMAGE",
         "OMNIGENT_SHARED_HOST_IMAGE_TAG",
         "OMNIGENT_SHARED_HOST_IMAGE_REF",
-        source,
+        shared_source,
     )
     # Fall back to previous if still None
     if (
@@ -483,7 +520,14 @@ async def resolve_omnigent_images(
         server_image_digest = _extract_digest(server_ref)
     if not pi_ref and previous and previous.pi_host_image_ref:
         pi_ref = previous.pi_host_image_ref
-    if not shared_ref and previous and previous.shared_host_image_ref:
+    # An unresolved configured choice must not silently become a different
+    # prior image. Exact-coordinate local-cache fallback already ran above.
+    if (
+        not shared_ref
+        and not shared_choice_configured
+        and previous
+        and previous.shared_host_image_ref
+    ):
         shared_ref = previous.shared_host_image_ref
 
     # Server and host build digests retain independent provenance. An explicit
@@ -542,16 +586,16 @@ async def resolve_omnigent_images(
     compatibility_failure = selected.failure_code if selected else None
 
     if (
-        not _is_operator_pin(source.get("OMNIGENT_SHARED_HOST_IMAGE_REF"))
+        not explicit_shared
         and shared_ref
         and fresh_host_ref
         and shared_ref == fresh_host_ref
         and opencode_ref
         and opencode_ref != shared_ref
     ):
-        # The shared host resolved to the very image the OpenCode path judged
-        # incompatible. It is the same runtime pack, so it follows the admitted
-        # digest instead of launching a mismatched host for Codex or Claude.
+        # Keep the existing IMAGE/TAG compatibility fallback, including the
+        # defaults exported by Compose. An explicit REF choice (including the
+        # legacy alias or a mutable tag) must not be silently replaced.
         shared_ref = opencode_ref
 
     # Catalog/plan authority always identifies the actual server image. The
@@ -715,85 +759,6 @@ def reset_operator_image_configuration() -> None:
     _operator_image_baseline = None
 
 
-# Static Compose profiles are opt-in (never part of the default idle-service
-# count). When an operator requests them, the resolved shared host image is
-# launch authority for the static rows, so it must be digest-pinned before
-# admission. Mutable ``OMNIGENT_SHARED_HOST_IMAGE`` /
-# ``OMNIGENT_SHARED_HOST_IMAGE_TAG`` construction is a development/bootstrap
-# input only: this module resolves it to a digest and persists it as
-# ``OMNIGENT_SHARED_HOST_IMAGE_REF``; the gate below fails closed when that
-# resolution produced no digest (unset, pull failure, or invalid pin).
-STATIC_HOST_COMPOSE_PROFILES: tuple[str, ...] = (
-    "omnigent-host-codex",
-    "omnigent-host-claude",
-)
-
-
-def static_host_profiles_requested(
-    *, env: Mapping[str, str] | None = None
-) -> tuple[str, ...]:
-    """Return the static host Compose profiles the operator requested.
-
-    ``COMPOSE_PROFILES`` (comma- or space-separated, as Compose accepts)
-    is the only signal: static services stay out of the default
-    idle-service count and are admitted only when explicitly selected.
-    """
-
-    source = os.environ if env is None else env
-    raw = str(source.get("COMPOSE_PROFILES") or "")
-    selected = {
-        part.strip() for part in raw.replace(",", " ").split() if part.strip()
-    }
-    return tuple(
-        profile for profile in STATIC_HOST_COMPOSE_PROFILES if profile in selected
-    )
-
-
-def require_static_host_image_authority(
-    *,
-    env: Mapping[str, str] | None = None,
-    shared_ref: str | None,
-) -> str:
-    """Fail closed unless a digest-pinned static launch image is resolved.
-
-    This is the bootstrap *persistence* boundary for the static rows
-    (MoonLadderStudios/MoonMind#3936 R3): ``shared_ref`` is the resolved
-    ``OMNIGENT_SHARED_HOST_IMAGE_REF`` about to be persisted/exported.
-    The bounded legacy ``OMNIGENT_HOST_IMAGE_REF`` alias is honored only
-    when the shared ref is unset, mirroring
-    ``moonmind.omnigent.harness_platform.static_hosts.resolve_effective_static_host_image``.
-    Anything else (unset, mutable tag, invalid pin) raises instead of
-    persisting an unqualified image identity.
-
-    This persistence gate runs inside the API container *after* Compose has
-    already started creating profile-selected services, so by itself it
-    cannot prevent the mutable fallback image from being pulled and
-    launched. Qualified static launches must additionally pass the
-    operator-side prelaunch admission boundary
-    ``moonmind.omnigent.harness_platform.static_hosts.admit_static_host_compose_launch``
-    (managed launches pass the same boundary through
-    ``OmnigentOAuthHostRuntime._admit_static_compose_prelaunch`` immediately
-    before ``docker compose up``) or require the digest directly in Compose
-    before service creation. A direct ``docker compose up`` that bypasses
-    that prelaunch admission launches the mutable fallback below and is not
-    a qualified static launch.
-    """
-
-    source = os.environ if env is None else env
-    cleaned = str(shared_ref or "").strip()
-    if cleaned and _is_digest_pinned(cleaned):
-        return cleaned
-    legacy = str(source.get("OMNIGENT_HOST_IMAGE_REF") or "").strip()
-    if not cleaned and legacy and _is_digest_pinned(legacy):
-        return legacy
-    raise RuntimeError(
-        "static host launch is not admitted: OMNIGENT_SHARED_HOST_IMAGE_REF "
-        "must resolve to a digest-pinned image ref before static Compose "
-        "profiles launch (mutable IMAGE/TAG construction is a "
-        "development/bootstrap input only)"
-    )
-
-
 async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
     """Resolve, persist, and export the deployment's immutable image identities.
 
@@ -812,31 +777,10 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
 
     from moonmind.omnigent.bootstrap.store import save_resolved_state
 
-    state = await resolve_omnigent_images(operator_image_configuration())
-    requested_static_profiles = static_host_profiles_requested(
-        env=operator_image_configuration()
-    )
-    if requested_static_profiles:
-        # The operator admitted static rows into this deployment: the
-        # resolved shared image is their launch authority, so it must be
-        # digest-pinned before anything persists or exports it. Mutable or
-        # missing resolution fails this reconciliation pass instead of
-        # persisting an unqualified static image. When only the bounded
-        # legacy alias carries a digest pin, propagate that accepted pin
-        # into the persisted/exported shared ref: the static Compose image
-        # expression resolves the shared ref (not the legacy name), so
-        # leaving it unset would launch the mutable fallback rather than
-        # the digest this gate accepted.
-        accepted_static_ref = require_static_host_image_authority(
-            env=operator_image_configuration(),
-            shared_ref=state.shared_host_image_ref,
-        )
-        if not (state.shared_host_image_ref or "").strip() and (
-            accepted_static_ref or ""
-        ).strip():
-            state = state.model_copy(
-                update={"shared_host_image_ref": accepted_static_ref.strip()}
-            )
+    configuration = operator_image_configuration()
+    state = await resolve_omnigent_images(configuration)
+    # Optional static hosts do not gate publication for independent runtimes.
+    # Their admission owner checks readiness and credentials before use.
     save_resolved_state(state)
     exported = {
         "OMNIGENT_IMAGE_REF": state.server_image_ref,
@@ -848,6 +792,21 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
         cleaned = str(value or "").strip()
         if cleaned:
             os.environ[key] = cleaned
+        elif key == "OMNIGENT_SHARED_HOST_IMAGE_REF":
+            # An unresolved explicit choice is not the old exported artifact.
+            # Keep the operator coordinate visible (or remove a stale export
+            # for IMAGE/TAG input); managed admission still requires a resolved
+            # artifact and can retry without selecting a different image.
+            explicit = (
+                str(configuration.get(key) or "").strip()
+                or str(configuration.get("OMNIGENT_HOST_IMAGE_REF") or "").strip()
+            )
+            if explicit:
+                os.environ[key] = explicit
+            elif configuration.get("OMNIGENT_SHARED_HOST_IMAGE") or configuration.get(
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG"
+            ):
+                os.environ.pop(key, None)
     return state
 
 

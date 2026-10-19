@@ -1,47 +1,9 @@
-"""Static Claude qualify-or-retire evidence (MoonLadderStudios/MoonMind#3936).
+"""Static Claude image selection, credential fences, and readiness boundaries.
 
-The shared static template baseline (R1) is covered by
-``test_static_host_consolidation.py``. This module closes the remaining
-qualify-or-retire items for the static Claude path against effective inputs:
-
-- R2: the retained disposition is recorded in code and matches the
-  code-owned retirement row (no silent host-mode change).
-- R3: the effective launch image is classified for every operator
-  configuration (shared digest, missing ref, mutable tag, legacy-only
-  digest, conflicting settings) through the trusted boundary
-  ``resolve_effective_static_host_image``, not raw-YAML equality; the
-  Compose prelaunch admission boundary
-  ``admit_static_host_compose_launch`` (and its rendered-env equivalent
-  ``admit_static_host_effective_launch``) and the bootstrap persistence gate
-  ``require_static_host_image_authority`` enforce it at their callers.
-  The managed launch path admits through
-  ``OmnigentOAuthHostRuntime._compose_static_check`` immediately before
-  ``docker compose up``.
-- R4: credential generation fencing is verified through rendered effective
-  environments plus the packaged startup read-back check; the staged marker
-  is fenced against the live lease via
-  ``verify_staged_generation_against_lease`` and the profile/lease/host/
-  exclusivity/rotation chain via ``trace_static_credential_ownership``.
-- R5: readiness waits are bounded with distinct waiting vs failed outcomes
-  at the script level and through the deterministic workflow-side
-  ``classify_static_enrollment_status`` (the stream-admission deadline in
-  ``execute.py`` is unrelated and is not enrollment evidence). The
-  production caller is ``OmnigentOAuthHostRuntime.prepare_host`` via
-  ``_classify_static_enrollment`` / ``_require_static_enrollment_admitted``
-  with entrypoint-parity timeouts from
-  ``static_enrollment_timeouts_from_env``.
-- R6: isolation is verified through rendered effective inputs, effective
-  mounts, and executed packaged-script fragments (GH_TOKEN write/rotate/
-  preserve/reject, generation fencing, ambient/cross-runtime rejection,
-  credential-home layout gate).
-- R7: lifecycle/drain ownership is pinned to the retirement row, the
-  authority owners, and the host-class mapping.
-
-A full Profile -> static-host binding/attestation -> canonical
-session/turn -> terminal evidence -> cleanup journey against an exact-image
-Docker host and live-provider evidence remains out of unit scope and is
-named explicitly in ``test_static_claude_drain_ownership`` instead of being
-inferred from these hermetic checks.
+Retained Compose and profile-bound consumers share the OAuth lifecycle owner.
+These hermetic checks do not assert live-provider qualification or enable fresh
+static Claude generic planning. Full lifecycle regression coverage also lives
+in test_oauth_profile_lifecycle and the OAuth reconnect/maintenance tests.
 """
 
 from __future__ import annotations
@@ -157,120 +119,25 @@ def test_static_claude_disposition_never_substitutes_host_modes() -> None:
 # ------------------------------------------------------- R3: effective image
 
 
-def test_effective_launch_image_covers_all_configuration_cases() -> None:
-    # Shared digest: the only supported operator configuration.
-    ref, supported, _ = static_hosts.classify_effective_static_host_image(
-        {"OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST}
-    )
-    assert (ref, supported) == (FAKE_DIGEST, True)
-    assert (
-        static_hosts.resolve_effective_static_host_image(
-            {"OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST}
-        )
-        == FAKE_DIGEST
-    )
-    # Legacy-only digest: honored as the bounded alias.
-    ref, supported, reason = static_hosts.classify_effective_static_host_image(
-        {"OMNIGENT_HOST_IMAGE_REF": LEGACY_DIGEST}
-    )
-    assert (ref, supported) == (LEGACY_DIGEST, True)
-    assert "bounded-alias" in reason
-    # Conflicting settings: the shared ref always wins.
-    assert (
-        static_hosts.resolve_effective_static_host_image(
-            {
-                "OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST,
-                "OMNIGENT_HOST_IMAGE_REF": LEGACY_DIGEST,
-            }
-        )
-        == FAKE_DIGEST
-    )
-    # Unset configuration: fail closed, never a mutable default launch.
-    ref, supported, reason = static_hosts.classify_effective_static_host_image({})
-    assert ref is None and supported is False
-    with pytest.raises(HarnessPlatformError):
-        static_hosts.resolve_effective_static_host_image({})
-    # The bootstrap classifier and Compose must construct the same default tag.
-    ref, supported, _ = static_hosts.classify_effective_static_host_image(
-        {"OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind"}
-    )
-    assert ref == "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
-    assert supported is False
-    # Mutable tag construction: development/bootstrap input only.
-    ref, supported, reason = static_hosts.classify_effective_static_host_image(
-        {
-            "OMNIGENT_SHARED_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
-            "OMNIGENT_SHARED_HOST_IMAGE_TAG": "1.18.11",
-        }
-    )
-    assert ref is not None and supported is False
-    assert "bootstrap" in reason
-    with pytest.raises(HarnessPlatformError):
-        static_hosts.resolve_effective_static_host_image(
-            {"OMNIGENT_SHARED_HOST_IMAGE_TAG": "1.18.11"}
-        )
-    # Mutable pins are rejected on both ref paths, even when the other path
-    # holds a valid digest (fail-closed precedence).
-    with pytest.raises(HarnessPlatformError):
-        static_hosts.resolve_effective_static_host_image(
-            {"OMNIGENT_SHARED_HOST_IMAGE_REF": "some-image:latest"}
-        )
-    with pytest.raises(HarnessPlatformError):
-        static_hosts.resolve_effective_static_host_image(
-            {"OMNIGENT_HOST_IMAGE_REF": "some-image:latest"}
-        )
-    with pytest.raises(HarnessPlatformError):
-        static_hosts.resolve_effective_static_host_image(
-            {
-                "OMNIGENT_SHARED_HOST_IMAGE_REF": "some-image:latest",
-                "OMNIGENT_HOST_IMAGE_REF": LEGACY_DIGEST,
-            }
-        )
+@pytest.mark.parametrize("ref", [FAKE_DIGEST, "registry.example/host:chosen"])
+def test_effective_launch_image_preserves_shared_precedence(ref):
+    env = {
+        "OMNIGENT_SHARED_HOST_IMAGE_REF": ref,
+        "OMNIGENT_HOST_IMAGE_REF": LEGACY_DIGEST,
+    }
+    assert static_hosts.resolve_effective_static_host_image(env) == ref
+    assert static_hosts.resolve_static_host_image_ref(env) == ref
 
 
-def test_rendered_compose_anchor_resolves_effective_image_per_case() -> None:
-    compose = _load_compose()
-    anchor_image = compose["x-omnigent-static-host"]["image"]
-    assert "OMNIGENT_SHARED_HOST_IMAGE_REF" in anchor_image
-
-    def _rendered(operator_env: dict[str, str]) -> str:
-        return static_hosts.render_static_service_env(
-            {"image": anchor_image}, operator_env
-        )["image"]
-
-    # Unset operator configuration renders the mutable dev default, which the
-    # trusted boundary rejects as launch authority.
-    rendered_default = _rendered({})
-    assert rendered_default == (
-        "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"
-    )
-    _, supported, _ = static_hosts.classify_effective_static_host_image({})
-    assert supported is False
-    # A digest-pinned shared ref renders through to supported authority.
-    assert _rendered({"OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST}) == (
-        FAKE_DIGEST
-    )
-    assert (
-        static_hosts.resolve_effective_static_host_image(
-            {"OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST}
-        )
-        == FAKE_DIGEST
-    )
-    # Both static services share the anchor expression, so the same
-    # classification holds for each row.
-    services = compose["services"]
-    assert (
-        services["omnigent-host-codex"]["image"]
-        == services["omnigent-host-claude"]["image"]
-        == anchor_image
-    )
-    # The anchor documents the effective contract and its trusted boundary.
-    anchor_comment = (REPO_ROOT / "docker-compose.yaml").read_text()
-    assert "resolve_effective_static_host_image" in anchor_comment
-    assert "bootstrap" in anchor_comment
-
-
-# --------------------------------- R4/R6: effective credential environment
+def test_rendered_compose_services_share_default_image():
+    services = _load_compose()["services"]
+    images = [
+        static_hosts.render_static_service_env({"image": services[name]["image"]}, {})[
+            "image"
+        ]
+        for name in ("omnigent-host-codex", "omnigent-host-claude")
+    ]
+    assert images == [static_hosts.resolve_effective_static_host_image({})] * 2
 
 
 def test_rendered_static_environments_pass_generation_fencing() -> None:
@@ -574,23 +441,22 @@ def test_admit_static_host_compose_launch_admits_pinned_and_rejects() -> None:
         raw_service_env=raw,
     )
     assert admitted_legacy["image_ref"] == LEGACY_DIGEST
-    # Unset configuration: the boundary rejects instead of launching the
-    # mutable Compose default.
+    # Malformed references are rejected before launch.
     with pytest.raises(HarnessPlatformError):
         static_hosts.admit_static_host_compose_launch(
             service="omnigent-host-claude",
             pack_ref="claude-native-pack@1",
             materializer_ref="claude-oauth-home@1",
-            operator_env={},
+            operator_env={"OMNIGENT_SHARED_HOST_IMAGE_REF": "not an image"},
             raw_service_env=raw,
         )
-    # Mutable tag construction: rejected at the boundary, not launched.
+    # An invalid digest remains invalid; accepting tags does not waive integrity.
     with pytest.raises(HarnessPlatformError):
         static_hosts.admit_static_host_compose_launch(
             service="omnigent-host-claude",
             pack_ref="claude-native-pack@1",
             materializer_ref="claude-oauth-home@1",
-            operator_env={"OMNIGENT_SHARED_HOST_IMAGE_TAG": "1.18.11"},
+            operator_env={"OMNIGENT_SHARED_HOST_IMAGE_REF": "host@sha256:invalid"},
             raw_service_env=raw,
         )
     # Wrong pack for the service: rejected at the boundary instead of
@@ -603,68 +469,6 @@ def test_admit_static_host_compose_launch_admits_pinned_and_rejects() -> None:
             operator_env={"OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST},
             raw_service_env=raw,
         )
-
-
-def test_require_static_host_image_authority_fails_closed_at_bootstrap() -> None:
-    # Static profiles are opt-in: only an explicit COMPOSE_PROFILES selection
-    # admits static rows into the deployment.
-    assert image_resolution.static_host_profiles_requested(
-        env={"COMPOSE_PROFILES": "omnigent-host-claude"}
-    ) == ("omnigent-host-claude",)
-    assert image_resolution.static_host_profiles_requested(
-        env={"COMPOSE_PROFILES": "temporal-ui, omnigent-host-codex"}
-    ) == ("omnigent-host-codex",)
-    assert (
-        image_resolution.static_host_profiles_requested(env={}) == ()
-    )
-    assert (
-        image_resolution.static_host_profiles_requested(
-            env={"COMPOSE_PROFILES": "temporal-ui"}
-        )
-        == ()
-    )
-    # Digest-pinned resolution: authoritative at the bootstrap boundary.
-    assert (
-        image_resolution.require_static_host_image_authority(
-            env={"COMPOSE_PROFILES": "omnigent-host-claude"},
-            shared_ref=FAKE_DIGEST,
-        )
-        == FAKE_DIGEST
-    )
-    # Bounded legacy alias: honored only when the shared ref is unset.
-    assert (
-        image_resolution.require_static_host_image_authority(
-            env={
-                "COMPOSE_PROFILES": "omnigent-host-claude",
-                "OMNIGENT_HOST_IMAGE_REF": LEGACY_DIGEST,
-            },
-            shared_ref=None,
-        )
-        == LEGACY_DIGEST
-    )
-    # Missing resolution with static profiles requested: fail the
-    # reconciliation pass instead of launching an unqualified image.
-    with pytest.raises(RuntimeError):
-        image_resolution.require_static_host_image_authority(
-            env={"COMPOSE_PROFILES": "omnigent-host-claude"},
-            shared_ref=None,
-        )
-    with pytest.raises(RuntimeError):
-        image_resolution.require_static_host_image_authority(
-            env={"COMPOSE_PROFILES": "omnigent-host-claude"},
-            shared_ref="ghcr.io/moonladderstudios/omnigent-host-moonmind:1.18.11",
-        )
-    # Non-static deployments are unaffected: no static profiles requested,
-    # no gate, even with no resolution.
-    assert (
-        image_resolution.require_static_host_image_authority(
-            env={}, shared_ref=FAKE_DIGEST
-        )
-        == FAKE_DIGEST
-    )
-
-
-# --------------------------------- R5: workflow-side enrollment deadline
 
 
 def test_static_enrollment_classifier_separates_waiting_ready_failed() -> None:
@@ -1145,9 +949,8 @@ def test_admit_static_host_effective_launch_matches_compose_boundary() -> None:
     assert via_effective["image_ref"] == FAKE_DIGEST
     # The effective boundary fails closed on the same unqualified inputs.
     for bad_operator in (
-        {},
-        {"OMNIGENT_SHARED_HOST_IMAGE_TAG": "1.18.11"},
-        {"OMNIGENT_SHARED_HOST_IMAGE_REF": "some-image:latest"},
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": "not an image"},
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": "host@sha256:invalid"},
     ):
         with pytest.raises(HarnessPlatformError):
             static_hosts.admit_static_host_effective_launch(
@@ -1270,28 +1073,16 @@ def test_production_prelaunch_gate_binds_staged_marker_to_lease() -> None:
     assert excinfo.value.code == HostPreflightFailure.GENERATION_STALE.value
 
 
-def test_production_prelaunch_gate_rejects_unpinned_image_at_launch() -> None:
-    binding = _production_claude_binding()
-    lease = _production_claude_lease()
-    # Unset configuration: rejected with the exact platform authority code
-    # instead of launching the mutable Compose default.
+@pytest.mark.parametrize(
+    "image", ["not an image", "host@sha256:invalid", "-host:latest"]
+)
+def test_production_prelaunch_gate_rejects_malformed_image_at_launch(image):
     with pytest.raises(OmnigentOAuthHostError) as excinfo:
         OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
-            binding=binding,
-            host_lease=lease,
-            operator_env={"CLAUDE_CREDENTIAL_GENERATION": "7"},
-        )
-    assert excinfo.value.code == "OMNIGENT_HARNESS_BUILD_MISMATCH"
-    # Mutable tag construction: rejected at the launch boundary, not launched.
-    with pytest.raises(OmnigentOAuthHostError) as excinfo:
-        OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
-            binding=binding,
-            host_lease=lease,
+            binding=_production_claude_binding(),
+            host_lease=_production_claude_lease(),
             operator_env={
-                "OMNIGENT_SHARED_HOST_IMAGE": (
-                    "ghcr.io/moonladderstudios/omnigent-host-moonmind"
-                ),
-                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "1.18.11",
+                "OMNIGENT_SHARED_HOST_IMAGE_REF": image,
                 "CLAUDE_CREDENTIAL_GENERATION": "7",
             },
         )
@@ -1349,6 +1140,14 @@ async def test_compose_static_check_runs_prelaunch_gate_before_up(
         return 0, "", ""
 
     runtime._run = fake_run  # type: ignore[method-assign]
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: ResolvedOmnigentDeploymentState(sharedHostImageRef=LEGACY_DIGEST),
+    )
     binding = _production_claude_binding()
     lease = _production_claude_lease()
     effective_launch = {
@@ -1390,7 +1189,7 @@ async def test_compose_static_check_runs_prelaunch_gate_before_up(
     bad_launch = dict(
         effective_launch,
         hostImageRef=(
-            "ghcr.io/moonladderstudios/omnigent-host-moonmind:1.18.11"
+            "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:invalid"
         ),
     )
     with pytest.raises(OmnigentOAuthHostError):
@@ -1550,3 +1349,147 @@ def test_github_token_block_preserves_unrelated_config_contents() -> None:
         import shutil
 
         shutil.rmtree(config_home, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    "image_env, expected",
+    [
+        ({}, "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"),
+        (
+            {"OMNIGENT_SHARED_HOST_IMAGE_REF": "registry.example/host:chosen"},
+            "registry.example/host:chosen",
+        ),
+        (
+            {"OMNIGENT_HOST_IMAGE_REF": "registry.example/legacy:chosen"},
+            "registry.example/legacy:chosen",
+        ),
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE": "registry.example/host",
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "chosen",
+            },
+            "registry.example/host:chosen",
+        ),
+    ],
+)
+def test_static_claude_prelaunch_accepts_operator_image_without_manual_pin(
+    image_env, expected
+):
+    admission = OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
+        binding=_production_claude_binding(),
+        host_lease=_production_claude_lease(),
+        operator_env={**image_env, "CLAUDE_CREDENTIAL_GENERATION": "7"},
+    )
+    assert admission["image_ref"] == expected
+    assert admission["registered_host_id"] == "omnigent-host-claude"
+    image = _load_compose()["services"]["omnigent-host-claude"]["image"]
+    assert (
+        static_hosts.render_static_service_env({"image": image}, image_env)["image"]
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_optional_static_resolution_failure_does_not_block_other_images(
+    monkeypatch,
+):
+    from unittest.mock import AsyncMock, Mock
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+
+    state = ResolvedOmnigentDeploymentState(
+        serverImageRef=FAKE_DIGEST, sharedHostImageRef=None
+    )
+    monkeypatch.setattr(
+        image_resolution,
+        "operator_image_configuration",
+        lambda: {"COMPOSE_PROFILES": "omnigent-host-claude"},
+    )
+    monkeypatch.setattr(
+        image_resolution, "resolve_omnigent_images", AsyncMock(return_value=state)
+    )
+    save = Mock()
+    monkeypatch.setattr(store, "save_resolved_state", save)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "previous")
+    assert await image_resolution.publish_resolved_omnigent_images() is state
+    save.assert_called_once_with(state)
+    assert os.environ["OMNIGENT_IMAGE_REF"] == FAKE_DIGEST
+
+
+@pytest.mark.asyncio
+async def test_static_launch_fallback_uses_installed_image_and_selected_home(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+
+    installed = ResolvedOmnigentDeploymentState(sharedHostImageRef=FAKE_DIGEST)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: installed)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", LEGACY_DIGEST)
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    env = await runtime._compose_static_check(
+        binding=_production_claude_binding(),
+        host_lease=_production_claude_lease(),
+        workspace_source=tmp_path,
+    )
+    assert env["OMNIGENT_SHARED_HOST_IMAGE_REF"] == FAKE_DIGEST
+    assert env["CLAUDE_VOLUME_NAME"] == "claude_auth_volume"
+    assert env["CLAUDE_CREDENTIAL_GENERATION"] == "7"
+    assert runtime._run.await_args.kwargs["env"] == env
+
+
+@pytest.mark.parametrize("service", ["omnigent-host-codex", "omnigent-host-claude"])
+@pytest.mark.parametrize(
+    "configuration, image",
+    [
+        ("", "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"),
+        (
+            "OMNIGENT_SHARED_HOST_IMAGE_REF=registry.example/selected:chosen\n",
+            "registry.example/selected:chosen",
+        ),
+        (
+            "OMNIGENT_HOST_IMAGE_REF=registry.example/legacy:chosen\n",
+            "registry.example/legacy:chosen",
+        ),
+        (
+            "OMNIGENT_SHARED_HOST_IMAGE=registry.example/selected\nOMNIGENT_SHARED_HOST_IMAGE_TAG=chosen\n",
+            "registry.example/selected:chosen",
+        ),
+    ],
+)
+def test_static_diagnostic_checks_actual_compose_env_file(
+    tmp_path, service, configuration, image
+):
+    import shutil
+    import sys
+
+    if shutil.which("docker") is None:
+        pytest.skip("Docker Compose CLI is required for effective configuration")
+    (tmp_path / ".env").write_text(configuration)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("OMNIGENT_", "COMPOSE_"))
+    }
+    env.update(
+        {
+            "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR": str(tmp_path),
+            "MOONMIND_DEPLOYMENT_COMPOSE_FILE": str(REPO_ROOT / "docker-compose.yaml"),
+            "PYTHONPATH": str(REPO_ROOT),
+            "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+        }
+    )
+    result = subprocess.run(
+        ["sh", str(SCRIPTS / "check-static-host-image.sh"), "--profile", service],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"{service} image={image}" in result.stdout
