@@ -23,6 +23,7 @@ from temporalio.api.workflowservice.v1 import (
     DescribeWorkflowExecutionResponse,
 )
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
@@ -290,9 +291,30 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             ) == quota_before
             activities.execution_notify_completion.assert_not_awaited()
         # A fresh Activity invocation represents the existing publication retry.
+        links_before = {
+            link.id for link in await service._repository.list_links(brief_id)
+        }
+        brief_reads = AsyncMock(wraps=service.read)
+        monkeypatch.setattr(service, "read", brief_reads)
         published = await activities.agent_runtime_publish_artifacts(enriched)
+        if scope in {"missing", "unrelated"}:
+            assert {
+                link.id for link in await service._repository.list_links(brief_id)
+            } == links_before
+            read_scopes = [
+                call.kwargs["admitted_principal"]
+                for call in brief_reads.await_args_list
+                if call.kwargs.get("artifact_id") == brief_id
+            ]
+            assert read_scopes
+            if scope == "missing":
+                assert read_scopes == [None]
+            else:
+                assert all(value in {None, "workflow:unrelated"} for value in read_scopes)
         gate = published.metadata["moonSpecVerify"]
-        if scope in {"own", "restricted", "temporary"}:
+        if scope in {"own", "restricted", "temporary"} or (
+            scope in {"unrelated", "missing"} and settings.oidc.AUTH_PROVIDER == "disabled"
+        ):
             assert not gate.get("contractViolations")
             assert "acceptanceProjection" in gate["validatedRefs"]
             if scope == "temporary":

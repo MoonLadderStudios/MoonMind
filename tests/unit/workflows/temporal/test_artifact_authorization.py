@@ -64,12 +64,15 @@ async def test_authenticated_mode_denies_cross_principal_read(
                     principal="user-2",
                 )
 
-async def test_disabled_mode_preserves_operator_reads_and_denies_unscoped_readers(
+@pytest.mark.parametrize("surface", ["read", "metadata", "list", "latest"])
+@pytest.mark.parametrize("principal", ["another-local-user", "service:legacy-reader", ""])
+async def test_legacy_disabled_mode_preserves_artifact_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    surface: str,
+    principal: str,
 ) -> None:
-    """The admitted operator remains visible without granting ambient access."""
-
+    """Disabled mode retains the merged-main local artifact read behavior."""
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -78,7 +81,11 @@ async def test_disabled_mode_preserves_operator_reads_and_denies_unscoped_reader
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
             artifact, _upload = await service.create(
-                principal="default-user", content_type="text/plain"
+                principal="default-user", content_type="text/plain",
+                link=ExecutionRef(
+                    namespace="default", workflow_id="local-run",
+                    run_id="local-run-1", link_type="input.test",
+                ),
             )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,
@@ -87,16 +94,25 @@ async def test_disabled_mode_preserves_operator_reads_and_denies_unscoped_reader
                 content_type="text/plain",
             )
 
-            _meta, payload = await service.read(
-                artifact_id=artifact.artifact_id,
-                principal="operator",
-            )
-            assert payload == b"local"
-            with pytest.raises(TemporalArtifactAuthorizationError):
-                await service.read(
-                    artifact_id=artifact.artifact_id,
-                    principal="another-local-user",
+            if surface == "read":
+                _meta, payload = await service.read(
+                    artifact_id=artifact.artifact_id, principal=principal,
                 )
+                assert payload == b"local"
+            elif surface == "metadata":
+                row, _links, _pinned, policy = await service.get_metadata(
+                    artifact_id=artifact.artifact_id, principal=principal,
+                )
+                assert row.artifact_id == artifact.artifact_id
+                assert policy.raw_access_allowed
+            else:
+                rows = await service.list_for_execution(
+                    namespace="default", workflow_id="local-run", run_id="local-run-1",
+                    link_type="input.test", principal=principal,
+                    latest_only=surface == "latest",
+                )
+                assert [row.artifact_id for row in rows] == [artifact.artifact_id]
+
 
 async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
     tmp_path: Path,
@@ -180,7 +196,7 @@ async def test_restricted_report_metadata_uses_preview_default_read_without_raw_
                 )
 
 
-@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header"])
 @pytest.mark.parametrize("latest_only", [False, True])
 async def test_execution_list_requires_owner_or_admitted_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str, latest_only: bool,

@@ -28,6 +28,7 @@ from api_service.services.checkpoint_branch_service import (
 from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
+from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -165,8 +166,16 @@ async def test_retention_reads_only_recorded_source_turn_and_child_scopes(retent
         assert json.loads(data)["outputRefs"] == refs
 
 
-@pytest.mark.parametrize("kind", ["foreign", "restricted", "quarantined"])
-async def test_retention_rejects_foreign_and_unsafe_refs_before_link_or_pin(retention, kind):
+@pytest.mark.parametrize("kind,auth_mode", [
+    (kind, mode)
+    for kind in ("foreign", "restricted", "quarantined")
+    for mode in ("accounts", "oidc", "header", "disabled")
+    if kind != "foreign" or mode != "disabled"
+])
+async def test_retention_rejects_foreign_and_unsafe_refs_before_link_or_pin(
+    retention, kind, auth_mode, monkeypatch
+):
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
     sessions, _, seed, environment, payload, identity, _ = retention
     ref = await seed(
         "foreign" if kind == "foreign" else identity.workflow_id,

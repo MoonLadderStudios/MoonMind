@@ -171,15 +171,14 @@ async def test_remediation_consumers_read_own_workflow_on_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("consumer", ("head", "evidence"))
-@pytest.mark.parametrize("denial", ("unrelated", "restricted", "quarantined"))
-async def test_remediation_consumers_cannot_expand_scope_or_raw_policy(
+@pytest.mark.parametrize("denial", ("restricted", "quarantined"))
+async def test_remediation_consumers_preserve_raw_policy(
     artifacts, tmp_path, monkeypatch, consumer, denial
 ):
     artifact_id, _ = await _publish(
         artifacts,
         consumer=consumer,
-        workflow_id="unrelated" if denial == "unrelated" else "workflow-1",
-        protection=None if denial == "unrelated" else denial,
+        workflow_id="workflow-1", protection=denial,
     )
     with pytest.raises(
         (RemediationWorkspaceError, TemporalActivityRuntimeError)
@@ -197,6 +196,26 @@ async def test_remediation_consumers_cannot_expand_scope_or_raw_policy(
         if denial == "quarantined"
         else TemporalArtifactAuthorizationError,
     )
+    assert not list((tmp_path / "agent_jobs").rglob("*.json"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("artifacts", ("accounts", "oidc", "header"), indirect=True)
+@pytest.mark.parametrize("consumer", ("head", "evidence"))
+async def test_remediation_consumers_require_authenticated_execution_scope(
+    artifacts, tmp_path, monkeypatch, consumer
+):
+    artifact_id, _ = await _publish(
+        artifacts, consumer=consumer, workflow_id="unrelated",
+    )
+    with pytest.raises(
+        (RemediationWorkspaceError, TemporalActivityRuntimeError)
+    ) as failure:
+        await _consume(
+            artifacts, artifact_id, consumer=consumer,
+            tmp_path=tmp_path, monkeypatch=monkeypatch,
+        )
+    assert isinstance(failure.value.__cause__, TemporalArtifactAuthorizationError)
     assert not list((tmp_path / "agent_jobs").rglob("*.json"))
 
 

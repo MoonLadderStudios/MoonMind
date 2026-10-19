@@ -456,7 +456,7 @@ Baseline policy:
 
 ## 9.3 Service and worker access
 
-A worker's service identity names the caller; it is not a read grant. Under every authentication mode, including disabled mode, a bare `service:` or runtime principal reads only artifacts it owns. Readers of execution inputs pass the admitted execution as `admitted_principal=workflow:<id>`, and the service then requires the artifact to be owned by or linked to that execution. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only, so admission never releases protected content.
+A worker's service identity names the caller; authenticated modes apply the existing artifact owner and execution-scope checks. Readers of execution inputs pass `admitted_principal=workflow:<id>`, allowing artifacts owned by or linked to that execution. Local disabled mode retains its historical read, metadata, list and saved-work owner-check bypass for retained consumers. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only in every mode, so admission never releases protected content.
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
@@ -466,7 +466,7 @@ Execution inputs gain that linkage at trusted boundaries, never from agent-suppl
 * Workspace checkpoint, restore-input and attachment projection, managed-runtime Skill loading, and remediation head/evidence reads carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope. Story breakdown and source-brief handoffs verify the exact Activity execution's parent and namespace against Temporal before delegating; neither artifact creator values nor provider-supplied parent fields grant access.
 * Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.
 
-Mismatched scope fails authorization. Parent-lookup failures use publication's existing bounded retry policy before writes. Readers never substitute identities or disabled-mode access; read, metadata, list and saved-work checks apply in every mode while the admitted operator retains instance visibility.
+Verified readers retain their immutable input-closure, recorded Step and parent checks independently of artifact visibility. Parent-lookup failures use publication's existing bounded retry policy before writes. Readers never substitute artifact creator identities; authenticated artifact checks preserve the admitted operator's instance visibility.
 
 ## 9.4 Auditing
 
@@ -493,7 +493,7 @@ this section only binds them to artifact routes.
 | `accounts` | Require the MoonMind session for the resolved `User.id`, then execution-linked authorization | fresh installs and shared deployments |
 | `oidc` | Require the MoonMind session minted from the verified `(issuer, subject)` pair, then execution-linked authorization | shared dev/staging/prod behind an external IdP |
 | `header` | Require the MoonMind session minted from the proxy-asserted identity (ingress strips and replaces identity headers; direct bypass blocked), then execution-linked authorization | authenticated ingress only |
-| `disabled` | No end-user credential required at user-facing metadata/presign endpoints, but only behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`); execution-linked authorization still applies | one-click local/dev |
+| `disabled` | No end-user credential required at user-facing metadata/presign endpoints, but only behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`); historical artifact owner-check bypass remains, with raw/quarantine protection | one-click local/dev |
 
 User versus machine credentials at artifact routes:
 
@@ -518,8 +518,9 @@ binding facade, not an unrestricted upstream proxy.
 Artifacts are instance resources for the admitted operator: the stable
 `operator` principal (and legacy human-owner UUID strings as
 provenance) inspects and controls instance artifacts and saved-work reads
-without a human-owner lookup. `workflow:`/`service:` machine principals
-stay execution-bound via owner-equality and linked-execution checks.
+without a human-owner lookup. In authenticated modes, `workflow:`/`service:`
+machine principals retain owner-equality and linked-execution checks; local
+disabled mode keeps the historical visibility behavior described above.
 Restricted raw bytes, quarantine, redaction, and explicit-grant gates are
 enforced independently of ordinary artifact visibility. See
 [Single-User Application Design](../SingleUserApplicationDesign.md).
