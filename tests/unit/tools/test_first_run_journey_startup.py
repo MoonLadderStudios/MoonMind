@@ -49,7 +49,10 @@ footprint = config.get("footprint", {}).get(phase, {})
 if args[:1] != ["compose"]:
     with calls.with_suffix(".host.jsonl").open("a") as output:
         output.write(json.dumps(args) + "\n")
-    print(footprint.get(args[0], ""))
+    if args[:2] == ["image", "inspect"]:
+        print("sha256:" + "a" * 64)
+    else:
+        print(footprint.get(args[0], ""))
     raise SystemExit(footprint.get("host_status", 0))
 previous = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 directory = Path(args[args.index("--project-directory") + 1])
@@ -178,6 +181,17 @@ def journey(tmp_path: Path) -> Journey:
     tools.mkdir(parents=True)
     (tools / SCRIPT.name).write_text(SCRIPT.read_text())
     (tools / "single_user_journey_checks.py").write_text(API_COUNTERPART)
+    (tools / "single_user_journey_cutover.py").write_text(
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "config = json.loads(Path(os.environ['STARTUP_TEST_CONFIG']).read_text())\n"
+        "calls = Path(os.environ['STARTUP_TEST_API_CALLS']).read_text()\n"
+        "result = {'passed': not config.get('cutover_failure'), 'args': args, "
+        "'candidate_work_started': 'after-upgrade' in calls}\n"
+        "Path(args[args.index('--receipt-file') + 1]).write_text(json.dumps(result))\n"
+        "raise SystemExit(0 if result['passed'] else 1)\n"
+    )
     (tools / "single_user_journey_browser.mjs").write_text(
         "// External browser counterpart.\n"
     )
@@ -585,3 +599,33 @@ def test_early_log_setup_failure_restores_callers_environment(journey, blocked):
     assert result.returncode != 0
     assert (journey.repo / ".env").read_text() == "CALLER_ENV=must-survive\n"
     assert "unbound variable" not in result.stderr
+
+
+def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> None:
+    result = journey.run(upgrade=True, lines=1)
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(
+        (journey.logs / "upgrade/state/routing-cutover.json").read_text()
+    )
+    assert receipt["passed"]
+    args = receipt["args"]
+    assert args[args.index("--project") + 1] == "moonmind-test-startup-unit"
+    assert args[args.index("--image") + 1] == "sha256:" + "a" * 64
+    files = [args[index + 1] for index, item in enumerate(args) if item == "-f"]
+    assert len(files) == 2
+    assert files[0].endswith("/docker-compose.yaml")
+    assert files[1].endswith("/isolation.json")
+    assert not receipt["candidate_work_started"]
+    journey.assert_cleaned()
+
+
+def test_upgrade_routing_failure_stops_candidate_work(journey: Journey) -> None:
+    result = journey.run(upgrade=True, cutover_failure=True, lines=1)
+    assert result.returncode != 0
+    receipt = json.loads(
+        (journey.logs / "upgrade/state/routing-cutover.json").read_text()
+    )
+    assert not receipt["passed"]
+    calls = journey.api_calls.read_text()
+    assert "after-upgrade" not in calls
+    journey.assert_cleaned()

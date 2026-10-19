@@ -564,6 +564,7 @@ prepare_upgrade_source() {
   fi
   DEPLOY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-upgrade-4356.XXXXXX")"
   git -C "$REPO_ROOT" worktree add --detach --quiet "$DEPLOY_DIR" "$UPGRADE_FROM_REVISION"
+  printf '%s\n' "$PROJECT_NAME" > "$DEPLOY_DIR/.first-run-journey-project"
   # The old release pins quay.io/minio/minio, which is no longer publicly
   # pullable. Substitute the MinIO image the candidate qualifies; the
   # MoonMind services stay on the old release.
@@ -586,6 +587,18 @@ compose_candidate_config() {
 upgrade_source_to_candidate() {
   git -C "$DEPLOY_DIR" checkout --detach --quiet "$CANDIDATE_REVISION"
   COMPOSE_OVERRIDES=()
+}
+
+# Compose performs the image upgrade; the selected controller owns routing.
+converge_upgrade_routing() {
+  local candidate_image_id
+  candidate_image_id="$(docker image inspect "$MOONMIND_IMAGE" --format '{{.Id}}')"
+  python3 "$SCRIPT_DIR/single_user_journey_cutover.py" \
+    --repo "$DEPLOY_DIR" --project "$PROJECT_NAME" \
+    --image "$candidate_image_id" --revision "$CANDIDATE_REVISION" \
+    --receipt-file "$STATE_DIR/routing-cutover.json" \
+    -f "$DEPLOY_DIR/docker-compose.yaml" -f "$ISOLATION_OVERRIDE" \
+    ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} 2>&1 | redact
 }
 
 require_conversion_outcome() {
@@ -676,6 +689,7 @@ else
   upgrade_source_to_candidate
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
   bring_up
+  converge_upgrade_routing
   require_conversion_outcome before-upgrade
   checks verify before-upgrade
   browser before-upgrade
