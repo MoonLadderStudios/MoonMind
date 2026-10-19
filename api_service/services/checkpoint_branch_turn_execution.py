@@ -7,6 +7,7 @@ workflow that dispatches the canonical profile-bound Omnigent AgentRun.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -374,6 +375,16 @@ async def admit_checkpoint_branch_turn_instruction(
     await artifacts._assert_artifact_raw_access(
         artifact, principal=consumer, admitted_principal=scope
     )
+    # The durable turn authorizes only these exact bytes. Validate the locked
+    # row's storage object before link_artifact commits any delegation. The row
+    # lock protects this preflight from lifecycle deletion; it needs no claim.
+    payload = await asyncio.get_running_loop().run_in_executor(
+        None, artifacts._store.read_bytes, artifact.storage_key
+    )
+    if _sha256(payload) != turn.instruction_digest:
+        raise CheckpointBranchTurnLaunchError(
+            "instruction_digest_mismatch", "branch instruction bytes changed"
+        )
     link_type = "input.branch_turn.instructions.md"
     if not any(
         link.namespace == namespace
