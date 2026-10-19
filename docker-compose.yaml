@@ -1,57 +1,11 @@
-# Shared static Omnigent host template (MoonLadderStudios/MoonMind#3834).
-#
-# One source of truth for the common static Codex/Claude host configuration.
-# Both `omnigent-host-codex` and `omnigent-host-claude` keep their explicit
-# service names and `omnigent-host-codex` / `omnigent-host-claude` profiles,
-# but share: the digest-pinned `omnigent-host-moonmind` image, uid/gid, home,
-# workdir, read-only root, tmpfs, capabilities, no-new-privileges, resource
-# limits, restart behavior, Omnigent endpoint, workspace/Skill/tool/state
-# boundaries, egress network, and the generic health shape. Runtime differences
-# are limited to the trusted pack/materializer selection
-# (`MOONMIND_OMNIGENT_RUNTIME_PACK_REF` /
-# `MOONMIND_OMNIGENT_CREDENTIAL_MATERIALIZER_REF`) plus that runtime's own
-# credential attachment and generation marker.
-#
-# The values below are intentionally duplicated explicitly in each service so
-# `docker compose config` keeps showing the final operator-visible contract.
-# `tests/unit/omnigent/test_static_host_consolidation.py` fails if any service
-# drifts from this anchor. Do not introduce templating that hides the contract.
-#
-# Rollback: set OMNIGENT_SHARED_HOST_IMAGE_REF to the prior image. To restore
-# earlier startup behavior, revert the corresponding checkout change, including
-# this file and its mounted scripts; an image change alone cannot restore them.
-# The legacy OMNIGENT_HOST_IMAGE_REF variable is honored only as a bounded alias by
-# `moonmind.omnigent.harness_platform.static_hosts.resolve_static_host_image_ref`
-# when OMNIGENT_SHARED_HOST_IMAGE_REF is unset; legacy mutable
-# OMNIGENT_HOST_IMAGE / OMNIGENT_HOST_IMAGE_TAG construction is not honored
-# for static hosts.
-#
-# Effective launch contract (MoonLadderStudios/MoonMind#3936): only a
-# digest-pinned OMNIGENT_SHARED_HOST_IMAGE_REF (or, when it is unset, a
-# digest-pinned OMNIGENT_HOST_IMAGE_REF bounded alias) is supported launch
-# authority. The OMNIGENT_SHARED_HOST_IMAGE / OMNIGENT_SHARED_HOST_IMAGE_TAG
-# fallback below is a development/bootstrap input only:
-# `moonmind.omnigent.bootstrap.image_resolution` must resolve it to a digest
-# and persist it as OMNIGENT_SHARED_HOST_IMAGE_REF before admission, and
-# `require_static_host_image_authority` fails the persistence/reconciliation
-# pass when a requested static profile has no digest-pinned resolution. That
-# persistence gate runs inside the API container after Compose has already
-# started creating profile-selected services, so it alone cannot prevent the
-# mutable fallback from being pulled: qualified static launches must pass the
-# operator-side prelaunch admission boundary
-# `moonmind.omnigent.harness_platform.static_hosts.admit_static_host_compose_launch`
-# (via `services/omnigent/scripts/check-static-host-image.sh --profile
-# <omnigent-host-codex|omnigent-host-claude>` before a direct
-# `docker compose --profile <profile> up`, or automatically through
-# `OmnigentOAuthHostRuntime._compose_static_check` on the managed path,
-# which admits the rendered effective environment via
-# `admit_static_host_effective_launch` and resolves the effective image
-# through `resolve_effective_static_host_image`, binding the staged
-# generation to the live lease) immediately before `docker compose up`; a direct
-# `docker compose up` that bypasses that prelaunch admission launches the
-# mutable fallback below and is not a qualified static launch.
+# Optional static Codex/Claude hosts share packaged startup and health scripts.
+# Ordinary Claude work uses on-demand hosts; these profiles retain explicit
+# deployment choices and previously admitted profile-bound consumers.
+# The managed launcher uses the installed image or its admitted artifact.
+# Direct Compose accepts the shared ref, its legacy alias, or image/tag (latest
+# by default). Image identity does not replace credential and session admission.
 x-omnigent-static-host:
-  image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
+  image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}}
   user: "1000:1000"
   working_dir: /home/app
   read_only: true
@@ -1274,7 +1228,7 @@ services:
     profiles: ["omnigent-host-claude"]
     # Shared host image (MoonLadderStudios/MoonMind#3834): must stay identical
     # to `x-omnigent-static-host` image and to `omnigent-host-codex` image.
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}}
     hostname: omnigent-host-claude
     user: "1000:1000"
     working_dir: /home/app
@@ -1356,7 +1310,7 @@ services:
     restart: unless-stopped
   omnigent-host-claude-init:
     profiles: ["omnigent-host-claude"]
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}}
     user: "0:0"
     network_mode: none
     cap_drop:
@@ -1386,7 +1340,7 @@ services:
 
   omnigent-host-codex-init:
     profiles: ["omnigent-host-codex"]
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}}
     user: "0:0"
     network_mode: none
     cap_drop:
@@ -1418,7 +1372,7 @@ services:
     profiles: ["omnigent-host-codex"]
     # Shared host image (MoonLadderStudios/MoonMind#3834): must stay identical
     # to `x-omnigent-static-host` image and to `omnigent-host-claude` image.
-    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}
+    image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}}}
     hostname: omnigent-host-codex
     user: "1000:1000"
     working_dir: /home/app
