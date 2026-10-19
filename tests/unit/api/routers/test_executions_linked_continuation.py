@@ -145,7 +145,7 @@ def _patch_collaborators(
     async def _snapshot(**kwargs):  # noqa: ANN001
         return "art_snapshot"
 
-    async def _materialize(*, session, user, refs):  # noqa: ANN001
+    async def _materialize(*, session, user, refs, recovery_principal=None):  # noqa: ANN001
         return list(materialized_attachments or [])
 
     async def _attach(*, session, record, attachment_refs):  # noqa: ANN001
@@ -801,7 +801,7 @@ class _FakeArtifactService:
         self.writes: list[tuple[str, int]] = []
         self._counter = 0
 
-    async def read(self, *, artifact_id, principal, allow_restricted_raw=False):  # noqa: ANN001
+    async def read(self, *, artifact_id, principal, allow_restricted_raw=False, recovery_principal=None):  # noqa: ANN001
         return SimpleNamespace(artifact_id=artifact_id), b'{"k":"v"}'
 
     async def create(self, *, principal, content_type, size_bytes, retention_class, metadata_json=None, **kwargs):  # noqa: ANN001

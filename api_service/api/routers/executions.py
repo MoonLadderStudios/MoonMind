@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, cast, get_args
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -72,6 +72,7 @@ from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
 )
+from api_service.api.routers.temporal_artifacts import _resolve_recovery_principal
 from api_service.api.schemas import CreateJobRequest
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.core import sync as execution_sync
@@ -18876,6 +18877,7 @@ async def download_workflow_captured_evidence(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
+    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> Response:
     """Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
 
@@ -18943,6 +18945,7 @@ async def download_workflow_captured_evidence(
                 artifact_id=artifact_id,
                 principal=str(getattr(user, "id", "") or "system"),
                 allow_restricted_raw=True,
+                recovery_principal=recovery_principal,
             )
         except (PermissionError, TemporalArtifactAuthorizationError) as exc:
             # The Workflow-level authorization above already gated access; a
@@ -18985,7 +18988,11 @@ def _evidence_attachment_content_type(filename: str) -> str:
 
 
 async def _read_continuation_evidence_bytes(
-    *, artifact_service: Any, principal: str, ref: str
+    *,
+    artifact_service: Any,
+    principal: str,
+    ref: str,
+    recovery_principal: str | None = None,
 ) -> bytes | None:
     """Read one authorized source evidence ref's bytes, scheme-aware.
 
@@ -19009,6 +19016,7 @@ async def _read_continuation_evidence_bytes(
             artifact_id=artifact_id,
             principal=principal,
             allow_restricted_raw=True,
+            recovery_principal=recovery_principal,
         )
         return body
     except (
@@ -19020,7 +19028,11 @@ async def _read_continuation_evidence_bytes(
 
 
 async def _materialize_continuation_source_attachments(
-    *, session: AsyncSession, user: User, refs: list[str]
+    *,
+    session: AsyncSession,
+    user: User,
+    refs: list[str],
+    recovery_principal: str | None = None,
 ) -> list[dict[str, Any]]:
     """Copy authorized source evidence refs into durable input attachments.
 
@@ -19042,7 +19054,10 @@ async def _materialize_continuation_source_attachments(
     attachments: list[dict[str, Any]] = []
     for ref in refs:
         body = await _read_continuation_evidence_bytes(
-            artifact_service=artifact_service, principal=principal, ref=ref
+            artifact_service=artifact_service,
+            principal=principal,
+            ref=ref,
+            recovery_principal=recovery_principal,
         )
         if body is None or len(body) > _CONTINUATION_EVIDENCE_MAX_BYTES:
             raise HTTPException(
@@ -19170,6 +19185,7 @@ async def continue_in_new_workflow(
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
+    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> ContinueInNewWorkflowResponse:
     """Create a linked continuation Workflow from a terminal source (#3641 §3-§7).
 
@@ -19439,6 +19455,7 @@ async def continue_in_new_workflow(
             session=session,
             user=user,
             refs=payload.selected_source_artifact_refs,
+            recovery_principal=recovery_principal,
         )
         if source_attachments:
             workflow_payload = initial_params.get("workflow")
