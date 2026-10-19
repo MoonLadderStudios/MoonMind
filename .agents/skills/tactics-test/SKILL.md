@@ -70,13 +70,15 @@ run artifacts remain available separately.
   failed automation result fails even when the process exits zero.
 - Managed execution consumes the current container job's structured result,
   including its job identity and artifact references. Test verdicts use the
-  full Unreal log written into the shared workspace and declared as a job
-  output, rather than a truncated CLI tail. A submission, process exit or
+  full Unreal log, checked against the backend's collected output digest,
+  rather than a truncated CLI tail or mutable local receipt. Missing artifact
+  evidence or a changed log is incomplete. A submission, process exit or
   successful container start alone does not prove completion.
 - Resume the same managed run with `--resume <results-directory>` and its
-  original options. Matching successful phases are retained; missing evidence
-  reattaches with the same job request identity. Changed inputs or source
-  invalidate reuse. Resume requires a Git source snapshot; non-Git projects
+  original options. Every phase is freshly observed through the existing job
+  owner with its original request identity, so completed jobs are not rerun.
+  Prior observations remain available. Changed inputs or source invalidate
+  reuse. Resume requires a Git source snapshot; non-Git projects
   can run but cannot safely reuse prior phases. A new request without
   `--resume` creates fresh work.
 - Preserve original logs/results when investigating failures. Never credit an

@@ -129,15 +129,19 @@ def _managed_test_phase(tmp_path: Path, log_line: str) -> tuple[int, dict]:
     stub = bin_dir / "moonmind"
     stub.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
+        "import hashlib, json, os, pathlib, sys\n"
         "spec = json.loads(pathlib.Path(sys.argv[sys.argv.index('--spec') + 1]).read_text())\n"
+        f"result = {result!r}\n"
         "for arg in spec['command']:\n"
         "    if arg.startswith('-abslog='):\n"
         "        path = pathlib.Path(os.environ['MOONMIND_REPO_DIR']) / "
         "pathlib.Path(arg.split('=', 1)[1]).relative_to('/workspace')\n"
         "        path.parent.mkdir(parents=True, exist_ok=True)\n"
         f"        path.write_text({log_line!r} + '\\n')\n"
-        f"print({json.dumps(result)!r})\n",
+        "        result['artifacts'] = [{**spec['outputs'][0], "
+        "'artifactRef': 'artifact:test-log', 'collectionStatus': 'collected', "
+        "'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}]\n"
+        "print(json.dumps(result))\n",
         encoding="utf-8",
     )
     stub.chmod(0o755)

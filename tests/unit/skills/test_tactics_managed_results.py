@@ -58,21 +58,41 @@ def managed(tmp_path):
     stub = bin_dir / "moonmind"
     stub.write_text(
         f"#!{sys.executable}\n"
-        "import json, os, pathlib, sys\n"
-        "args = sys.argv\n"
-        "spec = json.loads(pathlib.Path(args[args.index('--spec') + 1]).read_text())\n"
-        "with open(os.environ['CALLS'], 'a') as f:\n"
-        "    f.write(json.dumps({'args': args, 'spec': spec}) + '\\n')\n"
-        "result = json.loads(pathlib.Path(os.environ['RESULT']).read_text())\n"
-        "for arg in spec['command']:\n"
-        "    if arg.startswith('-abslog=') "
-        "and os.environ.get('WRITE_TEST_LOG') != '0':\n"
-        "        path = pathlib.Path(os.environ['MOONMIND_REPO_DIR']) / "
-        "arg.removeprefix('-abslog=/workspace/')\n"
-        "        path.parent.mkdir(parents=True, exist_ok=True)\n"
-        "        path.write_text(os.environ.get('FULL_LOG', "
-        "'\\n'.join(result.get('log_tail', []))))\n"
-        "print(json.dumps(result))\n"
+        + """import hashlib, json, os, pathlib, sys
+args = sys.argv
+spec = json.loads(pathlib.Path(args[args.index('--spec') + 1]).read_text())
+request_id = args[args.index('--request-id') + 1]
+backend = pathlib.Path(os.environ['BACKEND'])
+jobs = json.loads(backend.read_text()) if backend.exists() else {}
+replayed = request_id in jobs
+with open(os.environ['CALLS'], 'a') as f:
+    f.write(json.dumps({'args': args, 'spec': spec, 'replayed': replayed}) + '\\n')
+if replayed:
+    assert jobs[request_id]['spec'] == spec
+    result = jobs[request_id]['result']
+else:
+    result = json.loads(pathlib.Path(os.environ['RESULT']).read_text())
+    if result.get('job_id'):
+        result['job_id'] = 'container-job:' + hashlib.sha256(request_id.encode()).hexdigest()[:32]
+    result['artifacts'] = []
+    for arg in spec['command']:
+        if arg.startswith('-abslog=') and os.environ.get('WRITE_TEST_LOG') != '0':
+            relative = arg.removeprefix('-abslog=/workspace/')
+            path = pathlib.Path(os.environ['MOONMIND_REPO_DIR']) / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(os.environ.get('FULL_LOG', '\\n'.join(result.get('log_tail', []))))
+            result['artifacts'].append({
+                'name': 'test-log', 'relativePath': relative,
+                'artifactRef': 'artifact:test-log', 'collectionStatus': 'collected',
+                'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                'sizeBytes': path.stat().st_size,
+            })
+    jobs[request_id] = {'spec': spec, 'result': result}
+    backend.write_text(json.dumps(jobs))
+if spec.get('outputs') and os.environ.get('ARTIFACT_ERROR'):
+    result = {**result, 'artifacts': [], 'artifact_error': os.environ['ARTIFACT_ERROR']}
+print(json.dumps(result))
+"""
     )
     stub.chmod(0o755)
     env = {
@@ -84,9 +104,13 @@ def managed(tmp_path):
         "MOONMIND_REPO_DIR": str(repo),
         "CALLS": str(command_log),
         "RESULT": str(result_file),
+        "BACKEND": str(tmp_path / "backend.json"),
     }
 
-    def run(*args, result=None, full_log=None, write_log=True):
+    def run(*args, result=None, full_log=None, write_log=True, artifact_error=None):
+        env.pop("ARTIFACT_ERROR", None)
+        if artifact_error:
+            env["ARTIFACT_ERROR"] = artifact_error
         env["WRITE_TEST_LOG"] = "1" if write_log else "0"
         env.pop("FULL_LOG", None)
         if full_log is not None:
@@ -176,7 +200,7 @@ def test_runs_do_not_collide_and_old_artifacts_are_retained(managed):
 
 def test_resume_reuses_build_and_reconciles_only_missing_test_evidence(managed):
     _, run, gate, calls, _ = managed
-    first = run(result=_result(log_tail=["Build completed"]))
+    first = run(artifact_error="manifest unavailable")
     assert first.returncode != 0
     current = gate()
     assert current["buildStatus"] == "pass"
@@ -186,7 +210,8 @@ def test_resume_reuses_build_and_reconciles_only_missing_test_evidence(managed):
     assert completed.returncode == 0, completed.stderr
     assert gate()["status"] == "PASS"
     assert gate()["resultsDir"] == current["resultsDir"]
-    assert len(calls()) == 3
+    assert len(calls()) == 4
+    assert sum(not call["replayed"] for call in calls()) == 2
 
     def request_id(call):
         return call["args"][call["args"].index("--request-id") + 1]
@@ -270,7 +295,8 @@ def test_resume_completed_failure_does_not_repeat_any_job(managed):
     completed = run("--phase", "test", "--resume", current["resultsDir"])
     assert completed.returncode != 0
     assert gate()["status"] == "FAIL"
-    assert len(calls()) == before
+    assert len(calls()) == before + 1
+    assert calls()[-1]["replayed"]
 
 
 def test_rejected_resume_invalidates_current_gate_without_changing_archive(managed):
@@ -325,7 +351,8 @@ def test_later_run_artifacts_do_not_invalidate_resume(managed, artifact_parent):
         original["resultsDir"],
     )
     assert completed.returncode == 0, completed.stderr
-    assert len(calls()) == before
+    assert len(calls()) == before + 1
+    assert calls()[-1]["replayed"]
 
 
 def test_resume_source_snapshot_frames_untracked_names_and_contents(managed):
@@ -358,4 +385,92 @@ def test_resume_source_snapshot_includes_untracked_file_type_and_mode(managed, c
     completed = run("--phase", "build", "--resume", original["resultsDir"])
     assert completed.returncode != 0
     assert "match" in completed.stderr.lower()
+    assert len(calls()) == before
+
+
+def test_resume_reobserves_owner_instead_of_trusting_forged_build_receipt(managed):
+    _, run, gate, calls, _ = managed
+    assert run(result=_result(state="failed", exit_code=1)).returncode != 0
+    first = gate()
+    receipt = Path(first["buildResult"])
+    receipt.write_text(json.dumps(_result()))
+    forged = receipt.read_bytes()
+    completed = run("--resume", first["resultsDir"])
+    assert completed.returncode != 0
+    assert gate()["buildStatus"] == "fail"
+    assert all(call["spec"]["command"][0] == "bash" for call in calls())
+    assert calls()[-1]["replayed"]
+    assert receipt.read_bytes() == forged
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        "Test Completed. Result={Fail} Name={Earlier}",
+        "No automation tests matched",
+        "Automation began but no completion evidence",
+    ],
+)
+def test_resume_rejects_tampered_test_log_and_forged_local_hash(managed, original):
+    _, run, gate, calls, _ = managed
+    assert run("--phase", "test", full_log=original).returncode != 0
+    first = gate()
+    log = Path(first["testLog"])
+    log.write_text(PASSED)
+    receipt_path = Path(first["testResult"])
+    forged = json.loads(receipt_path.read_text())
+    import hashlib
+
+    forged["artifacts"][0]["sha256"] = hashlib.sha256(log.read_bytes()).hexdigest()
+    receipt_path.write_text(json.dumps(forged))
+    saved = receipt_path.read_bytes()
+    completed = run("--phase", "test", "--resume", first["resultsDir"])
+    assert completed.returncode != 0
+    assert gate()["status"] == "INCOMPLETE"
+    assert "integrity" in gate()["reason"].lower()
+    assert calls()[-1]["replayed"]
+    assert sum(not call["replayed"] for call in calls()) == 1
+    assert receipt_path.read_bytes() == saved
+    assert log.read_text() == PASSED
+
+
+def test_resume_recovers_corrupt_local_receipt_from_same_owner_job(managed):
+    _, run, gate, calls, _ = managed
+    assert run("--phase", "build").returncode == 0
+    first = gate()
+    Path(first["buildResult"]).write_text("corrupt")
+    assert run("--phase", "build", "--resume", first["resultsDir"]).returncode == 0
+    assert calls()[-1]["replayed"]
+    assert sum(not call["replayed"] for call in calls()) == 1
+
+
+def test_resume_ignores_redirected_gate_log_path(managed):
+    _, run, gate, calls, _ = managed
+    assert (
+        run("--phase", "test", full_log="No automation tests matched").returncode != 0
+    )
+    first = gate()
+    redirected = Path(first["resultsDir"]) / "forged.log"
+    redirected.write_text(PASSED)
+    first["testLog"] = str(redirected)
+    (Path(first["resultsDir"]) / "gate.json").write_text(json.dumps(first))
+    assert run("--phase", "test", "--resume", first["resultsDir"]).returncode != 0
+    assert gate()["testStatus"] == "no_tests"
+    assert calls()[-1]["replayed"]
+    assert redirected.read_text() == PASSED
+
+
+def test_resume_rejects_changed_run_identity_before_querying_owner(managed):
+    _, run, gate, calls, _ = managed
+    assert run("--phase", "build").returncode == 0
+    first = gate()
+    archive = Path(first["resultsDir"]) / "gate.json"
+    edited = json.loads(archive.read_text())
+    edited["runId"] = "f" * 32
+    archive.write_text(json.dumps(edited))
+    before = len(calls())
+    completed = run("--phase", "build", "--resume", first["resultsDir"])
+    assert completed.returncode != 0
+    assert "identity" in completed.stderr.lower()
+    assert gate()["status"] == "INCOMPLETE"
     assert len(calls()) == before
