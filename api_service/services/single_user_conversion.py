@@ -288,9 +288,7 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
     ("workflow_execution_source_mappings", "owner_id", "user_temporal"),
     ("managed_agent_oauth_sessions", "requested_by_user_id", "uuid_text"),
     ("temporal_artifacts", "created_by_principal", "artifact_principal"),
-    ("temporal_artifact_pins", "pinned_by_principal", "artifact_principal"),
-    ("temporal_artifact_use_claims", "owner_principal", "artifact_principal"),
-    ("temporal_artifact_deletion_intents", "initiated_by_principal", "artifact_principal"),
+    ("temporal_artifact_use_claims", "owner_principal", "active_artifact_claim"),
 )
 
 # Null-owner rows in these tables are ambiguous retained data, not
@@ -464,6 +462,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             continue
         col = table.c[column_name]
         stmt = select(col).where(col.is_not(None))
+        if kind == "active_artifact_claim":
+            # Expired claims no longer protect retention or count quota. Their
+            # owner, like pin/deletion actors, is preserved provenance only.
+            stmt = stmt.where(table.c.expires_at > func.now())
         if kind == "user_temporal" and "owner_type" in table.c:
             stmt = stmt.where(func.lower(cast(table.c.owner_type, String)) == "user")
         try:
@@ -477,7 +479,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             norm = _looks_like_uuid(raw)
             if norm and not (kind == "uuid_fk" and norm == DEPLOYMENT_SUBJECT_ID):
                 principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-            elif kind == "artifact_principal" and not _is_artifact_machine_principal(raw):
+            elif kind in {"artifact_principal", "active_artifact_claim"} and not _is_artifact_machine_principal(raw):
                 # Unknown text is not proof of a machine or a person.
                 _record_inventory_error(inv, f"principal:{table_name}.{column_name}")
         total = await _probe_count(

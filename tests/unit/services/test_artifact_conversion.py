@@ -159,28 +159,17 @@ async def test_unsupported_workflow_parent_refuses_without_artifact_mutation(tmp
             assert not (await session.execute(select(conversion.SingleUserConversionRun))).scalars().all()
 
 
-@pytest.mark.parametrize("authority", ["claim", "expired_claim", "pin", "deletion_intent"])
-async def test_unknown_retained_child_authority_refuses(tmp_path, authority):
+async def test_unknown_active_claim_authority_refuses(tmp_path):
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, _owner = await seed(session, tmp_path)
-            if authority == "pin":
-                row = (await session.execute(select(TemporalArtifactPin))).scalar_one()
-                row.pinned_by_principal = str(uuid4())
-            elif authority == "deletion_intent":
-                row = (await session.execute(select(TemporalArtifactDeletionIntent))).scalar_one()
-                row.initiated_by_principal = str(uuid4())
-            else:
-                claim = (await session.execute(select(TemporalArtifactUseClaim))).scalar_one()
-                claim.owner_principal = str(uuid4())
-                if authority == "expired_claim":
-                    claim.expires_at = datetime.now(UTC) - timedelta(days=1)
+            claim = (await session.execute(select(TemporalArtifactUseClaim))).scalar_one()
+            claim.owner_principal = str(uuid4())
             await session.commit()
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert not result.published
             assert result.decision.reason_code == "unknown_principal"
-            assert not getattr(await session.get(TemporalArtifact, artifact_id),
-                               "operator_recovery_granted", False)
+            assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
 
 
 async def test_same_count_artifact_authority_change_rejects_stale_preflight(tmp_path):
@@ -387,3 +376,32 @@ async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
         async with maker() as restarted:
             assert (await restarted.get(TemporalArtifact, artifact_id)).operator_recovery_granted
             assert await _disabled_account_free_allowed(restarted)
+
+
+@pytest.mark.parametrize("authority", ["expired_claim", "pin", "deletion_intent"])
+@pytest.mark.parametrize("historical_actor", ["unknown_uuid", "legacy-actor-label"])
+async def test_historical_child_provenance_does_not_block_recovery(
+    tmp_path, authority, historical_actor,
+):
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            artifact_id, _owner = await seed(session, tmp_path)
+            actor = str(uuid4()) if historical_actor == "unknown_uuid" else historical_actor
+            if authority == "pin":
+                model, field = TemporalArtifactPin, "pinned_by_principal"
+            elif authority == "deletion_intent":
+                model, field = TemporalArtifactDeletionIntent, "initiated_by_principal"
+            else:
+                model, field = TemporalArtifactUseClaim, "owner_principal"
+            row = (await session.execute(select(model))).scalar_one()
+            setattr(row, field, actor)
+            if authority == "expired_claim":
+                row.expires_at = datetime.now(UTC) - timedelta(days=1)
+            await session.commit()
+            before = dict((await session.execute(select(model.__table__))).mappings().one())
+            result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
+            assert result.published, result.to_sanitized_dict()
+            after = dict((await session.execute(select(model.__table__))).mappings().one())
+            assert after == before
+            assert (await service(session, tmp_path).read(
+                artifact_id=artifact_id, principal="operator"))[1] == b"retained bytes"
