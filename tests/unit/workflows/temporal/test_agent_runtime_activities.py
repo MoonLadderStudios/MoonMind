@@ -155,8 +155,9 @@ class _StaticArtifactService:
         artifact_id: str,
         principal: str,
         allow_restricted_raw: bool,
+        admitted_principal: str | None = None,
     ) -> tuple[SimpleNamespace, bytes]:
-        del principal, allow_restricted_raw
+        del principal, allow_restricted_raw, admitted_principal
         return SimpleNamespace(artifact_id=artifact_id), self._payloads[artifact_id]
 
 
@@ -4199,6 +4200,14 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_verifier_evi
         "agentId": "codex",
         "correlationId": "corr-remediation",
         "idempotencyKey": "idem-remediation",
+        "stepExecution": {
+            "workflowId": "workflow-remediation",
+            "runId": "run-1",
+            "logicalStepId": "remediate",
+            "executionOrdinal": 1,
+            "stepExecutionId": "workflow-remediation:run-1:remediate:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
         "parameters": {
             "instructions": "Implement the verifier gaps.",
             "selectedSkill": "remediate-issue",

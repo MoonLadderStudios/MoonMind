@@ -29,6 +29,11 @@ source_bound_report = source_bindings.source_bound_report
 
 
 def _configure_runtime(monkeypatch, *, new_history=True):
+    from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+    from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
+        _recorded_server,
+    )
+
     info = SimpleNamespace(
         namespace="default",
         task_queue="mm.workflow.user.v2",
@@ -38,7 +43,21 @@ def _configure_runtime(monkeypatch, *, new_history=True):
         parent=None,
     )
     monkeypatch.setattr(run_module.workflow, "info", lambda: info)
-    monkeypatch.setattr(activity, "info", lambda: info)
+    activity_info = SimpleNamespace(
+        namespace="default", workflow_id="scope-parent:agent:verify", workflow_run_id="child-run"
+    )
+    monkeypatch.setattr(activity, "info", lambda: activity_info)
+    server, _ = _recorded_server(DescribeWorkflowExecutionResponse(
+        workflow_execution_info={
+            "execution": {"workflow_id": activity_info.workflow_id, "run_id": "child-run"},
+            "parent_execution": {"workflow_id": "scope-parent", "run_id": "parent-run"},
+            "parent_namespace_id": "namespace-default",
+        }
+    ))
+    monkeypatch.setattr(
+        activity, "client",
+        lambda: SimpleNamespace(namespace="default", workflow_service=server),
+    )
     monkeypatch.setattr(run_module.workflow, "now", lambda: datetime.now(timezone.utc))
     monkeypatch.setattr(
         run_module.workflow,

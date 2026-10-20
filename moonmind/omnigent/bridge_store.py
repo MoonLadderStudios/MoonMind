@@ -1304,7 +1304,9 @@ class OmnigentBridgeSessionStore:
             if plan.payload.effectiveLaunchSnapshotRef:
                 raw = await TemporalOmnigentArtifactGateway(
                     self._session_factory
-                ).read_bytes(plan.payload.effectiveLaunchSnapshotRef)
+                ).read_admitted_input(
+                    plan.payload.effectiveLaunchSnapshotRef, request=request
+                )
                 # Preserve the immutable launch intact, including its grants and
                 # content digest. Runtime routing/fences are a separate projection.
                 effective_launch_snapshot = validate_planned_effective_launch(plan, raw)

@@ -2819,6 +2819,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             _artifact, payload = await artifact_service.read(
                 artifact_id=artifact_ref,
                 principal="system:story_output",
+                admitted_principal=f"workflow:{temporalio.activity.info().workflow_id}",
                 allow_restricted_raw=True,
             )
             return payload

@@ -121,9 +121,11 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
     build_activity_bindings,
 )
+from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
+    TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
@@ -939,7 +941,7 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             summary=f"{key[0]} completed", metadata={"omnigentSessionId": session}
         )
 
-    async def resolve_host(planned):
+    async def resolve_host(planned, *, request):
         return fleet.resolve_host(planned), get_launch_policy("omnigent-on-demand@1")
 
     async with isolated_postgres([]) as sessions:
@@ -1369,8 +1371,26 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
         ]
         assert "workspaceCheckpointRestoreRef" not in predecessor.workspace_spec
         restore_ref = successor.workspace_spec["workspaceCheckpointRestoreRef"]
+        async with sessions() as session:
+            observer = TemporalArtifactService(TemporalArtifactRepository(session))
+            artifact_id = TemporalOmnigentArtifactGateway._artifact_id(restore_ref)
+            # The default journey retains disabled-mode read compatibility;
+            # verify the sibling denial at the authenticated artifact boundary.
+            with monkeypatch.context() as authenticated:
+                authenticated.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    await observer.read(
+                        artifact_id=artifact_id,
+                        principal="service:recovery-journey-observer",
+                        admitted_principal="workflow:unrelated-recovery-journey",
+                    )
+            _artifact, restore_bytes = await observer.read(
+                artifact_id=artifact_id,
+                principal="service:recovery-journey-observer",
+                admitted_principal=f"workflow:{successor.step_execution.workflow_id}",
+            )
         with tarfile.open(
-            fileobj=io.BytesIO(await artifacts.read_bytes(restore_ref)), mode="r:gz"
+            fileobj=io.BytesIO(restore_bytes), mode="r:gz"
         ) as archive:
             saved = {
                 Path(member.name).name: archive.extractfile(member).read().decode()
