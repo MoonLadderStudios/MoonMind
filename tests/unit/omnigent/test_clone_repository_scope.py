@@ -91,10 +91,9 @@ async def test_clone_rejects_redirect_before_contacting_new_repository(
                         )
                     )
                     self.send_response(302)
-                    self.send_header(
-                        "Location",
-                        self.path.replace("/owner/repo.git/", "/other/repo.git/", 1),
-                    )
+                    # A fixed fixture target avoids reflecting request bytes into
+                    # headers while still redirecting to a different repository.
+                    self.send_header("Location", "/other/repo.git/info/refs")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
