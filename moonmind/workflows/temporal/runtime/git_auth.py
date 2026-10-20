@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
+from urllib.parse import unquote, urlsplit
 
 _GITHUB_TOKEN_GIT_CREDENTIAL_HELPER = (
     '!f() { test "$1" = get || exit 0; '
@@ -34,9 +35,7 @@ def build_github_token_git_environment(
 
     normalized_host = str(host or "").strip().lower() or "github.com"
     env["GITHUB_TOKEN"] = normalized_token
-    env["GIT_TERMINAL_PROMPT"] = str(
-        env.get("GIT_TERMINAL_PROMPT") or terminal_prompt
-    )
+    env["GIT_TERMINAL_PROMPT"] = str(env.get("GIT_TERMINAL_PROMPT") or terminal_prompt)
     env["GIT_CONFIG_COUNT"] = "2"
     env["GIT_CONFIG_KEY_0"] = f"credential.https://{normalized_host}.helper"
     env["GIT_CONFIG_VALUE_0"] = ""
@@ -71,7 +70,14 @@ _ISOLATED_GIT_ENV_PASSTHROUGH = (
 _ISOLATED_GIT_CREDENTIAL_ENV = "MOONMIND_GIT_CREDENTIAL"
 _ISOLATED_GIT_CREDENTIAL_HELPER = (
     '!f() { test "$1" = get || exit 0; '
-    f'echo username=x-access-token; echo password="${_ISOLATED_GIT_CREDENTIAL_ENV}"; '
+    "protocol=; host=; path=; while IFS= read -r field; do "
+    'case "$field" in protocol=*) protocol=${field#*=};; '
+    "host=*) host=${field#*=};; path=*) path=${field#*=};; esac; done; "
+    'host=$(printf %s "$host" | tr "[:upper:]" "[:lower:]"); path=${path%/}; '
+    'test "$protocol" = https && test "$host" = "$MOONMIND_GIT_HOST" || exit 0; '
+    'test "$path" = "$MOONMIND_GIT_REPOSITORY_PATH" || '
+    'test "$path" = "$MOONMIND_GIT_LFS_PATH" || exit 0; '
+    f'printf "username=x-access-token\\npassword=%s\\n" "${_ISOLATED_GIT_CREDENTIAL_ENV}"; '
     "}; f"
 )
 
@@ -80,7 +86,7 @@ def build_isolated_git_environment(
     token: str | None,
     *,
     base_env: Mapping[str, str] | None = None,
-    host: str = "github.com",
+    repository_url: str | None = None,
 ) -> dict[str, str]:
     """Return a Git process environment that admits only ``token``.
 
@@ -92,7 +98,11 @@ def build_isolated_git_environment(
     a token the process is anonymous. The caller's own ``HOME`` is untouched;
     only this Git process reads an empty one. Known Git LFS filters are added
     explicitly so isolation still materializes LFS files without trusting
-    arbitrary ambient filter commands.
+    arbitrary ambient filter commands. Credentials are available only for the
+    admitted HTTPS repository and its standard LFS endpoint. HTTP redirects are
+    disabled because Git can forward already-acquired credentials without
+    consulting the helper again. This is transport scoping, not confinement
+    against arbitrary code that can read the process environment.
     """
 
     source = base_env or {}
@@ -110,6 +120,8 @@ def build_isolated_git_environment(
     entries = [
         ("credential.helper", ""),
         ("http.extraHeader", ""),
+        ("credential.useHttpPath", "true"),
+        ("http.followRedirects", "false"),
         # System/global isolation also removes the normal Git LFS install.
         # Restore only the fixed trusted driver, never inherited filter config.
         ("filter.lfs.clean", "git-lfs clean -- %f"),
@@ -119,7 +131,25 @@ def build_isolated_git_environment(
     ]
     normalized_token = str(token or "").strip()
     if normalized_token:
-        normalized_host = str(host or "").strip().lower() or "github.com"
+        target = urlsplit(str(repository_url or ""))
+        path = unquote(target.path).strip("/")
+        if (
+            target.scheme != "https"
+            or not target.netloc
+            or target.username is not None
+            or target.password is not None
+            or target.query
+            or target.fragment
+            or not path
+            or any(char in str(repository_url) + path for char in "\r\n\x00")
+        ):
+            raise ValueError(
+                "an admitted HTTPS repository is required for Git credentials"
+            )
+        normalized_host = target.netloc.lower()
+        env["MOONMIND_GIT_HOST"] = normalized_host
+        env["MOONMIND_GIT_REPOSITORY_PATH"] = path
+        env["MOONMIND_GIT_LFS_PATH"] = path.removesuffix(".git") + ".git/info/lfs"
         env[_ISOLATED_GIT_CREDENTIAL_ENV] = normalized_token
         entries.append(
             (
