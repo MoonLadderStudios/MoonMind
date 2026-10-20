@@ -1380,8 +1380,9 @@ async def test_codex_dispatch_preserves_admitted_plan_and_checkpoint_authority(
 
     assert result.failure_class is None
     assert result.summary == "Codex session completed"
-    # A typed plan binding delegates its verified inputs before the realizer.
-    assert admitted == ([] if authority == "legacy_flat" else [(request, plan)])
+    # Every step-bound plan delegates verified inputs before the realizer,
+    # including retained plans that have no compact typed binding.
+    assert admitted == [(request, plan)]
     assert len(delivered) == 1
     assert delivered[0].execution_profile_ref == request.execution_profile_ref
     assert delivered[0].step_execution == request.step_execution

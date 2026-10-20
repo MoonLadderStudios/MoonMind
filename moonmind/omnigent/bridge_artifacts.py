@@ -75,12 +75,16 @@ async def link_verified_execution_plan_inputs(
         TemporalArtifactService,
     )
 
-    plan = verify_execution_plan_envelope(plan)
+    plan = verify_execution_plan_envelope(
+        plan.model_dump(mode="json", by_alias=True)
+        if hasattr(plan, "model_dump")
+        else plan
+    )
     if not workflow_id or not run_id:
         raise OmnigentArtifactError(
             "plan input delegation requires a concrete execution"
         )
-    if binding is None or (
+    if binding is not None and (
         binding.plan_ref != plan.planRef
         or binding.plan_digest != "sha256:" + plan.planRef.rsplit(":", 1)[-1]
         or (
@@ -99,28 +103,31 @@ async def link_verified_execution_plan_inputs(
     refs = _execution_plan_input_refs(plan, binding)
     async with session_factory() as session:
         repository = TemporalArtifactRepository(session)
-        # The compact plan artifact pointer is validated before attaching any
-        # execution grant. A wrong pointer must not expose an unrelated blob
+        # Parameter-selected and freshly compiled plans have no compact binding;
+        # their verified persisted envelope supplies the input closure. When
+        # present, the compact plan artifact pointer is validated before attaching
+        # any execution grant. A wrong pointer must not expose an unrelated blob
         # while the subsequent plan comparison reports the mismatch.
-        plan_artifact = await repository.get_artifact(
-            TemporalOmnigentArtifactGateway._artifact_id(binding.plan_artifact_ref)
-        )
-        expected_digest = hashlib.sha256(
-            json.dumps(
-                plan.model_dump(mode="json", by_alias=True),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8")
-        ).hexdigest()
-        if (
-            plan_artifact.sha256 != expected_digest
-            or (plan_artifact.metadata_json or {}).get("artifact_class")
-            != "omnigent.execution_plan"
-        ):
-            raise OmnigentArtifactError(
-                "plan artifact pointer conflicts with verified execution authority"
+        if binding is not None:
+            plan_artifact = await repository.get_artifact(
+                TemporalOmnigentArtifactGateway._artifact_id(binding.plan_artifact_ref)
             )
+            expected_digest = hashlib.sha256(
+                json.dumps(
+                    plan.model_dump(mode="json", by_alias=True),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                plan_artifact.sha256 != expected_digest
+                or (plan_artifact.metadata_json or {}).get("artifact_class")
+                != "omnigent.execution_plan"
+            ):
+                raise OmnigentArtifactError(
+                    "plan artifact pointer conflicts with verified execution authority"
+                )
         admission = plan.payload.admissionAuthority
         if admission is not None and admission.admissionMode == "strict":
             support_ref = admission.supportEvidenceRef
@@ -374,10 +381,22 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             raise OmnigentArtifactError(
                 "repository plan delegation requires Step Execution authority"
             )
+        binding = request.omnigent_execution_plan or identity.omnigent_execution_plan
+        if binding is None:
+            # Non-compact dispatch still selects a persisted plan through the
+            # trusted workflow request. Prove that exact envelope before grants;
+            # an absent binding is not permission to admit a different plan.
+            _identity, _binding, persisted = await self._admitted_plan(
+                request, noun="plan input delegation"
+            )
+            if persisted != plan:
+                raise OmnigentArtifactError(
+                    "plan input delegation conflicts with persisted request authority"
+                )
         await link_verified_execution_plan_inputs(
             session_factory=self._session_factory,
             plan=plan,
-            binding=request.omnigent_execution_plan or identity.omnigent_execution_plan,
+            binding=binding,
             workflow_id=identity.workflow_id,
             run_id=identity.run_id,
         )

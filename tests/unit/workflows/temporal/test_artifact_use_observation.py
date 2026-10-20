@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -27,6 +28,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactStateError,
+    TemporalArtifactValidationError,
 )
 from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
     _complete_artifact,
@@ -654,3 +656,81 @@ async def test_failed_claim_extension_preserves_loaded_expiry_and_caller_work(
         assert len(claims) == 1
         assert claims[0].id == original_id
         assert claims[0].expires_at.replace(tzinfo=UTC) == original_expiry
+
+
+@pytest.mark.parametrize("surface", ("read", "read_path", "compute_preview"))
+@pytest.mark.parametrize("primary_kind", ("missing", "invalid", "cancelled", "none"))
+@pytest.mark.parametrize("release_kind", ("non_database", "invalidated", "control", "cancelled"))
+async def test_release_failure_preserves_primary_serving_failure(
+    tmp_path, monkeypatch, caplog, surface, primary_kind, release_kind
+):
+    """Real release SQL errors retain the read error, including cancellation."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    caplog.set_level(logging.WARNING, logger=_LOGGER)
+    async with temporal_db(tmp_path) as sessions, sessions() as session:
+        service = _service(session, tmp_path)
+        artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
+        artifact_id = artifact.artifact_id
+        primary = (
+            TemporalArtifactValidationError("invalid artifact path")
+            if primary_kind == "invalid" else asyncio.CancelledError("serving cancelled")
+        )
+        if primary_kind == "missing":
+            service._store.read_path(artifact.storage_key).unlink()
+        elif primary_kind in {"invalid", "cancelled"}:
+            def fail_storage(_key):
+                raise primary
+            monkeypatch.setattr(
+                service._store, "read_path" if surface == "read_path" else "read_bytes",
+                fail_storage,
+            )
+        cleanup = (
+            asyncio.CancelledError("release cancelled") if release_kind == "cancelled"
+            else DBAPIError("DELETE", {}, RuntimeError("release invalidated"), connection_invalidated=True)
+            if release_kind == "invalidated"
+            else RuntimeError("release programming error")
+        )
+        releasing = False
+        def fail_release(connection, cursor, statement, parameters, context, many):
+            nonlocal releasing
+            normalized = statement.lstrip().upper()
+            if normalized.startswith("DELETE FROM TEMPORAL_ARTIFACT_USE_CLAIMS"):
+                releasing = True
+                if release_kind != "control":
+                    raise cleanup
+            if releasing and release_kind == "control" and normalized.startswith("RELEASE SAVEPOINT "):
+                cursor.execute("SELECT missing_release_control()")
+        engine = sessions.kw["bind"].sync_engine
+        event.listen(engine, "before_cursor_execute", fail_release)
+        try:
+            expected = (
+                TemporalArtifactValidationError if primary_kind == "invalid" and surface == "read_path"
+                else TemporalArtifactStateError if primary_kind in {"missing", "invalid"}
+                else asyncio.CancelledError if primary_kind == "cancelled"
+                else sqlite3.OperationalError if release_kind == "control"
+                else DBAPIError if release_kind == "invalidated"
+                else type(cleanup)
+            )
+            with pytest.raises(expected) as caught:
+                await getattr(service, surface)(
+                    artifact_id=artifact_id, principal=_READER, admitted_principal=_OWNER,
+                )
+        finally:
+            event.remove(engine, "before_cursor_execute", fail_release)
+        if primary_kind == "missing":
+            assert "bytes are missing" in str(caught.value)
+            if surface == "read_path":
+                assert caught.value.__cause__ is None
+            else:
+                assert isinstance(caught.value.__cause__, FileNotFoundError)
+        elif primary_kind == "invalid":
+            assert (caught.value if surface == "read_path" else caught.value.__cause__) is primary
+        elif primary_kind == "cancelled":
+            assert caught.value is primary
+        elif release_kind != "control":
+            assert caught.value is cleanup
+        if primary_kind != "none":
+            assert "consumer-use release also failed" in " ".join(caught.value.__notes__)
+            assert "release failed while preserving serving failure" in caplog.text
+        else:
+            assert "preserving serving failure" not in caplog.text

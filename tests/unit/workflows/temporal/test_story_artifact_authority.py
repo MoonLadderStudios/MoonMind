@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from temporalio.workflow import ParentInfo
 from temporalio.api.common.v1 import WorkflowExecution
 from temporalio.api.namespace.v1 import NamespaceInfo
 from temporalio.api.workflow.v1 import WorkflowExecutionInfo
@@ -15,6 +16,9 @@ from temporalio.api.workflowservice.v1 import (
 
 import pytest
 
+from api_service.services.checkpoint_branch_turn_execution import (
+    build_branch_turn_execution_identity,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
@@ -41,7 +45,8 @@ from tests.unit.omnigent.test_admitted_input_authority import (  # noqa: F401
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 @pytest.mark.parametrize("scenario", [
-    "current_history", "retained_history", "forged_retained_parent",
+    "current_history", "checkpoint_branch_turn", "retained_checkpoint_branch_turn",
+    "retained_history", "forged_retained_parent",
     "missing_namespace", "foreign_namespace", "parent_run_mismatch",
     "child_workflow_mismatch", "child_run_mismatch", "describe_unavailable", "missing_output", "unsafe_output",
 ])
@@ -49,13 +54,21 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
     artifacts, tmp_path, monkeypatch, scenario, caplog, auth_mode,  # noqa: F811
 ):
     parent, child = "story-parent", "story-parent:agent:breakdown"
+    semantic_run_id = "parent-run"
+    if scenario in {"checkpoint_branch_turn", "retained_checkpoint_branch_turn"}:
+        identity = build_branch_turn_execution_identity(
+            branch_id="story-branch", branch_turn_id="story-turn",
+            logical_step_id="breakdown", ordinal=1,
+        )
+        parent, child = identity.workflow_id, identity.agent_run_workflow_id
+        semantic_run_id = identity.semantic_run_id
     request = AgentExecutionRequest.model_validate({
         "agentKind": "external", "agentId": "omnigent",
         "correlationId": parent, "idempotencyKey": "breakdown",
         "stepExecution": {
-            "schemaVersion": "v1", "workflowId": parent, "runId": "parent-run",
+            "schemaVersion": "v1", "workflowId": parent, "runId": semantic_run_id,
             "logicalStepId": "breakdown", "executionOrdinal": 1,
-            "stepExecutionId": f"{parent}:parent-run:breakdown:execution:1",
+            "stepExecutionId": f"{parent}:{semantic_run_id}:breakdown:execution:1",
             "runtimeContextPolicy": "fresh_agent_run",
         },
     })
@@ -74,10 +87,13 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
         status="completed", startedAt=datetime.now(UTC), workspacePath=str(workspace),
     ))
     monkeypatch.setattr(
-        agent_run.workflow, "patched", lambda _patch: scenario == "current_history"
+        agent_run.workflow, "patched",
+        lambda _patch: scenario in {"current_history", "checkpoint_branch_turn"}
     )
     monkeypatch.setattr(agent_run.workflow, "info", lambda: SimpleNamespace(
         workflow_id=child, run_id="child-run", task_queue="mm.workflow.user.v2",
+        namespace="default",
+        parent=ParentInfo(namespace="default", workflow_id=parent, run_id="parent-run"),
     ))
     forged = scenario in {"current_history", "forged_retained_parent"}
     result = agent_run.MoonMindAgentRun()._enrich_result_metadata(
@@ -86,7 +102,7 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
             "agentRunId": "story-run", "storyBreakdownPath": "stories.json",
             "storyBreakdownMarkdownPath": "stories.md",
             "parentWorkflowId": "forged-parent" if forged else parent,
-            "parentRunId": "forged-run" if forged else "parent-run",
+            "parentRunId": "forged-run" if forged else semantic_run_id,
         }),
     )
     assert result.metadata["parentWorkflowId"] == (
@@ -116,10 +132,22 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
             namespace_info=NamespaceInfo(id="namespace-id"),
         )),
     )
+    if scenario in {"checkpoint_branch_turn", "retained_checkpoint_branch_turn"}:
+        from temporalio.converter import DataConverter
+        from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
+            _recorded_server,
+        )
+
+        recorded, _ = _recorded_server(
+            workflow_service.describe_workflow_execution.return_value,
+            launch_request=request,
+        )
+        workflow_service.get_workflow_execution_history = recorded.get_workflow_execution_history
     if scenario == "describe_unavailable":
         workflow_service.describe_workflow_execution.side_effect = RuntimeError("Temporal unavailable")
     monkeypatch.setattr(worker_runtime.temporalio.activity, "client", lambda: SimpleNamespace(
         namespace="default", workflow_service=workflow_service,
+        data_converter=DataConverter.default if scenario in {"checkpoint_branch_turn", "retained_checkpoint_branch_turn"} else None,
     ))
     async with artifacts() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
@@ -171,8 +199,17 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
             for link in await TemporalArtifactRepository(session).list_links(ref)
         }
         assert child in linked_workflows
+        if scenario in {"checkpoint_branch_turn", "retained_checkpoint_branch_turn"}:
+            parent_links = [
+                link for link in await TemporalArtifactRepository(session).list_links(ref)
+                if link.workflow_id == parent
+            ]
+            assert parent_links
+            assert {link.run_id for link in parent_links} == {semantic_run_id}
+            assert request.step_execution.run_id == semantic_run_id
         assert not {"sibling-parent", "forged-parent"} & linked_workflows
-        if scenario in {"current_history", "retained_history", "describe_unavailable"}:
+        if scenario in {"current_history", "checkpoint_branch_turn", "retained_checkpoint_branch_turn",
+            "retained_history", "describe_unavailable"}:
             assert parent in linked_workflows
         else:
             assert parent not in linked_workflows
@@ -208,7 +245,8 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
             workflow_id=parent,
         ))
         if auth_mode == "disabled" or scenario in {
-            "current_history", "retained_history", "describe_unavailable"
+            "current_history", "checkpoint_branch_turn", "retained_checkpoint_branch_turn",
+            "retained_history", "describe_unavailable"
         }:
             assert await captured["reader"](ref) == story_bytes
         else:
