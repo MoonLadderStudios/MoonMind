@@ -70,6 +70,7 @@ async def link_verified_execution_plan_inputs(
         verify_execution_plan_envelope,
     )
     from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactNotFoundError,
         TemporalArtifactRepository,
         TemporalArtifactService,
     )
@@ -120,6 +121,28 @@ async def link_verified_execution_plan_inputs(
             raise OmnigentArtifactError(
                 "plan artifact pointer conflicts with verified execution authority"
             )
+        admission = plan.payload.admissionAuthority
+        if admission is not None and admission.admissionMode == "strict":
+            support_ref = admission.supportEvidenceRef
+            try:
+                support_artifact = await repository.get_artifact(
+                    TemporalOmnigentArtifactGateway._artifact_id(support_ref)
+                )
+            except (TemporalArtifactNotFoundError, OmnigentArtifactError):
+                # The validator owns unavailable-certificate handling,
+                # including ordinary reissue of retained pre-upgrade strict
+                # authority. Missing/undecodable artifacts receive no grant.
+                refs.discard(support_ref)
+            else:
+                if (
+                    support_artifact.sha256
+                    != admission.supportEvidenceDigest.removeprefix("sha256:")
+                    or (support_artifact.metadata_json or {}).get("artifact_class")
+                    != "omnigent.execution_support_evidence"
+                ):
+                    raise OmnigentArtifactError(
+                        "support evidence pointer conflicts with verified execution authority"
+                    )
         service = TemporalArtifactService(repository)
 
         async def link(artifact_id: str) -> None:
@@ -189,6 +212,12 @@ def _execution_plan_input_refs(plan, binding) -> set[str]:
             plan.payload.agentProfileSnapshotRef,
             plan.payload.policySnapshotRef,
             plan.payload.effectiveLaunchSnapshotRef,
+            (
+                plan.payload.admissionAuthority.supportEvidenceRef
+                if plan.payload.admissionAuthority is not None
+                and plan.payload.admissionAuthority.admissionMode == "strict"
+                else None
+            ),
             plan.payload.resolvedSkills.get("resolvedSkillSetRef"),
             *(
                 access["artifactRef"]

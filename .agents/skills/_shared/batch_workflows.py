@@ -121,7 +121,10 @@ def _text(value: Any) -> str | None:
 
 
 def _normalize_publish_mode(value: str | None) -> str:
-    return normalize_publish_mode(value)
+    try:
+        return normalize_publish_mode(value)
+    except ValueError as exc:
+        raise BatchInputError(str(exc)) from exc
 
 
 def _publish_payload_for_mode(publish_mode: str) -> dict[str, Any]:
@@ -1619,11 +1622,8 @@ def _refresh_owned_status(
         described = _describe_execution(
             moonmind_url=moonmind_url, workflow_id=workflow_id
         )
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return "admission_lost", None
-        return "unknown", None
     except Exception:  # noqa: BLE001 - describe failures stay unknown
+        # Even a 404 can be delayed visibility, not proof an accepted child vanished.
         return "unknown", None
     return _child_status_from_describe(described), described
 
@@ -1662,9 +1662,7 @@ def _wait_for_capacity(
             status, _ = _refresh_owned_status(
                 moonmind_url=moonmind_url, workflow_id=workflow_id
             )
-            if status == "admission_lost":
-                owned.pop(workflow_id, None)
-            elif status != "unknown":
+            if status != "unknown":
                 owned[workflow_id] = status
 
 
@@ -1716,8 +1714,6 @@ def _submit_repository_child(
     status, _ = _refresh_owned_status(
         moonmind_url=moonmind_url, workflow_id=workflow_id
     )
-    if status == "admission_lost":
-        return None, "admission_unconfirmed: child missing immediately after queueing", None
     # The POST receipt's workflowId proves acceptance; an unavailable
     # read-back leaves it accepted but unobserved ("unknown"), never rejected.
     return workflow_id, None, status
@@ -2037,9 +2033,6 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                 status, described = _refresh_owned_status(
                     moonmind_url=moonmind_url, workflow_id=reuse["workflowId"]
                 )
-                if status == "admission_lost":
-                    to_submit.append((target, 0))
-                    continue
                 evidence = None
                 publication = None
                 if isinstance(described, dict):
@@ -2058,6 +2051,8 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                         target,
                         status=status if status != "unknown" else "unknown",
                         workflow_id=reuse["workflowId"],
+                        idempotency_key=prior_by_ref.get(ref, {}).get("idempotencyKey"),
+                        attempt=int(reuse.get("attempt") or 0),
                         reason="already_queued",
                         evidence=evidence,
                         publication=publication,

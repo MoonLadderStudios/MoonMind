@@ -1,6 +1,6 @@
 ---
 name: update-moonmind
-description: Install one immutable MoonMind release through a durable updater that recreates the fleet in place, preserving deployment authority and operator access.
+description: Update MoonMind through the standalone deployment controller, preserving deployment authority, active work and operator access.
 metadata:
   required-capabilities:
     - docker
@@ -31,7 +31,7 @@ The entrypoint updates to `latest`: it pulls `<image-repository>:latest` once an
 
 The selected image supplies the canonical application code, migrations, and portable Skills. Deployment-owned `.env`, interfaces, authentication and explicit configuration retain their existing authority. The standalone controller (`deploy/controller`, running in its own `moonmind-controller` Compose project) is the portable semantic entrypoint for both this Skill and MoonMind's deployment tool: it stages the pulled image, recreates changed services with `pull --policy always` then `up -d --pull never --no-build --remove-orphans --wait`, and owns the local operation record and recovery independently of MoonMind health. The entrypoint installs and starts it by default: when no controller secret exists, or bootstrap left a secret but the controller never started (no reachable endpoint, operation record, or Compose container), it runs the selected release image's own `deploy/controller/bootstrap.py install` and `start`, and that same pulled image runs the controller. No flag or manual endpoint alignment is needed. The host CLI also updates and restores the controller, which never replaces itself. The entrypoint reads an installed controller's loopback port from its deployment-owned identity. Settings Operations and a workflow's `deployment.update_compose_stack` tool submit to and observe the same controller, so every entrypoint shares one operation per target. There is no other updater to fall back to: a controller with recorded work keeps recovery authority, an unreachable explicitly selected controller is reported rather than bypassed, and explicit `--controller-url`, `--controller-secret-file`, or corresponding environment settings always select the controller without reinstalling it. The controller defers its apply while a legacy application-owned writer is still active.
 
-The controller records an immutable submission, starts one named updater with durable ownership, pulls and verifies the digest the host pull resolved, persists the desired state, recreates the installed fleet in place, verifies readiness for every affected service, and migrates the singular Omnigent release (server/host digests, launch policy versions, recurring schedule admissions) to the resolved digests. No parallel candidate or retained fleet is started, so nothing is drained afterwards and recreation has a bounded downtime window. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
+The controller owns the durable operation, stages the selected image, persists desired state, recreates changed services in place, and records installed images and verification. It also updates the singular configured Omnigent release; fresh attempts follow the installed runtime without rewriting policy versions or recurring schedules. No parallel candidate fleet is started. The controller's operation record, installed state and required verification establish completion; a pull, process exit or container start alone does not.
 
 Before a default host submission, the entrypoint refreshes an idle controller
 through the release's existing bootstrap, including when journal support is
@@ -42,34 +42,10 @@ controller. Active controller work retains its owner and is observed instead;
 explicit controller selections retain their release choice. A rollback target
 without the bootstrap can use the installed application's repair source.
 
-Before handing off through the transitional updater, the host verifies Docker
-access from the updater's own rendered environment and networks. If its
-configured `docker-proxy` transport is unavailable, it starts only the proxy
-under the existing deployment kernel lock, without recreating an existing
-container, retries readiness, and if necessary
-recreates only that service once to refresh stale socket binds. A working proxy
-stays intact, and explicit external Docker endpoints never trigger local proxy
-repair. Recovery preserves the selected Compose files and deployment settings.
-It rechecks transport after acquiring the lock and never repairs alongside a
-running deployment owner. The probe and lock holder disable image pulls through
-a service `pull_policy` overlay, preserving support for older Compose V2 releases.
-Before those checks, Compose acquires a distinct worker image using the
-deployment's original pull policy, platform, and build configuration.
-Acquisition failure stops before transport recovery.
-Exhausted recovery stops before handoff and reports the original redacted
-errors; it does not claim that the release started.
 
 ## Terminal outcomes
 
-Completion requires a terminal release receipt naming the exact source SHA,
-the pinned repository digest of the installed image, and the verified installed
-readiness for every affected service. The serialized terminal result carries
-the verified `sourceRevision` in its outputs alongside `resolvedDigest` and
-`releaseReadinessArtifactRef`; receipt recovery validates that bound
-`sourceRevision` together with the digest before granting image authority, so
-the receipt is self-sufficient and never depends on an unbound second record.
-Report the unfinished phase and its recorded recovery owner when bounded
-recovery exhausts; preserve primary deployment success when only reporting remains.
+Observe the current controller operation through its terminal state and report its operation ID, requested image, installed image and verification. Confirmed installation stays recorded while required verification is pending; after controller restart, the same operation resumes verification without repeating Compose recreation. `succeeded` means required verification completed; `partially_verified` reports the installation with explicit remaining gaps and returns nonzero. A no-op still requires installed-state and access observations. Image source revision is diagnostic, never an installation selection or compatibility gate. Report the unfinished phase and recorded recovery owner when recovery exhausts; preserve confirmed installation if auxiliary reporting fails.
 
 - Verify readiness against the declared operator addresses from the immutable
   submission (`--operator-url` plus any configured base URL). An image pull,

@@ -679,15 +679,17 @@ moonmind container python-tests tests/unit/path/test_file.py
 
 ### 15.1 Credentials
 
-In `accounts`, `oidc`, and `header` modes, the managed-session credential
-boundary supplies a scoped bearer as `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; in
-restricted local `disabled` mode the same shape is issued for the stable
-persisted user behind a loopback-only bind or trusted ingress. Sessions never
-receive a shared deployment-wide token. The token is signed by the session
-launcher, expires with the bounded session lifetime, is accepted only by
-`/mcp/container/tools/call`, travels over TLS/loopback and never in URLs, and is
-never a browser session. Its claims bind owner, runtime, agent run, and session,
-and submissions whose workspace or correlation differ fail before job creation.
+The runtime supplies a scoped bearer as `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`
+or its token-file selector independently of browser authentication. Omnigent
+sessions use a service owner; retained managed sessions may carry their recorded
+owner. Sessions never receive a shared deployment-wide token. The token is
+signed by the session launcher, expires with the bounded session lifetime, is
+accepted only by `/mcp/container/tools/call`, travels over TLS/loopback and never
+in URLs, and is never a browser session. With no explicit
+`MOONMIND_CONTAINER_JOBS_MCP_URL`, the CLI derives `/mcp/container` from
+`MOONMIND_URL`, using the same scoped endpoint as runtime-issued configuration.
+The claims bind owner, runtime, agent run, and session; submissions whose
+workspace or correlation differ fail before job creation.
 
 A generic Omnigent host receives the token as a file in its lease-owned control
 volume, minted for the launch policy's `timeoutSeconds`. Because the session can

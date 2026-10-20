@@ -986,7 +986,7 @@ def test_build_child_requests_skips_unsupported_target():
     assert skipped[0].reason == "unsupported_target"
 
 
-def test_normalize_publish_mode_falls_back_to_pr():
+def test_normalize_publish_mode_preserves_supported_values():
     module = _load_module()
     assert module["_normalize_publish_mode"]("none") == "none"
     assert module["_normalize_publish_mode"]("branch") == "branch"
@@ -995,7 +995,9 @@ def test_normalize_publish_mode_falls_back_to_pr():
         module["_normalize_publish_mode"]("pr_with_merge_automation")
         == "pr_with_merge_automation"
     )
-    assert module["_normalize_publish_mode"]("bogus") == "pr"
+    assert module["_normalize_publish_mode"]("auto") == "auto"
+    assert module["_normalize_publish_mode"](" PR ") == "pr"
+    assert module["_normalize_publish_mode"](" ") == "pr"
 
 
 @pytest.mark.parametrize("skill_id", ["batch-workflows", "batch-github-workflows"])
@@ -1436,10 +1438,11 @@ def _run_issue_fanout_over_transport(
     targets: list[dict[str, Any]] | None = None,
     extra_args: tuple[str, ...] = (),
     post: Any = None,
+    skill_id: str = "batch-workflows",
 ) -> tuple[int, dict[str, Any], list[str]]:
     """Drive ``main`` through the real POST/GET transport with a fake urlopen."""
 
-    module = _load_module()
+    module = _load_module(skill_id)
     methods: list[str] = []
 
     class _Response:
@@ -1728,3 +1731,84 @@ def test_issue_fanout_rerun_after_issue_snapshot_changes_reuses_existing_child(
     inputs = posted[-1]["payload"]["task"]["inputs"]
     snapshot = inputs.get("github_issue") or inputs.get("jira_issue")
     assert snapshot == (after.get("githubIssue") or after.get("jiraIssue"))
+
+
+@pytest.mark.parametrize("value", ["bogus", "false", False, 0, [], {}])
+def test_explicit_invalid_publish_mode_is_rejected(value):
+    module = _load_module()
+    with pytest.raises(module["BatchInputError"], match="publish mode"):
+        module["_normalize_publish_mode"](value)
+
+
+@pytest.mark.parametrize("skill_id", ["batch-workflows", "batch-github-workflows"])
+@pytest.mark.parametrize("value", ["bogus", "false", "0"])
+def test_invalid_publish_mode_never_submits(tmp_path, monkeypatch, value, skill_id):
+    code, evidence, methods = _run_issue_fanout_over_transport(
+        tmp_path, monkeypatch, describe=lambda: {"status": "queued"},
+        extra_args=("--publish-mode", value), skill_id=skill_id,
+    )
+    assert methods == []
+    assert code == 2
+    assert evidence["failure"]["code"] == "BATCH_FANOUT_INPUT_INVALID"
+
+
+def test_issue_fanout_preserves_accepted_receipt_after_delayed_404(tmp_path, monkeypatch):
+    def describe():
+        raise urllib.error.HTTPError("http://api/child", 404, "not visible yet", None, None)
+    code, evidence, methods = _run_issue_fanout_over_transport(
+        tmp_path, monkeypatch, describe=describe,
+    )
+    assert code == 0
+    assert methods.count("POST") == 1
+    assert [(item["workflowId"], item["status"]) for item in evidence["queued"]] == [
+        ("mm:child-0", "unknown")
+    ]
+
+
+def test_delayed_404_retains_accepted_child_capacity(monkeypatch):
+    module = _load_module()
+    def describe(**kwargs):
+        raise urllib.error.HTTPError("http://api/child", 404, "not visible yet", None, None)
+    monkeypatch.setitem(module["_refresh_owned_status"].__globals__, "_describe_execution", describe)
+    owned = {"accepted-child": "running"}
+    module["_wait_for_capacity"](
+        moonmind_url="http://api", owned=owned, max_concurrency=1, polls=1, interval=0,
+    )
+    assert owned == {"accepted-child": "running"}
+
+
+def test_partial_fanout_lost_ack_restart_reuses_accepted_identities(tmp_path, monkeypatch):
+    accepted = {}
+    posted_keys = []
+    lose_ack = True
+
+    def post(body):
+        nonlocal lose_ack
+        key = body["payload"]["idempotencyKey"]
+        posted_keys.append(key)
+        workflow_id = accepted.setdefault(key, f"mm:child-{len(accepted)}")
+        if lose_ack:
+            lose_ack = False
+            raise urllib.error.URLError("acknowledgment lost after acceptance")
+        return {"workflowId": workflow_id}
+
+    targets = [
+        {"provider": "jira", "ref": f"MM-{number}", "jiraIssue": {"key": f"MM-{number}"},
+         "repository": "acme/widgets"}
+        for number in (1, 2)
+    ]
+    first_code, first, _ = _run_issue_fanout_over_transport(
+        tmp_path, monkeypatch, targets=targets, post=post,
+        describe=lambda: {"status": "queued"}, extra_args=("--max-concurrency", "2"),
+    )
+    assert first_code == 1
+    assert [item["workflowId"] for item in first["queued"]] == ["mm:child-1"]
+    assert "acknowledgment lost" in first["errors"][0]["error"]
+    second_code, second, _ = _run_issue_fanout_over_transport(
+        tmp_path, monkeypatch, targets=targets, post=post,
+        describe=lambda: {"status": "queued"}, extra_args=("--max-concurrency", "2"),
+    )
+    assert second_code == 0
+    assert [item["workflowId"] for item in second["queued"]] == ["mm:child-0", "mm:child-1"]
+    assert len(accepted) == 2
+    assert posted_keys[:2] == posted_keys[2:]

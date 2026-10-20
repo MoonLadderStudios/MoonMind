@@ -519,7 +519,7 @@ def test_legacy_probe_ignores_the_always_on_service_container(controller_path):
     )
 
 
-def _verification_runner(engine, ps_state="running"):
+def _verification_runner(engine, ps_state="running", health=""):
     import json as _json
 
     class _Runner:
@@ -533,7 +533,7 @@ def _verification_runner(engine, ps_state="running"):
             if "ps" in args:
                 return {
                     "exit": 0,
-                    "output": _json.dumps({"Service": "api", "State": ps_state}),
+                    "output": _json.dumps({"Service": "api", "State": ps_state, "Health": health}),
                 }
             return {"exit": 0, "output": "ok"}
 
@@ -766,6 +766,78 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
     assert phases == ["pull", "storage", "journal-prepare", "up", "journal-quiesce",
                       "pull", "storage", "journal-prepare", "up"]
     assert "only writer recreated" in result["attempts"][0]["error"]
+
+
+def _exhausted_apply(server, record, store, tmp_path, monkeypatch, *, recovery_exit=0):
+    services = ["temporal-worker-agent-runtime", "temporal-worker-artifacts", "postgres", "minio"]
+    op = _begin_op(record, store, {"project": "moonmind-test",
+        "projectDir": str(tmp_path), "composeFiles": ["docker-compose.yaml"],
+        "services": services})
+    store.record_journal_transition(op["operationId"], {"sourceImages": ["sha256:source"]})
+    events = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if "up" in args and "--no-recreate" not in args:
+                if args[-2:] == ("temporal-worker-agent-runtime", "temporal-worker-artifacts"):
+                    events.append(("recover", args))
+                    return {"exit": recovery_exit, "output": "sweeper unhealthy"}
+                events.append(("up", args))
+                return {"exit": 1, "output": "container moonmind-api-1 is unhealthy"}
+            return {"exit": 0, "output": ""}
+
+    def helper(store, operation, **kwargs):
+        events.append((kwargs["phase"], None))
+        return {"status": "prepared" if kwargs["phase"] == "journal-prepare" else "quiesced"}
+
+    monkeypatch.setattr(server.engine, "subprocess_runner", Runner)
+    monkeypatch.setattr(server, "run_omnigent_step", helper)
+    result = server._apply_recording_failure(store, op["operationId"],
+        lambda operation: server.production_apply(store, operation))
+    return result, events
+
+
+def test_exhausted_apply_restarts_consumers_on_the_applied_release(
+    controller_path, tmp_path, monkeypatch
+):
+    # No retry follows the last attempt, so fenced writers and sweepers must
+    # not stay stopped: Compose recreates their services on the applied
+    # release (one-offs stay stopped) instead of leaving agent launches dead.
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    result, events = _exhausted_apply(server, record, store, tmp_path, monkeypatch)
+
+    assert result["status"] == "failed"
+    assert result["autoAttemptsExhausted"] is True
+    assert "moonmind-api-1 is unhealthy" in result["attempts"][-1]["error"]
+    assert result["reportingFailures"] == []
+    phases = [phase for phase, _args in events]
+    assert phases.count("journal-quiesce") == 3
+    assert phases.count("recover") == 1
+    assert phases[-2:] == ["journal-quiesce", "recover"]
+    recover = events[-1][1]
+    assert {"--no-deps", "--pull", "never", "--no-build", "--wait"} <= set(recover)
+    assert "postgres" not in recover
+
+
+def test_failed_consumer_recovery_is_recorded_beside_the_apply_error(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    result, _events = _exhausted_apply(
+        server, record, store, tmp_path, monkeypatch, recovery_exit=1,
+    )
+
+    assert result["status"] == "failed"
+    assert "moonmind-api-1 is unhealthy" in result["attempts"][-1]["error"]
+    assert len(result["reportingFailures"]) == 1
+    assert "journal consumer recovery after failed apply" in str(
+        result["reportingFailures"][0]
+    )
+    assert "sweeper unhealthy" in str(result["reportingFailures"][0])
 
 
 def test_journal_oneoff_runs_recorded_source_with_controller_transport(
@@ -1105,6 +1177,139 @@ def test_production_apply_accepts_completed_one_shot_services(
     assert checks["service:init-db"]["status"] == "passed"
     assert checks["service:init-db"]["detail"] == "completed (exit 0)"
     assert checks["service:api"]["detail"] == "running"
+
+
+def test_production_apply_keeps_installation_open_until_verification_finishes(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(record, store, {
+        "project": "moonmind-test", "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"], "services": ["api"],
+    })
+    runner = _verification_runner(server.engine)
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+    verify = server._verify_applied_release
+    observed = []
+
+    def observe_before_verifying(*args, **kwargs):
+        observed.append(store.load(operation["operationId"]))
+        return verify(*args, **kwargs)
+
+    monkeypatch.setattr(server, "_verify_applied_release", observe_before_verifying)
+    result = server.production_apply(store, operation)
+
+    assert observed[0]["installed"]["image"] == operation["desired"]["image"]
+    assert observed[0]["status"] == "applying"
+    assert observed[0]["verification"] == []
+    final = store.load(operation["operationId"])
+    assert final["installed"] == observed[0]["installed"]
+    assert final["status"] == result["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("service_state,health", [
+    ("running", ""), ("exited", ""), ("running", "healthy"),
+    ("running", "unhealthy"), ("running", "starting"),
+])
+def test_restart_resumes_installed_verification_without_reapplying(
+    controller_path, tmp_path, monkeypatch, service_state, health
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(record, store, {
+        "project": "moonmind-test", "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"], "services": ["api"],
+    })
+    runner = _verification_runner(server.engine, ps_state=service_state, health=health)
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+    verify = server._verify_applied_release
+
+    def interrupted(*args, **kwargs):
+        raise OSError("verification interrupted")
+
+    monkeypatch.setattr(server, "_verify_applied_release", interrupted)
+    with pytest.raises(OSError, match="verification interrupted"):
+        server.production_apply(store, operation)
+    installed = store.load(operation["operationId"])["installed"]
+    assert installed["image"] == operation["desired"]["image"]
+    assert store.load(operation["operationId"])["status"] == "applying"
+    store.note_reporting_failure(operation["operationId"], error="report unavailable")
+    runner.commands.clear()
+
+    monkeypatch.setattr(server, "_verify_applied_release", verify)
+    result = server.resume_open_operations(
+        store, lambda current: server.production_apply(store, current), runner=runner
+    )
+
+    final = store.load(operation["operationId"])
+    assert result["converged"] == [operation["operationId"]]
+    assert final["installed"] == installed
+    assert final["reportingFailures"] == ["report unavailable"]
+    assert final["status"] == (
+        "succeeded" if service_state == "running" and health in ("", "healthy")
+        else "partially_verified"
+    )
+    assert final["verification"]
+    assert not any("pull" in command or "up" in command for command in runner.commands)
+    assert store.list_open() == []
+
+
+@pytest.mark.parametrize("newer_completed", [False, True])
+def test_restart_does_not_verify_a_superseded_installation(
+    controller_path, tmp_path, newer_completed
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    older = store.begin(stack="moonmind", desired_image="img:old", source_revision="")
+    older["createdAt"] = "2025-01-01T00:00:00Z"
+    store._write(older)
+    store.confirm_installed(older["operationId"], image="img:old", verification_pending=True)
+    installed = store.load(older["operationId"])["installed"]
+    newer = store.begin(stack="moonmind", desired_image="img:new", source_revision="")
+    if newer_completed:
+        store.confirm_installed(newer["operationId"], image="img:new")
+    applied = []
+
+    def apply(operation):
+        applied.append(operation["operationId"])
+        store.confirm_installed(operation["operationId"], image=operation["desired"]["image"])
+
+    server.converge_on_restart(store, apply)
+
+    assert applied == ([] if newer_completed else [newer["operationId"]])
+    final = store.load(older["operationId"])
+    assert final["status"] == "superseded"
+    assert final["installed"] == installed
+    assert store.list_open() == []
+
+
+def test_unavailable_service_observation_never_finishes_as_success(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(record, store, {
+        "project": "moonmind-test", "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"], "services": ["api"],
+    })
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: _verification_runner(server.engine))
+
+    def unavailable(*args, **kwargs):
+        raise OSError("service observation unavailable")
+
+    monkeypatch.setattr(server.engine, "observe_services", unavailable)
+    result = server.production_apply(store, operation)
+
+    final = store.load(operation["operationId"])
+    assert final["installed"]["image"] == operation["desired"]["image"]
+    assert final["status"] == result["status"] == "partially_verified"
+    assert any(check["name"] == "service-observation" and check["status"] == "unavailable"
+               for check in final["verification"])
 
 
 def test_production_apply_still_fails_a_one_shot_that_exited_non_zero(

@@ -59,6 +59,7 @@ CONTROLLER_CAPABILITIES = (
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
 # complete stdout, never its bounded diagnostic tail.
+JOURNAL_CONSUMER_SERVICES = ("temporal-worker-agent-runtime", "temporal-worker-artifacts")
 JOURNAL_CONSUMER_INSPECT_FORMAT = (
     '{{$fleet := ""}}{{range .Config.Env}}'
     '{{if or (eq . "TEMPORAL_WORKER_FLEET=agent_runtime") '
@@ -352,9 +353,9 @@ def converge_on_restart(
 ) -> dict:
     """Resume unfinished work after a controller restart.
 
-    Completed applies (confirmed installation) are never repeated. When a
-    legacy writer may still be active, unfinished work is deferred with an
-    explicit reason instead of being taken over.
+    Completed applies are never repeated; installed open operations finish
+    their verification. When a legacy writer may still be active, work is
+    deferred with an explicit reason instead of being taken over.
 
     Stale open targets are reconciled before anything runs: only the newest
     open operation per stack survives, and an open operation older than a
@@ -372,9 +373,6 @@ def converge_on_restart(
         for operation in survivors["superseded"]
     )
     for operation in survivors["open"]:
-        if operation.get("installed") is not None:
-            skipped.append(operation["operationId"])
-            continue
         if legacy_writer_probe is not None:
             try:
                 if legacy_writer_probe():
@@ -444,9 +442,7 @@ def resume_open_operations(
                     with lock_mod.StackLock(store.state_dir, operation["stack"]).acquire():
                         # A submission may have finished it before this owner held the stack.
                         current = store.load(operation["operationId"])
-                        if current.get("status") in record_mod.OPEN_STATUSES and (
-                            current.get("installed") is None
-                        ):
+                        if current.get("status") in record_mod.OPEN_STATUSES:
                             _apply_recording_failure(store, operation["operationId"], applier)
                     return
                 except lock_mod.LockBusyError:
@@ -508,7 +504,7 @@ def _reconcile_open_operations(
             )
         newest = candidates[-1]
         terminal = confirmed.get(stack_name)
-        if terminal is not None and newest.get("installed") is None:
+        if terminal is not None:
             installed_image = (terminal.get("installed") or {}).get("image")
             if (
                 newest.get("desired", {}).get("image") != installed_image
@@ -1308,7 +1304,7 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
             if len(rows) != len(identifiers) or any(not isinstance(row, dict) for row in rows):
                 raise ValueError("Journal consumer inventory is incomplete")
         selected = set(target.get("services") or ())
-        standard = {"temporal-worker-agent-runtime", "temporal-worker-artifacts"}
+        standard = set(JOURNAL_CONSUMER_SERVICES)
         images, services = [], set()
         for row in rows:
             config = row.get("Config") or {}
@@ -1327,7 +1323,10 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
             return {"status": "skipped"}
         if services - selected:
             raise ValueError("Journal writers and sweepers must be selected together for recreation")
-        state = {"sourceImages": list(dict.fromkeys(images))}
+        state = {
+            "sourceImages": list(dict.fromkeys(images)),
+            "consumerServices": sorted((standard & selected) | services),
+        }
         store.record_journal_transition(operation_id, state)
     if compact:
         base = engine.compose_base(
@@ -1361,6 +1360,38 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
         store.record_journal_transition(operation_id, {"helperImage": helper_image, "receipt": receipt})
         return receipt
     raise ValueError("No installed or staged image can prepare the active recovery journals")
+
+
+def resume_journal_consumers(store, operation, *, runner, overlay) -> None:
+    """Recreate fenced writers and sweepers on the release this apply selected.
+
+    Called only after quiescence, when no automatic retry follows. Every
+    consumer service then runs one release over the compacted journals, as a
+    successful apply would leave them; stopped one-offs are not restarted.
+    """
+    target = operation.get("target") or {}
+    state = store.load(operation["operationId"]).get("journalTransition") or {}
+    selected = set(target.get("services") or ())
+    services = sorted(
+        set(state.get("consumerServices") or JOURNAL_CONSUMER_SERVICES) & selected
+    )
+    if not services:
+        return
+    base = engine.compose_base(
+        project=target.get("project", operation.get("stack")),
+        project_dir=target.get("projectDir", ""),
+        compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
+        env_files=_env_files_for_apply(target, overlay),
+    )
+    result = engine.run_command(runner, (
+        *base, "up", "-d", "--no-deps", "--pull", "never", "--no-build", "--wait",
+        *services,
+    ), timeout_seconds=engine.UP_TIMEOUT_SECONDS)
+    if int(result.get("exit", 0)) != 0:
+        raise engine.ApplyError(
+            "journal-consumer-recovery", int(result.get("exit", 1)),
+            redact_text(engine.tail_text(str(result.get("output", "")))),
+        )
 
 
 def _temporal_worker_images(runner, project: str, image: str) -> tuple[list, list]:
@@ -1651,6 +1682,13 @@ def production_apply(
 
     env_files = _env_files_for_apply(target, overlay)
 
+    if operation.get("installed") is not None:
+        return _finish_installed_verification(
+            store, operation, runner=runner, project=project,
+            env_files=env_files, overlay=overlay, outcome=None,
+            dispatch_probe=dispatch_probe, omnigent_migrator=omnigent_migrator,
+        )
+
     def before_compose():
         require_routing_floor(store, operation, runner=runner, overlay=overlay)
         try:
@@ -1680,30 +1718,51 @@ def production_apply(
         )
         raise
     except engine.ApplyError as exc:
-        store.record_attempt_error(
+        recorded = store.record_attempt_error(
             operation["operationId"], error=f"apply failed: {exc} {exc.output}"
         )
-        # Compose can recreate only part of the fleet before failing. Keep
-        # every writer/sweeper stopped until this same owner recompacts and
-        # retries; do not resume an old reader beside a new chunk writer.
-        if store.load(operation["operationId"]).get("journalTransition"):
+        # Compose can recreate only part of the fleet before failing. Never
+        # resume an old reader beside a new chunk writer: stop every writer and
+        # sweeper. A retry recompacts and recreates them; when none follows,
+        # recreate their services on this release so launches keep a worker.
+        if recorded.get("journalTransition"):
+            step = "quiescence"
             try:
                 prepare_controller_journals(
                     store, operation, runner=runner, overlay=overlay, compact=False
                 )
+                if recorded.get("autoAttemptsExhausted"):
+                    step = "recovery"
+                    resume_journal_consumers(
+                        store, operation, runner=runner, overlay=overlay
+                    )
             except Exception as cleanup:  # noqa: BLE001 - preserve the original apply error
                 with contextlib.suppress(OSError):
                     store.note_reporting_failure(
                         operation["operationId"], error=redact_text(
-                            f"journal consumer quiescence after failed apply: {cleanup}"
+                            f"journal consumer {step} after failed apply: {cleanup} "
+                            f"{getattr(cleanup, 'output', '')}"
                         ),
                     )
         raise
+    store.confirm_installed(
+        operation["operationId"], image=operation["desired"]["image"],
+        verification_pending=True,
+    )
+    return _finish_installed_verification(
+        store, operation, runner=runner, project=project,
+        env_files=env_files, overlay=overlay, outcome=outcome,
+        dispatch_probe=dispatch_probe, omnigent_migrator=omnigent_migrator,
+    )
+
+
+def _finish_installed_verification(
+    store, operation, *, runner, project, env_files, overlay, outcome,
+    dispatch_probe, omnigent_migrator,
+) -> dict:
+    """Resume only verification once the operation has confirmed its apply."""
     routing_cutover = converge_routing_cutover(
         store, operation, runner=runner, overlay=overlay
-    )
-    store.confirm_installed(
-        operation["operationId"], image=operation["desired"]["image"]
     )
     verification = _verify_applied_release(
         store,
@@ -1715,10 +1774,11 @@ def production_apply(
         omnigent_migrator=omnigent_migrator,
         extra_checks=[routing_cutover] if routing_cutover else [],
     )
-    if verification["complete"]:
-        return {"status": "succeeded", "outcome": outcome, "verification": verification}
+    final = store.finish_verification(
+        operation["operationId"], complete=verification["complete"]
+    )
     return {
-        "status": "partially_verified",
+        "status": final["status"],
         "outcome": outcome,
         "verification": verification,
     }
@@ -1748,6 +1808,8 @@ def _verify_applied_release(
     services = tuple(target.get("services", ()))
     operation_id = operation["operationId"]
     completed_services: list = []
+    service_health: dict = {}
+    recorded: list = []
     try:
         base = engine.compose_base(
             project=project,
@@ -1758,13 +1820,13 @@ def _verify_applied_release(
         observed = engine.observe_services(runner, base, services)
         services_running = observed["services"]
         completed_services = list(observed.get("completed") or ())
+        service_health = observed.get("health") or {}
     except Exception as exc:
-        store.record_verification(
-            operation_id,
-            name="service-observation",
-            status="unavailable",
-            detail=f"could not observe Compose services: {exc}",
-        )
+        recorded.append({
+            "name": "service-observation",
+            "status": "unavailable",
+            "detail": f"could not observe Compose services: {exc}",
+        })
         services_running = {}
     operator_access: dict[str, str] = {}
     for url in target.get("operatorUrls", ()) or ():
@@ -1790,8 +1852,9 @@ def _verify_applied_release(
         dispatch_ok=dispatch_ok,
         operator_access=operator_access or None,
         completed_services=completed_services,
+        service_health=service_health,
     )
-    recorded = list(result["checks"])
+    recorded.extend(result["checks"])
     if dispatch_probe is None:
         # Ordinary dispatch is not observable from the controller without an
         # application handle; the limitation is noted in the outcome instead

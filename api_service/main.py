@@ -3213,66 +3213,14 @@ async def startup_event():
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
     await _sweep_secret_invalidation_outbox()
-    # The guarded upgrade already ran before the preset seed sync above;
-    # it is not repeated here: a second run on the same startup could only
-    # re-read the just-seeded catalog, never improve the decision.
+    # The guarded upgrade already ran (and logged its decision) before the
+    # preset seed sync above. Neither it nor the read-only guard is repeated
+    # here: re-reading retained history only held the listener closed.
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
     # gates on it. Proxy mode is the only supported transport; retained
     # embedded sessions drain through the janitor-owned terminal-cleanup
     # probes after startup instead of blocking it.
-
-    # Ensure default user exists if auth is disabled.
-    # Single-user (#4346, parent #4345; design sections 9-10): the guarded
-    # conversion entrypoint in api_service.services.single_user_conversion
-    # owns upgrade eligibility and the default-User lifecycle (#4346/#4347,
-    # disabled local mode). This startup route consults that guard first
-    # and never seeds a default user or bypasses eligibility: fresh
-    # databases initialize without an account, eligible sources convert
-    # through the explicit entrypoint (preflight/apply_conversion), and
-    # refused sources without a conversion record stay fail-closed on
-    # ordinary routes (the disabled-mode boundary serves account-free
-    # only on ledger-proven fresh/converted state) while protected
-    # diagnostics and independent host recovery remain available. A
-    # restart therefore cannot seed a default user or publish a candidate
-    # on stale attribution.
-    from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
-
-    if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():
-        try:
-            from api_service.services.single_user_conversion import (
-                startup_guard_decision,
-            )
-
-            async with get_async_session_context() as guard_session:
-                guard_decision = await startup_guard_decision(guard_session)
-            logger.info(
-                "Single-user conversion guard: disposition=%s reason=%s (%s)",
-                guard_decision.disposition,
-                guard_decision.reason_code,
-                guard_decision.detail or "no further detail",
-            )
-            if not guard_decision.eligible:
-                logger.warning(
-                    "Single-user conversion blocked (%s); preserving source "
-                    "data, serving release, and operator access without "
-                    "conversion-side mutation.",
-                    guard_decision.reason_code,
-                )
-        except Exception as exc:
-            logger.warning(
-                "Single-user conversion guard unreadable (%s); refusing to "
-                "seed a default user without eligibility evidence.",
-                type(exc).__name__,
-            )
-        logger.info(
-            "Skipping default user seeding on startup: User-row lifecycle "
-            "is owned by the #4346 guarded conversion entrypoint."
-        )
-    else:
-        logger.info(
-            f"Auth provider is '{getattr(app.state, 'auth_production_mode', settings.oidc.AUTH_PROVIDER)}'. Skipping default user creation on startup."
-        )
 
     # Wait for the Temporal client to be available and initialize provider profile managers
     await ensure_provider_profile_managers_started()
@@ -3306,7 +3254,7 @@ async def _sync_preset_seed_catalog() -> None:
         async with get_async_session_context() as session:
             service = PresetCatalogService(session)
             result = await service.sync_seed_templates(seed_dir=_PRESET_SEED_DIR)
-            deactivated = await service.deactivate_templates(
+            deactivated = await service.deactivate_seed_templates(
                 slugs=_LEGACY_PRESET_SLUGS_TO_DEACTIVATE,
                 scope="global",
                 scope_ref=None,
