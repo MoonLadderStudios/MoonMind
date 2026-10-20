@@ -73,7 +73,7 @@ export function SkillCombobox({
   const linkedDescriptionId = `${generatedListId}-description`;
 
   const filteredOptions = useMemo(
-    () => filterOptions(options, value),
+    () => filterOptions(options, value === "auto" ? "" : value),
     [options, value],
   );
 

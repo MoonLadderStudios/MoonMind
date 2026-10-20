@@ -11,7 +11,7 @@ import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
-import { PageHeader } from '../components/dashboard/PageHeader';
+import { useDocumentTitle } from '../components/dashboard/PageHeader';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import {
   WorkflowColumnFilterButton,
@@ -1443,6 +1443,7 @@ function clearFilterField(filters: ColumnFilters, field: FilterField): ColumnFil
 }
 
 export function WorkflowListPage({ payload }: { payload: BootPayload }) {
+  useDocumentTitle('Workflows');
   const dashboardCfg = useMemo(() => readListDashboardConfig(payload), [payload.initialData]);
   const listPollMs = useMemo(() => {
     const candidate = dashboardCfg?.pollIntervalsMs?.list;
@@ -2909,7 +2910,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
-      <PageHeader title="Workflows" className="workflow-list-page-header" />
+      <h1 className="sr-only">Workflows</h1>
       <RouterSearchListener onSearchChange={adoptUrlSearch} />
       {hasWorkflowListNotices ? (
         <section className="workflow-list-notices-deck" aria-label="Workflow list notices">

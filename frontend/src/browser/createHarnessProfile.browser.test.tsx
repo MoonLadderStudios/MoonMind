@@ -112,6 +112,22 @@ function expectInsideViewport(controls: Element[]) {
 
 describe('Create Harness and Provider Profile authoring', () => {
   for (const viewport of [DESKTOP, MOBILE]) {
+    it(`keeps Advanced mode below the form content at ${viewport.width}px`, async () => {
+      await page.viewport(viewport.width, viewport.height);
+      const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+      cleanupRender = unmount;
+
+      const skill = await screen.findByRole('combobox', { name: 'Step 1 skill' }, { timeout: 10_000 });
+      expect((skill as HTMLInputElement).value).toBe('auto');
+      const advanced = screen.getByRole('checkbox', { name: 'Advanced mode' });
+      const steps = screen.getByRole('region', { name: 'Steps' });
+      expect(advanced.getBoundingClientRect().top).toBeGreaterThan(steps.getBoundingClientRect().bottom);
+
+      await userEvent.click(advanced);
+      expect(screen.getByLabelText('Priority')).toBeTruthy();
+      expectInsideViewport([advanced]);
+    });
+
     it(`keeps an explicit Profile recoverable across Harness changes at ${viewport.width}px`, async () => {
       await page.viewport(viewport.width, viewport.height);
       const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
