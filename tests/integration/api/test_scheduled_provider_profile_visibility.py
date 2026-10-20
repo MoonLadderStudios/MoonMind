@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from temporalio.client import ScheduleOverlapPolicy
+from temporalio.client import ScheduleOverlapPolicy, ScheduleUpdate
 from temporalio.common import SearchAttributeKey
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
@@ -73,9 +73,17 @@ async def _trigger(client, schedule_id: str):
 
 
 @pytest.mark.usefixtures("launch_resolution_stages")
-@pytest.mark.parametrize("selection", ["recorded", "pending", "not_applicable"])
+@pytest.mark.parametrize(
+    "selection,legacy_admission",
+    [
+        pytest.param("recorded", False, id="recorded"),
+        pytest.param("pending", False, id="pending"),
+        pytest.param("not_applicable", False, id="not_applicable"),
+        pytest.param("recorded", True, id="recorded_legacy"),
+    ],
+)
 async def test_schedule_admission_records_profile_and_preserves_history_4640(
-    tmp_path, monkeypatch, selection: str
+    tmp_path, monkeypatch, selection: str, legacy_admission: bool
 ) -> None:
     # This exercises Provider Profile projection, not Omnigent admission. Under
     # an Omnigent default a runtime-less target is admitted through plan
@@ -130,6 +138,21 @@ async def test_schedule_admission_records_profile_and_preserves_history_4640(
                 },
                 policy={},
             )
+            if legacy_admission:
+
+                async def retain_pre_upgrade_action(update_input):
+                    schedule = update_input.description.schedule
+                    payload = (
+                        await client.data_converter.decode(schedule.action.args)
+                    )[0]
+                    payload.pop("linked_recovery_retired")
+                    schedule.action.args = [payload]
+                    return ScheduleUpdate(schedule=schedule)
+
+                await client.get_schedule_handle(
+                    definition.temporal_schedule_id
+                ).update(retain_pre_upgrade_action)
+
             run = await _trigger(client, definition.temporal_schedule_id)
             description = await run.describe()
             summary = await description.memo_value(PROVIDER_PROFILE_MEMO_KEY)
@@ -192,6 +215,7 @@ async def test_schedule_admission_records_profile_and_preserves_history_4640(
                     definition_id=definition.id,
                     workflow_type=workflow_type,
                     workflow_input=workflow_input,
+                    preserve_existing_admission=True,
                     memo={"definitionId": str(definition.id)},
                     search_attributes=service._owner_search_attributes(owner),
                 )
@@ -230,6 +254,18 @@ async def test_schedule_admission_records_profile_and_preserves_history_4640(
                         PROVIDER_PROFILE_MEMO_KEY
                     )
                 )["profiles"][0]["label"] == "Renamed scheduled work"
+                renamed_history = await renamed.fetch_history()
+                started = (
+                    renamed_history.events[0].workflow_execution_started_event_attributes
+                )
+                renamed_input = (
+                    await client.data_converter.decode(started.input.payloads)
+                )[0]
+                assert (
+                    "linked_recovery_retired" in renamed_input
+                ) is not legacy_admission
+                if not legacy_admission:
+                    assert renamed_input["linked_recovery_retired"] is True
                 assert (
                     await (await run.describe()).memo_value(PROVIDER_PROFILE_MEMO_KEY)
                     == summary

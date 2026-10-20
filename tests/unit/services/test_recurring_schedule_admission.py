@@ -322,3 +322,92 @@ async def test_repair_uses_callback_admission_after_concurrent_action_change(
     assert (MARKER in action(chain).args[0]) is new_admission
     assert await service.reconcile_schedules() == 0
     assert sdk.updates == 1
+
+
+@pytest.mark.parametrize("admission", [None, False, True])
+@pytest.mark.parametrize("edit", [{"name": "Renamed schedule"}, {"cron": "0 8 * * *"}])
+@pytest.mark.parametrize("concurrent_change", [False, True])
+async def test_metadata_edit_refreshes_provider_label_without_replacing_stored_action(
+    chain, admission, edit, concurrent_change
+):
+    from temporalio.common import SearchAttributeKey, SearchAttributePair
+
+    from api_service.db.models import ManagedAgentProviderProfile
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+        build_provider_profile_projection,
+    )
+
+    service, definition, sdk = chain
+    profile = ManagedAgentProviderProfile(
+        profile_id="scheduled-provider",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        account_label="Original account label",
+    )
+    service._session.add(profile)
+    await service._session.flush()
+    target = deepcopy(definition.target)
+    target["initialParameters"]["profileId"] = profile.profile_id
+    await service.update_definition(definition, target=target)
+    original_projection = deepcopy(action(chain).memo[PROVIDER_PROFILE_MEMO_KEY])
+
+    provider_key = SearchAttributeKey.for_text(PROVIDER_PROFILE_SEARCH_ATTRIBUTE)
+    unrelated_key = SearchAttributeKey.for_keyword("mm_repo")
+    profile.account_label = "Renamed account label"
+    await service._session.commit()
+    expected = {}
+
+    def change_stored_action():
+        current = action(chain)
+        if admission is None:
+            current.args[0].pop(MARKER, None)
+        else:
+            current.args[0][MARKER] = admission
+        # The callback action is authoritative, even when it differs from the
+        # definition or from the action visible before this update started.
+        current.args[0]["durableAdmissionEvidence"] = {"source": "stored-action"}
+        current.id = "retained-workflow-id"
+        current.task_queue = "retained-workflow-queue"
+        current.memo["operatorAnnotation"] = {"keep": "unchanged"}
+        current.typed_search_attributes = current.typed_search_attributes.updated(
+            SearchAttributePair(unrelated_key, "keep/repository"),
+            SearchAttributePair(provider_key, "ppstpending"),
+        )
+        expected["action"] = deepcopy(current)
+
+    if concurrent_change:
+        sdk.before_update = change_stored_action
+    else:
+        change_stored_action()
+    writes_before = sdk.updates
+    await service.update_definition(definition, **edit)
+
+    actual = action(chain)
+    stored = expected["action"]
+    summary, search_value = build_provider_profile_projection(
+        stored.args[0]["initial_parameters"],
+        labels={profile.profile_id: "Renamed account label"},
+    )
+    assert summary != original_projection
+    assert actual.memo[PROVIDER_PROFILE_MEMO_KEY] == summary
+    assert actual.typed_search_attributes.get(provider_key) == search_value
+    assert actual.args == stored.args
+    assert actual.id == stored.id
+    assert actual.task_queue == stored.task_queue
+    assert {
+        key: value for key, value in actual.memo.items()
+        if key != PROVIDER_PROFILE_MEMO_KEY
+    } == {
+        key: value for key, value in stored.memo.items()
+        if key != PROVIDER_PROFILE_MEMO_KEY
+    }
+    assert {
+        pair.key.name: pair.value for pair in actual.typed_search_attributes
+        if pair.key.name != PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+    } == {
+        pair.key.name: pair.value for pair in stored.typed_search_attributes
+        if pair.key.name != PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+    }
+    assert sdk.updates == writes_before + 1
