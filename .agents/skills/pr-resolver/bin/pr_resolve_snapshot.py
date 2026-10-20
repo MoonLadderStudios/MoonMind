@@ -5,6 +5,7 @@ Gathers PR metadata, CI status, and comments to decide the next fix action.
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -1374,6 +1375,11 @@ _INFRASTRUCTURE_FAILURE_PATTERNS = (
 _MISSING_UPSTREAM_ARTIFACT_PATTERN = re.compile(
     r"Unable to download artifact\(s\): Artifact not found", re.IGNORECASE
 )
+# Kinds that describe a job failing because of another job's platform failure.
+# They never make a run infrastructure-only on their own.
+_DEPENDENT_FAILURE_KINDS = frozenset(
+    {"missing_upstream_artifact", "upstream_job_failure"}
+)
 _GENERIC_EXIT_PATTERN = re.compile(
     r"^Process completed with exit code \d+\.?$", re.IGNORECASE
 )
@@ -1383,11 +1389,12 @@ _ACTIONS_JOB_URL_PATTERN = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 def _classify_failure_annotations(annotations: list[dict]) -> str | None:
     """Return the infrastructure kind when every failure annotation is one.
 
-    ``missing_upstream_artifact`` is provisional: it only counts when another
-    job in the same run has a confirmed infrastructure failure. A generic step
-    exit is tolerated only beside that gate case; next to a platform failure it
-    may be a real test failure followed by an ``if: always()`` upload, so the
-    job fails closed.
+    ``missing_upstream_artifact`` and ``upstream_job_failure`` (only bare exit
+    statuses) are provisional: they count only beside a confirmed platform
+    failure in another job of the same run. A generic step exit is tolerated
+    only in those gate cases; next to a platform failure in the same job it may
+    be a real test failure followed by an ``if: always()`` upload, so the job
+    fails closed.
     """
 
     messages = [
@@ -1415,12 +1422,93 @@ def _classify_failure_annotations(annotations: list[dict]) -> str | None:
         if kind is None:
             return None
         kinds.add(kind)
-    platform_kinds = sorted(kinds - {"missing_upstream_artifact"})
+    platform_kinds = sorted(kinds - _DEPENDENT_FAILURE_KINDS)
     if platform_kinds:
         return None if generic_exit else platform_kinds[0]
     if kinds:
         return "missing_upstream_artifact"
-    return None
+    return "upstream_job_failure" if generic_exit else None
+
+
+def _workflow_jobs(source: object) -> dict | None:
+    """The ``jobs`` mapping of a workflow file, or None when it is unreadable."""
+
+    try:
+        import yaml
+    except ImportError:
+        return None
+    try:
+        document = yaml.safe_load(str(source or ""))
+    except yaml.YAMLError:
+        return None
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    return jobs if isinstance(jobs, dict) else None
+
+
+def _workflow_job_id(jobs: dict, check_name: str) -> str | None:
+    """The one workflow job that ran as this check.
+
+    A matrix job renders as ``<name> (<matrix values>)``. A name built from an
+    expression cannot be matched without rendering it, so it fails closed.
+    """
+
+    matches = []
+    for job_id, spec in jobs.items():
+        if not isinstance(spec, dict):
+            continue
+        base = str(spec.get("name") or job_id)
+        strategy = spec.get("strategy")
+        is_matrix = isinstance(strategy, dict) and "matrix" in strategy
+        if check_name == base or (
+            is_matrix and check_name.startswith(f"{base} (") and check_name[-1:] == ")"
+        ):
+            matches.append(job_id)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _gating_dependencies(
+    job: object, spec: object, failed_dependencies: set[str]
+) -> list[str]:
+    """The platform-failed dependencies every failed step of this job reads.
+
+    ``needs`` orders jobs; it does not explain an exit. Only failed steps that
+    evaluate ``needs.<job>.result`` (or ``needs.*.result``) for a directly
+    needed, platform-failed job make this job a gate on that failure. A bare
+    exit cannot show which line failed, so the gate stays unverified until a
+    rerun clears its dependency.
+    """
+
+    if not isinstance(spec, dict) or not isinstance(job, dict):
+        return []
+    needs = spec.get("needs")
+    needed = [needs] if isinstance(needs, str) else needs
+    dependencies = sorted(
+        failed_dependencies & {str(item) for item in needed or [] if item}
+        if isinstance(needed, list)
+        else set()
+    )
+    failed_steps = [
+        str(step.get("name") or "")
+        for step in job.get("steps") or []
+        if isinstance(step, dict) and step.get("conclusion") == "failure"
+    ]
+    if not dependencies or not failed_steps:
+        return []
+    reads_result = re.compile(
+        r"\bneeds\.(?:\*|" + "|".join(map(re.escape, dependencies)) + r")\.result\b"
+    )
+    defined = {
+        str(step["name"]): step
+        for step in spec.get("steps") or []
+        if isinstance(step, dict) and step.get("name")
+    }
+    if all(
+        name in defined
+        and reads_result.search(json.dumps(defined[name], default=str)) is not None
+        for name in failed_steps
+    ):
+        return dependencies
+    return []
 
 
 def summarize_ci_infrastructure(
@@ -1428,14 +1516,19 @@ def summarize_ci_infrastructure(
     *,
     fetch_annotations,
     fetch_run,
+    fetch_job=None,
+    fetch_workflow=None,
 ) -> dict:
     """Decide whether every failed check is a GitHub Actions platform failure.
 
     Fails closed: a check without failure annotations, outside GitHub Actions,
     or with any non-platform failure keeps the PR on the ``ci_failures`` path.
+    A bare-exit job counts only with workflow evidence that it gates on a
+    platform-failed dependency's result.
     """
 
     classified: list[dict] = []
+    check_ids: list[object] = []
     for check in failed_check_runs:
         match = _ACTIONS_JOB_URL_PATTERN.search(
             str(check.get("details_url") or check.get("detailsUrl") or "")
@@ -1449,16 +1542,21 @@ def summarize_ci_infrastructure(
         )
         if kind is None:
             return {"infrastructureOnly": False}
+        failure_messages = [
+            str(item.get("message") or "").strip()
+            for item in annotations
+            if isinstance(item, dict)
+            and str(item.get("annotation_level") or "").lower() == "failure"
+        ]
+        # A gate's bare exit status is its only evidence; elsewhere prefer the
+        # specific platform message.
         message = next(
             (
-                str(item.get("message") or "").strip()
-                for item in annotations
-                if str(item.get("annotation_level") or "").lower() == "failure"
-                and not _GENERIC_EXIT_PATTERN.match(
-                    str(item.get("message") or "").strip()
-                )
+                text
+                for text in failure_messages
+                if not _GENERIC_EXIT_PATTERN.match(text)
             ),
-            "",
+            failure_messages[0] if kind == "upstream_job_failure" else "",
         )
         classified.append(
             {
@@ -1468,22 +1566,68 @@ def summarize_ci_infrastructure(
                 "runId": int(match.group(1)),
             }
         )
+        check_ids.append(check_id)
 
     platform_runs = {
         item["runId"]
         for item in classified
-        if item["kind"] != "missing_upstream_artifact"
+        if item["kind"] not in _DEPENDENT_FAILURE_KINDS
     }
     if not platform_runs or any(
         item["runId"] not in platform_runs for item in classified
     ):
         return {"infrastructureOnly": False}
 
-    runs: list[dict] = []
+    fetched_runs: dict[int, dict] = {}
     for run_id in sorted(platform_runs):
         run = fetch_run(run_id)
         if not isinstance(run, dict):
             return {"infrastructureOnly": False}
+        fetched_runs[run_id] = run
+
+    workflow_jobs: dict[int, dict | None] = {}
+    for item, check_id in zip(classified, check_ids):
+        if item["kind"] != "upstream_job_failure":
+            continue
+        run_id = item["runId"]
+        if run_id not in workflow_jobs:
+            run = fetched_runs[run_id]
+            # A reusable or dynamic workflow path carries an ``@ref`` suffix.
+            path = str(run.get("path") or "").split("@", 1)[0]
+            ref = str(run.get("head_sha") or "")
+            source = (
+                fetch_workflow(path, ref)
+                if fetch_workflow is not None and path and ref
+                else None
+            )
+            workflow_jobs[run_id] = _workflow_jobs(source)
+        jobs = workflow_jobs[run_id]
+        gate_id = _workflow_job_id(jobs, item["name"]) if jobs else None
+        if gate_id is None or fetch_job is None:
+            return {"infrastructureOnly": False}
+        failed_dependencies: dict[str, str] = {}
+        for other in classified:
+            if other["runId"] == run_id and other["kind"] not in (
+                _DEPENDENT_FAILURE_KINDS
+            ):
+                job_id = _workflow_job_id(jobs, other["name"])
+                if job_id is not None:
+                    failed_dependencies.setdefault(job_id, other["name"])
+        gating = _gating_dependencies(
+            fetch_job(check_id), jobs[gate_id], set(failed_dependencies)
+        )
+        if not gating:
+            return {"infrastructureOnly": False}
+        # Report the gate as unverified, not as an outage of its own.
+        item["message"] = (
+            f"{item['message']} Unverified until a rerun: it evaluates "
+            + ", ".join(failed_dependencies[job_id] for job_id in gating)
+            + ", which hit a GitHub Actions platform failure."
+        )[:300]
+
+    runs: list[dict] = []
+    for run_id in sorted(platform_runs):
+        run = fetched_runs[run_id]
         try:
             run_attempt = int(run.get("run_attempt") or 1)
         except (TypeError, ValueError):
@@ -1563,6 +1707,25 @@ def _fetch_check_run_annotations(*, pr_repo: str, check_id: object) -> list[dict
 def _fetch_actions_run(*, pr_repo: str, run_id: int) -> dict | None:
     payload = run_command_optional(["gh", "api", f"repos/{pr_repo}/actions/runs/{run_id}"])
     return payload if isinstance(payload, dict) else None
+
+
+def _fetch_actions_job(*, pr_repo: str, job_id: object) -> dict | None:
+    payload = run_command_optional(
+        ["gh", "api", f"repos/{pr_repo}/actions/jobs/{job_id}"]
+    )
+    return payload if isinstance(payload, dict) else None
+
+
+def _fetch_workflow_source(*, pr_repo: str, path: str, ref: str) -> str | None:
+    payload = run_command_optional(
+        ["gh", "api", f"repos/{pr_repo}/contents/{quote(path)}?ref={quote(ref)}"]
+    )
+    if not isinstance(payload, dict) or payload.get("encoding") != "base64":
+        return None
+    try:
+        return base64.b64decode(str(payload.get("content") or "")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
 def _fetch_base_branch(*, pr_repo: str | None, base_branch: str | None) -> dict | None:
@@ -2056,6 +2219,12 @@ def main():
                 ),
                 fetch_run=lambda run_id: _fetch_actions_run(
                     pr_repo=pr_repo, run_id=run_id
+                ),
+                fetch_job=lambda job_id: _fetch_actions_job(
+                    pr_repo=pr_repo, job_id=job_id
+                ),
+                fetch_workflow=lambda path, ref: _fetch_workflow_source(
+                    pr_repo=pr_repo, path=path, ref=ref
                 ),
             )
         )

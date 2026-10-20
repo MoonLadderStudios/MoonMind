@@ -612,7 +612,7 @@ class SuiteSelection:
             separators=(",", ":"),
         )
         rows = [
-            {"suite": suite, "job_minutes": 15}
+            {"suite": suite, "job_minutes": 18 if suite == "unit-fast" else 15}
             for suite in ("unit-fast", "api-component", "temporal-boundary")
             if getattr(self, suite.replace("-", "_"))
         ]

@@ -510,6 +510,30 @@ async def _lock_conversion_evidence(session: AsyncSession) -> None:
         await session.execute(text(f"LOCK TABLE {quoted} IN SHARE ROW EXCLUSIVE MODE NOWAIT"))
 
 
+async def _table_content_digest(session: AsyncSession, table, columns) -> tuple[int, str]:
+    """Row count plus an order-independent digest of ``columns`` in every row.
+
+    PostgreSQL hashes rows in place and sums them as a multiset: materializing
+    millions of retained artifact rows in Python held API startup for minutes.
+    Table and column names come from ORM metadata, never from input.
+    """
+    if session.get_bind().dialect.name == "postgresql":
+        names = ", ".join(f'"{column.name}"' for column in columns)
+        count, low, high = (
+            await session.execute(text(
+                "SELECT count(*),"
+                " coalesce(sum(('x' || substr(h, 1, 16))::bit(64)::bigint::numeric), 0),"
+                " coalesce(sum(('x' || substr(h, 17, 16))::bit(64)::bigint::numeric), 0)"
+                f" FROM (SELECT md5(json_build_array({names})::text) AS h"
+                f' FROM "{table.name}") AS row_hashes'
+            ))
+        ).one()
+        return int(count), f"{low}:{high}"
+    rows = (await session.execute(select(*columns))).all()
+    entries = sorted(_canonical(list(row)) for row in rows)
+    return len(rows), hashlib.sha256("\n".join(entries).encode()).hexdigest()
+
+
 async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     """Trace every retained user reference (SQL + serialized + in-flight).
 
@@ -583,22 +607,27 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         # Conversion-owned output is not source attribution. Everything else,
         # including child authority and quarantine, binds stale preflight checks.
         columns = [c for c in table.c if c.name != "operator_recovery_granted"]
+        missing_creator = False
         try:
             async with session.begin_nested():
-                rows = (await session.execute(select(*columns))).all()
+                count, digest = await _table_content_digest(session, table, columns)
+                if table_name == "temporal_artifacts":
+                    creator = table.c.created_by_principal
+                    missing_creator = (
+                        await session.execute(
+                            select(creator).where(creator.is_(None)).limit(1)
+                        )
+                    ).first() is not None
         except Exception as exc:
             if not _is_absent_table_error(exc):
                 _record_inventory_error(inv, f"artifact_evidence:{table_name}")
             continue
-        resource_counts[f"{table_name}.rows"] = len(rows)
-        for row in rows:
-            artifact_content_entries.append(table_name + ":" + _canonical(list(row)))
-        if table_name == "temporal_artifacts":
-            for row in rows:
-                # Deployment attestation alone cannot reconstruct a lost human
-                # raw owner. Refuse until that disposition has an owned design.
-                if row._mapping["created_by_principal"] is None:
-                    _record_inventory_error(inv, "artifact_recovery:missing_creator")
+        resource_counts[f"{table_name}.rows"] = count
+        artifact_content_entries.append(f"{table_name}:{digest}")
+        if missing_creator:
+            # Deployment attestation alone cannot reconstruct a lost human
+            # raw owner. Refuse until that disposition has an owned design.
+            _record_inventory_error(inv, "artifact_recovery:missing_creator")
 
     # Live parents need their owning transforms even when machine-owned and
     # their optional human owner columns are empty. Historical artifact links
@@ -1763,6 +1792,10 @@ async def run_guarded_upgrade(
         deployment_owned_tables=deployment_owned_tables,
         operator_authorized=operator_authorized,
     )
+    if not bound.decision.eligible:
+        # Apply would re-read the same fingerprint under writer locks only to
+        # return this refusal; a refused source keeps writers unblocked.
+        return ApplyResult(digest=bound.digest, published=False, decision=bound.decision)
     return await apply_conversion(
         session,
         bound,

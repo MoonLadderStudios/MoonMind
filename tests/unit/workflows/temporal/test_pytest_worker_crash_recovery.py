@@ -22,9 +22,11 @@ pytestmark = pytest.mark.slow
 CONFTEST = Path(__file__).resolve().parents[4] / "tests/conftest.py"
 
 COMMON = """
-import json, os, socket
+import asyncio, json, os, socket
+from contextlib import asynccontextmanager
 from pathlib import Path
 import pytest
+import pytest_asyncio
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
@@ -45,7 +47,8 @@ def module_socket():
 def class_directory(tmp_path_factory):
     return str(tmp_path_factory.mktemp("class-owned"))
 
-async def operation(name, module_socket, *, wait=False, class_directory=None):
+@asynccontextmanager
+async def prepared_operation(name, module_socket, *, class_directory=None):
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(env.client, task_queue="owned-" + name, workflows=[ProbeWorkflow],
                           workflow_runner=UnsandboxedWorkflowRunner()):
@@ -71,9 +74,22 @@ async def operation(name, module_socket, *, wait=False, class_directory=None):
                       "class_directory": class_directory, "result": value}
             directory = Path(os.environ["WORKER_CRASH_REGRESSION_RECEIPTS"])
             (directory / f"{name}-{os.getpid()}.json").write_text(json.dumps(record))
-            if wait:
-                import asyncio
-                await asyncio.Event().wait()
+            yield
+
+async def operation(name, module_socket, *, class_directory=None):
+    async with prepared_operation(name, module_socket, class_directory=class_directory):
+        pass
+
+@pytest_asyncio.fixture
+async def ready_for_fatal_timeout(module_socket):
+    context = prepared_operation("crash", module_socket)
+    # Readiness has its own finite bound; func_only starts the fatal timer
+    # only after the real operation and ownership receipt exist.
+    await asyncio.wait_for(context.__aenter__(), timeout=10)
+    try:
+        yield
+    finally:
+        await context.__aexit__(None, None, None)
 """
 
 CONTROL = """
@@ -86,18 +102,20 @@ async def test_real_temporal_control(module_socket):
 """
 
 CRASH = """
+import asyncio
 import pytest
-from probe import module_socket, operation
+from probe import module_socket, ready_for_fatal_timeout
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(3, func_only=True)
-async def test_thread_timeout_after_real_operation(module_socket):
-    await operation("crash", module_socket, wait=True)
+async def test_thread_timeout_after_real_operation(ready_for_fatal_timeout):
+    await asyncio.Event().wait()
 """
 
 PENDING = """
+import asyncio
 import pytest
-from probe import class_directory, module_socket, operation
+from probe import class_directory, module_socket, operation, ready_for_fatal_timeout
 
 @pytest.mark.asyncio
 async def test_completed_before_crash(module_socket):
@@ -105,8 +123,8 @@ async def test_completed_before_crash(module_socket):
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(3, func_only=True)
-async def test_thread_timeout_after_real_operation(module_socket):
-    await operation("crash", module_socket, wait=True)
+async def test_thread_timeout_after_real_operation(ready_for_fatal_timeout):
+    await asyncio.Event().wait()
 
 class TestPending:
     @pytest.mark.asyncio
@@ -188,6 +206,8 @@ def _run_fixture(
         "--timeout",
         "10",
         "--timeout-method=thread",
+        "-o",
+        "timeout_func_only=true",
         "-n",
         "1" if completed_files else "2",
         "--dist",
@@ -204,7 +224,9 @@ def _run_fixture(
     )
     try:
         try:
-            output, _ = process.communicate(timeout=20)
+            # Leave room for worker startup and replacement recovery around
+            # the separate readiness and fatal test-body timeout budgets.
+            output, _ = process.communicate(timeout=40)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGTERM)
             try:
@@ -284,6 +306,59 @@ def test_thread_timeout_preserves_failure_and_file_scoped_remaining_coverage(
         assert by_case["before"]["module_socket"] == by_case["crash"]["module_socket"]
         assert by_case["pending"]["worker"] != by_case["crash"]["worker"]
         assert by_case["pending"]["class_directory"]
+
+
+def test_slow_crash_fixture_readiness_does_not_consume_fatal_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A real server/operation may need longer than the deliberate hang budget.
+    delayed = COMMON.replace(
+        "    async with await WorkflowEnvironment.start_time_skipping() as env:",
+        "    if name == 'crash':\n"
+        "        import asyncio\n"
+        "        await asyncio.sleep(8)\n"
+        "    async with await WorkflowEnvironment.start_time_skipping() as env:",
+    )
+    monkeypatch.setitem(globals(), "COMMON", delayed)
+    test_thread_timeout_preserves_failure_and_file_scoped_remaining_coverage(
+        tmp_path, True, True
+    )
+
+
+def test_crash_fixture_readiness_failure_stays_bounded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Reuse the control worker to prove ordinary fixture setup also stays
+    # outside the test-body timer, without another expensive subprocess run.
+    monkeypatch.setitem(
+        globals(),
+        "CONTROL",
+        CONTROL
+        + """
+@pytest.fixture
+def slow_setup():
+    import time
+    time.sleep(0.3)
+    return True
+
+@pytest.mark.timeout(0.1)
+def test_non_crashing_setup_has_a_separate_budget(slow_setup):
+    assert slow_setup
+""",
+    )
+    blocked = COMMON.replace(
+        "    async with await WorkflowEnvironment.start_time_skipping() as env:",
+        "    if name == 'crash':\n"
+        "        await asyncio.Event().wait()\n"
+        "    async with await WorkflowEnvironment.start_time_skipping() as env:",
+    ).replace("context.__aenter__(), timeout=10", "context.__aenter__(), timeout=0.2")
+    monkeypatch.setitem(globals(), "COMMON", blocked)
+    result, records = _run_fixture(tmp_path, CRASH)
+    assert result.returncode == 1, result.stdout
+    assert "TimeoutError" in result.stdout
+    assert "2 passed, 1 error" in result.stdout
+    assert "crashed while running" not in result.stdout
+    assert [record["case"] for record in records] == ["control"]
 
 
 @pytest.mark.parametrize("local_server", [False, True])
