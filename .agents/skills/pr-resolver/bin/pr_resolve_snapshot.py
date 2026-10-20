@@ -1446,28 +1446,40 @@ def _workflow_jobs(source: object) -> dict | None:
 
 
 def _workflow_job_id(jobs: dict, check_name: str) -> str | None:
-    """The one workflow job whose display name is this check's name."""
+    """The one workflow job that ran as this check.
 
-    matches = [
-        job_id
-        for job_id, spec in jobs.items()
-        if isinstance(spec, dict) and str(spec.get("name") or job_id) == check_name
-    ]
+    A matrix job renders as ``<name> (<matrix values>)``. A name built from an
+    expression cannot be matched without rendering it, so it fails closed.
+    """
+
+    matches = []
+    for job_id, spec in jobs.items():
+        if not isinstance(spec, dict):
+            continue
+        base = str(spec.get("name") or job_id)
+        strategy = spec.get("strategy")
+        is_matrix = isinstance(strategy, dict) and "matrix" in strategy
+        if check_name == base or (
+            is_matrix and check_name.startswith(f"{base} (") and check_name[-1:] == ")"
+        ):
+            matches.append(job_id)
     return matches[0] if len(matches) == 1 else None
 
 
-def _fails_on_dependency_result(
+def _gating_dependencies(
     job: object, spec: object, failed_dependencies: set[str]
-) -> bool:
-    """Whether every failed step of this job reads a failed dependency's result.
+) -> list[str]:
+    """The platform-failed dependencies every failed step of this job reads.
 
-    ``needs`` orders jobs; it does not explain an exit. Only a failed step that
-    evaluates ``needs.<job>.result`` (or ``needs.*.result``) for a directly
-    needed, platform-failed job is a gate failing because of that job.
+    ``needs`` orders jobs; it does not explain an exit. Only failed steps that
+    evaluate ``needs.<job>.result`` (or ``needs.*.result``) for a directly
+    needed, platform-failed job make this job a gate on that failure. A bare
+    exit cannot show which line failed, so the gate stays unverified until a
+    rerun clears its dependency.
     """
 
     if not isinstance(spec, dict) or not isinstance(job, dict):
-        return False
+        return []
     needs = spec.get("needs")
     needed = [needs] if isinstance(needs, str) else needs
     dependencies = sorted(
@@ -1481,7 +1493,7 @@ def _fails_on_dependency_result(
         if isinstance(step, dict) and step.get("conclusion") == "failure"
     ]
     if not dependencies or not failed_steps:
-        return False
+        return []
     reads_result = re.compile(
         r"\bneeds\.(?:\*|" + "|".join(map(re.escape, dependencies)) + r")\.result\b"
     )
@@ -1490,11 +1502,13 @@ def _fails_on_dependency_result(
         for step in spec.get("steps") or []
         if isinstance(step, dict) and step.get("name")
     }
-    return all(
+    if all(
         name in defined
         and reads_result.search(json.dumps(defined[name], default=str)) is not None
         for name in failed_steps
-    )
+    ):
+        return dependencies
+    return []
 
 
 def summarize_ci_infrastructure(
@@ -1591,17 +1605,25 @@ def summarize_ci_infrastructure(
         gate_id = _workflow_job_id(jobs, item["name"]) if jobs else None
         if gate_id is None or fetch_job is None:
             return {"infrastructureOnly": False}
-        failed_dependencies = {
-            job_id
-            for other in classified
-            if other["runId"] == run_id
-            and other["kind"] not in _DEPENDENT_FAILURE_KINDS
-            and (job_id := _workflow_job_id(jobs, other["name"])) is not None
-        }
-        if not _fails_on_dependency_result(
-            fetch_job(check_id), jobs[gate_id], failed_dependencies
-        ):
+        failed_dependencies: dict[str, str] = {}
+        for other in classified:
+            if other["runId"] == run_id and other["kind"] not in (
+                _DEPENDENT_FAILURE_KINDS
+            ):
+                job_id = _workflow_job_id(jobs, other["name"])
+                if job_id is not None:
+                    failed_dependencies.setdefault(job_id, other["name"])
+        gating = _gating_dependencies(
+            fetch_job(check_id), jobs[gate_id], set(failed_dependencies)
+        )
+        if not gating:
             return {"infrastructureOnly": False}
+        # Report the gate as unverified, not as an outage of its own.
+        item["message"] = (
+            f"{item['message']} Unverified until a rerun: it evaluates "
+            + ", ".join(failed_dependencies[job_id] for job_id in gating)
+            + ", which hit a GitHub Actions platform failure."
+        )[:300]
 
     runs: list[dict] = []
     for run_id in sorted(platform_runs):
