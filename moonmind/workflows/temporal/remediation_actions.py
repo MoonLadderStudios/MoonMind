@@ -600,9 +600,10 @@ def remediation_action_kinds() -> tuple[str, ...]:
         if metadata.get("enabled") is True
         and remediation_action_capability(action_kind)["requestable"] is True
     )
-_ABSOLUTE_PATH_PATTERN = re.compile(
-    r"/(?:[A-Za-z0-9._:@+-]+/)*[A-Za-z0-9._:@+-]+"
-)
+# Relative repository/branch identifiers are executable parameters, not host
+# paths. Only whole canonical artifact IDs may survive the path redactor.
+_ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![\w.-])/(?:[^\s\"']+/)*[^\s\"']+")
+_OPAQUE_ARTIFACT_REF_PATTERN = re.compile(r"artifact://art_[0-7][0-9A-HJKMNP-TV-Z]{25}")
 _PRESIGNED_URL_PATTERN = re.compile(
     r"https?://[^\s\"']*(?:token|signature|x-amz-signature|credential)[^\s\"']*",
     re.IGNORECASE,
@@ -2718,6 +2719,8 @@ def _redact_text(value: str | None) -> str:
     if redacted is None:
         return ""
     redacted = _PRESIGNED_URL_PATTERN.sub("[REDACTED_URL]", redacted)
+    if _OPAQUE_ARTIFACT_REF_PATTERN.fullmatch(redacted):
+        return redacted
     redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return redacted
 

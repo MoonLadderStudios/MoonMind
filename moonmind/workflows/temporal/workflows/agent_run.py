@@ -159,6 +159,9 @@ PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
 TRUSTED_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-trusted-execution-artifact-handoff-v1"
 )
+TEMPORAL_PARENT_ARTIFACT_HANDOFF_PATCH_ID = (
+    "agent-run-temporal-parent-artifact-handoff-v1"
+)
 TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID = (
     "agent-run-terminal-evidence-control-queue-v1"
 )
@@ -2764,6 +2767,21 @@ class MoonMindAgentRun:
             if include_parent_execution and request.step_execution is not None:
                 metadata["parentWorkflowId"] = request.step_execution.workflow_id
                 metadata["parentRunId"] = request.step_execution.run_id
+            if workflow.patched(TEMPORAL_PARENT_ARTIFACT_HANDOFF_PATCH_ID):
+                metadata.pop("parentTemporalRunId", None)
+                info = workflow.info()
+                parent = getattr(info, "parent", None)
+                if (
+                    include_parent_execution
+                    and request.step_execution is not None
+                    and parent is not None
+                    and parent.workflow_id == request.step_execution.workflow_id
+                    and parent.namespace == info.namespace
+                ):
+                    # Checkpoint Branch turns retain a semantic Step Execution
+                    # run ID. Server ancestry uses the parent's Temporal UUID;
+                    # keep both rather than rewriting durable execution links.
+                    metadata["parentTemporalRunId"] = parent.run_id
         else:
             # Preserve the recorded activity payload of retained histories.
             metadata.setdefault("childWorkflowId", workflow.info().workflow_id)

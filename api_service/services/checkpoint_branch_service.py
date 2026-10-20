@@ -15,6 +15,7 @@ from api_service.db.models import (
     CheckpointBranchPublishStatus,
     CheckpointBranchRuntimeContextPolicy,
     CheckpointBranchWorkspacePolicy,
+    TemporalExecutionCanonicalRecord,
     WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchGitBinding,
@@ -1273,6 +1274,9 @@ class CheckpointBranchService:
         workflow_id: str,
         branch_id: str,
         branch_turn_id: str,
+        execution_workflow_id: str | None = None,
+        execution_owner: str | None = None,
+        execution_namespace: str | None = None,
     ) -> tuple[WorkflowCheckpointBranch, WorkflowCheckpointBranchTurn]:
         """Serialize launch/finalization against the durable turn identity.
 
@@ -1307,6 +1311,25 @@ class CheckpointBranchService:
         ).scalar_one_or_none()
         if turn is None:
             raise ValueError("checkpoint branch turn was not found")
+        if execution_workflow_id is not None:
+            # The launch owner records these identities before starting the
+            # unique Temporal workflow. A worker may delegate artifact reads
+            # only after its actual Activity identity matches that claim.
+            claim = turn.diagnostics or {}
+            source = await self._session.get(
+                TemporalExecutionCanonicalRecord, branch.workflow_id
+            )
+            if (
+                not execution_workflow_id
+                or claim.get("executionWorkflowId") != execution_workflow_id
+                or claim.get("executionOwner") != "MoonMind.CheckpointBranchTurn"
+                or execution_owner != claim.get("executionOwner")
+                or not turn.created_step_execution_id
+                or not turn.runtime_agent_run_id
+                or source is None
+                or source.namespace != execution_namespace
+            ):
+                raise ValueError("branch turn Activity does not match launch claim")
         return branch, turn
 
     async def mark_turn_running(

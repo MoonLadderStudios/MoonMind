@@ -180,7 +180,10 @@ async def _execute_admitted_generic_plan(journey, plan, record):
         await session.commit()
     journey.plan, journey.request = plan, request
     journey.manager.plan, journey.manager.request = plan, request
-    journey.docker.host_class, _ = await journey.services.planned_host_resolver(plan)
+    await journey.gateway.admit_execution_plan_inputs(request=request, plan=plan)
+    journey.docker.host_class, _ = await journey.services.planned_host_resolver(
+        plan, request=request
+    )
     from tests.integration.omnigent.test_generic_bound_native_chat import (
         _during_active_session,
         assert_bound_native_round_trip,
