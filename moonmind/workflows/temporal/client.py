@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from temporalio.api.common.v1 import WorkflowExecution
+from temporalio.api.common.v1 import Payload, WorkflowExecution
 from temporalio.api.enums.v1 import ResetReapplyExcludeType
 from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
 from temporalio.client import (
@@ -57,6 +57,14 @@ from moonmind.workflows.temporal.workers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def decode_schedule_action_value(value: Any) -> Any:
+    """Read SDK-described action payloads without mutating their wire form."""
+    if isinstance(value, Payload):
+        return MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payloads([value])[0]
+    return value
+
 
 # All MoonMind-owned Temporal task queues.  Used to scope Visibility queries
 # so that drain metrics and batch signals only target our own workflows.
@@ -1443,13 +1451,16 @@ class TemporalClientAdapter:
         note: str | None = None,
         workflow_type: str | None = None,
         workflow_input: Mapping[str, Any] | None = None,
+        preserve_existing_admission: bool = False,
         memo: Mapping[str, Any] | None = None,
         search_attributes: Mapping[str, Any] | None = None,
     ) -> None:
         """Update the spec, policy, or state of an existing schedule.
 
         Only provided (non-``None``) fields are modified; everything else
-        is preserved from the current schedule description.
+        is preserved from the current schedule description. Automatic repairs
+        preserve existing admission; explicit execution-target replacements
+        retain the default new-admission behavior.
 
         Raises:
             ScheduleNotFoundError: if the schedule does not exist.
@@ -1530,6 +1541,24 @@ class TemporalClientAdapter:
 
             if workflow_type is not None:
                 admitted_input = admit_user_workflow_input(workflow_type, workflow_input)
+                if (
+                    preserve_existing_admission
+                    and workflow_type == RENAMED_USER_WORKFLOW_TYPE
+                    and isinstance(schedule.action, ScheduleActionStartWorkflow)
+                    and schedule.action.workflow == workflow_type
+                    and len(schedule.action.args) == 1
+                ):
+                    existing_input = decode_schedule_action_value(schedule.action.args[0])
+                    if isinstance(existing_input, Mapping):
+                        # Read the current durable action inside the SDK's
+                        # optimistic update callback, never a stale description
+                        # or a caller-supplied opt-out. Absence is old admission.
+                        admitted_input = dict(admitted_input or {})
+                        admitted_input.pop("linked_recovery_retired", None)
+                        if "linked_recovery_retired" in existing_input:
+                            admitted_input["linked_recovery_retired"] = existing_input[
+                                "linked_recovery_retired"
+                            ]
                 args = [admitted_input] if admitted_input is not None else []
                 schedule.action = ScheduleActionStartWorkflow(
                     workflow_type,

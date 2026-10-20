@@ -75,6 +75,8 @@ It stores one authored workspace/repository context, one branch role, and one pu
 
 Create/update/pause/resume/delete commit product desired state and reconcile the corresponding Temporal operation through the existing service/adapter. Trigger-now uses the approved current definition without silently rewriting it.
 
+Metadata-only edits preserve the durable execution action. Reconciliation compares the execution inputs independently of its server-owned linked-recovery admission decision; it preserves that decision, including an absent legacy marker, when repairing action drift. Only an explicit changed target or a genuinely missing action receives new admission. SDK-described inputs and memo values are decoded for comparison without changing their stored wire form.
+
 When DB desired state and Temporal differ after failure, the next successful reconciliation reapplies the validated desired revision. Reconciliation is not allowed to invent new defaults or permission grants. Concurrent edits use expected revisions and stable request identity; a stale reconciliation cannot overwrite a newer approved definition. Report pending/failed reconciliation and actual observed pause/timing separately from desired settings.
 
 Run-now request acceptance is distinct from an observed workflow start. The
