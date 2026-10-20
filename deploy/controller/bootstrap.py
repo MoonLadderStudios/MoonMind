@@ -499,62 +499,73 @@ def _handoff(args, *, deadline: float) -> int:
 def _controller_stays_running(
     project: str, image: str, *, deadline=None, allow_prior_restarts=False
 ) -> bool:
-    """Require a stable recovery container, or a replacement with no restarts."""
+    """Verify the same healthy container stays running through the settle window.
+
+    RestartCount is lifetime history, not a recovery failure. Compare it and
+    StartedAt across this window so a retained prior container may have history,
+    but a new restart, replacement, or unhealthy state cannot pass readiness.
+    Forward replacements retain the stricter zero-restart requirement.
+    """
+    budget = {"deadline": deadline} if deadline is not None else {}
+
+    def snapshot():
+        listed = _run_capture(
+            [
+                "docker",
+                "ps",
+                "--quiet",
+                "--no-trunc",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--filter",
+                f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
+            ],
+            **budget,
+        )
+        identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
+        if len(identifiers) != 1:
+            return None
+        inspected = _run_capture(["docker", "inspect", identifiers[0]], **budget)
+        if inspected.returncode:
+            return None
+        try:
+            containers = json.loads(inspected.stdout or "[]")
+            if not isinstance(containers, list) or len(containers) != 1:
+                return None
+            container = containers[0]
+            state = container.get("State") or {}
+            labels = (container.get("Config") or {}).get("Labels") or {}
+            restarts = container.get("RestartCount")
+            if (
+                container.get("Id") != identifiers[0]
+                or container.get("Image") != image
+                or labels.get("com.docker.compose.project") != project
+                or labels.get("com.docker.compose.service") != CONTROLLER_SERVICE
+                or state.get("Status") != "running"
+                or state.get("Restarting")
+                or state.get("Paused")
+                or state.get("Dead")
+                or (
+                    "Health" in state
+                    and (state["Health"] or {}).get("Status") != "healthy"
+                )
+                or not isinstance(state.get("StartedAt"), str)
+                or not state["StartedAt"]
+                or type(restarts) is not int
+                or restarts < 0
+            ):
+                return None
+            return container["Id"], restarts, state["StartedAt"]
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    before = snapshot()
+    if before is None or (not allow_prior_restarts and before[1] != 0):
+        return False
     if deadline is not None and _remaining(deadline) <= HANDOFF_SETTLE_SECONDS:
         raise RuntimeError("handoff readiness budget exhausted")
-    baseline = None
-    if allow_prior_restarts:
-        baseline = _controller_running_state(project, image, deadline=deadline)
-        if baseline is None:
-            return False
-        if deadline is not None and _remaining(deadline) <= HANDOFF_SETTLE_SECONDS:
-            raise RuntimeError("handoff readiness budget exhausted")
     time.sleep(HANDOFF_SETTLE_SECONDS)
-    observed = _controller_running_state(project, image, deadline=deadline)
-    return observed is not None and (
-        observed == baseline if allow_prior_restarts else observed[1] == 0
-    )
-
-
-def _controller_running_state(
-    project: str, image: str, *, deadline=None
-) -> tuple[str, int] | None:
-    """Observe the unique running controller's identity and restart count."""
-    listed = _run_capture(
-        [
-            "docker",
-            "ps",
-            "--quiet",
-            "--filter",
-            f"label=com.docker.compose.project={project}",
-            "--filter",
-            f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
-        ],
-        **({"deadline": deadline} if deadline is not None else {}),
-    )
-    identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
-    if len(identifiers) != 1:
-        return None
-    inspected = _run_capture(
-        [
-            "docker",
-            "inspect",
-            "--format",
-            "{{.Image}} {{.RestartCount}}",
-            identifiers[0],
-        ],
-        **({"deadline": deadline} if deadline is not None else {}),
-    )
-    fields = (inspected.stdout or "").split()
-    if (
-        inspected.returncode != 0
-        or len(fields) != 2
-        or fields[0] != image
-        or not fields[1].isascii()
-        or not fields[1].isdecimal()
-    ):
-        return None
-    return identifiers[0], int(fields[1])
+    return snapshot() == before
 
 
 def _print_handoff_receipt(status: str, **details: str) -> int:
