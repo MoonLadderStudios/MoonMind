@@ -9,7 +9,10 @@ import pytest
 from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleSpec
 
 from moonmind.workflows.temporal.client import TemporalClientAdapter
-from moonmind.workflows.temporal.hard_switch_cutover import admit_user_workflow_input
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    LEGACY_USER_WORKFLOW_TYPE,
+    admit_user_workflow_input,
+)
 
 _REAL_START_WORKFLOW = TemporalClientAdapter.start_workflow
 
@@ -38,7 +41,9 @@ def test_user_admission_copies_payload_and_overrides_operator_opt_out(payload):
 
 
 @pytest.mark.parametrize("payload", [None, {}, _spoofed_input()])
-@pytest.mark.parametrize("workflow_type", ["MoonMind.Run", "MoonMind.MergeAutomation"])
+@pytest.mark.parametrize(
+    "workflow_type", [LEGACY_USER_WORKFLOW_TYPE, "MoonMind.MergeAutomation"]
+)
 def test_other_workflow_admission_leaves_payload_unchanged(workflow_type, payload):
     original = deepcopy(payload)
     assert admit_user_workflow_input(workflow_type, payload) is payload

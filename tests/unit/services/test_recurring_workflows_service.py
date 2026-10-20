@@ -1540,13 +1540,11 @@ async def test_update_definition_updates_temporal_schedule(
             assert call_kwargs["definition_id"] == definition.id
             assert call_kwargs["cron_expression"] == "0 12 * * *"
             assert call_kwargs["enabled"] is False
-            assert call_kwargs["workflow_type"] == "MoonMind.UserWorkflow"
-            assert call_kwargs["workflow_input"]["workflow_type"] == (
-                "MoonMind.UserWorkflow"
-            )
-            assert call_kwargs["workflow_input"]["initial_parameters"]["task"][
-                "instructions"
-            ] == "Queue job"
+            assert "workflow_type" not in call_kwargs
+            assert "workflow_input" not in call_kwargs
+            assert "memo" not in call_kwargs
+            assert "search_attributes" not in call_kwargs
+            assert definition.target["initialParameters"]["task"]["instructions"] == "Queue job"
 
 async def test_create_manual_run_triggers_temporal_schedule(
     tmp_path: Path, mock_temporal_adapter
@@ -3598,6 +3596,18 @@ async def test_schedule_actions_record_provider_profile_projection_4640(
 
         assert_projection(mock_temporal_adapter.create_schedule.await_args.kwargs)
         await service.update_definition(definition, name="Renamed schedule")
+        metadata_update = mock_temporal_adapter.update_schedule.await_args.kwargs
+        assert "workflow_input" not in metadata_update
+        assert "memo" not in metadata_update
+        assert "search_attributes" not in metadata_update
+        # A changed target still writes a complete admitted action projection.
+        await service.update_definition(
+            definition,
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {**parameters, "title": "Changed target"},
+            },
+        )
         assert_projection(mock_temporal_adapter.update_schedule.await_args.kwargs)
         # Recreate and its create-conflict recovery must carry the same projection.
         from api_service.services.recurring_workflows_service import _normalize_policy
