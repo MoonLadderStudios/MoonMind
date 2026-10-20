@@ -7,7 +7,7 @@ default user or publishes a candidate on stale attribution.
 """
 
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -58,8 +58,16 @@ async def test_startup_preserves_refused_multi_person_source(
         await session.commit()
         before = sorted(str(u) for u in (await session.execute(select(User.id))).scalars().all())
 
-    with (patch("api_service.main._initialize_oidc_provider"),):
+    from api_service.services import single_user_conversion as conversion
+
+    collect = AsyncMock(wraps=conversion.collect_inventory)
+    with (
+        patch("api_service.main._initialize_oidc_provider"),
+        patch.object(conversion, "collect_inventory", collect),
+    ):
         await startup_event()
+    # One startup reads retained history once; it holds the HTTP listener.
+    assert collect.await_count == 1
 
     async with db_base.async_session_maker() as session:
         after = sorted(str(u) for u in (await session.execute(select(User.id))).scalars().all())

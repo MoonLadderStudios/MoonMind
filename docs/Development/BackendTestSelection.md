@@ -100,7 +100,7 @@ bound sized from observed setup, testing, and bounded diagnostics/cleanup:
 
 | Lane | Per-test timeout | Test-step bound | Job bound |
 | --- | --- | --- | --- |
-| Unit-fast | 60s (`--timeout 60`) | 7-minute native test step | 15-minute job |
+| Unit-fast | 60s (`--timeout 60`) | 12-minute native test step | 18-minute job |
 | API/component | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
 | Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
 | Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
@@ -123,13 +123,15 @@ evidence summary reports the termination as a cooperative deadline stop
 (124), a hard kill (137), an ordinary pytest exit, or unavailable when the
 native step bound, cancellation or runner loss stopped the step first.
 
-Fast 15-minute jobs cover observed setup (~2-3 minutes: checkout,
-Python, dependencies, submodules), the 7-minute test step, and bounded
-reporting (2-minute caps that typically finish in seconds). Reliability
-20-minute jobs cover the same setup shape plus Compose pull/up (~1-2
-minutes), the 12-minute test step, and bounded diagnostics/cleanup (2-minute
-caps each). The 20-minute reliability bound is a measured exception: the
-heaviest duration-balanced partition holds ~500s of tests plus
+Unit-fast keeps six minutes outside its 12-minute test step for setup and
+reporting. Its full suite can take about nine minutes before final process
+exit. Warm setup has taken about 35 seconds; the normal summary and upload
+steps each have a 2-minute cap. API/component and Temporal retain 15-minute
+jobs and 7-minute test steps. Reliability 20-minute jobs also cover Compose
+pull/up (~1-2 minutes), their 12-minute test step, and bounded diagnostics/
+cleanup. Job deadlines remain hard ceilings: slow setup or multiple exhausted
+failure-diagnostic caps can prevent final uploads. The reliability bound
+reflects measured load: its heaviest duration-balanced partition holds ~500s of tests plus
 collection/shutdown overhead, so it must not receive a shorter aspirational
 cutoff. A justified individual slow test can use the installed
 pytest-timeout per-test marker as a documented exception; global defaults
@@ -195,7 +197,7 @@ If the change removes an authorized obsolete capability, identify the retired wo
 
 ### Hermetic Integration CI Selection
 
-The integration matrix selects four independent lanes: hermetic, fresh-journey, upgrade-journey, and controller-journey (including host journal transitions). Each row owns its checkout, Compose project, artifacts and teardown. Native matrix fail-fast and the wrapper's `--maxfail=1` apply outside schedules. Each run step has a native bound of about three times its healthy duration, and teardown and diagnostics Compose commands each get `MOONMIND_TEST_CLEANUP_TIMEOUT` seconds (default 120). After teardown, each row collects only its own redacted outputs: the hermetic JUnit report, streamed log and project diagnostics on every run, or a failed journey's log tree, plus the journal transition test's phase, ps and log evidence on controller-journey. A hard job kill or runner loss can still prevent collection and upload.
+The integration matrix selects four independent lanes: hermetic, fresh-journey, upgrade-journey, and controller-journey (including host journal transitions). Each row owns its checkout, Compose project, artifacts and teardown. Native matrix fail-fast and the wrapper's `--maxfail=1` apply outside schedules. Each run step has a finite native deadline with room for diagnostics and teardown. Their Compose commands each get `MOONMIND_TEST_CLEANUP_TIMEOUT` seconds (default 120) plus a 10-second kill grace. The hermetic job reserves 12 minutes for bounded checkout, submodule, Buildx and image setup, 23 for execution and cleanup, four for evidence collection/upload and one for runner overhead within its 40-minute deadline; journey jobs retain 30 minutes. After teardown, each row collects only its own redacted outputs: the hermetic JUnit report, streamed log and project diagnostics on every run, or a failed journey's log tree, plus the journal transition test's phase, ps and log evidence on controller-journey. Runner loss, cancellation or overhead beyond the reserve can still prevent collection and upload.
 
 The executable dependency map narrows only audited lane-local inputs: ordinary integration tests/fixtures select hermetic; the journal transition test selects controller-journey; unclassified host tests/fixtures retain hermetic plus controller-journey; shared journey scripts select all three journeys. Mixed changes union their lanes. The shared changed-file helper includes rename sources and destinations and deleted paths, so removal does not erase an owner.
 
@@ -209,7 +211,7 @@ Unknown/full changes, dependencies, Docker/Compose, shared boot/runtime/auth/con
 
 The candidate journey observes asynchronous bootstrap separately from HTTP health. Before constructing its deferred task, it reads the existing Agent Profile inventory until one active deployment default has a ready active version, bounded by the journey's 300-second timeout. It creates no profile and applies no selection override. The subsequent default admission, idempotent redelivery, workflow observations, and dashboard cancellation must still succeed. The pre-upgrade account-era release uses its existing supported request path. After candidate workers are ready, the isolated upgrade harness runs the existing controller routing convergence under its real stack lock and operation record. It observes actual worker images, preserves pinned or unknown executions, and requires a completed receipt before new work. This covers Compose upgrade plus production routing convergence, not a full updater/API operation.
 
-`tools/test_integration.sh` builds its test image unless `MOONMIND_PYTHON_TEST_IMAGE` supplies an already loadable image. It writes `artifacts/integration-ci/` on the host, also when it runs Compose from a temporary checkout copy, and exits with pytest's status. CI sets `MOONMIND_INTEGRATION_FAIL_FAST` and `MOONMIND_INTEGRATION_TIMEOUT`. The deadline interrupts pytest with SIGINT so it still writes its report, then exits 124. CI's existing image layer cache and per-file xdist execution are reused. The journey and transport rows build the candidate deployable image with the same inputs as `omnigent-exact-artifact` and read that job's layer cache scope without writing it. `MOONMIND_INTEGRATION_WORKERS` controls the supported worker override. This host-side path is not a reason to expose Docker to a managed agent.
+`tools/test_integration.sh` builds its test image unless `MOONMIND_PYTHON_TEST_IMAGE` supplies an already loadable image. It writes `artifacts/integration-ci/` on the host, also when it runs Compose from a temporary checkout copy, and exits with pytest's status. CI sets `MOONMIND_INTEGRATION_FAIL_FAST` and `MOONMIND_INTEGRATION_TIMEOUT`. The deadline covers Compose startup and pytest together, interrupts with SIGINT to preserve the report, then exits 124 (137 after the 30-second kill grace). CI's existing image layer cache and per-file xdist execution are reused. The journey and transport rows build the candidate deployable image with the same inputs as `omnigent-exact-artifact` and read that job's layer cache scope without writing it. `MOONMIND_INTEGRATION_WORKERS` controls the supported worker override. This host-side path is not a reason to expose Docker to a managed agent.
 
 The shared conftest's crash-recovery override depends on pytest-xdist 3.8.0's
 private `LoadScopeScheduling` state behind the public scheduler hook. It retains
@@ -218,8 +220,12 @@ supplies a replacement worker's required next item before execution. The latter
 matches [the upstream pytest-xdist fix](https://github.com/pytest-dev/pytest-xdist/pull/1328).
 `tests/unit/workflows/temporal/test_pytest_worker_crash_recovery.py` is the slow,
 real-subprocess compatibility coverage, including a replacement facing queued
-single-test files. When updating the declared xdist dependency, run these cases
-against the native scheduler; remove the override once a released version
+single-test files. Crash readiness (real operation and ownership receipt) has
+a separate 10-second setup bound before the 3-second fatal test-body timeout.
+Child test timers exclude fixture setup; a 40-second outer deadline bounds
+the full subprocess, including startup, setup, and recovery.
+When updating the declared xdist dependency, run these cases against the native
+scheduler; remove the override once a released version
 preserves the failed exit, runs each survivor once, and finishes those cases.
 The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
 cleans only SDK time-skipping and local dev-server children directly owned by
