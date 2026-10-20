@@ -178,7 +178,7 @@ The primary result is persisted before secondary cleanup, and ownership is relea
 
 A development bind mount can change files without restarting imported code, so affected processes are recreated through the same owner. Actual startup provenance is recorded for diagnosis but is not a runtime admission or compatibility gate.
 
-Bind sources use the Docker client's namespace. Windows drive paths map to Docker Desktop's `/run/desktop/mnt/host/<drive>`; WSL keeps `/mnt/<drive>`. Bootstrap fails on missing sources and removes stopped controllers with obsolete network IDs before `up`. Readiness times out after 30 seconds; cold starts retain image download time. Bounded startup commands stop their Compose process group before reconciling Docker state on timeout. Handoff shares the deadline below.
+Bind sources follow the Docker client's namespace: Windows drives map to Docker Desktop's `/run/desktop/mnt/host/<drive>`, while WSL clients keep `/mnt/<drive>`. Bootstrap rejects missing sources. Before `up`, it removes stopped controllers with stale network IDs. No-pull refresh shares a startup budget, stops owned process groups, and reconciles the exact controller project before reporting a timeout; uncertainty stops the attempt without retry. Cold startup leaves removal and image download time unbounded for native host compatibility. Compose readiness times out after 30 seconds. Handoff's shared recovery budget is described below.
 
 ## 11. Updater runner execution model
 

@@ -172,7 +172,7 @@ def test_missing_identity_is_recovered_from_installed_compose_without_losing_wor
     monkeypatch.setattr(
         bootstrap,
         "_compose",
-        lambda *args: (args[2] == "up" and recreated.append(args)) or 0,
+        lambda *args, **kwargs: (args[2] == "up" and recreated.append(args)) or 0,
     )
     previous_umask = os.umask(0o077)
     try:
@@ -232,7 +232,7 @@ def test_ensure_refreshes_a_capable_controller_from_the_requested_release(
         selected.append(image)
         return concrete
 
-    def recreate(state_dir, project, *args):
+    def recreate(state_dir, project, *args, **kwargs):
         assert lock_mod.StackLock(state_dir, "moonmind").probe()
         if args[0] == "up":
             recreations.append(compose.read_text())
@@ -652,7 +652,7 @@ def test_controller_prerequisite_can_retry_failed_recreation(
     attempts = []
     upgraded = False
 
-    def recreate(state_dir, project, *args):
+    def recreate(state_dir, project, *args, **kwargs):
         nonlocal upgraded
         if args[0] != "up":
             return 0
@@ -734,7 +734,7 @@ def test_bootstrap_update_holds_the_target_stack_lock(
     assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
     held_during_compose = {}
 
-    def fake_compose(state_dir, *args):
+    def fake_compose(state_dir, *args, **kwargs):
         held_during_compose["stack_locked"] = lock_mod.StackLock(
             state_dir, "moonmind"
         ).probe()
@@ -817,7 +817,7 @@ def test_ensure_replaces_a_stopped_controller_on_wsl_spelled_binds(
             return SimpleNamespace(returncode=0, stdout='""', stderr="")
         return SimpleNamespace(returncode=0, stdout="id", stderr="")
 
-    def fake_compose(state_dir, project, *args):
+    def fake_compose(state_dir, project, *args, **kwargs):
         nonlocal upgraded
         calls.append(("compose", args, compose.read_text()))
         upgraded = upgraded or args[0] == "up"
@@ -862,10 +862,7 @@ def test_controller_startup_deadline_returns_failure_to_the_lifecycle_owner(
     bootstrap = load("bootstrap")
 
     def restarting_controller(command, *, deadline):
-        assert 0 < deadline - bootstrap.time.monotonic() <= (
-            bootstrap.CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
-            + bootstrap.COMMAND_CLEANUP_SECONDS
-        )
+        assert 0 < deadline - bootstrap.time.monotonic() <= 125
         if "up" in command:
             assert "--wait-timeout" in command
             timeout = int(command[command.index("--wait-timeout") + 1])
@@ -892,7 +889,7 @@ def test_lifecycle_replaces_a_stopped_controller_before_up(
     )
     calls = []
 
-    def fake_compose(state_dir, project, *args):
+    def fake_compose(state_dir, project, *args, **kwargs):
         calls.append(args)
         return 0
 
@@ -1036,7 +1033,7 @@ def test_bootstrap_start_creates_a_missing_api_network_before_up(
             return SimpleNamespace(returncode=0, stdout="id", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    def fake_compose(state_dir, project, *args):
+    def fake_compose(state_dir, project, *args, **kwargs):
         calls.append(("compose", args))
         return 0
 
@@ -1325,7 +1322,7 @@ def test_ensure_keeps_the_application_image_process_identity(
     )
     upgraded = False
 
-    def compose_run(*args):
+    def compose_run(*args, **kwargs):
         nonlocal upgraded
         upgraded = True
         return 0
@@ -1666,7 +1663,7 @@ def test_bootstrap_restore_never_replaces_a_controller_that_owns_the_stack(
     assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
     held_during_compose = []
 
-    def fake_compose(state_dir, *args):
+    def fake_compose(state_dir, *args, **kwargs):
         held_during_compose.append(
             lock_mod.StackLock(state_dir, "moonmind").probe()
         )
@@ -1728,7 +1725,7 @@ def test_controller_startup_cancellation_is_not_a_failed_handoff(
     bootstrap = load("bootstrap")
 
     def interrupted(command, **kwargs):
-        assert kwargs["deadline"] > bootstrap.time.monotonic()
+        assert 0 < kwargs["deadline"] - bootstrap.time.monotonic() <= 125
         raise KeyboardInterrupt
 
     monkeypatch.setattr(bootstrap, "_run_owned", interrupted)
@@ -1736,23 +1733,27 @@ def test_controller_startup_cancellation_is_not_a_failed_handoff(
         bootstrap._compose_up(tmp_path, "moonmind-test-cancel", "--pull", "never")
 
 
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
 def test_cold_controller_start_does_not_apply_handoff_budget_to_image_download(
-    controller_path, tmp_path, monkeypatch
+    controller_path, tmp_path, monkeypatch, platform
 ):
     import subprocess
 
     bootstrap = load("bootstrap")
     calls = []
+    monkeypatch.setattr(bootstrap.sys, "platform", platform)
+    monkeypatch.setattr(
+        bootstrap, "_run_owned", lambda *a, **k: pytest.fail("cold startup was bounded")
+    )
 
     def run(command, **kwargs):
         calls.append(command)
+        assert kwargs["timeout"] is None
         if "up" in command:
-            assert kwargs["timeout"] is None
             assert command[command.index("--wait-timeout") + 1] == "30"
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(bootstrap.subprocess, "run", run)
-    monkeypatch.setattr(bootstrap, "_run_owned", run)
     assert bootstrap._compose_up(tmp_path, "moonmind-test-cold") == 0
     assert any("up" in command for command in calls)
 
@@ -1783,6 +1784,8 @@ time.sleep(60)
     popen = subprocess.Popen
 
     def launch(args, **kwargs):
+        if command[0] == "up" and "rm" in args:
+            return popen([sys.executable, "-c", "pass"], **kwargs)
         return popen([sys.executable, "-c", script, str(marker)], **kwargs)
 
     def plugin_running():
@@ -1808,7 +1811,7 @@ time.sleep(60)
     started = time.monotonic()
     try:
         with pytest.raises(RuntimeError, match="timed out") as caught:
-            bootstrap._compose(tmp_path, "moonmind-test-owned", *command)
+            bootstrap._compose_up(tmp_path, "moonmind-test-owned", "--pull", "never")
         assert marker.exists()
         assert not plugin_running()
         assert reconciled == ["moonmind-test-owned"]
@@ -2097,6 +2100,9 @@ def test_owned_commands_spend_one_cumulative_allowance(controller_path, monkeypa
                 raise subprocess.TimeoutExpired("compose up", timeout)
             return "", ""
 
+        def poll(self):
+            return 0
+
         def wait(self, *, timeout):
             return 0
 
@@ -2253,3 +2259,396 @@ def test_handoff_keeps_original_error_when_saved_config_restore_fails(
     assert len(mutations) == 1
     assert "original startup timeout" in receipt["reason"]
     assert "saved compose restore denied" in receipt["reason"]
+
+
+def test_no_deadline_compose_startup_uses_owned_cleanup(
+    controller_path, tmp_path, monkeypatch
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    calls = []
+
+    def owned(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bootstrap, "_run_owned", owned)
+    monkeypatch.setattr(
+        bootstrap.subprocess,
+        "run",
+        lambda *a, **k: pytest.fail("unowned bounded command"),
+    )
+    assert bootstrap._compose_up(tmp_path, "exact-controller", "--pull", "never") == 0
+    assert len(calls) == 2
+    assert all(call[1]["deadline"] > bootstrap.time.monotonic() for call in calls)
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform != "linux", reason="real process-group regression"
+)
+@pytest.mark.parametrize(
+    "verb,mode,state",
+    [
+        ("rm", "timeout", "running"),
+        ("up", "timeout", "running"),
+        ("up", "timeout", "removing"),
+        ("up", "timeout", "inspection-error"),
+        ("up", "interrupt", "running"),
+        ("up", "sigterm", "running"),
+    ],
+)
+def test_ensure_stops_plugin_and_reconciles_before_timeout_returns(
+    controller_path, tmp_path, monkeypatch, verb, mode, state
+):
+    import json
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    bootstrap = load("bootstrap")
+    lock = load("lock")
+    state_dir = tmp_path / "state"
+    bootstrap.ensure_secret(state_dir)
+    identity = bootstrap.ensure_identity(state_dir, tmp_path, 8472)
+    bootstrap.render_compose_file(
+        state_dir=state_dir, repo=tmp_path, image="sha256:" + "a" * 64
+    )
+    monkeypatch.setattr(bootstrap, "controller_capabilities", lambda *args: set())
+    monkeypatch.setattr(
+        bootstrap, "_application_controller_image", lambda *args: "sha256:" + "c" * 64
+    )
+    monkeypatch.setattr(bootstrap, "CONTROLLER_START_COMMAND_TIMEOUT_SECONDS", 0.3)
+    marker = tmp_path / "plugin"
+    mutations = []
+    inspections = []
+    real_popen = subprocess.Popen
+    real_communicate = subprocess.Popen.communicate
+    script = """
+import signal,subprocess,sys,time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+subprocess.Popen([sys.executable, '-c',
+ 'import os,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+ 'open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(60)', sys.argv[1]])
+time.sleep(60)
+"""
+
+    def plugin_stopped():
+        assert marker.exists()
+        try:
+            value = Path(f"/proc/{int(marker.read_text())}/stat").read_text()
+        except FileNotFoundError:
+            return
+        assert value.rsplit(")", 1)[1].split()[0] == "Z"
+
+    def popen(command, **kwargs):
+        assert command[:2] == ["docker", "compose"]
+        assert command[command.index("--project-name") + 1] == identity["project"]
+        assert kwargs["start_new_session"] is True
+        current = "up" if "up" in command else "rm"
+        mutations.append(current)
+        process = real_popen(
+            (
+                [sys.executable, "-c", script, str(marker)]
+                if current == verb
+                else [sys.executable, "-c", "pass"]
+            ),
+            **kwargs,
+        )
+        process.test_blocked = current == verb
+        return process
+
+    def communicate(process, **kwargs):
+        if process.test_blocked and mode != "timeout":
+            until = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < until:
+                time.sleep(0.01)
+            if mode == "sigterm":
+                os.kill(os.getpid(), signal.SIGTERM)
+            raise KeyboardInterrupt
+        return real_communicate(process, **kwargs)
+
+    def inspect(command, **kwargs):
+        plugin_stopped()
+        assert lock.StackLock(state_dir, "moonmind").probe()
+        assert kwargs["deadline"] > time.monotonic()
+        inspections.append(command)
+        if state == "inspection-error":
+            return subprocess.CompletedProcess(command, 1, "", "unavailable")
+        if command[1] == "ps":
+            assert f"label=com.docker.compose.project={identity['project']}" in command
+            assert "label=com.docker.compose.service=controller" in command
+            return subprocess.CompletedProcess(command, 0, "exact-controller", "")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                [
+                    {
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.project": identity["project"],
+                                "com.docker.compose.service": "controller",
+                            }
+                        },
+                        "Image": "sha256:" + "c" * 64,
+                        "State": {"Status": state},
+                    }
+                ]
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(real_popen, "communicate", communicate)
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", popen)
+    monkeypatch.setattr(bootstrap, "_run_capture", inspect)
+    original_handler = signal.getsignal(signal.SIGTERM)
+    error = {
+        "timeout": RuntimeError,
+        "interrupt": KeyboardInterrupt,
+        "sigterm": SystemExit,
+    }[mode]
+    with pytest.raises(error) as caught:
+        bootstrap.main(
+            [
+                "ensure",
+                "--state-dir",
+                str(state_dir),
+                "--repo",
+                str(tmp_path),
+                "--image",
+                "ghcr.io/org/moonmind:latest",
+            ],
+            env={},
+        )
+    plugin_stopped()
+    assert mutations == (["rm"] if verb == "rm" else ["rm", "up"])
+    assert signal.getsignal(signal.SIGTERM) == original_handler
+    assert not lock.StackLock(state_dir, "moonmind").probe()
+    if mode == "timeout":
+        assert inspections
+        assert "timed out" in str(caught.value)
+        assert (
+            "state reconciled" if state == "running" else "state unverified"
+        ) in str(caught.value)
+    else:
+        assert not inspections
+
+
+@pytest.mark.parametrize("outcome", ["gone", "live", "denied"])
+def test_non_linux_posix_group_probe_fails_closed(
+    controller_path, monkeypatch, outcome
+):
+    bootstrap = load("bootstrap")
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    calls = []
+
+    def probe(group, signum):
+        calls.append((group, signum))
+        if outcome == "gone":
+            raise ProcessLookupError
+        if outcome == "denied":
+            raise PermissionError
+
+    monkeypatch.setattr(bootstrap.os, "killpg", probe)
+    if outcome == "denied":
+        with pytest.raises(PermissionError):
+            bootstrap._group_running(123)
+    else:
+        assert bootstrap._group_running(123) == (outcome == "live")
+    assert calls == [(123, 0)]
+
+
+def test_posix_cleanup_reaps_launcher_before_group_probe(controller_path, monkeypatch):
+    bootstrap = load("bootstrap")
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    calls = []
+
+    class Process:
+        pid = 123
+
+        def poll(self):
+            calls.append("reaped")
+            return 0
+
+        def wait(self, *, timeout):
+            calls.append("waited")
+
+    def signal(group, signum):
+        if signum == 0:
+            assert "reaped" in calls
+            raise ProcessLookupError
+        calls.append("signalled")
+
+    monkeypatch.setattr(bootstrap.os, "killpg", signal)
+    bootstrap._stop_command(Process(), deadline=bootstrap.time.monotonic() + 5)
+    assert calls == ["signalled", "reaped", "waited"]
+
+
+def test_no_pull_startup_shares_budget_and_bounds_timeout_reconciliation(
+    controller_path, tmp_path, monkeypatch
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    clock = [1000.0]
+    calls = []
+    monkeypatch.setattr(bootstrap.time, "monotonic", lambda: clock[0])
+
+    def owned(command, *, deadline):
+        assert deadline == 1125
+        calls.append(command)
+        if "rm" in command:
+            clock[0] += 100
+            return subprocess.CompletedProcess(command, 0)
+        clock[0] = deadline
+        raise bootstrap.CommandTimeoutError("startup timed out")
+
+    def reconcile(project, *, deadline):
+        assert project == "exact-controller"
+        assert deadline == 1140
+        raise RuntimeError("inspection budget exhausted")
+
+    monkeypatch.setattr(bootstrap, "_run_owned", owned)
+    monkeypatch.setattr(bootstrap, "_reconcile_controller", reconcile)
+    with pytest.raises(
+        RuntimeError,
+        match="startup timed out; controller state unverified: inspection budget exhausted",
+    ):
+        bootstrap._compose_up(tmp_path, "exact-controller", "--pull", "never")
+    assert len(calls) == 2
+
+
+def test_no_pull_startup_skips_reconciliation_when_cleanup_is_unverified(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    calls = []
+
+    def owned(*args, **kwargs):
+        calls.append(args)
+        raise bootstrap.CommandCleanupError("plugin cleanup unverified")
+
+    monkeypatch.setattr(bootstrap, "_run_owned", owned)
+    monkeypatch.setattr(
+        bootstrap,
+        "_reconcile_controller",
+        lambda *a, **k: pytest.fail("unclean plugin was inspected/retried"),
+    )
+    with pytest.raises(
+        bootstrap.CommandCleanupError, match="plugin cleanup unverified"
+    ):
+        bootstrap._compose_up(tmp_path, "exact-controller", "--pull", "never")
+    assert len(calls) == 1
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform != "linux", reason="real process-group regression"
+)
+@pytest.mark.parametrize("launcher_timeout", [False, True])
+@pytest.mark.parametrize("cancel_at", ["probe", "wait"])
+def test_cancellation_during_cleanup_stops_real_plugin(
+    controller_path, tmp_path, monkeypatch, launcher_timeout, cancel_at
+):
+    import os
+    import signal
+    import sys
+    import time
+    from pathlib import Path
+
+    bootstrap = load("bootstrap")
+    marker = tmp_path / "plugin"
+    script = """
+import signal,subprocess,sys,time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+subprocess.Popen([sys.executable, '-c',
+ 'import os,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+ 'open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(60)', sys.argv[1]])
+while not __import__('os').path.exists(sys.argv[1]): time.sleep(.01)
+if sys.argv[2] == 'True': time.sleep(60)
+"""
+    monkeypatch.setattr(bootstrap, "CONTROLLER_START_COMMAND_TIMEOUT_SECONDS", 0.3)
+    original = bootstrap._group_running if cancel_at == "probe" else time.sleep
+    signalled = []
+
+    def cancel(*args):
+        if not signalled:
+            signalled.append(True)
+            os.kill(os.getpid(), signal.SIGTERM)
+        return original(*args)
+
+    if cancel_at == "probe":
+        monkeypatch.setattr(bootstrap, "_group_running", cancel)
+    else:
+        monkeypatch.setattr(bootstrap.time, "sleep", cancel)
+    handler = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(SystemExit):
+        bootstrap._run_owned(
+            [sys.executable, "-c", script, str(marker), str(launcher_timeout)],
+            deadline=time.monotonic() + 6,
+        )
+    assert signalled
+    assert signal.getsignal(signal.SIGTERM) == handler
+    try:
+        stat = Path(f"/proc/{int(marker.read_text())}/stat").read_text()
+    except FileNotFoundError:
+        pass
+    else:
+        assert stat.rsplit(")", 1)[1].split()[0] == "Z"
+
+
+def test_cancelled_unverified_cleanup_keeps_unsafe_retry_diagnostic(
+    controller_path, monkeypatch, capsys
+):
+    import os
+    import signal
+
+    bootstrap = load("bootstrap")
+
+    def cleanup(*args, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)
+        raise bootstrap.CommandCleanupError("plugin remains uncertain")
+
+    monkeypatch.setattr(bootstrap, "_stop_command_group", cleanup)
+    original = signal.signal(signal.SIGTERM, bootstrap._cancel_handoff)
+    try:
+        with pytest.raises(SystemExit):
+            bootstrap._stop_command(object(), deadline=1)
+        assert signal.getsignal(signal.SIGTERM) == bootstrap._cancel_handoff
+    finally:
+        signal.signal(signal.SIGTERM, original)
+    assert "MOONMIND_CONTROLLER_RETRY_UNSAFE=" in capsys.readouterr().err
+
+
+def test_no_pull_exhausted_budget_reconciles_without_launching_again(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    clock = [1000.0]
+    commands = []
+    observed = []
+    monkeypatch.setattr(bootstrap.time, "monotonic", lambda: clock[0])
+    original = bootstrap._run_owned
+
+    def owned(command, *, deadline):
+        commands.append(command)
+        if "rm" in command:
+            clock[0] = deadline - 4
+            return __import__("subprocess").CompletedProcess(command, 0)
+        return original(command, deadline=deadline)
+
+    monkeypatch.setattr(bootstrap, "_run_owned", owned)
+    monkeypatch.setattr(
+        bootstrap.subprocess, "Popen", lambda *a, **k: pytest.fail("budget exhausted")
+    )
+    monkeypatch.setattr(
+        bootstrap, "_reconcile_controller",
+        lambda project, **k: observed.append(project) or "no controller container",
+    )
+    with pytest.raises(RuntimeError, match="budget exhausted; controller state reconciled"):
+        bootstrap._compose_up(tmp_path, "exact-project", "--pull", "never")
+    assert len(commands) == 2
+    assert observed == ["exact-project"]

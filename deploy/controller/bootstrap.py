@@ -63,11 +63,12 @@ HANDOFF_SETTLE_SECONDS = 5
 # Bound readiness separately from the CLI so failed starts can reach rollback.
 CONTROLLER_START_TIMEOUT_SECONDS = 30
 CONTROLLER_START_COMMAND_TIMEOUT_SECONDS = 120
-CONTROLLER_RECONCILE_TIMEOUT_SECONDS = 30
 # The caller allows 300 seconds; leave time to deliver the final receipt.
 HANDOFF_TIMEOUT_SECONDS = 270
 HANDOFF_RECOVERY_SECONDS = 90
 COMMAND_CLEANUP_SECONDS = 5
+CONTROLLER_RECONCILE_TIMEOUT_SECONDS = 15
+UNSAFE_RETRY_PREFIX = "MOONMIND_CONTROLLER_RETRY_UNSAFE="
 
 
 # The standalone controller image repository. Any other image is the MoonMind
@@ -858,23 +859,36 @@ def split_image_reference(image: str) -> tuple[str, str | None, str | None]:
     return text, tag, digest
 
 
-class CommandCleanupError(RuntimeError):
-    """The prior CLI may still mutate Docker; no recovery mutation is safe."""
-
-
 class CommandTimeoutError(RuntimeError):
-    """The owned command timed out and its process group has been stopped."""
+    """The command budget expired with no owned process group left running."""
+
+
+class ControllerStateUnverifiedError(RuntimeError):
+    """Tell host fallback not to launch another source against uncertain effects."""
+
+    def __str__(self):
+        return UNSAFE_RETRY_PREFIX + super().__str__()
+
+
+class CommandCleanupError(ControllerStateUnverifiedError):
+    """The prior CLI may still mutate Docker; no recovery mutation is safe."""
 
 
 def _remaining(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise RuntimeError("controller handoff budget exhausted")
+        raise CommandTimeoutError("controller command budget exhausted")
     return remaining
 
 
 def _group_running(group: int) -> bool:
-    """Linux zombies cannot issue Docker requests; all live group members count."""
+    """Observe the owned POSIX group; Linux zombies cannot issue Docker requests."""
+    if not sys.platform.startswith("linux"):
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            return False
+        return True
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
@@ -888,6 +902,37 @@ def _group_running(group: int) -> bool:
 
 
 def _stop_command(process, *, deadline: float) -> None:
+    """Finish bounded cleanup before honoring cancellation, including during probes."""
+    pending = []
+    handlers = {}
+
+    def defer(signum, frame):
+        pending.append((signum, frame))
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        previous = signal.getsignal(signum)
+        if previous != signal.SIG_IGN:
+            handlers[signum] = signal.signal(signum, defer)
+    try:
+        _stop_command_group(process, deadline=deadline)
+    except CommandCleanupError as exc:
+        if pending:
+            # Cancellation must not hide the unsafe-retry diagnostic from the host.
+            print(str(exc), file=sys.stderr, flush=True)
+        raise
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        if pending:
+            signum, frame = pending[0]
+            handler = handlers[signum]
+            if callable(handler):
+                handler(signum, frame)
+            else:
+                raise SystemExit(128 + signum)
+
+
+def _stop_command_group(process, *, deadline: float) -> None:
     """Stop the owned CLI and Compose plugin before inspecting Docker again."""
     try:
         for signum, grace in ((signal.SIGTERM, 1), (signal.SIGKILL, 3)):
@@ -896,9 +941,11 @@ def _stop_command(process, *, deadline: float) -> None:
             except ProcessLookupError:
                 # The group already exited; this shutdown race needs no signal.
                 pass
+            process.poll()  # Reap the launcher before portable group-existence probes.
             until = min(deadline, time.monotonic() + grace)
             while _group_running(process.pid) and time.monotonic() < until:
                 time.sleep(min(0.05, max(0, until - time.monotonic())))
+                process.poll()
             if not _group_running(process.pid):
                 process.wait(timeout=_remaining(deadline))
                 return
@@ -912,55 +959,56 @@ def _stop_command(process, *, deadline: float) -> None:
 def _run_owned(command: list[str], *, deadline: float, capture=False, environment=None):
     """Use the shared phase budget, including bounded descendant cleanup.
 
-    Controller mutations run in Linux helpers. Host/Windows discovery and
-    cold-image downloads retain their existing subprocess path.
+    Refresh/handoff use a POSIX process group. Native Windows discovery and
+    cold-image startup retain their existing unbounded subprocess path.
     """
     timeout = min(
         CONTROLLER_START_COMMAND_TIMEOUT_SECONDS,
         _remaining(deadline) - COMMAND_CLEANUP_SECONDS,
     )
     if timeout <= 0:
-        raise RuntimeError("controller handoff command budget exhausted")
-    if not sys.platform.startswith("linux"):
-        raise RuntimeError("controller handoff requires its Linux helper")
-    process = subprocess.Popen(
-        command,
-        start_new_session=True,
-        text=True,
-        env=environment,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-    )
+        raise CommandTimeoutError("controller command budget exhausted")
+    if os.name != "posix":
+        raise RuntimeError("bounded controller startup requires its Linux helper")
+    previous_handler = signal.signal(signal.SIGTERM, _cancel_handoff)
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except BaseException as exc:
+        process = subprocess.Popen(
+            command,
+            start_new_session=True,
+            text=True,
+            env=environment,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
         try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            # Enter protected cleanup even after launcher success: the plugin
+            # can outlive it, and cancellation may arrive during observation.
             _stop_command(process, deadline=deadline)
-        except CommandCleanupError as cleanup:
-            if not isinstance(exc, Exception):
-                exc.add_note(str(cleanup))
-                raise exc
-            raise CommandCleanupError(f"{exc}; {cleanup}") from exc
-        if isinstance(exc, subprocess.TimeoutExpired):
-            raise CommandTimeoutError(
-                f"controller command timed out after {timeout:g} seconds"
-            ) from exc
-        raise
-    # Even a successful launcher must not leave a plugin mutating the daemon.
-    try:
-        if _group_running(process.pid):
-            _stop_command(process, deadline=deadline)
-    except OSError as exc:
-        raise CommandCleanupError(
-            f"controller command cleanup unverified: {exc}"
-        ) from exc
-    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except CommandCleanupError:
+            raise
+        except BaseException as exc:
+            try:
+                _stop_command(process, deadline=deadline)
+            except CommandCleanupError as cleanup:
+                if not isinstance(exc, Exception):
+                    print(str(cleanup), file=sys.stderr, flush=True)
+                    raise exc
+                raise CommandCleanupError(f"{exc}; {cleanup}") from exc
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise CommandTimeoutError(
+                    f"controller command timed out after {timeout:g} seconds"
+                ) from exc
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
 
 
 def _reconcile_controller(
     project: str, *, images: set[str] | None = None, deadline: float
-) -> None:
-    """Inspect exact-project state; recovery additionally requires a known image."""
+) -> str:
+    """Fail closed on ambiguous or transitional exact-project container state."""
     identifiers = _checked_capture(
         [
             "docker",
@@ -975,7 +1023,7 @@ def _reconcile_controller(
         deadline=deadline,
     ).split()
     if not identifiers:
-        return
+        return "no controller container"
     if len(identifiers) != 1:
         raise RuntimeError("recovery skipped: ambiguous controller containers")
     containers = json.loads(
@@ -991,13 +1039,16 @@ def _reconcile_controller(
     if (
         labels.get("com.docker.compose.project") != project
         or labels.get("com.docker.compose.service") != CONTROLLER_SERVICE
-        or (images is not None and container.get("Image") not in images)
+        or not isinstance(container.get("Image"), str)
+        or not container["Image"]
+        or (images is not None and container["Image"] not in images)
         or state.get("Status") not in {"running", "exited", "restarting"}
         or state.get("Paused")
     ):
         # A known candidate in a daemon restart loop is precisely what
         # rollback repairs. Removing/unknown state is not safe to repeat.
         raise RuntimeError("recovery skipped: controller state is uncertain")
+    return f"{container['Image']} ({state['Status']})"
 
 
 def _run_capture(
@@ -1259,33 +1310,8 @@ def _compose(state_dir: Path, project: str, *args: str, deadline=None) -> int:
     ]
     if deadline is not None:
         return _run_owned(command, deadline=deadline).returncode
-    bounded = args[0] == "rm" or (
-        args[0] == "up"
-        and "--pull" in args
-        and args[args.index("--pull") + 1] == "never"
-    )
-    if not bounded:
-        return subprocess.run(command, check=False, timeout=None).returncode
-    try:
-        return _run_owned(
-            command,
-            deadline=time.monotonic()
-            + CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
-            + COMMAND_CLEANUP_SECONDS,
-        ).returncode
-    except CommandTimeoutError as exc:
-        # No rollback follows here. Observe daemon effects before releasing
-        # the lifecycle lock, keeping the original timeout if inspection fails.
-        try:
-            _reconcile_controller(
-                project,
-                deadline=time.monotonic() + CONTROLLER_RECONCILE_TIMEOUT_SECONDS,
-            )
-        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-            raise RuntimeError(
-                f"{exc}; controller state reconciliation failed ({error})"
-            ) from exc
-        raise
+    # Cold-image startup remains host-portable and must allow download time.
+    return subprocess.run(command, check=False, timeout=None).returncode
 
 
 def _compose_up(state_dir: Path, project: str, *options: str, deadline=None) -> int:
@@ -1298,22 +1324,54 @@ def _compose_up(state_dir: Path, project: str, *options: str, deadline=None) -> 
     controller is untouched; its state lives in the bind-mounted state dir.
     Bound startup so a restarting replacement returns control for rollback.
     """
-    budget = {"deadline": deadline} if deadline is not None else {}
-    code = _compose(state_dir, project, "rm", "--force", CONTROLLER_SERVICE, **budget)
-    if code:
-        return code
-    return _compose(
-        state_dir,
-        project,
-        "up",
-        "-d",
-        "--wait",
-        "--wait-timeout",
-        str(CONTROLLER_START_TIMEOUT_SECONDS),
-        *options,
-        CONTROLLER_SERVICE,
-        **budget,
+    bounded_refresh = (
+        deadline is None
+        and "--pull" in options
+        and options[options.index("--pull") + 1] == "never"
     )
+    if bounded_refresh:
+        deadline = (
+            time.monotonic()
+            + CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
+            + COMMAND_CLEANUP_SECONDS
+        )
+    budget = {"deadline": deadline} if deadline is not None else {}
+    try:
+        code = _compose(
+            state_dir, project, "rm", "--force", CONTROLLER_SERVICE, **budget
+        )
+        if code:
+            return code
+        return _compose(
+            state_dir,
+            project,
+            "up",
+            "-d",
+            "--wait",
+            "--wait-timeout",
+            str(CONTROLLER_START_TIMEOUT_SECONDS),
+            *options,
+            CONTROLLER_SERVICE,
+            **budget,
+        )
+    except CommandTimeoutError as exc:
+        if not bounded_refresh:
+            raise  # Handoff owns its reserved recovery/reconciliation budget.
+        try:
+            observed = _reconcile_controller(
+                project,
+                deadline=time.monotonic() + CONTROLLER_RECONCILE_TIMEOUT_SECONDS,
+            )
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            subprocess.SubprocessError,
+        ) as inspection:
+            raise ControllerStateUnverifiedError(
+                f"{exc}; controller state unverified: {inspection}"
+            ) from exc
+        raise RuntimeError(f"{exc}; controller state reconciled: {observed}") from exc
 
 
 def _client_bind_lines(lines: list[str]) -> list[str]:

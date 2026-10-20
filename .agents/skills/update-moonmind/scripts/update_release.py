@@ -38,6 +38,7 @@ _CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
 _CONTROLLER_SUBMIT_ATTEMPTS = 2
 # Receipt line printed by the controller's `bootstrap.py ensure --prefer-requested`.
 _CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
+_CONTROLLER_UNSAFE_RETRY_PREFIX = "MOONMIND_CONTROLLER_RETRY_UNSAFE="
 # Controller behavior this submitter relies on (deploy/controller/server.py
 # CONTROLLER_CAPABILITIES). Without request identity a controller answers a
 # new `latest` request with an earlier success, so it is refreshed first. A
@@ -910,6 +911,8 @@ def _ensure_controller_journal_transition(
                     cwd=repo,
                 )
         except RuntimeError as exc:
+            if _CONTROLLER_UNSAFE_RETRY_PREFIX in str(exc):
+                raise  # Cleanup/state is uncertain; another source must not mutate.
             # A later source may carry the repair this one lacks; ensure is
             # serialized by the stack lock and never replaces a controller
             # that owns an open operation, so the next source may retry it.
@@ -968,6 +971,8 @@ def _refresh_controller_to_requested(record, repo, controller_url):
                     cwd=repo,
                 )
             except RuntimeError as exc:
+                if _CONTROLLER_UNSAFE_RETRY_PREFIX in str(exc):
+                    return False, str(exc)
                 # A source predating --prefer-requested refuses the flag.
                 detail = f"controller source {image} could not refresh: {exc}"
                 print(detail[:1].upper() + detail[1:], flush=True)
