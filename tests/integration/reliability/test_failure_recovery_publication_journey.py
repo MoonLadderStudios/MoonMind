@@ -79,7 +79,7 @@ from tests.unit.workflows.temporal.test_remediation_context import (
     _read_artifact_json,
 )
 from tests.unit.workflows.temporal.test_remediation_issue_3622 import AcceptedEffect
-from tests.unit.workflows.temporal.workflows.test_run_recover_from_failed_step import (
+from tests.unit.workflows.temporal.workflows.test_run_failed_step_repair import (
     _configure_workflow_runtime,
     _dependency_map,
     _journey_remediation_spec,

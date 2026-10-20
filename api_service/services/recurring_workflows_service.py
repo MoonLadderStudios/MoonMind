@@ -73,6 +73,7 @@ from moonmind.workflows.temporal.schedule_mapping import (
 from moonmind.workflows.temporal.client import (
     ScheduleTriggerResult,
     TemporalClientAdapter,
+    decode_schedule_action_value,
 )
 from moonmind.workflows.temporal.schedule_errors import (
     ScheduleAdapterError,
@@ -642,6 +643,14 @@ class RecurringWorkflowsService:
             "mm_owner_id": str(owner_user_id),
         }
 
+    async def _provider_profile_projection(
+        self, parameters: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], str]:
+        return build_provider_profile_projection(
+            parameters,
+            labels=await provider_profile_label_snapshot(self._session, parameters),
+        )
+
     async def _workflow_start_metadata(
         self,
         *,
@@ -662,10 +671,7 @@ class RecurringWorkflowsService:
             publication_git_identity_admission,
         )
 
-        summary, search_value = build_provider_profile_projection(
-            parameters,
-            labels=await provider_profile_label_snapshot(self._session, parameters),
-        )
+        summary, search_value = await self._provider_profile_projection(parameters)
         return {
             "memo": {
                 "definitionId": str(definition_id),
@@ -711,11 +717,23 @@ class RecurringWorkflowsService:
             temporal_args_list = list(temporal_args)
         except TypeError:
             temporal_args_list = []
-        temporal_input = temporal_args_list[0] if temporal_args_list else None
+        temporal_input = decode_schedule_action_value(
+            temporal_args_list[0] if temporal_args_list else None
+        )
+        # Admission belongs to the durable action, not this rebuilt desired
+        # payload. Both current stamped and retained unversioned actions match;
+        # all operator input fields still participate in drift detection.
+        if isinstance(temporal_input, Mapping):
+            temporal_input = dict(temporal_input)
+            temporal_input.pop("linked_recovery_retired", None)
+        expected_input = dict(workflow_input)
+        expected_input.pop("linked_recovery_retired", None)
         temporal_task_queue = _object_value(action, "task_queue", "taskQueue")
         expected_task_queue = self._expected_task_queue(workflow_type)
         expected_workflow_id_base = make_scheduled_workflow_id_base(definition_id)
         memo = _object_value(action, "memo") or {}
+        if isinstance(memo, Mapping):
+            memo = {key: decode_schedule_action_value(value) for key, value in memo.items()}
         typed_attributes = _object_value(action, "typed_search_attributes") or []
         has_profile_projection = (
             isinstance(memo, Mapping)
@@ -754,7 +772,7 @@ class RecurringWorkflowsService:
             or not has_identity_admission
             or temporal_workflow_type != workflow_type
             or temporal_workflow_id_base != expected_workflow_id_base
-            or temporal_input != workflow_input
+            or temporal_input != expected_input
             or (
                 expected_task_queue is not None
                 and temporal_task_queue != expected_task_queue
@@ -795,6 +813,7 @@ class RecurringWorkflowsService:
 
         await self._adapter.update_schedule(
             definition_id=definition.id,
+            preserve_existing_admission=True,
             workflow_type=workflow_type,
             workflow_input=workflow_input,
             **await self._workflow_start_metadata(
@@ -1954,6 +1973,9 @@ class RecurringWorkflowsService:
         if timezone is not None:
             definition.timezone = validate_timezone_name(timezone)
             changed_schedule = True
+        replace_action = (
+            normalized_target is not None and normalized_target != definition.target
+        )
         if normalized_target is not None:
             definition.target = normalized_target
 
@@ -2016,9 +2038,29 @@ class RecurringWorkflowsService:
             elif enabled is True:
                 await self._adapter.unpause_schedule(definition_id=definition.id)
 
-            workflow_type, workflow_input = self._workflow_bundle_for_definition(
-                definition
-            )
+            action_update: dict[str, Any] = {}
+            if replace_action:
+                workflow_type, workflow_input = self._workflow_bundle_for_definition(
+                    definition
+                )
+                action_update = {
+                    "workflow_type": workflow_type,
+                    "workflow_input": workflow_input,
+                    **await self._workflow_start_metadata(
+                        definition_id=definition.id,
+                        owner_user_id=definition.owner_user_id,
+                        workflow_input=workflow_input,
+                    ),
+                }
+            else:
+                # Refresh only the provider projection for future occurrences.
+                # Do not rebuild execution input or re-admit retained actions.
+                parameters = dict(definition.target.get("initialParameters") or {})
+                summary, search_value = await self._provider_profile_projection(parameters)
+                action_update = {
+                    "memo": {PROVIDER_PROFILE_MEMO_KEY: summary},
+                    "search_attributes": {PROVIDER_PROFILE_SEARCH_ATTRIBUTE: search_value},
+                }
             await self._adapter.update_schedule(
                 definition_id=definition.id,
                 cron_expression=cron_normalized,
@@ -2028,13 +2070,7 @@ class RecurringWorkflowsService:
                 jitter_seconds=policy_obj.jitter_seconds if policy_obj else None,
                 enabled=enabled,
                 note=name if name is not None else None,
-                workflow_type=workflow_type,
-                workflow_input=workflow_input,
-                **await self._workflow_start_metadata(
-                    definition_id=definition.id,
-                    owner_user_id=definition.owner_user_id,
-                    workflow_input=workflow_input,
-                ),
+                **action_update,
             )
         except Exception as exc:
             logger.error(f"Failed to update temporal schedule for {definition.id}: {exc}")
@@ -2276,6 +2312,7 @@ class RecurringWorkflowsService:
         except ScheduleAlreadyExistsError:
             await self._adapter.update_schedule(
                 definition_id=dfn.id,
+                preserve_existing_admission=True,
                 cron_expression=dfn.cron,
                 timezone=dfn.timezone,
                 overlap_mode=policy_obj.overlap_mode,
@@ -2416,6 +2453,7 @@ class RecurringWorkflowsService:
                     note = (dfn.name or "") if mismatch else None
                     await self._adapter.update_schedule(
                         definition_id=dfn.id,
+                        preserve_existing_admission=True,
                         cron_expression=dfn.cron if mismatch else None,
                         timezone=dfn.timezone if mismatch else None,
                         overlap_mode=policy_obj.overlap_mode if mismatch else None,

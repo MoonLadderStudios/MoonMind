@@ -2855,7 +2855,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('MM-815 surfaces latest evidence refs and preserved provenance markers in the default step row', async () => {
+  it('MM-815 surfaces latest evidence refs in the default step row', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
@@ -2866,7 +2866,7 @@ describe('Workflow Detail Entrypoint', () => {
       stepsHref: '/api/executions/test-123/steps',
       source: 'temporal',
       workflowType: 'MoonMind.UserWorkflow',
-      title: 'Resumed task',
+      title: 'Retried task',
       summary: 'Execution summary',
       status: 'running',
       state: 'executing',
@@ -2876,7 +2876,7 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-04-09T00:00:04Z',
       actions: {},
     };
-    const resumedSnapshot = {
+    const retriedSnapshot = {
       workflowId: 'test-123',
       runId: '02-run',
       runScope: 'latest',
@@ -2908,12 +2908,6 @@ describe('Workflow Detail Entrypoint', () => {
             stepExecutionManifestRefs: ['art-plan-manifest'],
           },
           stateCheckpointRef: 'art-plan-checkpoint',
-          preservedFrom: {
-            workflowId: 'test-123',
-            runId: '01-run',
-            logicalStepId: 'plan',
-            executionOrdinal: 1,
-          },
           lastError: null,
         },
         {
@@ -2935,9 +2929,8 @@ describe('Workflow Detail Entrypoint', () => {
             elapsedMs: null,
             serverNow: '2026-04-09T00:00:04Z',
             precision: 'unavailable',
-            preserved: true,
           },
-          summary: 'Review preserved from the prior run',
+          summary: 'Review complete',
           checks: [],
           refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
           artifacts: {
@@ -2948,12 +2941,6 @@ describe('Workflow Detail Entrypoint', () => {
             runtimeMergedLogs: null,
             runtimeDiagnostics: null,
             providerSnapshot: null,
-          },
-          preservedFrom: {
-            workflowId: 'test-123',
-            runId: '01-run',
-            logicalStepId: 'review',
-            executionOrdinal: 1,
           },
           lastError: null,
         },
@@ -2997,7 +2984,7 @@ describe('Workflow Detail Entrypoint', () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/executions/test-123/steps')) {
-        return Promise.resolve({ ok: true, json: async () => resumedSnapshot } as Response);
+        return Promise.resolve({ ok: true, json: async () => retriedSnapshot } as Response);
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
@@ -3007,21 +2994,17 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
-    // Default (collapsed) rows must surface latest evidence refs and the
-    // preserved-provenance marker without expanding full attempt history.
+    // Default (collapsed) rows must surface latest evidence refs without
+    // expanding full attempt history.
     await waitFor(() => {
       expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
     });
-
-    // Preserved provenance marker on the resumed row (and not yet the expanded text).
-    expect(screen.getAllByText('Preserved').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Preserved from source run/)).toBeNull();
+    expect(screen.queryByText('Preserved')).toBeNull();
 
     // Latest attempt count is surfaced on the re-run row.
     expect(screen.getByText('Execution 2')).toBeTruthy();
-    expect(screen.getByText('Original duration: 1.0 s')).toBeTruthy();
-    expect(screen.getByText('Original timing unavailable')).toBeTruthy();
-    expect(screen.getByText('1.0 s')).toBeTruthy();
+    expect(screen.getAllByText('1.0 s')).toHaveLength(2);
+    expect(screen.getAllByText('Timing unavailable').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('Step timing overview').textContent).toContain(
       'Longest step Plan work · 1.0 s',
     );
@@ -3032,8 +3015,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('art-apply-output')).toBeTruthy();
     expect(screen.getByText('art-apply-diagnostics')).toBeTruthy();
     expect(screen.getByText('art-gate-verdict')).toBeTruthy();
-    // Step-execution manifest and recovery checkpoint refs are surfaced as the
-    // only durable latest evidence for running/recovered rows.
+    // Step-execution manifest and checkpoint refs are surfaced as the only
+    // durable latest evidence for completed rows.
     expect(screen.getByText('art-plan-manifest')).toBeTruthy();
     expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
   });
@@ -3230,8 +3213,6 @@ describe('Workflow Detail Entrypoint', () => {
           runId: '02-run',
           logicalStepId: 'apply',
           executionOrdinal: 1,
-          sourceExecutionOrdinal: null,
-          lineage: null,
           reason: 'initial_execution',
           status: 'failed',
           terminalDisposition: 'retryable',
@@ -3282,14 +3263,6 @@ describe('Workflow Detail Entrypoint', () => {
           runId: '02-run',
           logicalStepId: 'apply',
           executionOrdinal: 2,
-          sourceExecutionOrdinal: 1,
-          lineage: {
-            sourceWorkflowId: 'wf-source',
-            sourceRunId: 'run-source',
-            sourceLogicalStepId: 'apply',
-            sourceExecutionOrdinal: 1,
-            relationship: 'recovered_from',
-          },
           reason: 'dependency_invalidated',
           status: 'completed',
           terminalDisposition: 'accepted',
@@ -3386,8 +3359,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(history).getByText('Downstream invalidation')).toBeTruthy();
 
     // Full enumerated evidence field set is surfaced as refs / typed diagnostics.
-    expect(within(history).getByText('Lineage')).toBeTruthy();
-    expect(within(history).getByText('Source attempt')).toBeTruthy();
     expect(within(history).getAllByText('Terminal disposition').length).toBe(2);
     expect(within(history).getAllByText('Workspace policy').length).toBe(2);
     expect(within(history).getAllByText('Git disposition').length).toBe(2);
@@ -3404,7 +3375,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(history).getByText('art-exec-1-diag')).toBeTruthy();
     expect(within(history).getByText('art-exec-2-sideeffect')).toBeTruthy();
     expect(within(history).getByText('child-wf-apply-2')).toBeTruthy();
-    expect(within(history).getByText('wf-source')).toBeTruthy();
   });
 
   it('MM-1034 shows step duration states and keeps the wall-clock timeline behind a secondary toggle', async () => {
@@ -5418,11 +5388,6 @@ describe('Workflow Detail Entrypoint', () => {
           updatedAt: '2026-03-28T00:00:01Z',
           refs: {},
           artifacts: { outputSummary: 'artifact://summary/plan' },
-          recoveryPreservation: {
-            eligible: true,
-            reason: 'complete',
-            message: 'Step has recoverable output refs and state checkpoint evidence.',
-          },
         },
       ],
     };
@@ -6136,15 +6101,6 @@ describe('Workflow Detail Entrypoint', () => {
         failedStepId: 'implement',
         sourceRunId: '01-run',
       },
-      relatedRuns: [
-        {
-          workflowId: 'mm:source',
-          runId: 'run-source',
-          relationship: 'Resumed from failed step',
-          status: 'failed',
-          href: '/workflows/mm:source',
-        },
-      ],
     };
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -6762,22 +6718,6 @@ describe('Workflow Detail Entrypoint', () => {
             ],
           },
         ],
-        recovery: {
-          resumed: true,
-          sourceWorkflowId: 'mm:source',
-          sourceRunId: 'run-source',
-          checkpointRef: 'artifact://resume/checkpoint',
-          preservedSteps: [
-            {
-              logicalStepId: 'prepare',
-              title: 'Prepare context',
-              sourceExecutionOrdinal: 1,
-              sourceWorkflowId: 'mm:source',
-              sourceRunId: 'run-source',
-            },
-          ],
-          failedRecoveryPhase: null,
-        },
         degradedReason: 'step_attachment_missing',
       },
     };
@@ -6807,9 +6747,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('Inspect screenshot')).toBeTruthy();
     expect(screen.getByText('Attachment download failed before step execution.')).toBeTruthy();
     expect(screen.getByText('artifact://diagnostics/input-manifest')).toBeTruthy();
-    expect(screen.getByText('Resumed from mm:source')).toBeTruthy();
-    expect(screen.getByText('Prepare context')).toBeTruthy();
-    expect(screen.getAllByText('artifact://resume/checkpoint').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('heading', { name: 'Recovery' })).toBeNull();
 
     fireEvent.click(screen.getByText('Diagnostics'));
     await waitFor(() => {
@@ -6885,69 +6823,6 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('artifact://context/objective')).toBeTruthy();
     expect(screen.getByText('artifact://context/inspect')).toBeTruthy();
     expect(screen.getByText('No attachments recorded for this target.')).toBeTruthy();
-  });
-
-  it('renders failed-step execution Resume phase with preserved provenance', async () => {
-    const mockExecution = {
-      taskId: 'test-123',
-      workflowId: 'test-123',
-      namespace: 'default',
-      temporalRunId: '01-run',
-      runId: '01-run',
-      source: 'temporal',
-      workflowType: 'MoonMind.UserWorkflow',
-      entry: 'user_workflow',
-      agentRunId: '123e4567-e89b-12d3-a456-426614174000',
-      title: 'Failed Resume diagnostic task',
-      summary: 'Resume failed during step execution.',
-      status: 'failed',
-      state: 'failed',
-      rawState: 'failed',
-      temporalStatus: 'failed',
-      createdAt: '2026-03-28T00:00:00Z',
-      updatedAt: '2026-03-28T00:00:02Z',
-      targetDiagnostics: {
-        targets: [],
-        recovery: {
-          resumed: true,
-          sourceWorkflowId: 'mm:source',
-          sourceRunId: 'run-source',
-          checkpointRef: 'artifact://resume/checkpoint',
-          preservedSteps: [
-            {
-              logicalStepId: 'prepare',
-              title: 'Prepare context',
-              sourceExecutionOrdinal: 1,
-              sourceWorkflowId: 'mm:source',
-              sourceRunId: 'run-source',
-            },
-          ],
-          failedRecoveryPhase: 'failed_step_execution',
-        },
-        degradedReason: null,
-      },
-    };
-
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/logs/') || url.includes('/observability') || url.includes('/diagnostics')) {
-        return Promise.resolve({ ok: true, text: async () => '' } as Response);
-      }
-      if (url.includes('/artifacts')) {
-        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
-    });
-
-    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Failed Resume diagnostic task')).toBeTruthy();
-    });
-    expect(screen.getByText('Resumed from mm:source')).toBeTruthy();
-    expect(screen.getByText('Prepare context')).toBeTruthy();
-    expect(screen.getByText('Failed phase:')).toBeTruthy();
-    expect(screen.getByText('Failed step execution')).toBeTruthy();
   });
 
   it('renders remediation create action, relationships, evidence, and degraded states', async () => {

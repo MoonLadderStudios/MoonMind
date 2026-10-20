@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from temporalio.api.common.v1 import WorkflowExecution
+from temporalio.api.common.v1 import Payload, WorkflowExecution
 from temporalio.api.enums.v1 import ResetReapplyExcludeType
 from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
 from temporalio.client import (
@@ -47,6 +47,7 @@ from moonmind.omnigent.git_identity import admitted_publication_git_identity
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
     RENAMED_USER_WORKFLOW_TYPE,
+    admit_user_workflow_input,
     resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.temporal.workers import (
@@ -56,6 +57,14 @@ from moonmind.workflows.temporal.workers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def decode_schedule_action_value(value: Any) -> Any:
+    """Read SDK-described action payloads without mutating their wire form."""
+    if isinstance(value, Payload):
+        return MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payloads([value])[0]
+    return value
+
 
 # All MoonMind-owned Temporal task queues.  Used to scope Visibility queries
 # so that drain metrics and batch signals only target our own workflows.
@@ -466,6 +475,7 @@ class TemporalClientAdapter:
 
         task_queue = self._get_task_queue(workflow_type, task_queue=task_queue, memo=memo)
 
+        input_args = admit_user_workflow_input(workflow_type, input_args)
         args = [input_args] if input_args is not None else []
 
         formatted_search_attributes = {
@@ -1335,7 +1345,8 @@ class TemporalClientAdapter:
         schedule_id = make_schedule_id(definition_uuid)
         task_queue = self._get_task_queue(workflow_type, memo=memo)
 
-        args = [workflow_input] if workflow_input is not None else []
+        admitted_input = admit_user_workflow_input(workflow_type, workflow_input)
+        args = [admitted_input] if admitted_input is not None else []
 
         formatted_sa = {
             k: v if isinstance(v, list) else [v]
@@ -1440,13 +1451,18 @@ class TemporalClientAdapter:
         note: str | None = None,
         workflow_type: str | None = None,
         workflow_input: Mapping[str, Any] | None = None,
+        preserve_existing_admission: bool = False,
         memo: Mapping[str, Any] | None = None,
         search_attributes: Mapping[str, Any] | None = None,
     ) -> None:
         """Update the spec, policy, or state of an existing schedule.
 
         Only provided (non-``None``) fields are modified; everything else
-        is preserved from the current schedule description.
+        is preserved from the current schedule description. Automatic repairs
+        preserve existing admission; explicit execution-target replacements
+        retain the default new-admission behavior. Without a workflow replacement,
+        supplied memo/search attributes are merged by key onto the current
+        action; its execution inputs and other options remain untouched.
 
         Raises:
             ScheduleNotFoundError: if the schedule does not exist.
@@ -1526,7 +1542,26 @@ class TemporalClientAdapter:
                 )
 
             if workflow_type is not None:
-                args = [workflow_input] if workflow_input is not None else []
+                admitted_input = admit_user_workflow_input(workflow_type, workflow_input)
+                if (
+                    preserve_existing_admission
+                    and workflow_type == RENAMED_USER_WORKFLOW_TYPE
+                    and isinstance(schedule.action, ScheduleActionStartWorkflow)
+                    and schedule.action.workflow == workflow_type
+                    and len(schedule.action.args) == 1
+                ):
+                    existing_input = decode_schedule_action_value(schedule.action.args[0])
+                    if isinstance(existing_input, Mapping):
+                        # Read the current durable action inside the SDK's
+                        # optimistic update callback, never a stale description
+                        # or a caller-supplied opt-out. Absence is old admission.
+                        admitted_input = dict(admitted_input or {})
+                        admitted_input.pop("linked_recovery_retired", None)
+                        if "linked_recovery_retired" in existing_input:
+                            admitted_input["linked_recovery_retired"] = existing_input[
+                                "linked_recovery_retired"
+                            ]
+                args = [admitted_input] if admitted_input is not None else []
                 schedule.action = ScheduleActionStartWorkflow(
                     workflow_type,
                     args=args,
@@ -1539,6 +1574,18 @@ class TemporalClientAdapter:
                         else {}
                     ),
                 )
+
+            elif isinstance(schedule.action, ScheduleActionStartWorkflow):
+                # Refresh future-start projections without changing durable
+                # args/admission, routing, identity, or already-started runs.
+                if memo is not None:
+                    schedule.action.memo = {**(schedule.action.memo or {}), **memo}
+                if typed_search_attributes:
+                    schedule.action.typed_search_attributes = (
+                        schedule.action.typed_search_attributes.updated(
+                            *typed_search_attributes
+                        )
+                    )
 
             return ScheduleUpdate(schedule=schedule)
 

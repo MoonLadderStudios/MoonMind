@@ -79,15 +79,11 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
             "schemaVersion": "v1",
             "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
             "executionScope": "run",
-            "lineage": {
-                "sourceWorkflowId": "workflow-0",
-                "sourceRunId": "run-0",
-                "sourceLogicalStepId": "implement-story",
-                "sourceExecutionOrdinal": 1,
-                "relationship": "recover_from_failed_step",
-                "lineageExecutionOrdinal": 3,
-            },
-            "reason": "recover_from_failed_step",
+            # Stored v1 manifests carry these keys. New runs leave them empty;
+            # retained linked-recovery histories may still populate them.
+            "lineage": None,
+            "recoverySource": None,
+            "reason": "runtime_recovered",
             "status": "completed",
             "terminalDisposition": "accepted",
             "input": {"taskInputSnapshotRef": "artifact-input"},
@@ -105,8 +101,7 @@ def test_step_execution_manifest_accepts_canonical_payload_and_content_type() ->
     assert STEP_EXECUTION_MANIFEST_CONTENT_TYPE == (
         "application/vnd.moonmind.step-execution+json;version=1"
     )
-    assert manifest.lineage is not None
-    assert manifest.lineage.source_execution_ordinal == 1
+    assert manifest.lineage is None
     assert manifest.model_dump(by_alias=True)["terminalDisposition"] == "accepted"
 
 
@@ -493,4 +488,36 @@ def test_mm_1089_step_execution_semantic_operation_keeps_branch_turn_distinct() 
         "reexecute",
         "recover",
         "checkpoint_branch",
+    }
+
+
+def test_retained_linked_recovery_manifest_keeps_source_and_preserved_provenance() -> None:
+    from moonmind.workflows.temporal.step_execution_conformance import (
+        _valid_manifest_payload,
+    )
+
+    source = {"sourceWorkflowId": "source", "sourceRunId": "source-run"}
+    payload = _valid_manifest_payload(
+        reason="recover_from_failed_step",
+        recoverySource=source,
+        lineage={
+            "sourceWorkflowId": "source",
+            "sourceRunId": "source-run",
+            "sourceLogicalStepId": "implement",
+            "sourceExecutionOrdinal": 1,
+            "relationship": "recover_from_failed_step",
+            "preservedSteps": [{
+                "logicalStepId": "prepare",
+                "sourceWorkflowId": "source",
+                "sourceRunId": "source-run",
+                "sourceExecutionOrdinal": 1,
+                "outputRefs": {"outputPrimary": "artifact://prepared"},
+            }],
+        },
+    )
+    decoded = StepExecutionManifestModel.model_validate(payload).model_dump(by_alias=True)
+    assert decoded["reason"] == "recover_from_failed_step"
+    assert decoded["recoverySource"] == source
+    assert decoded["lineage"]["preservedSteps"][0]["outputRefs"] == {
+        "outputPrimary": "artifact://prepared"
     }
