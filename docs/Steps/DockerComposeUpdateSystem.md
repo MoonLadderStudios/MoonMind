@@ -25,9 +25,7 @@ The steady state is one installed Compose fleet per instance, not blue/green can
 
 ## 2. Summary
 
-One portable controller implements updates for the host entrypoint and the Settings Operations action. The host path stays usable when the API, Temporal workers, provider manager, or application artifact service is unhealthy, because those are the components an update may need to repair.
-
-The controller owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery, using Docker/Compose and local job files. Temporal and the UI may request or observe an update, but neither is required for progress or runs a second update algorithm. There is no parallel supervisor or mandatory approval workflow.
+One portable controller serves the host entrypoint and Settings Operations. It owns image resolution, the per-stack lock, local durable state, Compose mutation, verification, and bounded recovery. Docker/Compose and local job files keep host repair independent of the API, Temporal, provider manager, and application artifact service. Temporal and the UI submit or observe; neither runs another update algorithm.
 
 ## 3. Terminology
 
@@ -43,7 +41,7 @@ The controller owns image resolution, the per-stack lock, local durable state, C
 
 ### 4.1 Goals
 
-Default updates and recovery work without hidden switches or manual version alignment, preserving data, operator access, and explicit settings. Failures are understandable from local records even when chat and the UI fail. Each side effect has one owner, uncertain outcomes are reconciled before being repeated, and transient errors are retried within a bound.
+Default updates preserve data, operator access, and explicit settings without hidden switches or manual version alignment. Local records explain failures independently of chat and the UI. One owner reconciles uncertain effects before bounded retries.
 
 ### 4.2 Non-goals
 
@@ -79,11 +77,11 @@ A submission identifies the stack and target image, plus supported maintenance o
 
 Each caller names its own controller operation identity: `ui-<requestId>` from Settings Operations, `host-<submission>` from the host entrypoint, `wf-…` from a workflow's durable identity. A lost acknowledgment is resolved by reading that identity and resubmitting the same identity only if the controller never recorded it. The dashboard sends one `requestId` per update intent and resends it after an unanswered or server-error submission. A duplicate request for the target the stack is already applying reattaches to the running operation; a changed target is new intent and is refused, naming the owning operation, until that operation ends.
 
-Stack state lists controller operations (requested and installed image, status, original error, attempts, verification) beside read-only history of earlier workflow-backed updates; installing an earlier image is an ordinary controller update. Retry asks the controller for a fresh bounded attempt and keeps prior errors. Responses carry the controller `operationId`, `owner` (`controller`), and status. A missing or unrecognized controller status is reported as `UNKNOWN`, not as queued or finished. Controller unavailable, credential rejected, busy, and refused are distinct errors, and none starts another updater.
+Stack state lists controller operations (requested/installed image, status, errors, attempts, verification) beside read-only workflow-backed history. Retry starts a fresh bounded attempt, retaining prior errors. Responses carry `operationId`, `owner` (`controller`), and status; missing or unrecognized status is `UNKNOWN`. Controller unavailable, credential rejected, busy, and refused remain distinct errors; none starts another updater.
 
 The API reaches the controller over the private `deployment-controller-network` using the bearer secret in the read-only deployment state mount (`deploy/state/controller`). Only the API (read-only) and the deployment-control worker see that state; the agent runtime sees an empty view, and the secret never reaches the browser.
 
-Without an installed controller, Settings Operations refuses an update with `deployment_controller_not_installed` (HTTP 503) and names the host repair route `./tools/update-moonmind.sh`, which installs the controller and updates through it. Submitters trust only a controller whose `/v1/healthz` advertises the behavior they rely on: `active-journal-transition`, and `request-identity` (a completed operation answers only its own identity). A controller without request identity answers a new update to `latest` with the earlier success and pulls nothing, so its `202` would not mean the request was applied. The API refuses such a controller with `deployment_controller_refresh_required` and the same route, because only the host entrypoint and the deployment-control worker can refresh the controller; the worker refreshes it before submitting. API submission needs neither Temporal nor the deployment worker.
+Without a controller, Settings Operations returns `deployment_controller_not_installed` (HTTP 503) and the host repair route `./tools/update-moonmind.sh`. Submitters require `/v1/healthz` capabilities `active-journal-transition` and `request-identity`: without request identity, a new `latest` update could return an earlier success without pulling. The API returns `deployment_controller_refresh_required` and the same repair route for an incompatible controller. Only the host entrypoint and deployment-control worker refresh it; the worker does so before submission. API submission needs neither Temporal nor the worker.
 
 The workflow's deployment observer heartbeats while reading its registry and awaiting the durable result. A 60-second heartbeat timeout detects a replaced observer independently of the longer command and release deadlines, and its retry reattaches with the same operation identity, reading an existing terminal receipt without repeating deployment.
 
@@ -99,7 +97,7 @@ The operator's `.env`, Compose overrides, project identity, credentials, binding
 
 Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release.
 
-The default host update (`tools/update-moonmind.sh`) updates to `latest`: it pulls `<image-repository>:latest` once and installs whatever that tag currently names. It does not derive an image from Git, a branch tip, or a `sha-<commit>` tag, does not wait for a specific build to publish, and does not fall back through ancestors or check source revisions. A commit merged moments ago is installed by the next update after its image publishes. The digest that pull resolved is recorded only so every service in the operation runs the same image. An explicit target requested by the operator is not silently substituted.
+The default host update (`tools/update-moonmind.sh`) pulls `<image-repository>:latest` once and installs what it currently names, without Git-derived selection, source-revision checks, ancestor fallback, or waiting for a build. Newly merged code becomes installable after its image publishes. The resolved digest keeps services on the same artifact within the operation; an explicit operator target is never silently substituted.
 
 The installed Omnigent server/host selection belongs to the same deployment owner. Future managed launches resolve it from installed deployment intent, and historical attempt records retain the actual image and session that executed them.
 
@@ -180,7 +178,7 @@ The primary result is persisted before secondary cleanup, and ownership is relea
 
 A development bind mount can change files without restarting imported code, so affected processes are recreated through the same owner. Actual startup provenance is recorded for diagnosis but is not a runtime admission or compatibility gate.
 
-Bind sources are spelled the way the issuing Docker client resolves them, on POSIX and Windows Docker Desktop. A Windows drive path maps to the Desktop daemon namespace at `/run/desktop/mnt/host/<drive>`; a WSL user-distro client (and containers it creates through its socket mount) resolves binds inside the distro, where `/mnt/<drive>` is the drive, so that spelling stays. No empty directory is created over a missing source mount. Controller bootstrap resolves its bind sources through this adapter and fails fast on a missing required source. It removes a stopped controller container before `up`, because Compose would otherwise restart it with network IDs that disappear once the target stack recreates the link network.
+Windows binds use Desktop's `/run/desktop/mnt/host/<drive>`, while WSL keeps `/mnt/<drive>`. Bootstrap rejects missing sources and removes stopped controllers with stale network IDs before `up`. No-pull refresh bounds startup, stops owned process groups, and reconciles before reporting timeout; uncertainty prevents retry. Windows refresh preserves image, endpoint identity and TLS trust in a Linux helper: private networking for default refresh, Docker’s bridge for explicit endpoints. Cold startup allows unbounded removal/download time; Compose readiness times out after 30 seconds.
 
 ## 11. Updater runner execution model
 
@@ -198,7 +196,9 @@ The host entrypoint derives the endpoint port from the controller's identity. Th
 
 **Refresh.** The default host command refreshes an idle controller from the selected release before submission. It extracts the stdlib bootstrap from the staged target, falling back to an observed installed application image when a rollback target lacks that lifecycle. Bootstrap runs in a temporary trusted image container with the Docker socket and writable controller state on the private controller network, so root-owned records and locks stay readable without host privilege changes; it needs no healthy API or worker and leaves the host checkout, Compose project, mounts, network, and credentials in place. If the identity file is lost, bootstrap first recovers it from the Compose installation without replacing the controller. Replacement holds the stack lock; a capable controller with open work keeps ownership, and an explicitly selected controller, endpoint, or secret keeps its release choice.
 
-**Handoff.** Before mutation, a managed controller runs the requested image's `controller-handoff` one-off. It recreates the controller from that image, ending the old process and its kernel lock; the new controller resumes once the one-off exits. Only that operation may be open, and each attempt group hands off once. Startup has a 30-second deadline so a restarting replacement cannot prevent rollback. A failed or unstable replacement restores the previous controller, which applies the operation. Older controllers reach handoff through the requested image's `--omnigent-select` callback; owners lacking `active-journal-transition` or `unversioned-routing-cutover` are refused before mutation and pointed to `./tools/update-moonmind.sh`.
+**Handoff.** Before applying a release, a managed controller runs its `controller-handoff` one-off to replace a controller running other code. The old process and kernel lock end; the replacement resumes once the one-off exits. Only that operation may be open, and each attempt group hands off once. This lets Settings Operations install new controller behavior without a host step. Older controllers enter through the requested image's `--omnigent-select` callback; otherwise an owner lacking `active-journal-transition` or `unversioned-routing-cutover` is refused before mutation and directed to `./tools/update-moonmind.sh`.
+
+Handoff shares one monotonic deadline within the caller's 300-second allowance, reserving recovery time. Subprocesses consume the remaining budget. Linux process groups are terminated, killed if necessary, and reaped before recovery reconciles known running or stopped candidates, including created replacements, and attempts saved-configuration restoration. New replacements require zero restarts; recovery permits history only with stable identity, restart count, start time and healthy state. Receipts retain the original failure and distinguish verified restoration from failed or unverified recovery. An available controller can continue applying, including targets predating handoff.
 
 **Repair after failure.** A failed default host or deployment-control submission also tries `bootstrap.py ensure --prefer-requested` under the same lock and open-operation refusal; only a confirmed change (`refreshed: true`) earns a Retry.
 
@@ -252,7 +252,7 @@ A single admitted operator does not mean an unprotected application. Operator ad
 
 ## 14. Audit and artifacts
 
-The local operation record is the durable source for requested target, concrete images, operation identity, timestamps, progress, original errors, attempt bounds, and observed outcome, kept in existing files rather than a database or event platform. The host entrypoint and, when available, the Operations UI expose a short summary and redacted logs; losing the UI copy does not erase the local one. Missing metadata is reported as missing rather than reconstructed as success.
+Local operation files retain the requested target, concrete images, identity, timestamps, progress, errors, attempt bounds, and observed outcome. The host entrypoint and available Operations UI expose summaries and redacted logs. Losing the UI copy does not erase the local record; missing metadata is not reconstructed as success.
 
 ## 15. Failure and rollback semantics
 
@@ -266,4 +266,4 @@ Workflow submission is one optional way to request the update; ordinary orchestr
 
 ## 17. UI and observability
 
-Deployment update lives in Settings Operations, described plainly: "Pull the selected images, recreate changed services, verify the deployment, and preserve a local recovery record. Services may restart." The UI shows the actual target and result, does not call a failed or partially verified update complete, and does not expose promotion or fleet-management concepts. Detailed output stays outside workflow history. The design distinguishes an unavailable observer from a failed controller, an installed image from a verified product, and a requested action from a confirmed effect, and basic diagnosis works without chat or an LLM.
+Settings Operations shows the actual target and outcome, including restart expectations and incomplete verification, without promotion or fleet-management concepts. Detailed output stays outside workflow history. An unavailable observer is not a failed controller, and an installed image is not necessarily a verified product.

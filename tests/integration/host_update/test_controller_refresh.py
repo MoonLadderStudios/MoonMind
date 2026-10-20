@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -137,7 +138,7 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(
             ]
         )
 
-    command(["docker", "network", "create", network])
+    command(["docker", "network", "create", "--internal", network])
     source = None
     try:
         # The MoonMind host's project override must not reinterpret the
@@ -318,3 +319,175 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(
             command(["docker", "rm", "--force", source], check=False)
         command(["docker", "network", "rm", network], check=False)
         command(["docker", "image", "rm", previous], check=False)
+
+
+@pytest.mark.parametrize("endpoint_kind", ["private", "remote", "alias-looking", "loopback"])
+def test_helper_routes_private_and_host_endpoints_across_real_docker_networks(
+    tmp_path, monkeypatch, endpoint_kind
+):
+    """Exercise real ensure/HTTP/TLS through the generated helper command.
+
+    A bridge fixture stands in for a host/LAN endpoint. Its synthetic DNS
+    mapping is test-only; Docker Desktop's actual host gateway is not qualified
+    by this Linux Docker journey.
+    """
+    if os.environ.get("MOONMIND_TEST_JOURNAL_TRANSITION") != "1":
+        pytest.skip("Real Docker journey is enabled in controller-journey CI")
+    candidate = os.environ["MOONMIND_TEST_JOURNAL_APP_IMAGE"]
+    bootstrap = load("route_bootstrap", ROOT / "deploy/controller/bootstrap.py")
+    update = load(
+        "route_update",
+        ROOT / ".agents/skills/update-moonmind/scripts/update_release.py",
+    )
+    private = endpoint_kind == "private"
+    host = {
+        "private": "moonmind-controller",
+        "remote": "controller.example",
+        "alias-looking": "moonmind-controller",
+        "loopback": "localhost",
+    }[endpoint_kind]
+    project = f"moonmind-test-helper-route-{uuid4().hex[:10]}"
+    network = f"{project}_deployment-controller-network"
+    repo = tmp_path / "deployment"
+    state = repo / "deploy/state/controller"
+    state.mkdir(parents=True)
+    secret = bootstrap.ensure_secret(state).read_text().strip()
+    identity = bootstrap.ensure_identity(
+        state, repo, 8443, target_project=project, target_network=network
+    )
+    identity["project"] = f"{project}-controller"
+    (state / "controller-identity.json").write_text(json.dumps(identity))
+    bootstrap.render_compose_file(
+        state_dir=state, repo=repo, image=candidate, port=8443,
+        project=identity["project"], target_project=project, target_network=network,
+    )
+    # A capable active owner makes ensure probe and return without recreating
+    # any deployment. Preserve and check that record across the real helper.
+    operation = bootstrap.record_mod.OperationStore(state).begin(
+        stack="moonmind", desired_image=candidate, source_revision="",
+        operation_id="preserved-owner",
+    )
+    operation_path = state / "operations" / f"{operation['operationId']}.json"
+    original = operation_path.read_bytes()
+    certificate = tmp_path / "leaf.pem"
+    command(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-days", "1", "-subj", f"/CN={host}",
+            "-addext", f"subjectAltName=DNS:{host}",
+            "-keyout", str(tmp_path / "leaf-key.pem"), "-out", str(certificate),
+        ]
+    )
+    monkeypatch.setenv("SSL_CERT_FILE", str(certificate))
+    monkeypatch.setenv("SSL_CERT_DIR", "")
+    server_script = tmp_path / "endpoint.py"
+    server_script.write_text(
+        f"""import json, ssl
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_args): pass
+    def do_GET(self):
+        assert self.headers["Authorization"] == {f"Bearer {secret}"!r}
+        print(json.dumps({{
+            "path": self.path, "host": self.headers["Host"],
+            "sni": getattr(self.connection, "requested_name", None),
+            "tls": self.connection.version() if {not private!r} else None,
+        }}), flush=True)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write({json.dumps({"capabilities": list(update._REQUIRED_CONTROLLER_CAPABILITIES)}).encode()!r})
+server = ThreadingHTTPServer(("0.0.0.0", 8443), Handler)
+if {not private!r}:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain("/fixture/leaf.pem", "/fixture/leaf-key.pem")
+    context.set_servername_callback(
+        lambda connection, name, _context: setattr(connection, "requested_name", name)
+    )
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
+"""
+    )
+    command(["docker", "network", "create", "--internal", network])
+    server = None
+    try:
+        assert json.loads(command(["docker", "network", "inspect", network]))[0]["Internal"]
+        server = command(
+            [
+                "docker", "run", "--detach", "--rm", "--user", "0:0",
+                "--network", network if private else "bridge",
+                *(["--network-alias", host] if private else []),
+                "--mount", f"type=bind,source={tmp_path},target=/fixture,readonly",
+                "--entrypoint", "python", candidate, "/fixture/endpoint.py",
+            ]
+        )
+        command(
+            [
+                "docker", "exec", server, "python", "-c",
+                (
+                    "import socket,time\n"
+                    "for attempt in range(50):\n"
+                    "    try:\n"
+                    "        socket.create_connection(('127.0.0.1',8443),.2).close(); break\n"
+                    "    except OSError: time.sleep(.1)\n"
+                    "else: raise RuntimeError('fixture did not start')"
+                ),
+            ]
+        )
+        server_network = network if private else "bridge"
+        server_ip = json.loads(command(["docker", "inspect", server]))[0][
+            "NetworkSettings"
+        ]["Networks"][server_network]["IPAddress"]
+        if not private:
+            # Reproduce the isolation the old command mistakenly selected.
+            result = command(
+                [
+                    "docker", "run", "--rm", "--network", network,
+                    "--entrypoint", "python", candidate, "-c",
+                    (
+                        "import socket,sys\n"
+                        "try: socket.create_connection((sys.argv[1],8443),2)\n"
+                        "except OSError: print('isolated')\n"
+                        "else: raise AssertionError('private link reached external fixture')"
+                    ),
+                    server_ip,
+                ]
+            )
+            assert result == "isolated"
+        bundle = {
+            path.name: path.read_text()
+            for path in (ROOT / "deploy/controller").glob("*.py")
+        }
+        with update._materialized_controller(bundle) as materialized:
+            monkeypatch.setattr(
+                update, "os", SimpleNamespace(**{**vars(update.os), "name": "nt"})
+            )
+            endpoint = f"{'http' if private else 'https'}://{host}:8443"
+            helper = update._controller_bootstrap_command(
+                materialized, {"project": project, "image": candidate}, repo,
+                endpoint, source_image=candidate, privileged=private,
+            )
+            assert helper.count("--network") == 1
+            assert helper[helper.index("--network") + 1] == server_network
+            if not private:
+                # Do not replace the selected URL: verify its HTTP Host,
+                # certificate hostname and SNI through a test DNS mapping.
+                destination = "host.docker.internal" if endpoint_kind == "loopback" else host
+                helper[2:2] = ["--add-host", f"{destination}:{server_ip}"]
+            command(helper)
+        assert operation_path.read_bytes() == original
+        assert json.loads(command(["docker", "network", "inspect", network]))[0]["Internal"]
+        observations = [
+            json.loads(line) for line in command(["docker", "logs", server]).splitlines()
+        ]
+        assert observations == [
+            {
+                "path": "/v1/healthz", "host": f"{host}:8443",
+                "sni": None if private else host,
+                "tls": None if private else "TLSv1.2",
+            }
+        ]
+    finally:
+        if server:
+            command(["docker", "rm", "--force", server], check=False)
+        command(["docker", "network", "rm", network], check=False)
