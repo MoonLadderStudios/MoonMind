@@ -495,7 +495,13 @@ def test_reliability_deadline_interrupt_keeps_junit_teardown_and_stack(
     )
     junit = tmp_path / "junit.xml"
     log = tmp_path / "deadline.log"
-    env = dict(os.environ, PROBE_DIR_4369=str(probe_dir))
+    # This probe needs only pytest's built-in JUnit and interrupt handling.
+    # Loading unrelated plugins can consume the deadline before the stuck test.
+    env = dict(
+        os.environ,
+        PROBE_DIR_4369=str(probe_dir),
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+    )
     start = time.monotonic()
     proc = _run_under_deadline(
         [
