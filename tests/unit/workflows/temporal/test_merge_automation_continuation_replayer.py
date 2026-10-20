@@ -204,6 +204,10 @@ async def test_continuation_histories_replay_deterministically(
             else original_patched(name)
         ),
     )
+    # Record the pre-admission producer, then replay with current child admission.
+    # Existing parent histories must survive the added child-input metadata.
+    current_admit_input = module.admit_user_workflow_input
+    monkeypatch.setattr(module, "admit_user_workflow_input", lambda _type, payload: payload)
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
     parent_queue = "mm1209-merge-replay"
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -257,9 +261,14 @@ async def test_continuation_histories_replay_deterministically(
             result = await handle.result()
             history = await handle.fetch_history()
 
+    monkeypatch.setattr(module, "admit_user_workflow_input", current_admit_input)
     assert result["status"] == expected_status
     for event in history.events:
         if event.HasField("start_child_workflow_execution_initiated_event_attributes"):
+            child_input = await env.client.data_converter.decode(
+                event.start_child_workflow_execution_initiated_event_attributes.input.payloads
+            )
+            assert "linked_recovery_retired" not in child_input[0]
             fields = (
                 event.start_child_workflow_execution_initiated_event_attributes.memo.fields
             )

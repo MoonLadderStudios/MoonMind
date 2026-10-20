@@ -8,20 +8,9 @@ export function formatTaskSkills(
   return skillId || '—';
 }
 
-const STATUS_DISPLAY_NAMES: Record<string, string> = {
-  checkpoint_validation: 'Checkpoint validation',
-  failed_step_execution: 'Failed step execution',
-  preserved_output_injection: 'Preserved output injection',
-  workspace_restoration: 'Workspace restoration',
-};
-
 export function formatStatusLabel(status: string | null | undefined, fallback = '—'): string {
   const raw = String(status || fallback).trim();
   if (!raw) return fallback;
-  const key = raw.toLowerCase().replace(/[\s_]+/g, '_');
-  if (Object.prototype.hasOwnProperty.call(STATUS_DISPLAY_NAMES, key)) {
-    return STATUS_DISPLAY_NAMES[key]!;
-  }
   return raw.replace(/_/g, ' ').replace(/\s+/g, ' ');
 }
 

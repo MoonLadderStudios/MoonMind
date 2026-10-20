@@ -450,3 +450,33 @@ def test_observe_services_rejects_destructive_or_empty_observation(controller_pa
     )
     with pytest.raises(ValueError):
         engine.observe_services(runner, base, ())
+
+
+@pytest.mark.parametrize(
+    "stdout,stderr",
+    [
+        (None, b"token=secret-value helper stalled\n"),
+        (b"token=secret-value helper stalled\n", None),
+        (b"out\n", b"token=secret-value helper stalled\n"),
+        (None, None),
+    ],
+)
+def test_subprocess_timeout_preserves_redacted_byte_output(
+    controller_path, monkeypatch, stdout, stderr
+):
+    import subprocess
+
+    engine = load("engine")
+
+    def expire(args, **kwargs):
+        assert kwargs["text"] is True
+        raise subprocess.TimeoutExpired(args, 30, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(engine.subprocess, "run", expire)
+    with pytest.raises(engine.CommandError) as raised:
+        engine.subprocess_runner().run(("docker", "ps"), 30)
+    assert raised.value.exit_status == 124
+    assert "secret-value" not in raised.value.output
+    if stdout or stderr:
+        assert "helper stalled" in raised.value.output
+    assert len(raised.value.output) <= 4000

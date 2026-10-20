@@ -100,7 +100,6 @@ Step detail uses these v1 rules:
 - `GET /api/executions/{workflowId}/steps` returns the latest/current run by default
 - prior-run step history must not be mixed into the default workflow detail view
 - historical runs and cross-run step history are future explicit surfaces
-- historical linked recovery executions may show preserved rows from a source run, marked as preserved provenance rather than mixed into normal latest-run history
 
 ## 5. Progress summary model
 
@@ -162,8 +161,7 @@ Representative response:
         "durationMs": null,
         "elapsedMs": 75000,
         "serverNow": "2026-04-04T18:11:15Z",
-        "precision": "live",
-        "preserved": false
+        "precision": "live"
       },
       "summary": "Executing tests in sandbox",
       "checks": [],
@@ -181,7 +179,6 @@ Representative response:
         "runtimeDiagnostics": null,
         "providerSnapshot": null
       },
-      "preservedFrom": null,
       "lastError": null
     }
   ]
@@ -212,22 +209,18 @@ Required fields:
 | `checks[]` | Structured review/check verdicts from §9 |
 | `refs` | Child-workflow / workflow-run references from §10 |
 | `artifacts` | Semantic artifact refs from §11 |
-| `preservedFrom` | Optional source-run provenance on a row a historical linked recovery execution reused |
 | `lastError` | Bounded latest error summary |
 
 Rules:
 
 - `logicalStepId` comes from the plan node and must remain stable within that plan
-- `timing` carries `startedAt`, `endedAt`, `durationMs`, `elapsedMs`, `serverNow`, `precision`, and `preserved`
+- `timing` carries `startedAt`, `endedAt`, `durationMs`, `elapsedMs`, `serverNow`, and `precision`
 - `precision: "exact"` means the terminal end and duration come from known step-end timing; `precision: "live"` means active elapsed time as of `serverNow`, which can be the last row write rather than the read, so the dashboard keeps an active row ticking from `startedAt` to the current time and never shows less than `elapsedMs`; `precision: "fallback"` means lifecycle timestamps were used because exact end timing was unavailable; `precision: "unavailable"` means the dashboard must show unavailable, ready, or not-started copy instead of inventing a duration
 - `updatedAt` remains the last user-visible mutation timestamp and must not be treated as the primary terminal end when explicit timing is available
 - `workload.durationSeconds` is runner/workload metadata and is not the logical step duration source for the row timing chip
-- preserved rows keep source-run timing with `timing.preserved: true`; operators see original timing or original timing unavailable, not newly executed work
 - clients must not infer step identity from array position alone
 - `summary` must stay bounded and display-safe
 - `lastError` is a summary only; large error details belong in artifacts
-- `preservedFrom` is present only on a row reused from a source run
-- preserved rows are not counted as freshly executed work
 
 If a step exhausts retries because of model-provider rate limits, the current
 step row must include a bounded operator-facing summary such as:
@@ -259,7 +252,6 @@ Rules:
 - step statuses are more specific than workflow/dashboard rollup statuses
 - `waitingReason` provides the bounded cause for blocked states
 - `attentionRequired` indicates whether the current stall requires operator action
-- a preserved row uses the normal terminal status, usually `completed`, plus `preservedFrom`; preservation is provenance, not a separate status
 
 ## 9. Checks and review results
 
@@ -301,9 +293,7 @@ Rules:
 
 ### 10.1 Retried runs
 
-Retry from a step resets a closed run to the start of the chosen step. The reset run's ledger carries the earlier steps as their replayed history recorded them, and the chosen step and later steps run again as new attempts of the reset run. The failed run's attempts remain in its own history and artifacts.
-
-Linked recovery executions from earlier MoonMind versions instead show earlier steps as preserved rows with `preservedFrom.workflowId`, `.runId`, `.logicalStepId`, and `.executionOrdinal`. Those rows reuse the source attempt's artifact refs and do not count as attempts of the recovering run.
+Retry from a step resets a closed run to the start of the chosen step. The reset run's ledger carries the earlier steps as their replayed history recorded them, and the chosen step and later steps run again as new attempts of the reset run. The failed run's attempts remain in its own history and artifacts. Retained linked-recovery histories continue their recorded path: earlier completed steps keep source provenance and are not dispatched again. Their ledger decoder retains `preservedFrom`, `recoveryPreservation`, and `timing.preserved`; new runs do not enter linked recovery.
 
 ## 11. Parent/child refs and artifact refs
 
@@ -353,10 +343,6 @@ Recommended artifact-link metadata:
 - optional `scope = "step"`
 
 Clients must not guess “latest” step evidence by sorting artifacts locally. The server groups by `(step_id, attempt, link_type)` and returns the canonical refs.
-
-### 11.3 Historical recovery checkpoints
-
-Linked recovery executions from earlier MoonMind versions recorded a recovery checkpoint (`recoveryCheckpointRef`) naming the source run, failed step, preserved steps, and workspace before the failed step; detail views still show it. Retry from a step needs no recovery checkpoint, because Temporal history carries the earlier steps.
 
 ## 12. Source of truth, projection, and degraded reads
 

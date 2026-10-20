@@ -11,6 +11,9 @@ from typing import Any
 REDACTED = "[REDACTED]"
 
 _URL_USERINFO_RE = re.compile(r"(://)[^/\s:]+:[^/\s@]+@")
+_AUTHORIZATION_HEADER_RE = re.compile(
+    r"""(?i)(["']?authorization["']?[ \t]*[:=][ \t]*)[^\r\n]*"""
+)
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(password|passwd|token|secret|authorization|cookie)(\s*[:=]\s*)(\S+)"
 )
@@ -24,6 +27,9 @@ _SENSITIVE_KEY_RE = re.compile(
 def redact_text(text: str | None) -> str:
     """Redact likely credential material from free-form diagnostics."""
     redacted = _URL_USERINFO_RE.sub(r"\1***@", text or "")
+    # A header contains a scheme plus credentials; masking just "Bearer"
+    # would leave the credential behind and hide it from later sanitizers.
+    redacted = _AUTHORIZATION_HEADER_RE.sub(r"\1***", redacted)
     return _SECRET_ASSIGNMENT_RE.sub(r"\1\2***", redacted)
 
 

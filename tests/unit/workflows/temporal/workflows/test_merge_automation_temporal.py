@@ -705,6 +705,7 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
         "Resolve PR #350 (Attempt 1)",
         "Resolve PR #350 (Attempt 2)",
     ]
+    assert all(payload["linked_recovery_retired"] is True for payload in child_payloads)
     assert child_payloads[0]["workflow_type"] == "MoonMind.UserWorkflow"
     assert child_payloads[0]["initial_parameters"]["publishMode"] == "auto"
     assert child_payloads[0]["initial_parameters"]["task"]["publish"]["mode"] == "auto"
@@ -2667,3 +2668,34 @@ async def test_merge_automation_preserves_resolver_dependency_failure(
             result["summary"]
             == "pr-resolver child workflow failed before returning a result."
         )
+
+
+@pytest.mark.asyncio
+async def test_bounded_remediation_child_is_admitted_without_mutating_request(monkeypatch):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+
+    instance = MoonMindMergeAutomationWorkflow()
+    request = {
+        "linked_recovery_retired": False,
+        "initial_parameters": {"linked_recovery_retired": False},
+        "remediation_loop_continuation": {"linkedRecoveryRetired": False},
+    }
+    original = deepcopy(request)
+    monkeypatch.setattr(instance, "_build_remediation_run_request", lambda **kwargs: request)
+    monkeypatch.setattr(instance, "_workflow_child_task_queue", lambda: "test-queue")
+    monkeypatch.setattr(instance, "_resolver_search_attributes", lambda: {})
+    monkeypatch.setattr(merge_automation_module.workflow, "patched", lambda _: False)
+    dispatch = AsyncMock(return_value=None)
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_child_workflow", dispatch)
+
+    await instance._run_bounded_remediation(
+        verdict={"finalReason": "needs_remediation"}, resolver_workflow_id="resolver",
+    )
+
+    dispatch.assert_awaited_once()
+    assert dispatch.call_args.args == (
+        "MoonMind.UserWorkflow", {**request, "linked_recovery_retired": True},
+    )
+    assert dispatch.call_args.args[1] is not request
+    assert request == original

@@ -5,7 +5,7 @@ import pytest
 from moonmind.omnigent.git_identity import resolve_execution_git_identity
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from tests.unit.workflows.temporal.workflows.test_run_recover_from_failed_step import (
+from tests.unit.workflows.temporal.workflows.test_run_failed_step_repair import (
     _configure_workflow_runtime,
 )
 

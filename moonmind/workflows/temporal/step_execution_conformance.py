@@ -823,16 +823,6 @@ def _terminology_decisions() -> list[dict[str, Any]]:
             traceability=("FR-006", "SC-005", "DESIGN-REQ-003"),
         ),
         _decision(
-            fixture_id="term-recover_from_failed_step",
-            category="terminology",
-            contract_surface="terminology",
-            decision="valid",
-            expected="valid",
-            failure_code=None,
-            message="canonical recovery action token accepted",
-            traceability=("FR-006", "SC-005", "DESIGN-REQ-003"),
-        ),
-        _decision(
             fixture_id="term-step-attempt",
             category="terminology",
             contract_surface="terminology",
@@ -853,7 +843,6 @@ def api_contract_fixture() -> dict[str, Any]:
             "stepExecutionId": "workflow-1:run-1:implement-story:execution:2",
             "logicalStepId": "implement-story",
             "executionOrdinal": 2,
-            "recoveryAction": "recover_from_failed_step",
             "artifactRefs": {
                 "manifestRef": "artifact://manifest",
                 "checkpointRef": "artifact://checkpoint",

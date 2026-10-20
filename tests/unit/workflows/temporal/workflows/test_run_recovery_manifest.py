@@ -214,34 +214,6 @@ async def test_emit_recovery_manifest_is_patch_gated(
 
 
 @pytest.mark.asyncio
-async def test_emit_recovery_manifest_blocks_resume_on_degraded_checkpoint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _configure(monkeypatch, patched=True)
-    workflow = MoonMindRunWorkflow()
-    _seed_failed_run(workflow)
-    # Simulate a resume-path checkpoint validation failure captured before the
-    # failure was raised (workspace policy incompatible).
-    workflow._recovery_failed_step_id = "run-tests"
-    workflow._recovery_checkpoint_validation_failure = {
-        "failureCode": "policy_incompatible",
-        "checkpointRef": "artifact://checkpoint/before",
-    }
-
-    async def fake_write_json_artifact(*_a: Any, **_k: Any) -> str:
-        return "artifact-1"
-
-    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
-
-    summary, _ = await workflow._emit_failed_run_recovery_manifest()
-
-    assert summary is not None
-    assert summary["resumeAllowed"] is False
-    assert summary["validationResult"] == "incompatible"
-    assert summary["blockedReason"] == "workspace_policy_incompatible"
-
-
-@pytest.mark.asyncio
 async def test_recovery_manifest_emitted_before_terminal_failure_in_finalizing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

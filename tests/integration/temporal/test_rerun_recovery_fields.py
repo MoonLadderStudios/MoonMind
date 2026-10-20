@@ -1,4 +1,4 @@
-"""Fresh reruns and edited retries never carry recovery reference fields."""
+"""Fresh reruns and edited retries replace the source run's rerun provenance."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ async def _db(tmp_path: Path):
         await engine.dispose()
 
 
-async def test_generic_rerun_does_not_carry_recovery_reference_fields(
+async def test_generic_rerun_replaces_source_rerun_provenance(
     tmp_path: Path,
 ) -> None:
     async with _db(tmp_path) as maker:
@@ -49,28 +49,13 @@ async def test_generic_rerun_does_not_carry_recovery_reference_fields(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "recoverySource": {
-                        "sourceWorkflowId": "mm:old",
-                        "sourceRunId": "run-old",
-                    },
-                    "recoveryCheckpointRef": "artifact://checkpoint/old",
-                    "preservedSteps": [{"logicalStepId": "plan"}],
-                    "completedSteps": [{"logicalStepId": "plan"}],
                     "workflow": {
                         "title": "Recovery source",
                         "instructions": "Original",
                         "recovery": {
-                            "kind": "recover_from_failed_step",
+                            "kind": "exact_full_rerun",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
-                        },
-                        "resume": {
-                            "kind": "recover_from_failed_step",
-                            "sourceWorkflowId": "mm:old",
-                            "sourceRunId": "run-old",
-                            "failedStepId": "implement",
-                            "recoveryCheckpointRef": "artifact://checkpoint/old",
-                            "taskInputSnapshotRef": "artifact://snapshot/old",
                         },
                     },
                 },
@@ -94,10 +79,6 @@ async def test_generic_rerun_does_not_carry_recovery_reference_fields(
             rerun = await service.describe_execution(created.workflow_id)
 
     assert result["continue_as_new_cause"] == "manual_rerun"
-    assert "recoverySource" not in rerun.parameters
-    assert "recoveryCheckpointRef" not in rerun.parameters
-    assert "preservedSteps" not in rerun.parameters
-    assert "completedSteps" not in rerun.parameters
     assert rerun.parameters["workflow"] == {
         "title": "Recovery source",
         "instructions": "Original",
@@ -109,7 +90,7 @@ async def test_generic_rerun_does_not_carry_recovery_reference_fields(
     }
 
 
-async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
+async def test_edited_full_retry_replaces_source_rerun_provenance(
     tmp_path: Path,
 ) -> None:
     async with _db(tmp_path) as maker:
@@ -124,28 +105,13 @@ async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
                 manifest_artifact_ref=None,
                 failure_policy=None,
                 initial_parameters={
-                    "recoverySource": {
-                        "sourceWorkflowId": "mm:old",
-                        "sourceRunId": "run-old",
-                    },
-                    "recoveryCheckpointRef": "artifact://checkpoint/old",
-                    "preservedSteps": [{"logicalStepId": "plan"}],
-                    "completedSteps": [{"logicalStepId": "plan"}],
                     "workflow": {
                         "title": "Recovery source",
                         "instructions": "Original",
                         "recovery": {
-                            "kind": "recover_from_failed_step",
+                            "kind": "exact_full_rerun",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
-                        },
-                        "resume": {
-                            "kind": "recover_from_failed_step",
-                            "sourceWorkflowId": "mm:old",
-                            "sourceRunId": "run-old",
-                            "failedStepId": "implement",
-                            "recoveryCheckpointRef": "artifact://checkpoint/old",
-                            "taskInputSnapshotRef": "artifact://snapshot/old",
                         },
                     },
                 },
@@ -164,10 +130,6 @@ async def test_edited_full_retry_does_not_carry_recovery_reference_fields(
             edited_retry = await service.describe_execution(created.workflow_id)
 
     assert result["continue_as_new_cause"] == "major_reconfiguration"
-    assert "recoverySource" not in edited_retry.parameters
-    assert "recoveryCheckpointRef" not in edited_retry.parameters
-    assert "preservedSteps" not in edited_retry.parameters
-    assert "completedSteps" not in edited_retry.parameters
     assert edited_retry.parameters["workflow"] == {
         "title": "Recovery source",
         "instructions": "Original",

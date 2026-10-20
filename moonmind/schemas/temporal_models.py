@@ -1002,6 +1002,8 @@ class StepExecutionManifestModel(BaseModel):
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     execution_scope: Literal["run"] = Field("run", alias="executionScope")
+    # Retained linked-recovery histories still emit these fields. New runs leave
+    # them empty; every stored v1 manifest also carries both keys.
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     branch: StepExecutionBranchMetadataModel | None = Field(None, alias="branch")
     reason: StepExecutionReason = Field(..., alias="reason")
@@ -3550,12 +3552,12 @@ class StepLedgerRowModel(BaseModel):
     preserved_from: PreservedStepProvenanceModel | None = Field(
         None, alias="preservedFrom"
     )
-    state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
-    workspace_checkpoint_ref: str | None = Field(None, alias="workspaceCheckpointRef")
-    step_checkpoint_ref: str | None = Field(None, alias="stepCheckpointRef")
     resume_preservation: StepLedgerResumePreservationModel | None = Field(
         None, alias="recoveryPreservation"
     )
+    state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
+    workspace_checkpoint_ref: str | None = Field(None, alias="workspaceCheckpointRef")
+    step_checkpoint_ref: str | None = Field(None, alias="stepCheckpointRef")
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
     execution_outcome: StepExecutionOutcomeModel | None = Field(
         None, alias="executionOutcome"
@@ -3615,8 +3617,6 @@ class StepExecutionProjectionModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
-    source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
-    lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
     branch: StepExecutionBranchMetadataModel | None = Field(None, alias="branch")
     reason: StepExecutionReason | None = Field(None, alias="reason")
     status: StepExecutionStatus | None = Field(None, alias="status")
@@ -3674,9 +3674,6 @@ class StepExecutionDetailModel(StepExecutionProjectionModel):
     )
     dependency_effect_refs: dict[str, Any] = Field(
         default_factory=dict, alias="dependencyEffectRefs"
-    )
-    preserved_step_provenance: list[PreservedStepProvenanceDetailModel] = Field(
-        default_factory=list, alias="preservedStepProvenance"
     )
 
 
@@ -3810,37 +3807,6 @@ class ExecutionTargetDiagnosticTargetModel(BaseModel):
         alias="failures",
     )
 
-class ExecutionTargetDiagnosticsPreservedStepModel(BaseModel):
-    """Source provenance for a step output preserved into a resumed run."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
-    title: str | None = Field(None, alias="title")
-    source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
-    source_workflow_id: str | None = Field(None, alias="sourceWorkflowId")
-    source_run_id: str | None = Field(None, alias="sourceRunId")
-
-class ExecutionTargetDiagnosticsRecoveryModel(BaseModel):
-    """Failed-step recovery provenance and degraded recovery diagnostics."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    resumed: bool = Field(False, alias="resumed")
-    source_workflow_id: str | None = Field(None, alias="sourceWorkflowId")
-    source_run_id: str | None = Field(None, alias="sourceRunId")
-    checkpoint_ref: str | None = Field(None, alias="checkpointRef")
-    preserved_steps: list[ExecutionTargetDiagnosticsPreservedStepModel] = Field(
-        default_factory=list,
-        alias="preservedSteps",
-    )
-    failed_recovery_phase: Literal[
-        "checkpoint_validation",
-        "workspace_restoration",
-        "preserved_output_injection",
-        "failed_step_execution",
-    ] | None = Field(None, alias="failedRecoveryPhase")
-
 class ExecutionTargetDiagnosticsModel(BaseModel):
     """Target-aware task diagnostics surfaced on execution detail."""
 
@@ -3849,10 +3815,6 @@ class ExecutionTargetDiagnosticsModel(BaseModel):
     targets: list[ExecutionTargetDiagnosticTargetModel] = Field(
         default_factory=list,
         alias="targets",
-    )
-    recovery: ExecutionTargetDiagnosticsRecoveryModel | None = Field(
-        None,
-        alias="recovery",
     )
     degraded_reason: str | None = Field(None, alias="degradedReason")
 

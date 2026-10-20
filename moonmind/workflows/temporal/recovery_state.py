@@ -1,4 +1,4 @@
-"""Deterministic checkpoint-backed recovery contract and state projection."""
+"""Checkpoint recovery state retained for pre-retirement workflow histories."""
 
 from __future__ import annotations
 

@@ -166,7 +166,7 @@ def test_execution_progress_model_normalizes_legacy_progress_fields() -> None:
     assert progress.completed == 1
 
 
-def test_execution_contract_keeps_retry_reexecution_and_recovery_terms_distinct() -> None:
+def test_execution_contract_keeps_reexecution_and_retried_run_identities_distinct() -> None:
     first = StepExecutionIdentityModel(
         workflowId="wf-1",
         runId="run-1",
@@ -179,27 +179,25 @@ def test_execution_contract_keeps_retry_reexecution_and_recovery_terms_distinct(
         logicalStepId="implement",
         executionOrdinal=2,
     )
-    resumed = StepExecutionManifestModel(
-        workflowId="wf-2",
+    # Retry from a step resets the workflow into a new run, where the step runs
+    # again as that run's first execution.
+    retried = StepExecutionManifestModel(
+        workflowId="wf-1",
         runId="run-2",
         logicalStepId="implement",
         executionOrdinal=1,
-        reason="recover_from_failed_step",
+        reason="initial_execution",
         status="executing",
         startedAt=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
         updatedAt=datetime(2026, 5, 17, 12, 0, tzinfo=UTC),
-        lineage={
-            "sourceWorkflowId": "wf-1",
-            "sourceRunId": "run-1",
-            "sourceLogicalStepId": "implement",
-            "sourceExecutionOrdinal": 2,
-            "lineageExecutionOrdinal": 3,
-        },
     )
 
     assert first.step_execution_id != reexecute.step_execution_id
-    assert resumed.execution_ordinal == 1
-    assert resumed.lineage["sourceExecutionOrdinal"] == 2
+    assert retried.step_execution_id not in {
+        first.step_execution_id,
+        reexecute.step_execution_id,
+    }
+    assert retried.lineage is None
 
 
 def test_evidence_ref_status_distinguishes_available_missing_invalid_and_skipped() -> None:
