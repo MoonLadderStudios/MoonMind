@@ -13497,7 +13497,7 @@ describe("Task Create MM-641 authoring validation", () => {
       expect(option?.title).toBe("mm:dep-641");
     });
 
-    it("places the Advanced mode toggle before the controls it reveals", async () => {
+    it("places the Advanced mode toggle after the form controls", async () => {
       renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
       await screen.findByLabelText("Instructions");
 
@@ -13507,10 +13507,10 @@ describe("Task Create MM-641 authoring validation", () => {
         '[data-canonical-create-section="Execution controls"]',
       );
       expect(
-        toggle.compareDocumentPosition(steps as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+        toggle.compareDocumentPosition(steps as Node) & Node.DOCUMENT_POSITION_PRECEDING,
       ).toBeTruthy();
       expect(
-        toggle.compareDocumentPosition(controls as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+        toggle.compareDocumentPosition(controls as Node) & Node.DOCUMENT_POSITION_PRECEDING,
       ).toBeTruthy();
     });
 
