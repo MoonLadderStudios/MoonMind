@@ -387,8 +387,13 @@ _REASONS: dict[str, tuple[str, str]] = {
         "deployment policy reconciliation completes.",
         "/settings#omnigent",
     ),
+    # Also reported while the agent runtime worker is not ready: that worker
+    # proves the enforced egress networks, so their absence is not yet a
+    # network configuration problem.
     "on_demand_backend_unavailable": (
-        "Enable the trusted container backend and worker route.",
+        "The agent runtime worker or trusted container backend is not ready. "
+        "MoonMind retries automatically; if this persists, check that the "
+        "container backend is enabled and the agent runtime worker is running.",
         "/settings#system",
     ),
     "static_host_not_ready": (
@@ -1390,10 +1395,16 @@ async def get_omnigent_codex_catalog_readiness(
             if (
                 not policy.enforced_egress
                 or not policy.network_ref
-                or policy.network_ref not in live_readiness.enforced_network_refs
+                or (
+                    live_readiness.backend_ready
+                    and policy.network_ref not in live_readiness.enforced_network_refs
+                )
             ):
                 policy_reasons.append(_reason("network_policy_unavailable"))
-            if policy.host_mode == "on_demand_docker" and not backend_ready:
+            if not backend_ready and (
+                policy.host_mode == "on_demand_docker"
+                or not live_readiness.backend_ready
+            ):
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
             if (
                 policy.host_mode == "static_compose"
@@ -1432,14 +1443,16 @@ async def get_omnigent_codex_catalog_readiness(
                 for field in ("serverImageRef", "hostImageRef")
             ):
                 policy_reasons.append(_reason("immutable_image_unavailable"))
-            if (
+            if live_readiness.backend_ready and (
                 network.get("attachmentRef") not in live_readiness.enforced_network_refs
                 or network.get("egressProfileRef")
                 not in live_readiness.enforced_egress_profile_refs
             ):
                 policy_reasons.append(_reason("network_policy_unavailable"))
             host_mode = str(host.get("mode") or "")
-            if host_mode == "on_demand_docker" and not backend_ready:
+            if not backend_ready and (
+                host_mode == "on_demand_docker" or not live_readiness.backend_ready
+            ):
                 policy_reasons.append(_reason("on_demand_backend_unavailable"))
             if (
                 host_mode == "static_compose"
@@ -1486,7 +1499,9 @@ async def get_omnigent_codex_catalog_readiness(
             for reason in unavailable_policy_reasons:
                 if reason.code not in {existing.code for existing in profile_reasons}:
                     profile_reasons.append(reason)
-            if profile.provider_runtime == "claude_code":
+            # Blocked candidates already explain themselves; only an absent
+            # Claude policy is a reconciliation gap.
+            if profile.provider_runtime == "claude_code" and not unavailable_policy_reasons:
                 profile_reasons.append(_reason("launch_policy_unavailable"))
         if not eligible_by_runtime.get(profile.provider_runtime):
             profile_reasons.append(_reason("no_eligible_codex_oauth_profile"))
@@ -1620,9 +1635,13 @@ async def get_omnigent_codex_catalog_readiness(
         # "restore the blocked capability" when the only problem is that every
         # slot is in use is both wrong and an invitation to substitute a
         # different profile or runtime.
+        # An unready agent runtime worker fails every capability it proves; its
+        # recoverable reason keeps the start page polling until it returns.
         gate = _reason(
             "omnigent_capacity_wait"
             if admission.wait_for_capacity
+            else "on_demand_backend_unavailable"
+            if not live_readiness.backend_ready
             else "omnigent_admission_readiness_failed"
         )
         if admission.structural_blocking:
@@ -1642,7 +1661,10 @@ async def get_omnigent_codex_catalog_readiness(
             item.model_copy(
                 update={
                     "available": False,
-                    "gate_reasons": [*item.gate_reasons, gate],
+                    "gate_reasons": [
+                        *(r for r in item.gate_reasons if r.code != gate.code),
+                        gate,
+                    ],
                 }
             )
             for item in profile_views
