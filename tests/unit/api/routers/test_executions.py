@@ -14575,6 +14575,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
         "elapsedMs": 60000,
         "serverNow": "2026-04-08T12:01:00Z",
         "precision": "live",
+        "preserved": False,
     }
 
 def test_get_execution_steps_surfaces_accepted_agent_run_progress(
@@ -14974,6 +14975,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
         "elapsedMs": 60000,
         "serverNow": "2026-05-19T10:01:00Z",
         "precision": "fallback",
+        "preserved": False,
     }
     assert "summary" not in payload["stepExecutions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
