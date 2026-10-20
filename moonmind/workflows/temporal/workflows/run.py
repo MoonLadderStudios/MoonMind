@@ -341,6 +341,7 @@ DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 # Retire only new runs. Histories without this marker retain their complete
 # linked-recovery command path until their deployment's retained histories drain.
 RUN_LINKED_RECOVERY_RETIREMENT_PATCH = "run-linked-recovery-retirement-v1"
+RUN_LINKED_RECOVERY_ADMISSION_PATCH = "run-linked-recovery-admission-v1"
 RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
@@ -460,6 +461,7 @@ class RunWorkflowInput(TypedDict, total=False):
     plan_artifact_ref: Optional[str]
     scheduled_for: Optional[str]
     remediation_loop_continuation: dict[str, Any]
+    linked_recovery_retired: bool
 
 
 class _RunWorkflowOutputBase(TypedDict):
@@ -11736,6 +11738,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._linked_recovery_retired = (
                 self._linked_recovery_retired
                 and continuation.get("linkedRecoveryRetired") is True
+            )
+        elif self._linked_recovery_retired and workflow.patched(
+            RUN_LINKED_RECOVERY_ADMISSION_PATCH
+        ):
+            # A queued pre-upgrade start has no completed task to freeze a
+            # patch decision. Preserve its admitted recovery input instead of
+            # redispatching completed effects. Existing retirement-v1 histories
+            # keep their recorded branch; new producers stamp this at admission.
+            self._linked_recovery_retired = (
+                isinstance(input_payload, dict)
+                and input_payload.get("linked_recovery_retired") is True
             )
         self._canonical_git_repository_projection_enabled = workflow.patched(
             RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH

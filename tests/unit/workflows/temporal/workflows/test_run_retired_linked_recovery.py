@@ -3,8 +3,8 @@
 Linked recovery executions started with a frozen recovery input
 (``recoverySource``, ``recoveryTarget``, ``workflow.resume``) that preserved
 earlier steps and restored the failed step's workspace. Retry from a step
-replaced them, so a run that still carries those keys executes its whole plan
-like any other run.
+replaced them for newly admitted runs. Unversioned queued starts and retained
+histories keep their admitted recovery semantics.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.workflows.run import (
     RUN_LINKED_RECOVERY_RETIREMENT_PATCH,
+    RUN_LINKED_RECOVERY_ADMISSION_PATCH,
     MoonMindUserWorkflow,
 )
 
@@ -149,7 +150,7 @@ async def test_new_run_never_enters_linked_recovery_mode(
     # command histories are exercised separately with the actual Replayer.
     monkeypatch.setattr(
         workflow, "patched",
-        lambda patch_id: patch_id == RUN_LINKED_RECOVERY_RETIREMENT_PATCH,
+        lambda patch_id: patch_id in {RUN_LINKED_RECOVERY_RETIREMENT_PATCH, RUN_LINKED_RECOVERY_ADMISSION_PATCH},
     )
     monkeypatch.setattr(workflow, "upsert_search_attributes", lambda _attrs: None)
     monkeypatch.setattr(workflow, "upsert_memo", lambda _memo: None)
@@ -165,6 +166,7 @@ async def test_new_run_never_enters_linked_recovery_mode(
                 MoonMindUserWorkflow.run,
                 {
                     "workflow_type": "MoonMind.UserWorkflow",
+                    "linked_recovery_retired": True,
                     "initial_parameters": json.loads(json.dumps(parameters)),
                     "plan_artifact_ref": _PLAN_REF,
                 },
@@ -194,14 +196,22 @@ async def test_new_run_never_enters_linked_recovery_mode(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("continued_run_id", "carried", "patch_enabled", "retired"),
+    ("continued_run_id", "carried", "patch_enabled", "admission_gate", "admitted", "retired"),
     [
-        (None, {}, True, True),
-        (None, {"linkedRecoveryRetired": False}, True, True),
-        ("previous-run", {}, True, False),
-        ("previous-run", {"linkedRecoveryRetired": False}, True, False),
-        ("previous-run", {"linkedRecoveryRetired": True}, True, True),
-        ("previous-run", {"linkedRecoveryRetired": True}, False, False),
+        (None, {}, True, False, None, True),
+        (None, {"linkedRecoveryRetired": False}, True, False, None, True),
+        ("previous-run", {}, True, False, None, False),
+        ("previous-run", {"linkedRecoveryRetired": False}, True, False, None, False),
+        ("previous-run", {"linkedRecoveryRetired": True}, True, False, None, True),
+        ("previous-run", {"linkedRecoveryRetired": True}, False, False, None, False),
+        (None, {}, True, True, None, False),
+        (None, {}, True, True, True, True),
+        (None, {}, False, True, True, False),
+        (None, {"linkedRecoveryRetired": False}, True, True, True, True),
+        (None, {"linkedRecoveryRetired": True}, True, True, None, False),
+        ("previous-run", {}, True, True, True, False),
+        ("previous-run", {"linkedRecoveryRetired": False}, True, True, True, False),
+        ("previous-run", {"linkedRecoveryRetired": True}, True, True, None, True),
     ],
 )
 async def test_retirement_choice_preserves_genuine_continuations_only(
@@ -209,6 +219,8 @@ async def test_retirement_choice_preserves_genuine_continuations_only(
     continued_run_id: str | None,
     carried: dict[str, Any],
     patch_enabled: bool,
+    admission_gate: bool,
+    admitted: bool | None,
     retired: bool,
 ) -> None:
     from types import SimpleNamespace
@@ -219,14 +231,14 @@ async def test_retirement_choice_preserves_genuine_continuations_only(
     monkeypatch.setattr(workflow, "info", lambda: SimpleNamespace(
         continued_run_id=continued_run_id,
     ))
-    monkeypatch.setattr(workflow, "patched", lambda _patch: patch_enabled)
+    monkeypatch.setattr(workflow, "patched", lambda patch: admission_gate if patch == RUN_LINKED_RECOVERY_ADMISSION_PATCH else patch_enabled)
 
     def stop_after_decision(_payload: Any) -> Any:
         raise ValueError("stop after retirement decision")
 
     monkeypatch.setattr(instance, "_initialize_from_payload", stop_after_decision)
     with pytest.raises(ApplicationError, match="stop after retirement decision"):
-        await instance.run({"remediation_loop_continuation": carried})
+        await instance.run({"remediation_loop_continuation": carried, "linked_recovery_retired": admitted})
     assert instance._linked_recovery_retired is retired
 
 

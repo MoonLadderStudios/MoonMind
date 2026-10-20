@@ -97,6 +97,8 @@ class DiagnosticRunner:
             try:
                 self._save()
             except OSError:
+                # Diagnostic persistence is best effort; preserve the original
+                # command failure even when its diagnostic file cannot be written.
                 pass
 
     def run(self, args, timeout_seconds):

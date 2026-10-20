@@ -308,18 +308,23 @@ async def _activity_workers(
         )
 
 
-async def _start(env, queue: str, parameters: dict):
+async def _start(env, queue: str, parameters: dict, *, admitted: bool = False):
     parameters = deepcopy(parameters)
     workflow_id = f"retained-recovery-{uuid4()}"
     if "recoveryTarget" in parameters:
         parameters["recoveryTarget"]["destination"]["workflowId"] = workflow_id
+    payload = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "initial_parameters": deepcopy(parameters),
+        "plan_artifact_ref": PLAN_REF,
+    }
+    if admitted:
+        from moonmind.workflows.temporal.hard_switch_cutover import admit_user_workflow_input
+
+        payload = admit_user_workflow_input("MoonMind.UserWorkflow", payload)
     return await env.client.start_workflow(
         MoonMindUserWorkflow.run,
-        {
-            "workflow_type": "MoonMind.UserWorkflow",
-            "initial_parameters": deepcopy(parameters),
-            "plan_artifact_ref": PLAN_REF,
-        },
+        payload,
         id=workflow_id,
         task_queue=queue,
         execution_timeout=timedelta(minutes=5),
@@ -447,7 +452,7 @@ async def test_new_runs_execute_all_steps_without_legacy_recovery(parameters):
         await _activity_workers(stack, env.client, fake)
         queue = f"new-run-{uuid4()}"
         async with _workflow_worker(env.client, queue):
-            handle = await _start(env, queue, parameters)
+            handle = await _start(env, queue, parameters, admitted=True)
             result = await asyncio.wait_for(handle.result(), 30)
             history = await handle.fetch_history()
             ledger = await handle.query("get_step_ledger")
@@ -459,9 +464,11 @@ async def test_new_runs_execute_all_steps_without_legacy_recovery(parameters):
         await _replay(history)
 
 
-@pytest.mark.parametrize("fixture", ["legacy-policy", "typed-state-machine"])
-async def test_pre_retirement_history_replays_on_installed_workflow(fixture):
-    """These immutable histories were recorded using the pre-retirement checkout.
+@pytest.mark.parametrize("fixture", [
+    "legacy-policy", "typed-state-machine", "retirement-v1-legacy", "retirement-v1-typed",
+])
+async def test_recorded_recovery_history_replays_on_installed_workflow(fixture):
+    """These immutable histories were recorded at their documented source revisions.
 
     They are deliberately not regenerated from the candidate under test: doing
     that could bless a changed dependency or deleted legacy command sequence.
@@ -479,9 +486,13 @@ async def test_pre_retirement_history_replays_on_installed_workflow(fixture):
     ]
     history = WorkflowHistory.from_json(workflow_id, history_json)
     names = _activity_names(history)
-    assert RUN_LINKED_RECOVERY_RETIREMENT_PATCH not in _patches(history)
     assert history.events[-1].HasField("workflow_execution_completed_event_attributes")
-    if fixture == "legacy-policy":
+    if fixture.startswith("retirement-v1-"):
+        assert RUN_LINKED_RECOVERY_RETIREMENT_PATCH in _patches(history)
+        assert "run-linked-recovery-admission-v1" not in _patches(history)
+        assert not LEGACY_EFFECTS.intersection(names)
+    elif fixture == "legacy-policy":
+        assert RUN_LINKED_RECOVERY_RETIREMENT_PATCH not in _patches(history)
         assert [name for name in names if name in LEGACY_EFFECTS] == [
             "step_checkpoint.validate",
             "workspace.apply_policy",
@@ -539,3 +550,117 @@ async def test_restarted_old_run_still_restores_when_recovery_was_not_reached(
         assert ledger["steps"][0]["preservedFrom"]["workflowId"] == "mm:source"
         assert RUN_LINKED_RECOVERY_RETIREMENT_PATCH not in _patches(after)
         await _replay(after)
+
+
+@pytest.mark.parametrize("state_machine", [False, True], ids=["legacy-policy", "typed-state-machine"])
+@pytest.mark.parametrize("first_task_failed", [False, True], ids=["not-polled", "failed-first-task"])
+async def test_queued_pre_upgrade_recovery_preserves_completed_effects(state_machine, first_task_failed):
+    """Admission predates the upgrade even when no workflow task has run yet."""
+    fake = FakeActivities()
+    async with (
+        await WorkflowEnvironment.start_local(
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+        ) as env,
+        AsyncExitStack() as stack,
+    ):
+        await register_deployment_search_attributes(env)
+        await _activity_workers(stack, env.client, fake)
+        queue = f"queued-pre-upgrade-{uuid4()}"
+        handle = await _start(env, queue, _parameters(state_machine=state_machine))
+        if first_task_failed:
+            async with Worker(
+                env.client, task_queue=queue, workflows=[_FailBeforeFirstTaskCompletes],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                await _wait_for_history_event(handle, "workflow_task_failed_event_attributes")
+        queued = await handle.fetch_history()
+        assert not any(
+            event.HasField("workflow_task_completed_event_attributes")
+            for event in queued.events
+        )
+        assert not fake.steps
+        async with _workflow_worker(env.client, queue):
+            result = await asyncio.wait_for(handle.result(), 30)
+            history = await handle.fetch_history()
+            ledger = await handle.query("get_step_ledger")
+        assert result["status"] == "success"
+        assert fake.steps == ["implement", "finish"]
+        expected_effects = (
+            [RESTORE_ACTIVITY] if state_machine
+            else ["step_checkpoint.validate", "workspace.apply_policy"]
+        )
+        assert [name for name, _ in fake.calls if name in LEGACY_EFFECTS] == expected_effects
+        assert ledger["steps"][0]["preservedFrom"]["workflowId"] == "mm:source"
+        await _replay(history)
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class _FailBeforeFirstTaskCompletes:
+    @workflow.run
+    async def run(self, _payload: dict) -> dict:
+        raise RuntimeError("Synthetic pre-upgrade worker failure before first task completion")
+
+
+async def _wait_for_history_event(handle, field: str):
+    async with asyncio.timeout(30):
+        while True:
+            history = await handle.fetch_history()
+            if any(event.HasField(field) for event in history.events):
+                return history
+            await asyncio.sleep(0.05)
+
+
+@workflow.defn(name="MoonMind.UserWorkflow")
+class _ContinueRecovery:
+    @workflow.run
+    async def run(self, payload: dict) -> dict:
+        workflow.continue_as_new(payload["nextInput"], task_queue=payload["nextQueue"])
+
+
+@pytest.mark.parametrize("carried_decision", [None, False, True], ids=["old-missing", "retained", "retired"])
+@pytest.mark.parametrize("admitted", [False, True], ids=["unversioned-input", "admitted-input"])
+async def test_real_continue_as_new_keeps_inherited_recovery_choice(carried_decision, admitted):
+    fake = FakeActivities()
+    async with (
+        await WorkflowEnvironment.start_local(data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER) as env,
+        AsyncExitStack() as stack,
+    ):
+        await register_deployment_search_attributes(env)
+        await _activity_workers(stack, env.client, fake)
+        queue = f"continue-recovery-{uuid4()}"
+        continuation = {} if carried_decision is None else {"linkedRecoveryRetired": carried_decision}
+        payload = {
+            "workflow_type": "MoonMind.UserWorkflow", "initial_parameters": _parameters(),
+            "plan_artifact_ref": PLAN_REF, "remediation_loop_continuation": continuation,
+        }
+        if admitted:
+            from moonmind.workflows.temporal.hard_switch_cutover import admit_user_workflow_input
+
+            payload = admit_user_workflow_input("MoonMind.UserWorkflow", payload)
+        async with Worker(
+            env.client, task_queue=queue + "-old", workflows=[_ContinueRecovery],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                _ContinueRecovery.run, {"nextInput": payload, "nextQueue": queue},
+                id=queue, task_queue=queue + "-old", execution_timeout=timedelta(minutes=5),
+                search_attributes=TypedSearchAttributes([
+                    SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_id"), "test-owner"),
+                    SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_type"), "user"),
+                ]),
+            )
+            original = env.client.get_workflow_handle(handle.id, run_id=handle.first_execution_run_id)
+            before = await _wait_for_history_event(original, "workflow_execution_continued_as_new_event_attributes")
+        next_run_id = before.events[-1].workflow_execution_continued_as_new_event_attributes.new_execution_run_id
+        current = env.client.get_workflow_handle(handle.id, run_id=next_run_id)
+        async with _workflow_worker(env.client, queue):
+            result = await asyncio.wait_for(current.result(), 30)
+            history = await current.fetch_history()
+            ledger = await current.query("get_step_ledger")
+        assert result["status"] == "success"
+        assert history.events[0].workflow_execution_started_event_attributes.continued_execution_run_id
+        assert fake.steps == (["prepare", "implement", "finish"] if carried_decision is True else ["implement", "finish"])
+        effects = [name for name, _ in fake.calls if name in LEGACY_EFFECTS]
+        assert effects == ([] if carried_decision is True else ["step_checkpoint.validate", "workspace.apply_policy"])
+        assert bool(ledger["steps"][0].get("preservedFrom")) is (carried_decision is not True)
+        await _replay(history)

@@ -591,7 +591,10 @@ class TestUpdateSchedule:
         )
 
         assert updated_schedule.action.workflow == "MoonMind.UserWorkflow"
-        assert updated_schedule.action.args == [workflow_input]
+        assert updated_schedule.action.args == [
+            {**workflow_input, "linked_recovery_retired": True}
+        ]
+        assert "linked_recovery_retired" not in workflow_input
         assert updated_schedule.action.id == f"mm:{_TEST_UUID}"
         assert updated_schedule.action.task_queue == "mm.workflow.user.v2"
         assert updated_schedule.action.memo == {"definitionId": str(_TEST_UUID)}
