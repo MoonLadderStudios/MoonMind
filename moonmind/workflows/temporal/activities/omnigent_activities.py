@@ -901,7 +901,9 @@ async def _try_generic_realizer_dispatch(
 
             realizer_registry = get_default_registry()
         realizer = realizer_registry.require(plan.payload.executionRealizerRef)
-        if getattr(plan.payload, "resolvedTools", {}).get("repositoryAccess"):
+        if request.step_execution is not None or getattr(
+            plan.payload, "resolvedTools", {}
+        ).get("repositoryAccess"):
             from moonmind.omnigent.bridge_artifacts import (
                 TemporalOmnigentArtifactGateway,
             )
@@ -1233,7 +1235,14 @@ async def _omnigent_execute_activity(
             workspace_owner=SandboxRemediationWorkspaceOwner(
                 workspace_root,
                 restorer=ManagedServiceRemediationRestorer(restore_service),
-                head_loader=ArtifactRemediationHeadLoader(artifact_service),
+                head_loader=ArtifactRemediationHeadLoader(
+                    artifact_service,
+                    workflow_id=(
+                        request.step_execution.workflow_id
+                        if request.step_execution is not None
+                        else None
+                    ),
+                ),
             ),
             # This activity still reaches the coordinator directly whenever a
             # profile-bound request carries no executionPlanRef and no

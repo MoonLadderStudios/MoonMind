@@ -327,20 +327,32 @@ async def test_retained_persistence_handler_fails_closed_without_artifact_storag
     """Artifact-storage denial fails closed instead of persisting partially.
 
     Terminal persistence must cross the artifact authority boundary: with a
-    working database and a denied artifact service, invoking
+    working database, claimed turn, and a denied artifact service, invoking
     ``persist_checkpoint_branch_turn_terminal`` with an artifact-bearing
     payload must raise from the artifact denial. The test records the
     denial invocation so a regression that stops crossing the artifact
     boundary (for example by calling a database-only handler) fails
-    instead of passing vacuously.
+    instead of passing vacuously. Run in a real Activity context so the
+    retained workflow-queue handler must pass its launch-authority checks.
     """
+
+    from dataclasses import replace
 
     import moonmind.workflows.temporal.workflows.checkpoint_branch_turn as turn_module
     from moonmind.schemas.agent_runtime_models import AgentRunResult
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
+    from temporalio.testing import ActivityEnvironment
 
-    from api_service.db.models import Base
+    from api_service.db.models import (
+        Base,
+        TemporalExecutionCanonicalRecord,
+        TemporalWorkflowType,
+    )
+    from api_service.services.checkpoint_branch_turn_execution import (
+        build_branch_turn_execution_identity,
+    )
+    from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/denial.db")
     try:
@@ -363,8 +375,24 @@ async def test_retained_persistence_handler_fails_closed_without_artifact_storag
             _deny_artifact_service,
         )
 
+        identity = build_branch_turn_execution_identity(
+            branch_id="branch-1",
+            branch_turn_id="turn-1",
+            logical_step_id="implement",
+            ordinal=1,
+        )
         async with sessions() as session:
-            await CheckpointBranchService(session).create_branch_graph(
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id="source-workflow",
+                    run_id="source-run",
+                    namespace="default",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    entry="api",
+                )
+            )
+            service = CheckpointBranchService(session)
+            await service.create_branch_graph(
                 {
                     "branchId": "branch-1",
                     "label": "Artifact-denial terminal persistence",
@@ -385,8 +413,34 @@ async def test_retained_persistence_handler_fails_closed_without_artifact_storag
                     "idempotencyKey": "create-turn-1",
                 }
             )
+            await service.claim_turn_execution(
+                workflow_id="source-workflow",
+                branch_id="branch-1",
+                branch_turn_id="turn-1",
+                context_bundle_ref="artifact://launch/context",
+                step_execution_manifest_ref="artifact://launch/manifest",
+                diagnostics_ref="artifact://launch/diagnostics",
+                agent_request_ref="artifact://launch/request",
+                launch_idempotency_key=build_branch_turn_launch_idempotency_key(
+                    workflow_id="source-workflow",
+                    branch_id="branch-1",
+                    branch_turn_id="turn-1",
+                ),
+                created_step_execution_id=identity.step_execution_id,
+                runtime_agent_run_id=identity.agent_run_workflow_id,
+                execution_workflow_id=identity.workflow_id,
+            )
             await session.commit()
 
+        environment = ActivityEnvironment()
+        environment.info = replace(
+            environment.info,
+            workflow_id=identity.workflow_id,
+            workflow_type=turn_module.WORKFLOW_NAME,
+            workflow_run_id="branch-turn-run",
+            namespace="default",
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
         payload = {
             "workflowId": "source-workflow",
             "branchId": "branch-1",
@@ -404,7 +458,9 @@ async def test_retained_persistence_handler_fails_closed_without_artifact_storag
             RuntimeError,
             match="denied unexpected artifact-storage",
         ):
-            await turn_module.persist_checkpoint_branch_turn_terminal(payload)
+            await environment.run(
+                turn_module.persist_checkpoint_branch_turn_terminal, payload
+            )
         assert artifact_calls, (
             "artifact denial was never exercised: terminal persistence did not "
             "cross the artifact-storage authority boundary"

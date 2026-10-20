@@ -601,7 +601,7 @@ def _build_realizer(
         async def cleanup_prepared(self, _prepared):
             machine.cleanups.append(f"inputs-cleanup:{run}")
 
-    async def resolve_host(_plan):
+    async def resolve_host(_plan, *, request):
         return _HOST_CLASS, get_launch_policy("omnigent-on-demand@1")
 
     async def session_driver(request, *, session_authority_sink):

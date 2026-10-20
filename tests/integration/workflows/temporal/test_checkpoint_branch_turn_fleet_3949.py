@@ -88,6 +88,7 @@ from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
 from tests.integration.workflows.temporal.test_checkpoint_branch_turn_execution import (
     _input,
     _terminal_activity_database,
+    _terminal_activity_environment,
 )
 from tests.support.isolated_postgres import isolated_postgres
 
@@ -340,7 +341,10 @@ async def _run_fleet3949(
                         correlation_id,
                         agent_run_workflow_id="agent-run-turn-1",
                     ),
-                    id=f"checkpoint-branch-fleet3949-{correlation_id}-{_uuid4()}",
+                    # The database fixture claims this exact workflow before
+                    # launch, as the production owner does. Each journey has
+                    # its own Temporal environment, so the ID can be reused.
+                    id="checkpoint-branch-turn:turn-1",
                     task_queue=queue,
                 )
                 if cancel:
@@ -837,8 +841,12 @@ async def test_duplicate_terminal_delivery_reuses_owned_row_3949(
     engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
     try:
         payload = _fleet3949_terminal_payload(refs)
-        first = await persist_checkpoint_branch_turn_terminal(payload)
-        replay = await persist_checkpoint_branch_turn_terminal(payload)
+        first = await _terminal_activity_environment().run(
+            persist_checkpoint_branch_turn_terminal, payload
+        )
+        replay = await _terminal_activity_environment().run(
+            persist_checkpoint_branch_turn_terminal, payload
+        )
 
         assert replay == first
         assert first["status"] == "checking"
@@ -860,8 +868,8 @@ async def test_divergent_terminal_replay_cannot_overwrite_newer_evidence_3949(
 
     engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
     try:
-        first = await persist_checkpoint_branch_turn_terminal(
-            _fleet3949_terminal_payload(refs)
+        first = await _terminal_activity_environment().run(
+            persist_checkpoint_branch_turn_terminal, _fleet3949_terminal_payload(refs)
         )
         assert first["status"] == "checking"
         stale = _fleet3949_terminal_payload(refs)
@@ -877,7 +885,9 @@ async def test_divergent_terminal_replay_cannot_overwrite_newer_evidence_3949(
         with pytest.raises(
             ValueError, match="(immutable terminal field|changed across retry)"
         ):
-            await persist_checkpoint_branch_turn_terminal(stale)
+            await _terminal_activity_environment().run(
+                persist_checkpoint_branch_turn_terminal, stale
+            )
         async with sessions() as session:
             turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
             assert turn is not None

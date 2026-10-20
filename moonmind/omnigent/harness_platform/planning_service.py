@@ -1005,7 +1005,9 @@ class OmnigentPlannedHostResolver:
             "MOONMIND_OMNIGENT_HOST_ARCHITECTURE", "linux/amd64"
         )
 
-    async def __call__(self, plan: OmnigentExecutionPlanEnvelope):
+    async def __call__(
+        self, plan: OmnigentExecutionPlanEnvelope, *, request: AgentExecutionRequest
+    ):
         catalog = await self._catalogs.load(plan.payload.harnessCatalogRef)
         if catalog is None:
             raise HarnessPlatformError(
@@ -1029,7 +1031,7 @@ class OmnigentPlannedHostResolver:
             )
         launch: Mapping[str, Any] | None = None
         if plan.payload.hostImageRef is not None:
-            launch = await self._load_exact_launch(plan)
+            launch = await self._load_exact_launch(plan, request=request)
             policy = launch_policy_from_effective_launch(
                 launch,
                 expected_ref=plan.payload.launchPolicyRef,
@@ -1063,14 +1065,18 @@ class OmnigentPlannedHostResolver:
     async def _load_exact_launch(
         self,
         plan: OmnigentExecutionPlanEnvelope,
+        *,
+        request: AgentExecutionRequest,
     ) -> Mapping[str, Any]:
-        """Load and validate the plan's immutable launch artifact."""
+        """Read the admitted launch through its execution, preserving its owner."""
         if self._artifacts is None:
             raise HarnessPlatformError(
                 "exact execution plan launch artifact cannot be resolved",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
-        raw = await self._artifacts.read_bytes(str(plan.payload.effectiveLaunchSnapshotRef))
+        raw = await self._artifacts.read_admitted_input(
+            str(plan.payload.effectiveLaunchSnapshotRef), request=request
+        )
         from moonmind.omnigent.execution_profiles import (
             validate_planned_effective_launch,
         )

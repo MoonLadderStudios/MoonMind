@@ -22,7 +22,6 @@ from sqlalchemy import select
 
 from api_service.api.routers import omnigent_bridge as bridge
 from api_service.api.routers import omnigent_native_ui as ui
-from api_service.auth_providers import get_current_user
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentBridgeSession,
@@ -59,7 +58,13 @@ def _application(store, base_url):
         bridge.workflow_chat_router, prefix=bridge.WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
     )
     app.include_router(ui.native_ui_router, prefix=ui.NATIVE_UI_MOUNT_PATH)
-    app.dependency_overrides[get_current_user()] = lambda: user
+    # Override the registered dependency, not a new mode-specific closure.
+    # Artifact authorization below still evaluates the parametrized auth mode.
+    for mounted in (bridge.workflow_chat_router, ui.native_ui_router):
+        for route in mounted.routes:
+            for dependency in route.dependant.dependencies:
+                if dependency.name in {"user", "_user"}:
+                    app.dependency_overrides[dependency.call] = lambda: user
     app.dependency_overrides[bridge._get_execution_service] = lambda: None
     app.dependency_overrides[bridge._get_bridge_store] = lambda: store
     app.dependency_overrides[bridge._get_bridge_proxy] = lambda: proxy
@@ -122,9 +127,13 @@ def _select_request_plan_shape(journey, explicit_binding):
     indirect=True,
 )
 @pytest.mark.parametrize("explicit_binding", [True, False])
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 async def test_attested_generic_native_binding_reads_and_sends(
-    native_journey, session_factory, explicit_binding
+    native_journey, session_factory, explicit_binding, auth_mode, monkeypatch
 ):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
     journey = native_journey
     _select_request_plan_shape(journey, explicit_binding)
     await _during_active_session(
