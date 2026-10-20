@@ -716,6 +716,7 @@ def test_windows_loopback_launcher_preserves_http_and_tls_identity(
 
         ca, certificate, key = _write_certificates(tmp_path, certificate_host)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(certificate, key)
         context.set_servername_callback(
             lambda _socket, name, _context: server_names.append(name)
