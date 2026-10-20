@@ -834,7 +834,9 @@ def _controller_bootstrap_command(
     command = [sys.executable, str(bootstrap)]
     state_dir = str(repo / "deploy" / "state" / "controller")
     target_repo = str(repo)
-    if privileged:
+    if privileged or sys.platform == "win32":
+        # Windows has no POSIX process-group cleanup or kernel stack lock.
+        # Use the same Linux helper without changing the selected target image.
         identity = _controller_identity(repo)
         if not identity:
             _recover_controller_identity(record, repo)
@@ -894,7 +896,9 @@ def _ensure_controller_journal_transition(
         _recover_controller_identity(record, repo)
     failure = None
     for image in _controller_source_images(record, repo, refresh=refresh):
-        bundle = _controller_sources(image, repo, bind_discovery=refresh)
+        bundle = _controller_sources(
+            image, repo, bind_discovery=refresh or sys.platform == "win32"
+        )
         if not bundle:
             continue
         try:

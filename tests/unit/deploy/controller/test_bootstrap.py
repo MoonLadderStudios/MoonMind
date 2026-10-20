@@ -1628,6 +1628,55 @@ def test_failed_handoff_restores_the_previous_controller(
     assert store.load("ui-handoff")["controllerHandoff"]["attemptGroup"] == 1
 
 
+@pytest.mark.parametrize("after_settle", ["3", "4", "disappeared", "replaced"])
+def test_handoff_recovery_checks_new_restarts_only(
+    controller_path, tmp_path, monkeypatch, capsys, after_settle
+):
+    bootstrap = load("bootstrap")
+    state, compose, _ = _handoff_installation(bootstrap, load("record"), tmp_path)
+    original = compose.read_text()
+    docker = _HandoffDocker()
+    docker.restarts = "3"
+    ups = []
+    settled = False
+
+    def compose_run(state_dir, project, *args, **kwargs):
+        if args[0] == "up":
+            ups.append(args)
+        return 1 if len(ups) == 1 and args[0] == "up" else 0
+
+    def settle(delay):
+        nonlocal settled
+        settled = True
+        if after_settle == "4":
+            docker.restarts = "4"
+
+    def run(command, **kwargs):
+        if command[-1] == "replacement-controller":
+            command = [*command[:-1], "live-controller"]
+        result = docker.run(command, **kwargs)
+        if settled and command[:2] == ["docker", "ps"]:
+            if after_settle == "disappeared":
+                result.stdout = ""
+            elif after_settle == "replaced":
+                result.stdout = "replacement-controller"
+        return result
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    monkeypatch.setattr(bootstrap, "_compose", compose_run)
+    monkeypatch.setattr(bootstrap.time, "sleep", settle)
+    receipt = _handoff(bootstrap, state, capsys)
+
+    assert receipt["status"] == "unavailable"
+    assert "controller recreation failed" in receipt["reason"]
+    assert ("previous controller restored" in receipt["reason"]) == (
+        after_settle == "3"
+    )
+    assert ("restore failed" in receipt["reason"]) == (after_settle != "3")
+    assert len(ups) == 2
+    assert compose.read_text() == original
+
+
 def test_bootstrap_update_rechecks_open_operations_inside_the_stack_lock(
     controller_path, tmp_path, monkeypatch
 ):
