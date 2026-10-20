@@ -2805,25 +2805,40 @@ class TemporalSandboxActivities:
     async def _workspace_archive_members(self, model, workspace: Path) -> set[str] | None:
         if not (workspace / ".git").exists():
             return None
-        # HEAD and the index preserve uninitialized gitlinks. Populated nested
-        # repositories need their own content/history capture; the regular-file
-        # archive skips their directories, so refuse to omit that local work.
-        # A missing directory is a worktree deletion, not the empty clone state.
+        # Checkout recreates empty gitlink directories already present in HEAD;
+        # replaying an index patch cannot recreate newly staged directories.
+        # Other worktree states need their own capture, including deletion state
+        # hidden behind a symlinked ancestor, so refuse to omit that local work.
         staged = await _run_command(_sandbox_workspace_git_command(
             workspace, "ls-files", "--stage", "-z"
         ))
-        for entry in staged.stdout.split("\x00"):
-            if not entry.startswith("160000 "):
-                continue
-            submodule = workspace / entry.partition("\t")[2]
-            if (
-                submodule.is_symlink()
-                or not submodule.is_dir()
-                or any(submodule.iterdir())
-            ):
-                raise ValueError(
-                    "Workspace snapshot cannot preserve submodule worktree state"
+        gitlinks = {
+            entry.partition("\t")[2]
+            for entry in staged.stdout.split("\x00")
+            if entry.startswith("160000 ")
+        }
+        if gitlinks:
+            tree = await _run_command(
+                _sandbox_workspace_git_command(
+                    workspace, "ls-tree", "--full-tree", "-r", "-z", "HEAD"
                 )
+            )
+            head_gitlinks = {
+                entry.partition("\t")[2]
+                for entry in tree.stdout.split("\x00")
+                if entry.startswith("160000 ")
+            }
+            for name in gitlinks:
+                submodule = workspace / name
+                if (
+                    name not in head_gitlinks
+                    or submodule.resolve() != submodule
+                    or not submodule.is_dir()
+                    or any(submodule.iterdir())
+                ):
+                    raise ValueError(
+                        "Workspace snapshot cannot preserve submodule worktree state"
+                    )
         args = ["ls-files", "--cached", "--exclude-standard", "-z"]
         if model.include_untracked:
             args.append("--others")
