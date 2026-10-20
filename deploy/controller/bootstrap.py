@@ -889,6 +889,7 @@ def _stop_command(process, *, deadline: float) -> None:
             try:
                 os.killpg(process.pid, signum)
             except ProcessLookupError:
+                # The group already exited; this shutdown race needs no signal.
                 pass
             until = min(deadline, time.monotonic() + grace)
             while _group_running(process.pid) and time.monotonic() < until:
