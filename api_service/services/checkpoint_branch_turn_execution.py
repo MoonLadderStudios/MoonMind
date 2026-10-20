@@ -7,6 +7,7 @@ workflow that dispatches the canonical profile-bound Omnigent AgentRun.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -26,6 +27,7 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     TemporalArtifact,
     TemporalArtifactRetentionClass,
+    TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
@@ -275,6 +277,139 @@ def _artifact_id(ref: str, *, field_name: str) -> str:
             "authority_ref_invalid", f"{field_name} must be a durable artifact ref"
         )
     return value.removeprefix("artifact://")
+
+
+def validate_checkpoint_branch_instruction_authority(
+    *,
+    branch: WorkflowCheckpointBranch,
+    turn: WorkflowCheckpointBranchTurn,
+    request: AgentExecutionRequest,
+) -> BranchTurnExecutionIdentity:
+    """Match one stored instruction to the turn's server-created Step.
+
+    Request refs and prepared inputs are consistency checks, never grants.
+    The durable turn and the existing owner identity builder supply authority.
+    """
+
+    step = request.step_execution
+    if step is None:
+        raise CheckpointBranchTurnLaunchError(
+            "instruction_authority_mismatch", "branch instruction has no created Step"
+        )
+    identity = build_branch_turn_execution_identity(
+        branch_id=branch.branch_id,
+        branch_turn_id=turn.branch_turn_id,
+        logical_step_id=branch.logical_step_id or "checkpoint-branch",
+        ordinal=step.execution_ordinal,
+    )
+    claim = turn.diagnostics or {}
+    step_branch = step.branch or {}
+    if (
+        turn.branch_id != branch.branch_id
+        or claim.get("executionOwner") != WORKFLOW_TYPE
+        or claim.get("executionWorkflowId") != identity.workflow_id
+        or turn.created_step_execution_id != identity.step_execution_id
+        or turn.runtime_agent_run_id != identity.agent_run_workflow_id
+        or step.workflow_id != identity.workflow_id
+        or step.run_id != identity.semantic_run_id
+        or step.logical_step_id != identity.logical_step_id
+        or step.step_execution_id != identity.step_execution_id
+        or step_branch.get("branchId") != branch.branch_id
+        or step_branch.get("branchTurnId") != turn.branch_turn_id
+        or request.instruction_ref != turn.instruction_ref
+        or turn.instruction_ref not in step.prepared_input_refs
+    ):
+        raise CheckpointBranchTurnLaunchError(
+            "instruction_authority_mismatch",
+            "branch instruction does not match the recorded turn and created Step",
+        )
+    _artifact_id(turn.instruction_ref, field_name="instructionRef")
+    return identity
+
+
+async def admit_checkpoint_branch_turn_instruction(
+    *,
+    branch: WorkflowCheckpointBranch,
+    turn: WorkflowCheckpointBranchTurn,
+    request: AgentExecutionRequest,
+    artifacts: TemporalArtifactService,
+    principal: str,
+    namespace: str,
+) -> None:
+    """Admit only the verified instruction at an existing branch-owner boundary.
+
+    Launch/relaunch and fenced terminal retention call this with their durable
+    graph and stored request. Retained turns can recover the missing link
+    without changing artifact provenance or accepting parameter-derived refs.
+    """
+
+    identity = validate_checkpoint_branch_instruction_authority(
+        branch=branch, turn=turn, request=request
+    )
+    if turn.instruction_ref.startswith("artifact://omnigent/"):
+        # Existing local refs retain their guarded read/promotion path; they
+        # have no Temporal row to link. Keep the same exact-byte validation.
+        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+
+        payload = await LocalOmnigentArtifactGateway().read_bytes(turn.instruction_ref)
+        if _sha256(payload) != turn.instruction_digest:
+            raise CheckpointBranchTurnLaunchError(
+                "instruction_digest_mismatch", "branch instruction bytes changed"
+            )
+        return
+    artifact_id = _artifact_id(turn.instruction_ref, field_name="instructionRef")
+    repository = artifacts._repository
+    artifact = await repository.get_artifact_for_update(artifact_id)
+    if (
+        artifact.status is not TemporalArtifactStatus.COMPLETE
+        or not artifact.sha256
+        or turn.instruction_digest != f"sha256:{artifact.sha256}"
+    ):
+        raise CheckpointBranchTurnLaunchError(
+            "instruction_digest_mismatch", "recorded branch instructions changed"
+        )
+    consumer = "service:checkpoint-branch-turn"
+    scope = f"workflow:{identity.workflow_id}"
+    # Admission is not raw-data authority. Apply the artifact owner's existing
+    # raw/quarantine gates as the actual consumer before adding a link.
+    await artifacts._assert_artifact_raw_access(
+        artifact, principal=consumer, admitted_principal=scope
+    )
+    # The durable turn authorizes only these exact bytes. Validate the locked
+    # row's storage object before link_artifact commits any delegation. The row
+    # lock protects this preflight from lifecycle deletion; it needs no claim.
+    payload = await asyncio.get_running_loop().run_in_executor(
+        None, artifacts._store.read_bytes, artifact.storage_key
+    )
+    if _sha256(payload) != turn.instruction_digest:
+        raise CheckpointBranchTurnLaunchError(
+            "instruction_digest_mismatch", "branch instruction bytes changed"
+        )
+    link_type = "input.branch_turn.instructions.md"
+    if not any(
+        link.namespace == namespace
+        and link.workflow_id == identity.workflow_id
+        and link.run_id == identity.semantic_run_id
+        and link.link_type == link_type
+        for link in await repository.list_links(artifact_id)
+    ):
+        await artifacts.link_artifact(
+            artifact_id=artifact_id,
+            principal=principal,
+            execution_ref={
+                "namespace": namespace,
+                "workflow_id": identity.workflow_id,
+                "run_id": identity.semantic_run_id,
+                "link_type": link_type,
+            },
+        )
+    _artifact, payload = await artifacts.read(
+        artifact_id=artifact_id, principal=consumer, admitted_principal=scope
+    )
+    if _sha256(payload) != turn.instruction_digest:
+        raise CheckpointBranchTurnLaunchError(
+            "instruction_digest_mismatch", "branch instruction bytes changed"
+        )
 
 
 class CheckpointBranchTurnExecutionOwner:
@@ -1606,14 +1741,31 @@ class CheckpointBranchTurnExecutionOwner:
             "stepExecutionId": turn.created_step_execution_id,
             "agentRunId": turn.runtime_agent_run_id,
         }
-        try:
-            source = await self._session.get(
-                TemporalExecutionCanonicalRecord, branch.workflow_id
+        source = await self._session.get(
+            TemporalExecutionCanonicalRecord, branch.workflow_id
+        )
+        if source is None:
+            raise CheckpointBranchTurnLaunchError(
+                "source_execution_missing", "source workflow is missing"
             )
-            if source is None:
-                raise CheckpointBranchTurnLaunchError(
-                    "source_execution_missing", "source workflow is missing"
+        try:
+            async with self._artifact_service() as (_artifact_session, artifacts):
+                await admit_checkpoint_branch_turn_instruction(
+                    branch=branch,
+                    turn=turn,
+                    request=agent_request,
+                    artifacts=artifacts,
+                    principal=self._principal,
+                    namespace=source.namespace,
                 )
+        except CheckpointBranchTurnLaunchError:
+            raise
+        except Exception as exc:
+            raise CheckpointBranchTurnLaunchError(
+                "instruction_authority_unavailable",
+                "recorded branch instruction cannot be admitted",
+            ) from exc
+        try:
             await self._client.start_workflow(
                 workflow_type=WORKFLOW_TYPE,
                 workflow_id=execution_workflow_id,
@@ -1651,6 +1803,7 @@ __all__ = [
     "CheckpointBranchTurnExecutionOwner",
     "CheckpointBranchTurnLaunchError",
     "WORKFLOW_TYPE",
+    "admit_checkpoint_branch_turn_instruction",
     "build_branch_turn_execution_identity",
     "checkpoint_branch_turn_owner_operational",
     "get_checkpoint_branch_artifact_service",

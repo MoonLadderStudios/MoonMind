@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -28,9 +29,11 @@ from tests.unit.workflows.temporal.test_activity_runtime import temporal_db
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reference_field", ["remainingWorkRef", "remaining_work_ref"])
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 async def test_separate_remaining_work_survives_publication_and_next_turn(
-    tmp_path: Path, monkeypatch, reference_field
+    tmp_path: Path, monkeypatch, reference_field, auth_mode
 ):
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
     root = tmp_path / "agent_jobs"
     workspace = root / "parent-workflow" / "repo"
     verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
@@ -99,20 +102,39 @@ async def test_separate_remaining_work_survives_publication_and_next_turn(
                         },
                     )
                 )
-            gate = MoonMindRunWorkflow()._moonspec_verify_gate_result(
+            parent = MoonMindRunWorkflow()
+            gate = parent._moonspec_verify_gate_result(
                 {"moonSpecVerify": result.metadata["moonSpecVerify"]}
             )
             assert gate.remaining_work_ref == remaining_ref
+            # The production Run owner builds the Step envelope before the
+            # managed adapter forwards the full request to turn preparation.
+            with patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-workflow",
+                    run_id="run-1",
+                    task_queue="mm.workflow.user.v2",
+                ),
+            ), patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                return_value=True,
+            ):
+                request = parent._build_agent_execution_request(
+                    node_inputs={
+                        "instructions": "Repair the remaining gaps.",
+                        "remainingWorkRef": gate.remaining_work_ref,
+                    },
+                    node_id="remediate",
+                    tool_name="codex_cli",
+                )
+            assert request.step_execution is not None
+            assert request.step_execution.workflow_id == "parent-workflow"
+            assert request.parameters["remainingWorkRef"] == remaining_ref
             prepared = await activities.agent_runtime_prepare_turn_instructions(
                 {
-                    "request": {
-                        "agentKind": "managed",
-                        "agentId": "codex_cli",
-                        "correlationId": "parent-workflow",
-                        "idempotencyKey": "remediate-1",
-                        "instructionRef": "Repair the remaining gaps.",
-                        "parameters": {"remainingWorkRef": gate.remaining_work_ref},
-                    },
+                    "request": request.model_dump(by_alias=True, exclude_none=True),
                     "workspacePath": str(workspace),
                     "skipSkillMaterialization": True,
                 }

@@ -175,9 +175,7 @@ class GenericOmnigentHostRealizer:
         credential_provisioning_service: Any,
         host_lease_repository: Any,
         host_runtime: Any,
-        planned_host_resolver: Callable[
-            [OmnigentExecutionPlanEnvelope], Awaitable[tuple[Any, Any]]
-        ],
+        planned_host_resolver: Callable[..., Awaitable[tuple[Any, Any]]],
         session_driver: Callable[..., Awaitable[AgentRunResult]],
         session_cleanup_service: Any,
         workspace_publisher: Any,
@@ -535,7 +533,7 @@ class GenericOmnigentHostRealizer:
                 )
 
             host_started_at = time.monotonic()
-            host_class, launch_policy = await self._resolve_host(plan)
+            host_class, launch_policy = await self._resolve_host(plan, request=request)
             credential_handles = await self._credentials.materialize_all(
                 request=request,
                 plan=plan,

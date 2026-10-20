@@ -679,11 +679,31 @@ async def test_sweep_bounded_paginated_idempotent_observable(
             assert settled.soft_deleted_count == 0
 
 
-async def test_service_principal_carries_admitted_scope_for_saved_work(
+async def test_legacy_disabled_mode_preserves_saved_work_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Local saved-work access keeps its merged-main disabled-mode behavior."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = _service(session, tmp_path)
+            artifact = await _complete_artifact(service, principal="owner-1")
+            claim = await service.acquire_saved_work_use(
+                artifact_id=artifact.artifact_id,
+                principal="service:restore-worker",
+                request_id="restore-local",
+                operation_kind="restore",
+            )
+            assert claim.artifact_id == artifact.artifact_id
+            assert claim.owner_principal == "service:restore-worker"
+
+
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header"])
+async def test_service_principal_carries_admitted_scope_for_saved_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str
+) -> None:
     """A bare service principal is not a generic saved-work permission."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -735,17 +755,12 @@ async def test_retention_graph_helpers_reject_unsafe_shapes() -> None:
     assert "does not retract" in statement
 
 
-async def test_bare_service_denied_across_data_plane_with_admitted_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
+async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str
 ) -> None:
-    """Uniform owner policy on every data surface; scope must be carried.
-
-    A bare ``service:`` principal without ``admitted_principal`` cannot
-    read, stream, download, preview, or list another owner's quarantined
-    artifact, and ``allow_restricted_raw=True`` never bypasses that.
-    Carrying the admitted user scope through the same calls succeeds.
-    """
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    """Authenticated scope checks and all-mode quarantine keep separate owners."""
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -758,45 +773,46 @@ async def test_bare_service_denied_across_data_plane_with_admitted_scope(
             )
             bare = "service:restore-worker"
 
-            # Lazily build each denied call so the await itself is the
-            # effectful statement (eager coroutines in a tuple read as a
-            # no-effect statement to static analysis).
-            denied_calls = [
-                lambda: service.read(
-                    artifact_id=artifact.artifact_id, principal=bare
-                ),
-                lambda: service.read(
-                    artifact_id=artifact.artifact_id,
-                    principal=bare,
-                    allow_restricted_raw=True,
-                ),
-                lambda: service.read_chunks(
-                    artifact_id=artifact.artifact_id, principal=bare
-                ),
-                lambda: service.read_path(
-                    artifact_id=artifact.artifact_id, principal=bare
-                ),
-                lambda: service.get_metadata(
-                    artifact_id=artifact.artifact_id, principal=bare
-                ),
-                lambda: service.presign_download(
-                    artifact_id=artifact.artifact_id, principal=bare
-                ),
-                lambda: service.compute_preview(
-                    artifact_id=artifact.artifact_id, principal=bare
-                ),
-            ]
-            for make_call in denied_calls:
-                with pytest.raises(TemporalArtifactAuthorizationError):
-                    await make_call()
+            if auth_mode != "disabled":
+                # Lazily build each denied call so the await itself is the
+                # effectful statement (eager coroutines in a tuple read as a
+                # no-effect statement to static analysis).
+                denied_calls = [
+                    lambda: service.read(
+                        artifact_id=artifact.artifact_id, principal=bare
+                    ),
+                    lambda: service.read(
+                        artifact_id=artifact.artifact_id,
+                        principal=bare,
+                        allow_restricted_raw=True,
+                    ),
+                    lambda: service.read_chunks(
+                        artifact_id=artifact.artifact_id, principal=bare
+                    ),
+                    lambda: service.read_path(
+                        artifact_id=artifact.artifact_id, principal=bare
+                    ),
+                    lambda: service.get_metadata(
+                        artifact_id=artifact.artifact_id, principal=bare
+                    ),
+                    lambda: service.presign_download(
+                        artifact_id=artifact.artifact_id, principal=bare
+                    ),
+                    lambda: service.compute_preview(
+                        artifact_id=artifact.artifact_id, principal=bare
+                    ),
+                ]
+                for make_call in denied_calls:
+                    with pytest.raises(TemporalArtifactAuthorizationError):
+                        await make_call()
 
-            # Listing surfaces filter instead of leaking the row.
-            listed, _has_more = await service.list_authorized_collection(
-                principal=bare, category="artifacts", query=None, offset=0, limit=50
-            )
-            assert artifact.artifact_id not in {
-                item.artifact_id for item, _links in listed
-            }
+                # Listing surfaces filter instead of leaking the row.
+                listed, _has_more = await service.list_authorized_collection(
+                    principal=bare, category="artifacts", query=None, offset=0, limit=50
+                )
+                assert artifact.artifact_id not in {
+                    item.artifact_id for item, _links in listed
+                }
 
             # Carrying the admitted user scope passes authorization, but
             # quarantined bytes stay unavailable on every raw surface: only
@@ -806,6 +822,12 @@ async def test_bare_service_denied_across_data_plane_with_admitted_scope(
                     artifact_id=artifact.artifact_id,
                     principal=bare,
                     admitted_principal="owner-1",
+                ),
+                lambda: service.read(
+                    artifact_id=artifact.artifact_id,
+                    principal=bare,
+                    admitted_principal="owner-1",
+                    allow_restricted_raw=True,
                 ),
                 lambda: service.read_chunks(
                     artifact_id=artifact.artifact_id,

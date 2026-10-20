@@ -29,6 +29,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from api_service.services.checkpoint_branch_service import CheckpointBranchService
     from api_service.services.checkpoint_branch_turn_execution import (
+        admit_checkpoint_branch_turn_instruction,
         get_checkpoint_branch_artifact_service,
     )
     from moonmind.schemas.agent_runtime_models import (
@@ -42,6 +43,7 @@ with workflow.unsafe.imports_passed_through():
         ARTIFACTS_TASK_QUEUE,
         SANDBOX_TASK_QUEUE,
     )
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 
 logger = logging.getLogger(__name__)
 
@@ -704,21 +706,37 @@ async def _pin_temporal_artifact(
     source_workflow_id: str,
     source_run_id: str,
     branch_turn_id: str,
+    read_scopes: tuple[str, ...],
 ) -> bytes:
     """Read, durably link, and pin one Temporal-owned evidence artifact."""
 
     async with async_session_maker() as session:
         artifacts = get_checkpoint_branch_artifact_service(session)
         try:
-            _artifact, data = await artifacts.read(
-                artifact_id=artifact_id,
-                principal=_RETENTION_PRINCIPAL,
-                allow_restricted_raw=True,
-            )
-            _metadata, links, pinned, _read_policy = await artifacts.get_metadata(
-                artifact_id=artifact_id,
-                principal=_RETENTION_PRINCIPAL,
-            )
+            # Each exact ref still crosses the artifact owner's read gates.
+            # Only the durable branch, this turn, and its recorded AgentRun
+            # are candidates; evidence contents cannot extend that set.
+            for read_scope in read_scopes:
+                try:
+                    _metadata, links, pinned, _read_policy = (
+                        await artifacts.get_metadata(
+                            artifact_id=artifact_id,
+                            principal=_RETENTION_PRINCIPAL,
+                            admitted_principal=read_scope,
+                        )
+                    )
+                    _artifact, data = await artifacts.read(
+                        artifact_id=artifact_id,
+                        principal=_RETENTION_PRINCIPAL,
+                        admitted_principal=read_scope,
+                    )
+                    break
+                except TemporalArtifactAuthorizationError:
+                    continue
+            else:
+                raise TemporalArtifactAuthorizationError(
+                    "retained artifact is outside the admitted branch turn"
+                )
             expected_link = _retention_link(
                 source_namespace=source_namespace,
                 source_workflow_id=source_workflow_id,
@@ -851,6 +869,7 @@ async def _retain_artifact(
     source_workflow_id: str,
     source_run_id: str,
     branch_turn_id: str,
+    read_scopes: tuple[str, ...],
 ) -> tuple[str, bytes]:
     """Resolve evidence and transfer lifecycle authority before it is recorded."""
 
@@ -883,6 +902,7 @@ async def _retain_artifact(
             source_workflow_id=source_workflow_id,
             source_run_id=source_run_id,
             branch_turn_id=branch_turn_id,
+            read_scopes=read_scopes,
         )
         return durable_ref, data
     except CheckpointBranchRetainedEvidenceError as exc:
@@ -987,10 +1007,26 @@ async def persist_checkpoint_branch_turn_terminal(
     result = AgentRunResult.model_validate(raw_result)
     async with async_session_maker() as session:
         service = CheckpointBranchService(session)
-        _branch, locked_turn = await service.lock_turn_execution(
+        activity_identity = activity.info()
+        if not activity_identity.workflow_id:
+            raise ValueError("branch turn Activity does not match launch claim")
+        branch, locked_turn = await service.lock_turn_execution(
             workflow_id=workflow_id,
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
+            execution_workflow_id=activity_identity.workflow_id,
+            execution_owner=activity_identity.workflow_type,
+            execution_namespace=activity_identity.namespace,
+        )
+        read_scopes = tuple(
+            dict.fromkeys(
+                f"workflow:{scope}"
+                for scope in (
+                    branch.workflow_id,
+                    locked_turn.diagnostics["executionWorkflowId"],
+                    locked_turn.runtime_agent_run_id,
+                )
+            )
         )
         _validate_secret_and_path_safety(raw_result, path="agentResult")
 
@@ -1014,6 +1050,7 @@ async def persist_checkpoint_branch_turn_terminal(
                 source_workflow_id=workflow_id,
                 source_run_id=source_run_id,
                 branch_turn_id=branch_turn_id,
+                read_scopes=read_scopes,
             )
             try:
                 checkpoint_model = StepExecutionCheckpointModel.model_validate_json(
@@ -1085,6 +1122,37 @@ async def persist_checkpoint_branch_turn_terminal(
                     )
                 )
             )
+        if locked_turn.instruction_ref in refs_to_resolve:
+            # Pre-upgrade in-flight turns may predate instruction linking.
+            # Only the fenced owner can recover this exact recorded input,
+            # using its persisted request rather than submitted result refs.
+            async with async_session_maker() as artifact_session:
+                artifacts = get_checkpoint_branch_artifact_service(artifact_session)
+                try:
+                    manifest_ref = _require_durable_artifact_ref(
+                        locked_turn.step_execution_manifest_ref,
+                        path="stepExecutionManifestRef",
+                    )
+                    _manifest, manifest_bytes = await artifacts.read(
+                        artifact_id=manifest_ref.removeprefix("artifact://"),
+                        principal=_RETENTION_PRINCIPAL,
+                        admitted_principal=f"workflow:{branch.workflow_id}",
+                    )
+                    stored_request = AgentExecutionRequest.model_validate(
+                        json.loads(manifest_bytes)["agentExecutionRequest"]
+                    )
+                    await admit_checkpoint_branch_turn_instruction(
+                        branch=branch,
+                        turn=locked_turn,
+                        request=stored_request,
+                        artifacts=artifacts,
+                        principal=_RETENTION_PRINCIPAL,
+                        namespace=activity_identity.namespace,
+                    )
+                except Exception as exc:
+                    raise CheckpointBranchRetainedEvidenceError(
+                        "recorded branch instruction authority is unavailable"
+                    ) from exc
         replacements: dict[str, str] = {}
         saved_manifest_bytes: bytes | None = None
         for index, ref in enumerate(dict.fromkeys(refs_to_resolve)):
@@ -1095,6 +1163,7 @@ async def persist_checkpoint_branch_turn_terminal(
                 source_workflow_id=workflow_id,
                 source_run_id=source_run_id,
                 branch_turn_id=branch_turn_id,
+                read_scopes=read_scopes,
             )
             if ref == safe_saved_candidate.get("manifestRef"):
                 saved_manifest_bytes = data
@@ -1111,6 +1180,7 @@ async def persist_checkpoint_branch_turn_terminal(
                 source_workflow_id=workflow_id,
                 source_run_id=source_run_id,
                 branch_turn_id=branch_turn_id,
+                read_scopes=read_scopes,
             )
             if retained_ref != ref:
                 replacements[ref] = retained_ref
@@ -1169,6 +1239,7 @@ async def persist_checkpoint_branch_turn_terminal(
                     source_workflow_id=workflow_id,
                     source_run_id=source_run_id,
                     branch_turn_id=branch_turn_id,
+                    read_scopes=read_scopes,
                 )
 
         disposition = checkpoint_branch_turn_terminal_disposition(
@@ -1244,6 +1315,7 @@ async def persist_checkpoint_branch_turn_terminal(
             source_workflow_id=workflow_id,
             source_run_id=source_run_id,
             branch_turn_id=branch_turn_id,
+            read_scopes=read_scopes,
         )
         # Commit the terminal save through the shared save-before-cleanup
         # result (#4016 finalization semantics) rather than relying on local
@@ -1278,6 +1350,7 @@ async def persist_checkpoint_branch_turn_terminal(
             source_workflow_id=workflow_id,
             source_run_id=source_run_id,
             branch_turn_id=branch_turn_id,
+            read_scopes=read_scopes,
         )
         save_commit = commit_branch_turn_save(
             agent_result_ref=agent_result_ref,
@@ -1368,10 +1441,26 @@ async def persist_checkpoint_branch_turn_terminal_rejection(
 
     async with async_session_maker() as session:
         service = CheckpointBranchService(session)
-        _branch, locked_turn = await service.lock_turn_execution(
+        activity_identity = activity.info()
+        if not activity_identity.workflow_id:
+            raise ValueError("branch turn Activity does not match launch claim")
+        branch, locked_turn = await service.lock_turn_execution(
             workflow_id=workflow_id,
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
+            execution_workflow_id=activity_identity.workflow_id,
+            execution_owner=activity_identity.workflow_type,
+            execution_namespace=activity_identity.namespace,
+        )
+        read_scopes = tuple(
+            dict.fromkeys(
+                f"workflow:{scope}"
+                for scope in (
+                    branch.workflow_id,
+                    locked_turn.diagnostics["executionWorkflowId"],
+                    locked_turn.runtime_agent_run_id,
+                )
+            )
         )
         existing = dict(locked_turn.diagnostics or {})
         if existing.get("agentResultRef"):
@@ -1431,6 +1520,7 @@ async def persist_checkpoint_branch_turn_terminal_rejection(
                 source_workflow_id=workflow_id,
                 source_run_id=source_run_id,
                 branch_turn_id=branch_turn_id,
+                read_scopes=read_scopes,
             )
         turn = await service.finalize_turn_execution(
             workflow_id=workflow_id,
