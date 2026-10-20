@@ -422,6 +422,9 @@ describe('routed remediation operator journey', () => {
       cleanupRender = unmount;
 
       expect(await screen.findByText('Failed source workflow', {}, { timeout: 10_000 })).toBeTruthy();
+      // Activate the test frame before sending native keyboard input. DOM
+      // focus alone can leave WebKit routing keys to the previous frame.
+      await userEvent.click(screen.getByText('Failed source workflow'));
       const actionTrigger = screen.getByRole('button', { name: 'Workflow actions' });
       expect(actionTrigger.getAttribute('aria-haspopup')).toBe('menu');
       actionTrigger.focus();
@@ -430,6 +433,10 @@ describe('routed remediation operator journey', () => {
       const actionMenu = screen.getByRole('menu', { name: 'Workflow actions' });
       const remediate = await within(actionMenu).findByRole('menuitem', { name: 'Remediate' });
       remediate.focus();
+      await waitFor(() => {
+        expect(document.activeElement).toBe(remediate);
+        expect(remediate.tabIndex).toBe(0);
+      });
       await userEvent.keyboard('{Enter}');
 
       await waitFor(() => expect(window.location.pathname).toBe('/workflows/new'));
