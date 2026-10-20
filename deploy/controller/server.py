@@ -59,6 +59,7 @@ CONTROLLER_CAPABILITIES = (
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
 # complete stdout, never its bounded diagnostic tail.
+JOURNAL_CONSUMER_SERVICES = ("temporal-worker-agent-runtime", "temporal-worker-artifacts")
 JOURNAL_CONSUMER_INSPECT_FORMAT = (
     '{{$fleet := ""}}{{range .Config.Env}}'
     '{{if or (eq . "TEMPORAL_WORKER_FLEET=agent_runtime") '
@@ -1303,7 +1304,7 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
             if len(rows) != len(identifiers) or any(not isinstance(row, dict) for row in rows):
                 raise ValueError("Journal consumer inventory is incomplete")
         selected = set(target.get("services") or ())
-        standard = {"temporal-worker-agent-runtime", "temporal-worker-artifacts"}
+        standard = set(JOURNAL_CONSUMER_SERVICES)
         images, services = [], set()
         for row in rows:
             config = row.get("Config") or {}
@@ -1322,7 +1323,10 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
             return {"status": "skipped"}
         if services - selected:
             raise ValueError("Journal writers and sweepers must be selected together for recreation")
-        state = {"sourceImages": list(dict.fromkeys(images))}
+        state = {
+            "sourceImages": list(dict.fromkeys(images)),
+            "consumerServices": sorted((standard & selected) | services),
+        }
         store.record_journal_transition(operation_id, state)
     if compact:
         base = engine.compose_base(
@@ -1350,14 +1354,44 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
         )
         if receipt.get("status") == "unsupported":
             continue
-        # A failed apply leaves single-image consumers running ("resumed");
-        # only mixed images stay fenced ("quiesced") until a retry.
-        expected = ("prepared",) if compact else ("quiesced", "resumed")
-        if receipt.get("status") not in expected:
-            raise ValueError(f"Journal transition returned no {expected[0]} receipt")
+        expected = "prepared" if compact else "quiesced"
+        if receipt.get("status") != expected:
+            raise ValueError(f"Journal transition returned no {expected} receipt")
         store.record_journal_transition(operation_id, {"helperImage": helper_image, "receipt": receipt})
         return receipt
     raise ValueError("No installed or staged image can prepare the active recovery journals")
+
+
+def resume_journal_consumers(store, operation, *, runner, overlay) -> None:
+    """Recreate fenced writers and sweepers on the release this apply selected.
+
+    Called only after quiescence, when no automatic retry follows. Every
+    consumer service then runs one release over the compacted journals, as a
+    successful apply would leave them; stopped one-offs are not restarted.
+    """
+    target = operation.get("target") or {}
+    state = store.load(operation["operationId"]).get("journalTransition") or {}
+    selected = set(target.get("services") or ())
+    services = sorted(
+        set(state.get("consumerServices") or JOURNAL_CONSUMER_SERVICES) & selected
+    )
+    if not services:
+        return
+    base = engine.compose_base(
+        project=target.get("project", operation.get("stack")),
+        project_dir=target.get("projectDir", ""),
+        compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
+        env_files=_env_files_for_apply(target, overlay),
+    )
+    result = engine.run_command(runner, (
+        *base, "up", "-d", "--no-deps", "--pull", "never", "--no-build", "--wait",
+        *services,
+    ), timeout_seconds=engine.UP_TIMEOUT_SECONDS)
+    if int(result.get("exit", 0)) != 0:
+        raise engine.ApplyError(
+            "journal-consumer-recovery", int(result.get("exit", 1)),
+            redact_text(engine.tail_text(str(result.get("output", "")))),
+        )
 
 
 def _temporal_worker_images(runner, project: str, image: str) -> tuple[list, list]:
@@ -1684,24 +1718,30 @@ def production_apply(
         )
         raise
     except engine.ApplyError as exc:
-        store.record_attempt_error(
+        recorded = store.record_attempt_error(
             operation["operationId"], error=f"apply failed: {exc} {exc.output}"
         )
         # Compose can recreate only part of the fleet before failing. Never
-        # resume an old reader beside a new chunk writer: mixed-image
-        # writers/sweepers stay stopped until this owner recompacts and
-        # retries. Single-image consumers keep running so a terminal failure
-        # cannot strand agent launches.
-        if store.load(operation["operationId"]).get("journalTransition"):
+        # resume an old reader beside a new chunk writer: stop every writer and
+        # sweeper. A retry recompacts and recreates them; when none follows,
+        # recreate their services on this release so launches keep a worker.
+        if recorded.get("journalTransition"):
+            step = "quiescence"
             try:
                 prepare_controller_journals(
                     store, operation, runner=runner, overlay=overlay, compact=False
                 )
+                if recorded.get("autoAttemptsExhausted"):
+                    step = "recovery"
+                    resume_journal_consumers(
+                        store, operation, runner=runner, overlay=overlay
+                    )
             except Exception as cleanup:  # noqa: BLE001 - preserve the original apply error
                 with contextlib.suppress(OSError):
                     store.note_reporting_failure(
                         operation["operationId"], error=redact_text(
-                            f"journal consumer quiescence after failed apply: {cleanup}"
+                            f"journal consumer {step} after failed apply: {cleanup} "
+                            f"{getattr(cleanup, 'output', '')}"
                         ),
                     )
         raise

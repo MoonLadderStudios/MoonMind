@@ -768,38 +768,76 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
     assert "only writer recreated" in result["attempts"][0]["error"]
 
 
-def test_exhausted_apply_records_resumed_single_image_consumers(
-    controller_path, tmp_path, monkeypatch
-):
-    record = load("record")
-    server = load("server")
-    store = record.OperationStore(tmp_path / "state")
+def _exhausted_apply(server, record, store, tmp_path, monkeypatch, *, recovery_exit=0):
     services = ["temporal-worker-agent-runtime", "temporal-worker-artifacts", "postgres", "minio"]
     op = _begin_op(record, store, {"project": "moonmind-test",
         "projectDir": str(tmp_path), "composeFiles": ["docker-compose.yaml"],
         "services": services})
     store.record_journal_transition(op["operationId"], {"sourceImages": ["sha256:source"]})
+    events = []
 
     class Runner:
         def run(self, args, timeout_seconds):
             if "up" in args and "--no-recreate" not in args:
+                if args[-2:] == ("temporal-worker-agent-runtime", "temporal-worker-artifacts"):
+                    events.append(("recover", args))
+                    return {"exit": recovery_exit, "output": "sweeper unhealthy"}
+                events.append(("up", args))
                 return {"exit": 1, "output": "container moonmind-api-1 is unhealthy"}
             return {"exit": 0, "output": ""}
 
     def helper(store, operation, **kwargs):
-        if kwargs["phase"] == "journal-prepare":
-            return {"status": "prepared"}
-        return {"status": "resumed", "consumers": ["writer", "sweeper"],
-                "image": "sha256:desired"}
+        events.append((kwargs["phase"], None))
+        return {"status": "prepared" if kwargs["phase"] == "journal-prepare" else "quiesced"}
 
     monkeypatch.setattr(server.engine, "subprocess_runner", Runner)
     monkeypatch.setattr(server, "run_omnigent_step", helper)
     result = server._apply_recording_failure(store, op["operationId"],
         lambda operation: server.production_apply(store, operation))
+    return result, events
+
+
+def test_exhausted_apply_restarts_consumers_on_the_applied_release(
+    controller_path, tmp_path, monkeypatch
+):
+    # No retry follows the last attempt, so fenced writers and sweepers must
+    # not stay stopped: Compose recreates their services on the applied
+    # release (one-offs stay stopped) instead of leaving agent launches dead.
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    result, events = _exhausted_apply(server, record, store, tmp_path, monkeypatch)
+
     assert result["status"] == "failed"
     assert result["autoAttemptsExhausted"] is True
+    assert "moonmind-api-1 is unhealthy" in result["attempts"][-1]["error"]
     assert result["reportingFailures"] == []
-    assert result["journalTransition"]["receipt"]["status"] == "resumed"
+    phases = [phase for phase, _args in events]
+    assert phases.count("journal-quiesce") == 3
+    assert phases.count("recover") == 1
+    assert phases[-2:] == ["journal-quiesce", "recover"]
+    recover = events[-1][1]
+    assert {"--no-deps", "--pull", "never", "--no-build", "--wait"} <= set(recover)
+    assert "postgres" not in recover
+
+
+def test_failed_consumer_recovery_is_recorded_beside_the_apply_error(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    result, _events = _exhausted_apply(
+        server, record, store, tmp_path, monkeypatch, recovery_exit=1,
+    )
+
+    assert result["status"] == "failed"
+    assert "moonmind-api-1 is unhealthy" in result["attempts"][-1]["error"]
+    assert len(result["reportingFailures"]) == 1
+    assert "journal consumer recovery after failed apply" in str(
+        result["reportingFailures"][0]
+    )
+    assert "sweeper unhealthy" in str(result["reportingFailures"][0])
 
 
 def test_journal_oneoff_runs_recorded_source_with_controller_transport(

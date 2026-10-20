@@ -1499,7 +1499,9 @@ async def get_omnigent_codex_catalog_readiness(
             for reason in unavailable_policy_reasons:
                 if reason.code not in {existing.code for existing in profile_reasons}:
                     profile_reasons.append(reason)
-            if profile.provider_runtime == "claude_code":
+            # Blocked candidates already explain themselves; only an absent
+            # Claude policy is a reconciliation gap.
+            if profile.provider_runtime == "claude_code" and not unavailable_policy_reasons:
                 profile_reasons.append(_reason("launch_policy_unavailable"))
         if not eligible_by_runtime.get(profile.provider_runtime):
             profile_reasons.append(_reason("no_eligible_codex_oauth_profile"))
@@ -1633,9 +1635,13 @@ async def get_omnigent_codex_catalog_readiness(
         # "restore the blocked capability" when the only problem is that every
         # slot is in use is both wrong and an invitation to substitute a
         # different profile or runtime.
+        # An unready agent runtime worker fails every capability it proves; its
+        # recoverable reason keeps the start page polling until it returns.
         gate = _reason(
             "omnigent_capacity_wait"
             if admission.wait_for_capacity
+            else "on_demand_backend_unavailable"
+            if not live_readiness.backend_ready
             else "omnigent_admission_readiness_failed"
         )
         if admission.structural_blocking:
@@ -1655,7 +1661,10 @@ async def get_omnigent_codex_catalog_readiness(
             item.model_copy(
                 update={
                     "available": False,
-                    "gate_reasons": [*item.gate_reasons, gate],
+                    "gate_reasons": [
+                        *(r for r in item.gate_reasons if r.code != gate.code),
+                        gate,
+                    ],
                 }
             )
             for item in profile_views
