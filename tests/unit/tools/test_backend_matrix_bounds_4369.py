@@ -512,6 +512,8 @@ def test_reliability_deadline_interrupt_keeps_junit_teardown_and_stack(
             "-p",
             "no:cacheprovider",
             "--tb=short",
+            "-o",
+            "faulthandler_timeout=1",
             f"--junitxml={junit}",
             str(probe),
         ],
@@ -529,9 +531,16 @@ def test_reliability_deadline_interrupt_keeps_junit_teardown_and_stack(
     assert elapsed < 12
     assert junit.exists()
     assert (probe_dir / "teardown_ran.txt").exists()
-    # The teed log names the interrupted location inside the stuck journey.
+    # Match the workflow's pre-deadline dump: GNU timeout can deliver SIGINT
+    # to both pytest and its process group, interrupting pytest again while
+    # it formats the first KeyboardInterrupt. The earlier dump must retain
+    # the actual stuck frame even when that exception report is interrupted.
     assert "KeyboardInterrupt" in output
-    assert "test_4369_deadline.py:11" in output
+    dump_start = output.index("Timeout (0:00:01)!")
+    interrupt_start = output.index("KeyboardInterrupt")
+    assert dump_start < interrupt_start
+    dump = output[dump_start:interrupt_start]
+    assert re.search(r'test_4369_deadline\.py", line 11 in stuck_in_journey', dump)
 
 
 def test_every_backend_row_records_its_test_exit_status() -> None:
