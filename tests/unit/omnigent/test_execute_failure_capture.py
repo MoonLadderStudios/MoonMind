@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -137,6 +138,13 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
     monkeypatch.setenv("OMNIGENT_API_TOKEN", "test-capture-token")
     monkeypatch.setattr("moonmind.omnigent.transport.httpx.AsyncClient", create_client)
     if stall:
+        # Artifact I/O and scheduling must not spend this scenario's budget
+        # before it reaches the chosen blocked read. Its real timeout cancels
+        # that read, then the shared clock expires to prevent later requests.
+        monkeypatch.setattr(
+            "moonmind.omnigent.bridge_artifacts.time",
+            SimpleNamespace(monotonic=lambda: 1.0 if read_cancelled.is_set() else 0.0),
+        )
         monkeypatch.setattr(
             "moonmind.omnigent.bridge_artifacts._OMNIGENT_HARVEST_TIMEOUT_SECONDS",
             0.05,
@@ -173,9 +181,8 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
                 artifact_gateway=gateway,
                 transport_pool=pool,
             ),
-            # The production remote-read deadline remains 0.05s, asserted by
-            # stalled/read_cancelled below. Artifact I/O and runner scheduling
-            # use the same harness watchdog as the non-stalled cases.
+            # The blocked read still uses a real 0.05s timeout. Publication I/O
+            # and runner scheduling use the separate harness watchdog.
             timeout=5,
         )
 
