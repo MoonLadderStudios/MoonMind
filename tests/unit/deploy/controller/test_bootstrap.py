@@ -861,8 +861,11 @@ def test_controller_startup_deadline_returns_failure_to_the_lifecycle_owner(
 
     bootstrap = load("bootstrap")
 
-    def restarting_controller(command, *, check, timeout):
-        assert 0 < timeout <= bootstrap.CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
+    def restarting_controller(command, *, deadline):
+        assert 0 < deadline - bootstrap.time.monotonic() <= (
+            bootstrap.CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
+            + bootstrap.COMMAND_CLEANUP_SECONDS
+        )
         if "up" in command:
             assert "--wait-timeout" in command
             timeout = int(command[command.index("--wait-timeout") + 1])
@@ -870,7 +873,7 @@ def test_controller_startup_deadline_returns_failure_to_the_lifecycle_owner(
             return subprocess.CompletedProcess(command, 1)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(bootstrap.subprocess, "run", restarting_controller)
+    monkeypatch.setattr(bootstrap, "_run_owned", restarting_controller)
 
     assert bootstrap._compose_up(tmp_path, "controller", "--pull", "never") == 1
 
@@ -1725,10 +1728,10 @@ def test_controller_startup_cancellation_is_not_a_failed_handoff(
     bootstrap = load("bootstrap")
 
     def interrupted(command, **kwargs):
-        assert kwargs["timeout"] == 120
+        assert kwargs["deadline"] > bootstrap.time.monotonic()
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(bootstrap.subprocess, "run", interrupted)
+    monkeypatch.setattr(bootstrap, "_run_owned", interrupted)
     with pytest.raises(KeyboardInterrupt):
         bootstrap._compose_up(tmp_path, "moonmind-test-cancel", "--pull", "never")
 
@@ -1749,8 +1752,90 @@ def test_cold_controller_start_does_not_apply_handoff_budget_to_image_download(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(bootstrap.subprocess, "run", run)
+    monkeypatch.setattr(bootstrap, "_run_owned", run)
     assert bootstrap._compose_up(tmp_path, "moonmind-test-cold") == 0
     assert any("up" in command for command in calls)
+
+
+@pytest.mark.skipif(__import__("sys").platform != "linux", reason="Linux lifecycle helper")
+@pytest.mark.parametrize("command", [("rm", "--force"), ("up", "--pull", "never")])
+@pytest.mark.parametrize("reconcile_fails", [False, True])
+def test_bounded_compose_timeout_cleans_plugin_and_reconciles(
+    controller_path, tmp_path, monkeypatch, command, reconcile_fails
+):
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    bootstrap = load("bootstrap")
+    marker = tmp_path / "plugin-pid"
+    script = """
+import os, signal, subprocess, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+subprocess.Popen([sys.executable, '-c',
+    'import os,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+    'open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(60)', sys.argv[1]])
+time.sleep(60)
+"""
+    popen = subprocess.Popen
+
+    def launch(args, **kwargs):
+        return popen([sys.executable, "-c", script, str(marker)], **kwargs)
+
+    def plugin_running():
+        try:
+            fields = Path(f"/proc/{int(marker.read_text())}/stat").read_text()
+        except FileNotFoundError:
+            return False
+        return fields.rsplit(")", 1)[1].split()[0] != "Z"
+
+    reconciled = []
+
+    def reconcile(project, **kwargs):
+        assert project == "moonmind-test-owned"
+        assert not plugin_running()
+        assert kwargs["deadline"] > time.monotonic()
+        reconciled.append(project)
+        if reconcile_fails:
+            raise RuntimeError("controller state is uncertain")
+
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", launch)
+    monkeypatch.setattr(bootstrap, "_reconcile_controller", reconcile)
+    monkeypatch.setattr(bootstrap, "CONTROLLER_START_COMMAND_TIMEOUT_SECONDS", 0.3)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="timed out") as caught:
+            bootstrap._compose(tmp_path, "moonmind-test-owned", *command)
+        assert marker.exists()
+        assert not plugin_running()
+        assert reconciled == ["moonmind-test-owned"]
+        if reconcile_fails:
+            assert "controller state is uncertain" in str(caught.value)
+        assert time.monotonic() - started < 7
+    finally:
+        if marker.exists() and plugin_running():
+            os.kill(int(marker.read_text()), signal.SIGKILL)
+
+
+def test_bounded_compose_does_not_reconcile_until_cleanup_is_verified(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+
+    def unverified(*args, **kwargs):
+        raise bootstrap.CommandCleanupError("plugin may still be running")
+
+    monkeypatch.setattr(bootstrap, "_run_owned", unverified)
+    monkeypatch.setattr(
+        bootstrap,
+        "_reconcile_controller",
+        lambda *args, **kwargs: pytest.fail("inspected before plugin cleanup"),
+    )
+    with pytest.raises(bootstrap.CommandCleanupError, match="plugin may still"):
+        bootstrap._compose_up(tmp_path, "moonmind-test-uncertain", "--pull", "never")
 
 
 def test_handoff_preflight_timeout_is_a_bounded_receipt(

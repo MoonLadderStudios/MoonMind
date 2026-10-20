@@ -63,6 +63,7 @@ HANDOFF_SETTLE_SECONDS = 5
 # Bound readiness separately from the CLI so failed starts can reach rollback.
 CONTROLLER_START_TIMEOUT_SECONDS = 30
 CONTROLLER_START_COMMAND_TIMEOUT_SECONDS = 120
+CONTROLLER_RECONCILE_TIMEOUT_SECONDS = 30
 # The caller allows 300 seconds; leave time to deliver the final receipt.
 HANDOFF_TIMEOUT_SECONDS = 270
 HANDOFF_RECOVERY_SECONDS = 90
@@ -861,6 +862,10 @@ class CommandCleanupError(RuntimeError):
     """The prior CLI may still mutate Docker; no recovery mutation is safe."""
 
 
+class CommandTimeoutError(RuntimeError):
+    """The owned command timed out and its process group has been stopped."""
+
+
 def _remaining(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -907,8 +912,8 @@ def _stop_command(process, *, deadline: float) -> None:
 def _run_owned(command: list[str], *, deadline: float, capture=False, environment=None):
     """Use the shared phase budget, including bounded descendant cleanup.
 
-    Handoff runs in a Linux one-off. Host/Windows discovery and cold-image
-    downloads retain their existing subprocess path without this deadline.
+    Controller mutations run in Linux helpers. Host/Windows discovery and
+    cold-image downloads retain their existing subprocess path.
     """
     timeout = min(
         CONTROLLER_START_COMMAND_TIMEOUT_SECONDS,
@@ -937,7 +942,7 @@ def _run_owned(command: list[str], *, deadline: float, capture=False, environmen
                 raise exc
             raise CommandCleanupError(f"{exc}; {cleanup}") from exc
         if isinstance(exc, subprocess.TimeoutExpired):
-            raise RuntimeError(  # noqa: TRY004 - translate subprocess failure
+            raise CommandTimeoutError(
                 f"controller command timed out after {timeout:g} seconds"
             ) from exc
         raise
@@ -952,8 +957,10 @@ def _run_owned(command: list[str], *, deadline: float, capture=False, environmen
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def _reconcile_controller(project: str, *, images: set[str], deadline: float) -> None:
-    """Fail closed on ambiguous or transitional exact-project container state."""
+def _reconcile_controller(
+    project: str, *, images: set[str] | None = None, deadline: float
+) -> None:
+    """Inspect exact-project state; recovery additionally requires a known image."""
     identifiers = _checked_capture(
         [
             "docker",
@@ -984,7 +991,7 @@ def _reconcile_controller(project: str, *, images: set[str], deadline: float) ->
     if (
         labels.get("com.docker.compose.project") != project
         or labels.get("com.docker.compose.service") != CONTROLLER_SERVICE
-        or container.get("Image") not in images
+        or (images is not None and container.get("Image") not in images)
         or state.get("Status") not in {"running", "exited", "restarting"}
         or state.get("Paused")
     ):
@@ -1252,23 +1259,33 @@ def _compose(state_dir: Path, project: str, *args: str, deadline=None) -> int:
     ]
     if deadline is not None:
         return _run_owned(command, deadline=deadline).returncode
-    timeout = (
-        CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
-        if args[0] == "rm" or (
-            args[0] == "up"
-            and "--pull" in args
-            and args[args.index("--pull") + 1] == "never"
-        )
-        else None
+    bounded = args[0] == "rm" or (
+        args[0] == "up"
+        and "--pull" in args
+        and args[args.index("--pull") + 1] == "never"
     )
+    if not bounded:
+        return subprocess.run(command, check=False, timeout=None).returncode
     try:
-        return subprocess.run(command, check=False, timeout=timeout).returncode
-    except subprocess.TimeoutExpired as exc:
-        # Keep streamed Compose diagnostics and let handoff restore its prior
-        # controller. Cancellation (KeyboardInterrupt) still propagates.
-        raise RuntimeError(
-            f"controller compose {args[0]} timed out after {exc.timeout} seconds"
-        ) from exc
+        return _run_owned(
+            command,
+            deadline=time.monotonic()
+            + CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
+            + COMMAND_CLEANUP_SECONDS,
+        ).returncode
+    except CommandTimeoutError as exc:
+        # No rollback follows here. Observe daemon effects before releasing
+        # the lifecycle lock, keeping the original timeout if inspection fails.
+        try:
+            _reconcile_controller(
+                project,
+                deadline=time.monotonic() + CONTROLLER_RECONCILE_TIMEOUT_SECONDS,
+            )
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            raise RuntimeError(
+                f"{exc}; controller state reconciliation failed ({error})"
+            ) from exc
+        raise
 
 
 def _compose_up(state_dir: Path, project: str, *options: str, deadline=None) -> int:
