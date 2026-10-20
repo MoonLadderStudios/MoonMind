@@ -81,10 +81,18 @@ afterEach(async () => {
 describe('workflow list responsive toolbar', () => {
   it('keeps the mobile Filters/View-options header row off the desktop table and restores it on mobile', async () => {
     await page.viewport(DESKTOP.width, DESKTOP.height);
-    const { unmount } = renderWithClient(<WorkflowListPage payload={payload} />);
+    const { container, unmount } = renderWithClient(<WorkflowListPage payload={payload} />);
     cleanupRender = unmount;
 
     await screen.findAllByText('Example task');
+
+    const heading = screen.getByRole('heading', { name: 'Workflows', level: 1 });
+    expect(heading.getBoundingClientRect().height).toBeLessThanOrEqual(1);
+    const tableHead = container.querySelector('thead')!;
+    expect(tableHead.getBoundingClientRect().top).toBeCloseTo(
+      container.firstElementChild!.getBoundingClientRect().top,
+      0,
+    );
 
     // Desktop: per-column filters own the table header, the "View options"
     // control collapses into the Actions header, and the standalone results

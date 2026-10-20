@@ -66,6 +66,8 @@ The Workflows List page is an operator scanning surface, not a generic Temporal 
 
 ## 5. Page layout
 
+The table starts directly below the navigation bar; the page heading is available to screen readers without taking up visual space.
+
 | Surface | Contents |
 | --- | --- |
 | Header / notices | Feature-disabled notice, ignored-scope notice, validation errors, cursor-reset recovery notices, and page-level live-update state. |

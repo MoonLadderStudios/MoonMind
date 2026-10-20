@@ -105,6 +105,8 @@ describe('Workflows Entrypoint layout', () => {
     const firstHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
     expect(noticesDeck).toBeNull();
+    expect(document.querySelector('.page-header')).toBeNull();
+    expect(getComputedStyle(screen.getByRole('heading', { name: 'Workflows', level: 1 })).position).toBe('absolute');
     expect(resultsHeader?.querySelector('.workflow-list-filter-trigger')).toBeTruthy();
     expect(resultsHeader?.querySelector('.page-title')).toBeNull();
     expect(resultsHeader?.textContent).not.toContain('Workflows');
