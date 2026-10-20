@@ -1083,11 +1083,17 @@ def _reconcile_controller(
         or not isinstance(container.get("Image"), str)
         or not container["Image"]
         or (images is not None and container["Image"] not in images)
-        or state.get("Status") not in {"running", "exited", "restarting"}
+        or state.get("Status") not in {"created", "running", "exited", "restarting"}
         or state.get("Paused")
+        or state.get("Dead")
+        or (
+            state.get("Status") == "created"
+            and (state.get("Running") or state.get("Restarting"))
+        )
     ):
-        # A known candidate in a daemon restart loop is precisely what
-        # rollback repairs. Removing/unknown state is not safe to repeat.
+        # After command cleanup, a known created or restarting candidate is
+        # precisely what rollback repairs. Removing/unknown or contradictory
+        # created state is not safe to repeat.
         raise RuntimeError("recovery skipped: controller state is uncertain")
     return f"{container['Image']} ({state['Status']})"
 

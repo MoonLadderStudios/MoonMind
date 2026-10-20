@@ -934,6 +934,12 @@ def _controller_bootstrap_command(
         )
         if privileged:
             controller_url = f"http://moonmind-controller:{identity.get('port', 8472)}"
+        else:
+            # The private link is Docker-internal, with no route to the
+            # Desktop host or external endpoints. Explicit host-selected
+            # names must not be reinterpreted as this link's Docker aliases.
+            # Give only this short-lived helper the existing bridge route.
+            network = "bridge"
         command = _controller_bootstrap_container(
             bootstrap, repo, source_image, network=network
         )

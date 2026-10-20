@@ -1773,6 +1773,114 @@ def test_handoff_startup_timeout_restores_saved_controller_and_keeps_failure(
     assert store.load("ui-handoff")["controllerHandoff"]["attemptGroup"] == 1
 
 
+@pytest.mark.parametrize("cleanup", ["verified", "unverified", "cancelled"])
+def test_handoff_created_replacement_recovers_only_after_command_cleanup(
+    controller_path, tmp_path, monkeypatch, capsys, cleanup
+):
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    state, compose, store = _handoff_installation(bootstrap, load("record"), tmp_path)
+    original = compose.read_text()
+    recorded = bootstrap.load_controller_image(state)
+    docker = _HandoffDocker()
+    previous = docker.live
+    requested = "sha256:" + "c" * 64
+    clock = [1000.0]
+    pending = []
+    mutations = []
+    reconciled = []
+    created = False
+    forward_stopped = False
+    monkeypatch.setattr(bootstrap.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        bootstrap.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+
+    class Process:
+        def __init__(self, command, **kwargs):
+            assert not pending, "Docker was queried before command cleanup"
+            self.command = command
+            self.returncode = 0
+
+        def communicate(self, *, timeout):
+            nonlocal created
+            command = self.command
+            if command[:2] == ["docker", "compose"]:
+                verb = "up" if "up" in command else "rm"
+                mutations.append((verb, compose.read_text()))
+                if len(mutations) == 2:
+                    # Docker has replaced the old container, but the new one
+                    # has not started when the Compose command is interrupted.
+                    assert verb == "up"
+                    docker.live = requested
+                    created = True
+                    pending.append(self)
+                    clock[0] += timeout
+                    if cleanup == "cancelled":
+                        raise KeyboardInterrupt
+                    raise subprocess.TimeoutExpired(command, timeout)
+                if len(mutations) > 2:
+                    assert reconciled, "recovery mutated before inspecting created state"
+                    if verb == "up":
+                        docker.live = previous
+                        created = False
+                return "", ""
+            result = docker.run(command)
+            if created and command[:2] == ["docker", "inspect"]:
+                assert "--format" not in command
+                containers = json.loads(result.stdout)
+                containers[0]["State"] = {
+                    "Status": "created",
+                    "Running": False,
+                    "Restarting": False,
+                    "Paused": False,
+                    "Dead": False,
+                }
+                result.stdout = json.dumps(containers)
+                reconciled.append(clock[0])
+            return result.stdout, result.stderr
+
+    def stop(process, *, deadline):
+        nonlocal forward_stopped
+        assert deadline == (1270 if forward_stopped else 1180)
+        assert clock[0] < deadline
+        if pending:
+            assert pending == [process]
+            if cleanup == "unverified":
+                raise bootstrap.CommandCleanupError("plugin may still be running")
+            pending.clear()
+            forward_stopped = True
+
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", Process)
+    monkeypatch.setattr(bootstrap, "_stop_command", stop)
+    if cleanup == "cancelled":
+        with pytest.raises(KeyboardInterrupt):
+            _handoff(bootstrap, state, capsys)
+    else:
+        receipt = _handoff(bootstrap, state, capsys)
+        assert receipt["status"] == "unavailable"
+        assert "timed out" in receipt["reason"]
+        if cleanup == "verified":
+            assert "previous controller restored" in receipt["reason"]
+            assert [verb for verb, _ in mutations] == ["rm", "up", "rm", "up"]
+            assert mutations[-1][1] == compose.read_text() == original
+            restored = bootstrap.load_controller_image(state)
+            assert (restored["requested"], restored["pinned"]) == (
+                recorded["requested"], recorded["pinned"]
+            )
+            assert docker.live == previous
+        else:
+            assert "recovery skipped: command cleanup is unverified" in receipt["reason"]
+    if cleanup != "verified":
+        assert len(mutations) == 2
+        assert not reconciled
+        assert docker.live == requested
+    assert clock[0] < 1270
+    assert store.load("ui-handoff")["controllerHandoff"]["attemptGroup"] == 1
+
+
 def test_controller_startup_cancellation_is_not_a_failed_handoff(
     controller_path, tmp_path, monkeypatch
 ):
@@ -2217,7 +2325,22 @@ def test_owned_command_preserves_timeout_when_cleanup_also_fails(
     assert "plugin cleanup unverified" in str(caught.value)
 
 
-def test_handoff_reconciles_known_restarting_candidate(controller_path, monkeypatch):
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"Status": "running", "Running": True},
+        {"Status": "exited", "Running": False},
+        {"Status": "restarting", "Restarting": True},
+        {
+            "Status": "created",
+            "Running": False,
+            "Restarting": False,
+            "Paused": False,
+            "Dead": False,
+        },
+    ],
+)
+def test_handoff_reconciles_known_candidate(controller_path, monkeypatch, state):
     import json
     import subprocess
 
@@ -2238,7 +2361,7 @@ def test_handoff_reconciles_known_restarting_candidate(controller_path, monkeypa
                                 "com.docker.compose.service": "controller",
                             }
                         },
-                        "State": {"Status": "restarting", "Restarting": True},
+                        "State": state,
                         "Image": "requested",
                     }
                 ]
@@ -2247,9 +2370,65 @@ def test_handoff_reconciles_known_restarting_candidate(controller_path, monkeypa
         )
 
     monkeypatch.setattr(bootstrap, "_run_capture", run)
-    bootstrap._reconcile_controller(
+    assert bootstrap._reconcile_controller(
         "exact", images={"requested", "previous"}, deadline=10
-    )
+    ) == f"requested ({state['Status']})"
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"State": {"Status": "removing"}},
+        {"State": {"Status": "unknown"}},
+        {"State": {"Status": "dead"}},
+        {"State": {"Status": "paused"}},
+        {"State": {"Running": True}},
+        {"State": {"Restarting": True}},
+        {"State": {"Paused": True}},
+        {"State": {"Dead": True}},
+        {"Labels": {"com.docker.compose.project": "unrelated"}},
+        {"Labels": {"com.docker.compose.service": "unrelated"}},
+        {"Image": "unrelated"},
+    ],
+)
+def test_handoff_rejects_uncertain_created_candidate(
+    controller_path, monkeypatch, changed
+):
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    container = {
+        "Config": {
+            "Labels": {
+                "com.docker.compose.project": "exact",
+                "com.docker.compose.service": "controller",
+            }
+        },
+        "State": {
+            "Status": "created",
+            "Running": False,
+            "Restarting": False,
+            "Paused": False,
+            "Dead": False,
+        },
+        "Image": "requested",
+    }
+    container["State"].update(changed.get("State", {}))
+    container["Config"]["Labels"].update(changed.get("Labels", {}))
+    container.update({key: value for key, value in changed.items() if key == "Image"})
+
+    def run(command, *, deadline):
+        assert deadline == 10
+        assert command[1] in {"ps", "inspect"}
+        stdout = "candidate" if command[1] == "ps" else json.dumps([container])
+        return subprocess.CompletedProcess(command, 0, stdout, "")
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    with pytest.raises(RuntimeError, match="controller state is uncertain"):
+        bootstrap._reconcile_controller(
+            "exact", images={"requested", "previous"}, deadline=10
+        )
 
 
 def test_handoff_sigterm_is_cancellation_not_recovery(
@@ -2346,6 +2525,7 @@ def test_no_deadline_compose_startup_uses_owned_cleanup(
     [
         ("rm", "timeout", "running"),
         ("up", "timeout", "running"),
+        ("up", "timeout", "created"),
         ("up", "timeout", "removing"),
         ("up", "timeout", "inspection-error"),
         ("up", "interrupt", "running"),
@@ -2486,8 +2666,10 @@ time.sleep(60)
         assert inspections
         assert "timed out" in str(caught.value)
         assert (
-            "state reconciled" if state == "running" else "state unverified"
+            "state reconciled" if state in {"running", "created"} else "state unverified"
         ) in str(caught.value)
+        if state == "created":
+            assert "(created)" in str(caught.value)
     else:
         assert not inspections
 

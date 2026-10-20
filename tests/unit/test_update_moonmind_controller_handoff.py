@@ -465,7 +465,8 @@ def test_windows_explicit_controller_prerequisite_runs_in_linux_from_main(
             # A host invocation would hit bootstrap._run_owned's POSIX guard.
             assert args[:2] == ["docker", "run"], args
             assert args[args.index("--user") + 1] == "0:0"
-            assert args[args.index("--network") + 1] == "operator-controller-link"
+            assert args.count("--network") == 1
+            assert args[args.index("--network") + 1] == "bridge"
             assert args[args.index("--entrypoint") + 2] == (
                 "sha256:installed-source"
             )
@@ -547,8 +548,15 @@ def test_windows_explicit_controller_prerequisite_runs_in_linux_from_main(
         ("http://localhost:0/controller", True),
         ("http://[::1]:9521/controller/", True),
         ("https://localhost/controller", True),
+        ("http://moonmind-controller:8521", False),
+        ("https://MOONMIND-CONTROLLER:8521", False),
+        ("https://moonmind-controller.:8521", False),
+        ("http://controller:8521", False),
         ("https://controller.example:9521/api", False),
+        ("https://corporate-controller:9521/api", False),
         ("http://192.168.1.2:9521/controller", False),
+        ("https://[fd00::12]:9521/controller", False),
+        ("http://host.docker.internal:9521/controller", False),
     ],
 )
 @pytest.mark.parametrize("first_source_failure", [None, "unsupported", "safe", "unsafe"])
@@ -633,7 +641,8 @@ def test_windows_explicit_prerequisite_preserves_selected_endpoint(
                     else (443 if selected.scheme == "https" else 80)
                 ),
             ]
-        assert command[command.index("--network") + 1] == "link"
+        assert command.count("--network") == 1
+        assert command[command.index("--network") + 1] == "bridge"
         if first_source_failure in {"safe", "unsafe"} and "sha256:installed-source" in command:
             raise RuntimeError(
                 "MOONMIND_CONTROLLER_RETRY_UNSAFE=cleanup unverified"
@@ -692,17 +701,21 @@ def test_windows_explicit_prerequisite_preserves_selected_endpoint(
         ("http", "localhost", None, False, "file"),
     ],
 )
+@pytest.mark.parametrize("tls_version", [ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3])
 def test_windows_loopback_launcher_preserves_http_and_tls_identity(
     tmp_path, monkeypatch, scheme, hostname, certificate_host, route_available,
-    trust_source,
+    trust_source, tls_version,
 ):
     """Execute the launcher and real bootstrap HTTP probe, not an argv mock."""
     requests = []
     server_names = []
+    negotiated = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             requests.append((self.path, self.headers["Host"], self.headers["Authorization"]))
+            if scheme == "https":
+                negotiated.append(self.connection.version())
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"capabilities": ["test-route"]}')
@@ -716,7 +729,8 @@ def test_windows_loopback_launcher_preserves_http_and_tls_identity(
 
         ca, certificate, key = _write_certificates(tmp_path, certificate_host)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.minimum_version = tls_version
+        context.maximum_version = tls_version
         context.load_cert_chain(certificate, key)
         context.set_servername_callback(
             lambda _socket, name, _context: server_names.append(name)
@@ -822,6 +836,9 @@ def test_windows_loopback_launcher_preserves_http_and_tls_identity(
             assert requests == [
                 ("/controller/v1/healthz", f"{hostname}:{port}", f"Bearer {SECRET}")
             ]
+            assert negotiated == (
+                [tls_version.name.replace("_", ".")] if scheme == "https" else []
+            )
         assert destinations == [
             (
                 "controller.example"
