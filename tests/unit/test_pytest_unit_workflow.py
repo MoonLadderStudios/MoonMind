@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -211,6 +212,59 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
         assert 0 < int(steps[name]["timeout-minutes"]) < 30, name
 
 
+def _integration_row_timeout_minutes(value: int | str, suite: str) -> int:
+    if isinstance(value, int):
+        return value
+    match = re.fullmatch(
+        r"\$\{\{ matrix\.suite == 'hermetic' && (\d+) \|\| (\d+) \}\}", value
+    )
+    assert match, f"Unrecognized integration timeout expression: {value}"
+    return int(match.group(1 if suite == "hermetic" else 2))
+
+
+def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
+    job = _load_workflow()["jobs"]["integration-ci"]
+    run_index = next(
+        index
+        for index, step in enumerate(job["steps"])
+        if step["name"] == "Run hermetic integration CI suite"
+    )
+    setup_minutes = 0
+    for step in job["steps"][:run_index]:
+        # Every setup phase must finish or time out before it can consume
+        # the wrapper's cleanup and evidence-upload reserve.
+        minutes = _integration_row_timeout_minutes(step["timeout-minutes"], "hermetic")
+        assert 0 < minutes <= 6, step["name"]
+        setup_minutes += minutes
+        if "if" not in step:
+            assert (
+                _integration_row_timeout_minutes(
+                    step["timeout-minutes"], "fresh-journey"
+                )
+                == 30
+            )
+
+    assert setup_minutes <= 12
+    execution_minutes = int(job["steps"][run_index]["timeout-minutes"])
+    report_steps = [
+        step
+        for step in job["steps"]
+        if step["name"]
+        in {
+            "Collect row-owned integration report and diagnostics",
+            "Upload row-owned integration report and diagnostics",
+        }
+    ]
+    assert len(report_steps) == 2
+    reporting_minutes = sum(int(step["timeout-minutes"]) for step in report_steps)
+    assert reporting_minutes == 4
+    # Include one minute for runner dispatch and post-action housekeeping;
+    # the wrapper's complete cleanup budget is already inside its native step.
+    assert setup_minutes + execution_minutes + reporting_minutes + 1 <= (
+        _integration_row_timeout_minutes(job["timeout-minutes"], "hermetic")
+    )
+
+
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     # The hermetic suite and the three disposable Compose journeys each own
     # an isolated Compose project.
@@ -218,14 +272,29 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     # row, not their serial sum, bounds integration-ci.
     job = _load_workflow()["jobs"]["integration-ci"]
 
-    assert json.loads(select_suites([]).as_outputs()["integration_matrix"])["suite"] == [
+    assert json.loads(select_suites([]).as_outputs()["integration_matrix"])[
+        "suite"
+    ] == [
         "hermetic",
         "fresh-journey",
         "upgrade-journey",
         "controller-journey",
     ]
     assert job["strategy"]["fail-fast"] == "${{ github.event_name != 'schedule' }}"
-    assert int(job["timeout-minutes"]) <= 30
+    assert {
+        suite: _integration_row_timeout_minutes(job["timeout-minutes"], suite)
+        for suite in (
+            "hermetic",
+            "fresh-journey",
+            "upgrade-journey",
+            "controller-journey",
+        )
+    } == {
+        "hermetic": 40,
+        "fresh-journey": 30,
+        "upgrade-journey": 30,
+        "controller-journey": 30,
+    }
 
     steps = {step["name"]: step for step in job["steps"]}
     row_commands = {
