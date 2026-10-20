@@ -338,6 +338,10 @@ _TERMINAL_LAST_ERROR_UNSET = object()
 JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+# Retire only new runs. Histories without this marker retain their complete
+# linked-recovery command path until their deployment's retained histories drain.
+RUN_LINKED_RECOVERY_RETIREMENT_PATCH = "run-linked-recovery-retirement-v1"
+RUN_LINKED_RECOVERY_ADMISSION_PATCH = "run-linked-recovery-admission-v1"
 RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH = "run-execution-scoped-principal-v1"
@@ -457,6 +461,7 @@ class RunWorkflowInput(TypedDict, total=False):
     plan_artifact_ref: Optional[str]
     scheduled_for: Optional[str]
     remediation_loop_continuation: dict[str, Any]
+    linked_recovery_retired: bool
 
 
 class _RunWorkflowOutputBase(TypedDict):
@@ -1801,6 +1806,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
         self._finish_summary: dict[str, Any] | None = None
+        self._linked_recovery_retired = False
         self._recovery_source: dict[str, Any] | None = None
         self._recovery_failed_step_id: str | None = None
         self._recovery_workspace: dict[str, Any] = {}
@@ -4373,6 +4379,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             state_payload.pop("latestProgressSignature", None)
         continuation: dict[str, Any] = {
             "schemaVersion": 1,
+            "linkedRecoveryRetired": self._linked_recovery_retired,
             "state": state_payload,
             "orderedNodes": [dict(node) for node in ordered_nodes],
             "stepLedgerRows": [dict(row) for row in self._step_ledger_rows],
@@ -11714,6 +11721,35 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
+        self._linked_recovery_retired = workflow.patched(
+            RUN_LINKED_RECOVERY_RETIREMENT_PATCH
+        )
+        # A genuine Continue-As-New remains part of admitted work, including
+        # chains whose previous worker predates the retirement marker. A fresh
+        # caller cannot select the legacy path by supplying continuation fields.
+        continuation = (
+            input_payload.get("remediation_loop_continuation")
+            if isinstance(input_payload, dict)
+            else None
+        )
+        if getattr(workflow.info(), "continued_run_id", None) and isinstance(
+            continuation, Mapping
+        ):
+            self._linked_recovery_retired = (
+                self._linked_recovery_retired
+                and continuation.get("linkedRecoveryRetired") is True
+            )
+        elif self._linked_recovery_retired and workflow.patched(
+            RUN_LINKED_RECOVERY_ADMISSION_PATCH
+        ):
+            # A queued pre-upgrade start has no completed task to freeze a
+            # patch decision. Preserve its admitted recovery input instead of
+            # redispatching completed effects. Existing retirement-v1 histories
+            # keep their recorded branch; new producers stamp this at admission.
+            self._linked_recovery_retired = (
+                isinstance(input_payload, dict)
+                and input_payload.get("linked_recovery_retired") is True
+            )
         self._canonical_git_repository_projection_enabled = workflow.patched(
             RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH
         )
@@ -11722,8 +11758,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 self._initialize_from_payload(input_payload)
             )
             recovery_target = parameters.get("recoveryTarget")
-            if recovery_target is not None and workflow.patched(
-                RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH
+            if (
+                not self._linked_recovery_retired
+                and recovery_target is not None
+                and workflow.patched(RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH)
             ):
                 if not isinstance(recovery_target, Mapping):
                     raise ValueError("RECOVERY_TARGET_MISSING")
@@ -12260,7 +12298,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             parameters, "recoverySource", "recovery_source"
         )
         self._recovery_source = (
-            dict(recovery_source) if isinstance(recovery_source, Mapping) else None
+            dict(recovery_source)
+            if not self._linked_recovery_retired and isinstance(recovery_source, Mapping)
+            else None
         )
         self._target_runtime = self._runtime_visibility_from_parameters(parameters)
         self._target_skill = self._skill_visibility_from_parameters(parameters)

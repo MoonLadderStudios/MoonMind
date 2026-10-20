@@ -5647,16 +5647,6 @@ def _recovery_manifest_summary_from_record(record) -> Mapping[str, Any]:
     return recovery_manifest if isinstance(recovery_manifest, Mapping) else {}
 
 
-def _recovery_source_block_from_record(record) -> Mapping[str, Any]:
-    params = dict(getattr(record, "parameters", None) or {})
-    recovery_block = params.get("recoverySource")
-    if not isinstance(recovery_block, Mapping):
-        recovery_block = params.get("recovery_source")
-    if not isinstance(recovery_block, Mapping):
-        return {}
-    return recovery_block
-
-
 def _build_retry_from_step_summary(
     record,
     *,
@@ -5704,30 +5694,6 @@ def _build_related_runs(
     params: Mapping[str, Any],
 ) -> list[ExecutionRelatedRunModel]:
     related_runs: list[ExecutionRelatedRunModel] = []
-    recovery_source = params.get("recoverySource")
-    if not isinstance(recovery_source, Mapping):
-        recovery_source = params.get("recovery_source")
-    if isinstance(recovery_source, Mapping):
-        source_workflow_id = str(
-            recovery_source.get("sourceWorkflowId")
-            or recovery_source.get("source_workflow_id")
-            or ""
-        ).strip()
-        if source_workflow_id:
-            source_run_id = str(
-                recovery_source.get("sourceRunId")
-                or recovery_source.get("source_run_id")
-                or ""
-            ).strip() or None
-            related_runs.append(
-                ExecutionRelatedRunModel(
-                    workflowId=source_workflow_id,
-                    runId=source_run_id,
-                    relationship="Recovered from failed step",
-                    status="failed",
-                    href=_related_run_href(source_workflow_id),
-                )
-            )
 
     # Linked "Continue in a new workflow" lineage (MoonLadderStudios/MoonMind#3641):
     # the continuation Workflow presents the terminal source it was continued
@@ -6168,89 +6134,6 @@ def _merge_target_overlay(
     )
 
 
-def _preserved_steps_from_recovery_source(
-    recovery_source: Mapping[str, Any],
-) -> list[dict[str, Any]]:
-    raw_steps = recovery_source.get("preservedSteps") or recovery_source.get(
-        "preserved_steps"
-    )
-    if not isinstance(raw_steps, list):
-        return []
-    preserved_steps: list[dict[str, Any]] = []
-    for item in raw_steps:
-        if not isinstance(item, Mapping):
-            continue
-        logical_step_id = str(
-            item.get("logicalStepId")
-            or item.get("logical_step_id")
-            or item.get("stepId")
-            or item.get("step_id")
-            or ""
-        ).strip()
-        if not logical_step_id:
-            continue
-        source_execution_ordinal = item.get("sourceExecutionOrdinal", item.get("attempt"))
-        try:
-            normalized_attempt = (
-                int(source_execution_ordinal) if source_execution_ordinal is not None else None
-            )
-        except (TypeError, ValueError):
-            normalized_attempt = None
-        preserved_steps.append(
-            {
-                "logicalStepId": logical_step_id,
-                "title": str(item.get("title") or "").strip() or None,
-                "sourceExecutionOrdinal": normalized_attempt,
-                "sourceWorkflowId": str(
-                    item.get("sourceWorkflowId")
-                    or item.get("source_workflow_id")
-                    or recovery_source.get("sourceWorkflowId")
-                    or recovery_source.get("source_workflow_id")
-                    or ""
-                ).strip()
-                or None,
-                "sourceRunId": str(
-                    item.get("sourceRunId")
-                    or item.get("source_run_id")
-                    or recovery_source.get("sourceRunId")
-                    or recovery_source.get("source_run_id")
-                    or ""
-                ).strip()
-                or None,
-            }
-        )
-    return preserved_steps
-
-
-def _normalize_failed_recovery_phase(value: Any) -> str | None:
-    phase = str(value or "").strip().lower().replace("-", "_")
-    if phase in {
-        "workspace_restoration",
-        "checkpoint_validation",
-        "preserved_output_injection",
-        "failed_step_execution",
-    }:
-        return phase
-    return None
-
-
-def _target_diagnostics_recovery_block(
-    diagnostics_block: Mapping[str, Any],
-) -> Mapping[str, Any]:
-    recovery = diagnostics_block.get("recovery")
-    if isinstance(recovery, Mapping):
-        return recovery
-    return {}
-
-
-def _mapping_str_value(value: Mapping[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        candidate = str(value.get(key) or "").strip()
-        if candidate:
-            return candidate
-    return None
-
-
 def _build_target_diagnostics(
     record,
     *,
@@ -6322,55 +6205,16 @@ def _build_target_diagnostics(
                 overlay=overlay,
             )
 
-    recovery_source = _recovery_source_block_from_record(record)
-    diagnostics_recovery = _target_diagnostics_recovery_block(diagnostics_block)
-    source_workflow_id = _mapping_str_value(
-        recovery_source, "sourceWorkflowId", "source_workflow_id"
-    ) or _mapping_str_value(
-        diagnostics_recovery, "sourceWorkflowId", "source_workflow_id"
-    )
-    source_run_id = _mapping_str_value(
-        recovery_source, "sourceRunId", "source_run_id"
-    ) or _mapping_str_value(diagnostics_recovery, "sourceRunId", "source_run_id")
-    failed_recovery_phase = _normalize_failed_recovery_phase(
-        _mapping_str_value(
-            diagnostics_recovery, "failedRecoveryPhase", "failed_recovery_phase"
-        )
-    )
-    checkpoint_ref = _mapping_str_value(
-        recovery_source, "recoveryCheckpointRef", "recovery_checkpoint_ref"
-    ) or _mapping_str_value(diagnostics_recovery, "checkpointRef", "checkpoint_ref")
-    preserved_steps = _preserved_steps_from_recovery_source(
-        recovery_source
-    ) or _preserved_steps_from_recovery_source(diagnostics_recovery)
-    recovery = None
-    has_recovery_evidence = bool(recovery_source or diagnostics_recovery)
-    if has_recovery_evidence:
-        recovery = {
-            "resumed": bool(
-                source_workflow_id
-                or source_run_id
-                or recovery_source
-                or diagnostics_recovery.get("resumed")
-            ),
-            "sourceWorkflowId": source_workflow_id,
-            "sourceRunId": source_run_id,
-            "checkpointRef": checkpoint_ref,
-            "preservedSteps": preserved_steps,
-            "failedRecoveryPhase": failed_recovery_phase,
-        }
-
     degraded_reason = str(
         diagnostics_block.get("degradedReason")
         or diagnostics_block.get("degraded_reason")
         or ""
     ).strip() or None
 
-    if not targets and not recovery and not degraded_reason:
+    if not targets and not degraded_reason:
         return None
     return {
         "targets": targets,
-        "recovery": recovery,
         "degradedReason": degraded_reason,
     }
 
@@ -7497,16 +7341,6 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         manifest.execution,
         manifest.outputs,
     )
-    source_workflow_id = (
-        _first_text(_field_value(manifest.lineage, "sourceWorkflowId"))
-        if manifest.lineage
-        else None
-    )
-    source_run_id = (
-        _first_text(_field_value(manifest.lineage, "sourceRunId"))
-        if manifest.lineage
-        else None
-    )
     if diagnostics and _is_environment_blocked_manifest(manifest):
         return {
             "eligible": False,
@@ -7515,8 +7349,6 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
             "disabledReasonCode": "environment_invalid",
             "requiredBoundary": required_boundary,
             "checkpointRef": None,
-            "sourceWorkflowId": source_workflow_id,
-            "sourceRunId": source_run_id,
             "operatorGuidance": "fix_environment",
             "evidence": [
                 _evidence_ref_status(
@@ -7539,8 +7371,6 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
             "disabledReasonCode": "CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING",
             "checkpointBoundary": required_boundary,
             "checkpointRef": checkpoint_ref,
-            "sourceWorkflowId": source_workflow_id,
-            "sourceRunId": source_run_id,
             "operatorGuidance": "full_retry",
             "evidence": [
                 _evidence_ref_status(
@@ -7559,8 +7389,6 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         "disabledReasonCode": "CHECKPOINT_ARTIFACT_INVALID",
         "checkpointBoundary": required_boundary,
         "checkpointRef": None,
-        "sourceWorkflowId": source_workflow_id,
-        "sourceRunId": source_run_id,
         "operatorGuidance": "full_retry",
         "evidence": [
             _evidence_ref_status(
@@ -7572,54 +7400,6 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
             )
         ],
     }
-
-
-def _preserved_step_provenance_payload(
-    manifest: StepExecutionManifestModel,
-) -> list[dict[str, Any]]:
-    recovery_source = manifest.recovery_source or {}
-    raw_steps = _field_value(recovery_source, "preservedSteps")
-    if not isinstance(raw_steps, list):
-        return []
-    preserved: list[dict[str, Any]] = []
-    for item in raw_steps:
-        if isinstance(item, BaseModel):
-            source = item.model_dump(by_alias=True, exclude_none=True)
-        elif isinstance(item, Mapping):
-            source = item
-        else:
-            continue
-        logical_step_id = _first_text(
-            _field_value(source, "logicalStepId"),
-            _field_value(source, "stepId"),
-        )
-        if not logical_step_id:
-            continue
-        output_refs = _bounded_ref_projection(_field_value(source, "outputRefs"))
-        preserved.append(
-            {
-                "logicalStepId": logical_step_id,
-                "title": _safe_display_text(_first_text(_field_value(source, "title"))),
-                "sourceWorkflowId": _first_text(
-                    _field_value(source, "sourceWorkflowId"),
-                    _field_value(recovery_source, "sourceWorkflowId"),
-                    _field_value(manifest.lineage, "sourceWorkflowId")
-                    if manifest.lineage
-                    else None,
-                ),
-                "sourceRunId": _first_text(
-                    _field_value(source, "sourceRunId"),
-                    _field_value(recovery_source, "sourceRunId"),
-                    _field_value(manifest.lineage, "sourceRunId")
-                    if manifest.lineage
-                    else None,
-                ),
-                "sourceExecutionOrdinal": _field_value(source, "sourceExecutionOrdinal"),
-                "stateCheckpointRef": _first_text(_field_value(source, "stateCheckpointRef")),
-                "outputRefs": output_refs if isinstance(output_refs, Mapping) else {},
-            }
-        )
-    return preserved
 
 
 def _runtime_child_refs(execution: Any) -> dict[str, Any]:
@@ -7648,9 +7428,6 @@ def _step_execution_projection_payload(
     outputs = manifest.outputs
     checks = manifest.checks
     runtime_child_refs = _runtime_child_refs(execution)
-    source_execution_ordinal = (
-        manifest.lineage.source_execution_ordinal if manifest.lineage is not None else None
-    )
     summary = _safe_display_text(
         _first_text(
             _field_value(outputs, "summary"),
@@ -7664,8 +7441,6 @@ def _step_execution_projection_payload(
         "runId": manifest.run_id,
         "logicalStepId": manifest.logical_step_id,
         "executionOrdinal": manifest.execution_ordinal,
-        "sourceExecutionOrdinal": source_execution_ordinal,
-        "lineage": manifest.lineage,
         "branch": manifest.branch,
         "reason": manifest.reason,
         "status": manifest.status,
@@ -7710,7 +7485,6 @@ def _step_execution_detail_payload(
             "dependencyEffectRefs": _bounded_ref_projection(
                 manifest.dependency_effects
             ),
-            "preservedStepProvenance": _preserved_step_provenance_payload(manifest),
         }
     )
     return payload

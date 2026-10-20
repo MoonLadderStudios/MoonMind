@@ -34,15 +34,10 @@ def _identity() -> StepExecutionIdentityModel:
 def test_resolve_checkpoint_policy_uses_enum_value() -> None:
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_RECOVERY_RESTORATION,
-        recovery_source={
-            "recoveryWorkspace": {
-                "workspacePolicy": "start_from_last_passed_commit",
-            }
-        },
     )
 
     assert policy.checkpoint_kind == "worktree_archive"
-    assert policy.workspace_policy == "start_from_last_passed_commit"
+    assert policy.workspace_policy == "restore_pre_execution"
 
 
 def test_resolve_checkpoint_policy_separates_omnigent_planes_after_execution() -> None:
@@ -119,15 +114,10 @@ def test_omnigent_unsupported_recovery_boundary_does_not_invent_local_capture() 
     policy = resolve_checkpoint_policy(
         boundary=_Boundary.BEFORE_RECOVERY_RESTORATION,
         runtime_kind="omnigent",
-        recovery_source={
-            "recoveryWorkspace": {
-                "workspacePolicy": "start_from_last_passed_commit",
-            }
-        },
     )
 
     assert policy.checkpoint_kind == "worktree_archive"
-    assert policy.workspace_policy == "start_from_last_passed_commit"
+    assert policy.workspace_policy == "restore_pre_execution"
 
 
 def test_external_state_ref_never_satisfies_workspace_restore_preflight() -> None:

@@ -25,11 +25,6 @@ from moonmind.workflows.temporal.runtime.checkpoint_restore import (
     ManagedCheckpointRestoreService,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.step_ledger import (
-    materialize_preserved_steps,
-    refresh_ready_steps,
-)
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.unit.workflows.executions.test_control_stop_continuation import (
     _payload as control_stop_payload,
 )
@@ -48,7 +43,7 @@ def _git(*args: str, cwd: Path) -> str:
 async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     tmp_path: Path,
 ) -> None:
-    """Lose the source run and workspace, then restore and resume its failed step."""
+    """Lose the source run and workspace, then restore it from durable state."""
     origin = tmp_path / "trusted-repository"
     origin.mkdir()
     _git("init", "-q", cwd=origin)
@@ -230,42 +225,6 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     assert os.readlink(destination / "safe-link") == "tracked.txt"
     assert not (destination / ".cache" / "excluded").exists()
 
-    workflow = MoonMindRunWorkflow()
-    workflow._initialize_step_ledger(
-        ordered_nodes=[
-            {"id": "prepare", "title": "Prepare"},
-            {"id": "implement", "title": "Implement"},
-            {"id": "verify", "title": "Verify"},
-        ],
-        dependency_map={
-            "prepare": [],
-            "implement": ["prepare"],
-            "verify": ["implement"],
-        },
-        updated_at=datetime.now(UTC),
-    )
-    materialize_preserved_steps(
-        workflow._step_ledger_rows,
-        source_workflow_id="source",
-        source_run_id="source-run",
-        preserved_steps=[
-            {
-                "logicalStepId": "prepare",
-                "status": "succeeded",
-                "terminalDisposition": "accepted",
-                "sourceExecutionOrdinal": 1,
-                "artifacts": {"outputSummary": "artifact://prepare/output"},
-                "stateCheckpointRef": "artifact://prepare/checkpoint",
-            }
-        ],
-        updated_at=datetime.now(UTC),
-    )
-    refresh_ready_steps(workflow._step_ledger_rows, updated_at=datetime.now(UTC))
-    rows = {row["logicalStepId"]: row for row in workflow._step_ledger_rows}
-    assert rows["prepare"]["status"] == "completed"
-    assert rows["prepare"]["preservedFrom"]["workflowId"] == "source"
-    assert rows["implement"]["status"] == "ready"
-    assert rows["verify"]["status"] == "pending"
     assert restored["restorationEvidenceRef"]
 
     # The control-stop continuation contract consumes the same durable archive

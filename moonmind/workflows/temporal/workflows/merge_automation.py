@@ -36,6 +36,7 @@ with workflow.unsafe.imports_passed_through():
         WORKFLOW_TASK_QUEUE,
         get_workflow_child_task_queue,
     )
+    from moonmind.workflows.temporal.hard_switch_cutover import admit_user_workflow_input
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.temporal.workflows.merge_gate import (
         DEFAULT_ACTIVITY_RETRY_POLICY,
@@ -879,7 +880,7 @@ class MoonMindMergeAutomationWorkflow:
         try:
             remediation_result = await workflow.execute_child_workflow(
                 "MoonMind.UserWorkflow",
-                remediation_request,
+                admit_user_workflow_input("MoonMind.UserWorkflow", remediation_request),
                 id=remediation_workflow_id,
                 task_queue=self._workflow_child_task_queue(),
                 search_attributes=self._resolver_search_attributes(),
@@ -2680,7 +2681,7 @@ class MoonMindMergeAutomationWorkflow:
                 try:
                     resolver_result = await workflow.execute_child_workflow(
                         "MoonMind.UserWorkflow",
-                        resolver_request,
+                        admit_user_workflow_input("MoonMind.UserWorkflow", resolver_request),
                         **child_kwargs,
                     )
                 except CancelledError:

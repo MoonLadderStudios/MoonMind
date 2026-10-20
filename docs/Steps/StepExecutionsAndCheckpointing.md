@@ -44,7 +44,7 @@ The manifest references checkpoints (`workspace.checkpointBeforeRef`, `workspace
 
 Policy callers select session state, workspace state, or both. Session evidence supports reattach or cold-session decisions; workspace evidence supports repository continuation and must satisfy the artifact contract, digest, and boundary map in the frozen workspace capability. A session `external_state_ref` never represents files, git metadata, or uncommitted changes, so Omnigent workspace boundaries use MoonMind `worktree_archive` checkpoints and `workspace.apply_checkpoint`.
 
-The workflow derives the runtime capability snapshot from its selected runtime before launch, and replay consumes the recorded snapshot rather than a mutable registry lookup, keeping replay deterministic. Authored node inputs and step result `runtimeCapabilities` fields cannot override it or supply checkpoint Activity bindings. Retained histories keep their recorded decisions behind Temporal patch markers.
+The workflow derives the runtime capability snapshot from its selected runtime before launch, and replay consumes the recorded snapshot rather than a mutable registry lookup, keeping replay deterministic. Authored node inputs and step result `runtimeCapabilities` fields cannot override it or supply checkpoint Activity bindings. Retained histories keep their recorded decisions behind Temporal patch markers. New starts carry a server-authored `linked_recovery_retired` decision. Unversioned queued starts retain recovery even before their first completed workflow task; existing histories retain their recorded retirement decision through the `run-linked-recovery-retirement-v1` and `run-linked-recovery-admission-v1` replay gates. Genuine Continue-As-New inherits its decision. Retained runs keep validation, restoration, preserved-step, and session commands. Compatibility can be removed only when every deployment has no queued starts, durable schedule actions, or replayable histories requiring it; one deployment’s scan is insufficient. Stored recovery manifests remain readable during this transition.
 
 ### 2.3 Durable capture and reads
 
@@ -58,12 +58,10 @@ New checkpoint and workspace artifacts link to the actual Activity's workflow an
 
 - **Logical Step** — stable plan node identified by `logicalStepId`.
 - **Step Execution** — one semantic execution, keyed by `(workflowId, runId, logicalStepId, executionOrdinal)`.
-- **Lineage Execution Ordinal** — optional cross-run ordinal that historical linked recovery runs display, such as "recovered execution 2" for local execution 1.
 - **Checkpoint** — durable evidence sufficient to restore or validate state at a step boundary.
 - **Context Bundle** — immutable per-execution artifact describing instructions, inputs, retrieval, memory, prior evidence, and policy.
 - **Workspace Policy** — explicit rule for the workspace/git state the next execution starts from.
 - **Gate** — structured verification whose verdict decides whether work advances, repeats, stops, or needs attention.
-- **Preserved Step** — a completed prior step that a historical linked recovery execution imported as provenance and reusable output refs.
 - **Invalidated Step** — a downstream step whose output is stale because an upstream accepted output changed.
 
 ```text
@@ -111,9 +109,7 @@ A manifest or checkpoint whose ID does not match its identity fields is rejected
 
 ### 5.2 Cross-run lineage
 
-Retry from a step creates no cross-run lineage: the reset run keeps the workflow identity, replays the steps before the retried one, and allocates new run-scoped identities for the steps that run again.
-
-Linked recovery executions from earlier MoonMind versions carry a `lineage` object on their newly executed Step Execution (`reason`, `sourceWorkflowId`, `sourceRunId`, `sourceLogicalStepId`, `sourceExecutionOrdinal`, `lineageExecutionOrdinal`, `relationship = recover_from_failed_step`) and `preservedFrom.*` on reused rows (section 12). Readers keep decoding both; the local key remains authoritative.
+Retry from a step creates no cross-run lineage: the reset run keeps the workflow identity, replays the steps before the retried one, and allocates new run-scoped identities for the steps that run again. The v1 manifest keeps its `lineage` and `recoverySource` fields so stored manifests still validate, but new executions leave them empty.
 
 ### 5.3 Idempotency keys
 
@@ -127,7 +123,7 @@ The manifest model lives in `moonmind/schemas/step_execution_models.py`; the wor
 
 Fields cover identity and lineage; reason, status, and terminal disposition; input (task snapshot, plan ref and digest, prepared inputs); context (bundle ref and digest, builder version, retrieval and memory manifests); workspace (baseline, policy, before/after checkpoint refs); execution (kind, child workflow/run, runtime id, runtime context policy); output refs; checks; side effects (git, external, artifacts, memory, retrieval); dependency effects; and budget.
 
-**Reasons** are bounded metadata: `initial_execution`, `quality_gate_failed`, `tests_failed`, `runtime_recovered`, `recover_from_failed_step`, `remediation_context`, `operator_requested`, `dependency_invalidated`, `policy_revalidation`. Rich explanation belongs in artifacts.
+**Reasons** are bounded metadata: `initial_execution`, `quality_gate_failed`, `tests_failed`, `runtime_recovered`, `checkpoint_branch`, `remediation_context`, `operator_requested`, `dependency_invalidated`, `policy_revalidation`. Rich explanation belongs in artifacts.
 
 **Statuses**: `pending`, `preparing`, `executing`, `checking`, `completed`, `failed`, `blocked`, `canceled`, `superseded`.
 
@@ -270,11 +266,9 @@ On Omnigent, where each Step Execution starts in a fresh sandbox, post-loop step
 
 ---
 
-## 12. Dependency Invalidation and Preserved Outputs
+## 12. Dependency Invalidation
 
-A repeated attempt can change a step's accepted output, so downstream inputs resolve to a specific producing Step Execution rather than an ambiguous "latest". When a newly accepted execution changes semantic outputs, dependent steps become `pending`, `blocked`, `superseded`, or `requires_revalidation`, and the change is recorded as `changedOutputs`, `invalidatedLogicalStepIds`, and `revalidationRequired`. For example, if step 2 replaces API contract v1 with v2, step 3's UI built against v1 must reattempt or revalidate before verification can pass.
-
-Rows that historical linked recovery executions preserved carry `preservedFrom.workflowId`, `.runId`, `.logicalStepId`, and `.executionOrdinal`. Without these rules MoonMind could present downstream work as valid when it was built against a superseded upstream attempt.
+A repeated attempt can change a step's accepted output, so downstream inputs resolve to a specific producing Step Execution rather than an ambiguous "latest". When a newly accepted execution changes semantic outputs, dependent steps become `pending`, `blocked`, `superseded`, or `requires_revalidation`, and the change is recorded as `changedOutputs`, `invalidatedLogicalStepIds`, and `revalidationRequired`. For example, if step 2 replaces API contract v1 with v2, step 3's UI built against v1 must reattempt or revalidate before verification can pass. Without these rules MoonMind could present downstream work as valid when it was built against a superseded upstream attempt.
 
 ---
 
@@ -284,7 +278,7 @@ An operator retries a failed run by resetting its Temporal history to the start 
 
 ### 13.1 Recovery manifest
 
-Every failed run emits a recovery manifest (`reports/recovery_manifest.json`, `application/vnd.moonmind.failed-run-recovery+json;version=1`, referenced from the finish summary) before terminal failure is reported. It names the last accepted step, the failed step and ordinal, checkpoint refs by boundary, the validation result (`valid`, `missing`, `corrupted`, `unauthorized`, `incompatible`, `invalid`, `not_evaluated`), side-effect dispositions (`accepted`, `discarded`, `blocked`, `needs_compensation`), and whether that checkpoint evidence could restore the failed step (`resumeAllowed`, with a blocked reason). A failure outside any step, such as in publication, reports `no_failed_step_execution_to_resume` while its accepted steps' checkpoints stay `valid`.
+Every failed run emits a recovery manifest (`reports/recovery_manifest.json`, `application/vnd.moonmind.failed-run-recovery+json;version=1`, referenced from the finish summary) before terminal failure is reported. It names the last accepted step, the failed step and ordinal, checkpoint refs by boundary, the validation result (`valid` when a checkpoint was selected, otherwise `missing`; retained linked-recovery validation can also report `corrupted`, `unauthorized`, `incompatible`, or `invalid`), side-effect dispositions (`accepted`, `discarded`, `blocked`, `needs_compensation`), and whether that checkpoint evidence could restore the failed step (`resumeAllowed`, with a blocked reason). A failure outside any step, such as in publication, reports `no_failed_step_execution_to_resume` while its accepted steps' checkpoints stay `valid`.
 
 A workflow-owned check that rejects a step before launch still records it as a failed Step Execution with an allocated ordinal, so the manifest names the step that actually failed. The capability snapshot and checkpoint kind come from the step whose checkpoint the manifest selects, by the failed-step-then-last-accepted-step rule.
 
@@ -304,7 +298,7 @@ For a managed agent attempt, `MoonMind.UserWorkflow` creates the Step Execution,
 
 ## 15. Operator Surfaces, Security, and Failure Semantics
 
-The default detail view shows each step's latest attempt, attempt count, gate summaries, latest evidence, and preserved provenance. Expanded views and the API expose bounded attempt history and refs, never large transcripts or diffs:
+The default detail view shows each step's latest attempt, attempt count, gate summaries, and latest evidence. Expanded views and the API expose bounded attempt history and refs, never large transcripts or diffs:
 
 ```http
 GET /api/executions/{workflow_id}/steps

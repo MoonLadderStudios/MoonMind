@@ -309,3 +309,11 @@ def test_workflow_cancellation_context_extracts_last_active_case() -> None:
     # Bounded extraction from the known streamed log into both records.
     assert "pytest-backend-${{ matrix.suite }}.log" in text
     assert "last-active-case" in text.lower() or "last active case" in text.lower()
+
+
+def test_explicit_secret_assignments_redact_even_short_values():
+    for text in ('{"token": "tiny"}', "api_key=k", "'password': 'p'", "secret=42"):
+        redacted, count = redact_text(text)
+        assert count == 1
+        assert "***REDACTED***" in redacted
+        assert redacted != text

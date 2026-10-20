@@ -33,7 +33,6 @@ REQUIRED_SELECTED_CONTRACT_TERMS = (
     "stepExecutionId",
     "executionOrdinal",
     "step-execution",
-    "recover_from_failed_step",
     "previous_execution",
 )
 

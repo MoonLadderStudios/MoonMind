@@ -150,18 +150,6 @@ TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 _BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS = 5.0
-FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
-    {
-        "recoverySource",
-        "recovery_source",
-        "recoveryCheckpointRef",
-        "recovery_checkpoint_ref",
-        "preservedSteps",
-        "preserved_steps",
-        "completedSteps",
-        "completed_steps",
-    }
-)
 
 
 # Edits apply a shallow parameters patch, where an omitted key keeps its stored
@@ -415,16 +403,6 @@ def _pending_workflow_task_attempt(description: Any) -> int:
         return int(getattr(pending, "attempt", 0) or 0)
     except (TypeError, ValueError):
         return 0
-
-
-def _recovery_source_block_from_record(record: TemporalExecutionRecord) -> Mapping[str, Any]:
-    parameters = getattr(record, "parameters", None)
-    if not isinstance(parameters, Mapping):
-        return {}
-    recovery_source = parameters.get("recoverySource") or parameters.get("recovery_source")
-    if isinstance(recovery_source, Mapping):
-        return recovery_source
-    return {}
 
 
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
@@ -5331,16 +5309,12 @@ class TemporalExecutionService:
         parameters: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         params = dict(parameters or {})
-        for key in FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS:
-            params.pop(key, None)
-
         for key in ("workflow", "task"):
             workflow_payload = params.get(key)
             if not isinstance(workflow_payload, Mapping):
                 continue
             workflow_params = dict(workflow_payload)
             workflow_params.pop("recovery", None)
-            workflow_params.pop("resume", None)
             if workflow_params:
                 params[key] = workflow_params
             else:

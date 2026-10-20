@@ -2285,9 +2285,9 @@ class WorkflowStepSpec(BaseModel):
         return payload
 
 
-# --- MM-638: Recovery / Resume contract types ---
+# --- MM-638: Rerun provenance contract types ---
 
-WorkflowRecoveryKind = Literal["exact_full_rerun", "edited_full_retry", "recover_from_failed_step"]
+WorkflowRecoveryKind = Literal["exact_full_rerun", "edited_full_retry"]
 
 
 class WorkflowRecoveryProvenance(BaseModel):
@@ -2315,121 +2315,6 @@ class WorkflowRecoveryProvenance(BaseModel):
     @classmethod
     def _clean_optional(cls, value: object) -> str | None:
         return _clean_optional_str(value)
-
-
-class ResumeFromFailedStepRef(BaseModel):
-    """Pins a resume submission to a specific source run, failed step, and checkpoint."""
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    kind: Literal["recover_from_failed_step"] = Field(
-        "recover_from_failed_step", alias="kind"
-    )
-    source_workflow_id: str = Field(..., alias="sourceWorkflowId")
-    source_run_id: str = Field(..., alias="sourceRunId")
-    failed_step_id: str = Field(..., alias="failedStepId")
-    failed_step_execution: int | None = Field(None, alias="failedStepExecution")
-    recovery_mode: Literal["selected_step"] | None = Field(None, alias="recoveryMode")
-    selected_start_step_id: str | None = Field(None, alias="selectedStartStepId")
-    selected_start_step_execution: int | None = Field(
-        None, alias="selectedStartStepExecution"
-    )
-    recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
-    checkpoint_boundary: Literal[
-        "after_prepare",
-        "before_execution",
-        "after_execution",
-        "after_gate",
-        "before_publication",
-        "before_recovery_restoration",
-    ] | None = Field(None, alias="checkpointBoundary")
-    task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef")
-    plan_ref: str | None = Field(None, alias="planRef")
-    plan_digest: str | None = Field(None, alias="planDigest")
-    preserved_step_refs: list[str] = Field(default_factory=list, alias="preservedStepRefs")
-    dependency_signatures: dict[str, Any] = Field(
-        default_factory=dict, alias="dependencySignatures"
-    )
-    workspace_policy: Literal[
-        "restore_pre_execution",
-        "continue_from_previous_execution",
-        "apply_previous_execution_diff_to_clean_baseline",
-        "start_from_last_passed_commit",
-        "fresh_branch_from_source",
-    ] | None = Field(None, alias="workspacePolicy")
-    admitted_checkpoint_resume_decision: dict[str, Any] | None = Field(
-        None, alias="admittedCheckpointResumeDecision"
-    )
-
-    @field_validator(
-        "source_workflow_id",
-        "source_run_id",
-        "failed_step_id",
-        "recovery_checkpoint_ref",
-        "task_input_snapshot_ref",
-        mode="before",
-    )
-    @classmethod
-    def _require_non_empty(cls, value: object) -> str:
-        cleaned = _clean_str(value)
-        if not cleaned:
-            raise WorkflowContractError(
-                "ResumeFromFailedStepRef required fields must be non-empty strings"
-            )
-        return cleaned
-
-    @field_validator("plan_ref", "plan_digest", mode="before")
-    @classmethod
-    def _clean_optional(cls, value: object) -> str | None:
-        return _clean_optional_str(value)
-
-    @field_validator("selected_start_step_id", mode="before")
-    @classmethod
-    def _clean_selected_start_step_id(cls, value: object) -> str | None:
-        return _clean_optional_str(value)
-
-    @field_validator("preserved_step_refs")
-    @classmethod
-    def _clean_preserved_step_refs(cls, value: list[str]) -> list[str]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for item in value:
-            candidate = _clean_str(item)
-            if not candidate or candidate in seen:
-                continue
-            seen.add(candidate)
-            normalized.append(candidate)
-        return normalized
-
-    @field_validator("dependency_signatures", mode="before")
-    @classmethod
-    def _require_dependency_signatures_mapping(cls, value: object) -> dict[str, Any]:
-        if value is None:
-            return {}
-        if not isinstance(value, Mapping):
-            raise WorkflowContractError("dependencySignatures must be an object")
-        return dict(value)
-
-    @field_validator("admitted_checkpoint_resume_decision", mode="before")
-    @classmethod
-    def _require_admitted_checkpoint_decision(cls, value: object) -> dict[str, Any] | None:
-        # Optional only for replay/validation of histories created before capability v2.
-        if value is None:
-            return None
-        if not isinstance(value, Mapping):
-            raise WorkflowContractError(
-                "admittedCheckpointResumeDecision must be an immutable decision object"
-            )
-        from moonmind.workflows.executions.checkpoint_resume_admission import (
-            AdmittedCheckpointResumeDecision,
-        )
-
-        decision = AdmittedCheckpointResumeDecision.model_validate(value)
-        if not decision.admitted:
-            raise WorkflowContractError(
-                "admittedCheckpointResumeDecision must admit checkpoint Resume"
-            )
-        return decision.model_dump(by_alias=True, mode="json")
 
 
 class WorkflowExecutionSpec(BaseModel):
@@ -2460,7 +2345,6 @@ class WorkflowExecutionSpec(BaseModel):
         None, alias="authoredPresets"
     )
     recovery: WorkflowRecoveryProvenance | None = Field(None, alias="recovery")
-    resume: ResumeFromFailedStepRef | None = Field(None, alias="resume")
     depends_on: list[str] | None = Field(None, alias="dependsOn")
 
     @field_validator("instructions", mode="before")
@@ -2525,40 +2409,6 @@ class WorkflowExecutionSpec(BaseModel):
         if isinstance(value, list) and len(value) == 0:
             return None
         return value
-
-    @model_validator(mode="after")
-    def _validate_recovery_recovery_consistency(self) -> "WorkflowExecutionSpec":
-        recovery = self.recovery
-        resume = self.resume
-
-        if recovery is not None and recovery.kind == "recover_from_failed_step":
-            if resume is None:
-                raise WorkflowContractError(
-                    "task.resume is required when task.recovery.kind is 'recover_from_failed_step'"
-                )
-
-        if resume is not None:
-            if recovery is None:
-                raise WorkflowContractError(
-                    "task.recovery must be present with kind 'recover_from_failed_step' "
-                    "when task.resume is provided"
-                )
-            if recovery.kind != "recover_from_failed_step":
-                raise WorkflowContractError(
-                    "task.resume is only valid when task.recovery.kind is "
-                    f"'recover_from_failed_step'; got {recovery.kind!r}"
-                )
-            if recovery.source_workflow_id != resume.source_workflow_id:
-                raise WorkflowContractError(
-                    "task.recovery.sourceWorkflowId and task.resume.sourceWorkflowId "
-                    "must match"
-                )
-            if recovery.source_run_id != resume.source_run_id:
-                raise WorkflowContractError(
-                    "task.recovery.sourceRunId and task.resume.sourceRunId must match"
-                )
-
-        return self
 
     @model_validator(mode="after")
     def _validate_container_steps_compatibility(self) -> "WorkflowExecutionSpec":
@@ -3552,7 +3402,6 @@ __all__ = [
     "WorkflowInputAttachmentRef",
     "WorkflowRecoveryKind",
     "WorkflowRecoveryProvenance",
-    "ResumeFromFailedStepRef",
     "WorkflowStepSource",
     "build_authoritative_workflow_input_snapshot",
     "build_runtime_command_preview_config",

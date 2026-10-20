@@ -1,4 +1,4 @@
-"""Deterministic workflow-entry policy for typed recovery targets."""
+"""Entry policy retained for pre-retirement linked-recovery histories."""
 
 from __future__ import annotations
 

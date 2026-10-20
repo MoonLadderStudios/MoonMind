@@ -1,0 +1,30 @@
+{
+  "sourceRevision": "78cbe1682249deeaa33b64791859dedbf7188005",
+  "workflowType": "MoonMind.UserWorkflow",
+  "temporalSdkVersion": "1.34.0",
+  "temporalServerVersion": "1.32.0",
+  "recording": "Complete real Temporal histories recorded from the unmodified source revision in a detached checkout, using the registered fake activities and input builders in test_linked_recovery_retained_history.py. No workflow functions or patches were mocked during fixture recording. The earlier prepare step is preserved; implement and finish execute. Payloads and owners are synthetic.",
+  "fixtures": {
+    "legacy-policy.json.gz": {
+      "events": 288,
+      "restoreActivities": [
+        "step_checkpoint.validate",
+        "workspace.apply_policy"
+      ],
+      "sha256": "2fc3400f70c7e674158f7bd5a87c30b748e4c75318d7a7cc1125fcfcd5bace06"
+    },
+    "typed-state-machine.json.gz": {
+      "events": 284,
+      "restoreActivities": [
+        "agent_runtime.restore_workspace_checkpoint"
+      ],
+      "requiredPatchMarkers": [
+        "run-typed-recovery-target-entry-v1",
+        "run-checkpoint-recovery-state-machine-v1"
+      ],
+      "sha256": "05989697ffef209e5cf12d6a2da4a850f4820bafb789dd48849fc7a056151f57"
+    }
+  },
+  "retirementPatchAbsent": "run-linked-recovery-retirement-v1",
+  "regeneration": "Copy the test module and record.py into the source-revision checkout, preserving their repository-relative locations. Run the recorder there with Python, passing an explicit output directory. Review histories rather than regenerating them as part of a test run."
+}

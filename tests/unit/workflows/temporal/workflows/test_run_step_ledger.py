@@ -1286,16 +1286,6 @@ def test_canonical_step_checkpoint_writes_keep_replay_patch_guard() -> None:
     assert source.index(ephemeral_guard) < source.index(activity_call)
 
 
-def test_recovery_workspace_prepares_before_marking_failed_step_running() -> None:
-    source = Path(run_module.__file__).read_text()
-
-    prepare_call = (
-        "await self._prepare_recovery_workspace_for_failed_step(node_id)\n"
-        "                self._mark_step_running("
-    )
-    assert prepare_call in source
-
-
 def _registry_payload() -> dict[str, Any]:
     return {
         "skills": [
@@ -5237,8 +5227,6 @@ def test_run_marks_completed_step_without_checkpoint_ineligible(
     workflow._record_step_checkpoint_evidence("plan", updated_at=now)
 
     step = workflow.get_step_ledger()["steps"][0]
-    assert step["recoveryPreservation"]["eligible"] is False
-    assert step["recoveryPreservation"]["reason"] == "missing_state_checkpoint"
     assert step.get("stateCheckpointRef") is None
 
 
@@ -5296,8 +5284,6 @@ def test_run_clears_stale_checkpoint_ref_before_successful_retry(
     step = workflow.get_step_ledger()["steps"][0]
     assert step.get("stateCheckpointRef") is None
     assert step["artifacts"]["outputPrimary"] == "artifact://successful-output"
-    assert step["recoveryPreservation"]["eligible"] is False
-    assert step["recoveryPreservation"]["reason"] == "missing_state_checkpoint"
 
 
 def test_run_reads_nested_workload_metadata_from_legacy_workload_result(

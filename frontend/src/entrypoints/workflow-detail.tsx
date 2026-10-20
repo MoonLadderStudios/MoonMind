@@ -671,38 +671,6 @@ const TargetDiagnosticsSchema = z
           .passthrough(),
       )
       .default([]),
-    recovery: z
-      .object({
-        resumed: z.boolean().optional(),
-        sourceWorkflowId: z.string().nullable().optional(),
-        sourceRunId: z.string().nullable().optional(),
-        checkpointRef: z.string().nullable().optional(),
-        preservedSteps: z
-          .array(
-            z
-              .object({
-                logicalStepId: z.string(),
-                title: z.string().nullable().optional(),
-                sourceExecutionOrdinal: z.number().nullable().optional(),
-                sourceWorkflowId: z.string().nullable().optional(),
-                sourceRunId: z.string().nullable().optional(),
-              })
-              .passthrough(),
-          )
-          .default([]),
-        failedRecoveryPhase: z
-          .enum([
-            'checkpoint_validation',
-            'workspace_restoration',
-            'preserved_output_injection',
-            'failed_step_execution',
-          ])
-          .nullable()
-          .optional(),
-      })
-      .passthrough()
-      .nullable()
-      .optional(),
     degradedReason: z.string().nullable().optional(),
   })
   .passthrough();
@@ -727,7 +695,6 @@ const RecoveryEligibilitySchema = z
     disabledReasonCode: z.string().nullable().optional(),
     checkpointBoundary: z.string().nullable().optional(),
     requiredBoundary: z.string().nullable().optional(),
-    resumePhase: z.enum(['rerun_failed_step', 'continue_to_gate', 'continue_after_gate', 'resume_publication', 'retry_restoration']).nullable().optional(),
     checkpointRef: z.string().nullable().optional(),
     checkpointKind: z.string().nullable().optional(),
     targetRuntimeId: z.string().nullable().optional(),
@@ -768,7 +735,6 @@ const StepTimingSchema = z
     elapsedMs: z.number().nullable().optional(),
     serverNow: z.string().nullable().optional(),
     precision: z.enum(['exact', 'live', 'fallback', 'unavailable']).default('unavailable'),
-    preserved: z.boolean().optional(),
   })
   .passthrough();
 
@@ -816,17 +782,6 @@ const StepEvidenceSummarySchema = z
   })
   .passthrough();
 
-const StepExecutionLineageSchema = z
-  .object({
-    sourceWorkflowId: z.string(),
-    sourceRunId: z.string(),
-    sourceLogicalStepId: z.string(),
-    sourceExecutionOrdinal: z.number(),
-    relationship: z.string().nullable().optional(),
-    lineageExecutionOrdinal: z.number().nullable().optional(),
-  })
-  .passthrough();
-
 const StepExecutionProjectionSchema = z
   .object({
     manifestArtifactRef: z.string(),
@@ -835,8 +790,6 @@ const StepExecutionProjectionSchema = z
     runId: z.string(),
     logicalStepId: z.string(),
     executionOrdinal: z.number(),
-    sourceExecutionOrdinal: z.number().nullable().optional(),
-    lineage: StepExecutionLineageSchema.nullable().optional(),
     reason: z.string(),
     status: z.string(),
     terminalDisposition: z.string().nullable().optional(),
@@ -1812,14 +1765,6 @@ const StepLedgerArtifactsSchema = z
     stepExecutionManifestRefs: [],
   });
 
-const StepLedgerRecoveryPreservationSchema = z
-  .object({
-    eligible: z.boolean(),
-    reason: z.string(),
-    message: z.string().nullable().optional(),
-  })
-  .passthrough();
-
 const StepLedgerWorkloadSchema = z
   .object({
     agentRunId: z.string().nullable().optional(),
@@ -1863,20 +1808,9 @@ const StepLedgerRowSchema = z
     checks: z.array(StepLedgerCheckSchema).default([]),
     refs: StepLedgerRefsSchema,
     artifacts: StepLedgerArtifactsSchema,
-    preservedFrom: z
-      .object({
-        workflowId: z.string(),
-        runId: z.string(),
-        logicalStepId: z.string(),
-        executionOrdinal: z.number(),
-      })
-      .passthrough()
-      .nullable()
-      .optional(),
     workload: StepLedgerWorkloadSchema.nullable().optional(),
     timing: StepTimingSchema.nullable().optional(),
     stateCheckpointRef: z.string().nullable().optional(),
-    recoveryPreservation: StepLedgerRecoveryPreservationSchema.nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
   .passthrough();
@@ -4884,19 +4818,6 @@ function StepEvidenceRefs({ row }: { row: z.infer<typeof StepLedgerRowSchema> })
   );
 }
 
-function StepProvenanceMarker({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
-  if (!row.preservedFrom) return null;
-  const source = row.preservedFrom;
-  return (
-    <span
-      className="step-provenance-marker"
-      title={`Preserved from source run ${source.workflowId} run ${source.runId} execution ${source.executionOrdinal}.`}
-    >
-      Preserved
-    </span>
-  );
-}
-
 const ACTIVE_STEP_TIMING_STATUSES = new Set(['executing', 'reviewing', 'awaiting_external']);
 
 type StepTiming = z.infer<typeof StepTimingSchema> | null | undefined;
@@ -5559,7 +5480,7 @@ function liveElapsedMs(
 }
 
 function isLiveStepRow(row: StepLedgerRow): boolean {
-  return ACTIVE_STEP_TIMING_STATUSES.has(row.status) && !(row.preservedFrom || row.timing?.preserved);
+  return ACTIVE_STEP_TIMING_STATUSES.has(row.status);
 }
 
 function rowTimingValueMs(row: StepLedgerRow, nowMs: number): number | null {
@@ -5571,9 +5492,6 @@ function stepTimingLabel(row: StepLedgerRow, nowMs: number): string {
   const status = row.status;
   const timing = row.timing;
   const valueMs = rowTimingValueMs(row, nowMs);
-  if (row.preservedFrom || timing?.preserved) {
-    return valueMs === null ? 'Original timing unavailable' : `Original duration: ${formatDurationMs(valueMs)}`;
-  }
   if (status === 'pending') return 'Not started';
   if (status === 'ready') return 'Ready';
   if (valueMs === null || timing?.precision === 'unavailable') return 'Timing unavailable';
@@ -5628,13 +5546,11 @@ function StepTimingDetails({ row }: { row: StepLedgerRow }) {
   const timing = row.timing;
   const nowMs = useLiveClock(isLiveStepRow(row));
   const valueMs = rowTimingValueMs(row, nowMs);
-  const elapsed = row.preservedFrom || timing?.preserved
-    ? stepTimingLabel(row, nowMs)
-    : valueMs === null
-      ? 'Timing unavailable'
-      : ACTIVE_STEP_TIMING_STATUSES.has(row.status)
-        ? `${formatDurationMs(valueMs)} so far`
-        : formatDurationMs(valueMs);
+  const elapsed = valueMs === null
+    ? 'Timing unavailable'
+    : ACTIVE_STEP_TIMING_STATUSES.has(row.status)
+      ? `${formatDurationMs(valueMs)} so far`
+      : formatDurationMs(valueMs);
   return (
     <section className="step-tl-detail-section">
       <h4>Timing</h4>
@@ -5704,7 +5620,7 @@ function StepExecutionRefList({ entries }: { entries: Array<[string, string]> })
 }
 
 // MM-831: one compact Step Execution row inside the expanded history. Surfaces
-// the full enumerated evidence field set (lineage, reason, source attempt,
+// the full enumerated evidence field set (reason,
 // runtime child refs, context bundle ref, workspace policy, git disposition,
 // gate verdict, output/diagnostic/diff refs, side effects, terminal
 // disposition, downstream invalidation) as refs and typed diagnostics only.
@@ -5726,7 +5642,6 @@ function StepExecutionHistoryRow({
   const outputRefs = stepRefEntries(execution.outputRefs);
   const runtimeChildRefs = stepRefEntries(execution.runtimeChildRefs);
   const downstreamInvalidated = execution.reason === 'dependency_invalidated';
-  const lineage = execution.lineage ?? null;
 
   return (
     <li className="step-execution-history-item">
@@ -5745,23 +5660,6 @@ function StepExecutionHistoryRow({
         ) : null}
       </div>
       <dl className="step-execution-history-facts">
-        {execution.sourceExecutionOrdinal ? (
-          <div className="step-execution-fact">
-            <dt>Source attempt</dt>
-            <dd>Execution {execution.sourceExecutionOrdinal}</dd>
-          </div>
-        ) : null}
-        {lineage ? (
-          <div className="step-execution-fact">
-            <dt>Lineage</dt>
-            <dd>
-              <code className="text-xs break-all">{lineage.sourceWorkflowId}</code> run{' '}
-              <code className="text-xs break-all">{lineage.sourceRunId}</code>{' '}
-              {lineage.sourceLogicalStepId} execution {lineage.sourceExecutionOrdinal}
-              {lineage.relationship ? ` (${formatStatusLabel(lineage.relationship)})` : ''}
-            </dd>
-          </div>
-        ) : null}
         {execution.terminalDisposition ? (
           <div className="step-execution-fact">
             <dt>Terminal disposition</dt>
@@ -5976,7 +5874,6 @@ function StepLedgerRowCard({
               <BranchStatusAffordance branches={branches} />
               <span className="sr-only">{formatStatusLabel(row.status)}</span>
               {row.executionOrdinal > 1 ? <span className="step-execution-pill">Execution {row.executionOrdinal}</span> : null}
-              <StepProvenanceMarker row={row} />
               <span className={`step-tl-chevron${expanded ? ' step-tl-chevron-open' : ''}`} aria-hidden="true">›</span>
             </span>
           </div>
@@ -6010,12 +5907,6 @@ function StepLedgerRowCard({
                 nextCheck={readOptionalWaitField<string>(row, 'nextCheck')}
                 waitEnteredAt={readOptionalWaitField<string>(row, 'waitEnteredAt')}
               />
-              {row.preservedFrom ? (
-                <p className="small">
-                  Preserved from source run <code>{row.preservedFrom.workflowId}</code> run{' '}
-                  <code>{row.preservedFrom.runId}</code> execution {row.preservedFrom.executionOrdinal}.
-                </p>
-              ) : null}
               {lastError ? <p className="small step-tl-error">Last error: {lastError}</p> : null}
             </section>
             {row.checks.length > 0 ? (
@@ -6952,9 +6843,8 @@ function TargetDiagnosticsPanel({
 }) {
   if (!diagnostics) return null;
   const hasTargets = diagnostics.targets.length > 0;
-  const recovery = diagnostics.recovery;
 
-  if (!hasTargets && !recovery && !diagnostics.degradedReason) return null;
+  if (!hasTargets && !diagnostics.degradedReason) return null;
 
   return (
     <section className="stack td-evidence-region">
@@ -7028,40 +6918,6 @@ function TargetDiagnosticsPanel({
       ) : (
         <p className="small">No target diagnostics were recorded.</p>
       )}
-      {recovery ? (
-        <div>
-          <h4>Recovery</h4>
-          {recovery.resumed && recovery.sourceWorkflowId ? (
-            <p>Resumed from {recovery.sourceWorkflowId}</p>
-          ) : recovery.resumed ? (
-            <p>Resumed from a previous run.</p>
-          ) : null}
-          <ul className="step-detail-list">
-            {recovery.sourceRunId ? (
-              <li><strong>Source run:</strong> <code className="text-xs break-all">{recovery.sourceRunId}</code></li>
-            ) : null}
-            {recovery.checkpointRef ? (
-              <li><strong>Checkpoint:</strong> <code className="text-xs break-all">{recovery.checkpointRef}</code></li>
-            ) : null}
-            {recovery.failedRecoveryPhase ? (
-              <li><strong>Failed phase:</strong> {formatStatusLabel(recovery.failedRecoveryPhase)}</li>
-            ) : null}
-          </ul>
-          {recovery.preservedSteps.length > 0 ? (
-            <div>
-              <h5>Preserved Steps</h5>
-              <ul className="step-detail-list">
-                {recovery.preservedSteps.map((step) => (
-                  <li key={`${step.logicalStepId}-${step.sourceRunId || ''}`}>
-                    <strong>{step.title || step.logicalStepId}</strong>
-                    {step.sourceExecutionOrdinal ? <span className="small"> execution {step.sourceExecutionOrdinal}</span> : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </section>
   );
 }

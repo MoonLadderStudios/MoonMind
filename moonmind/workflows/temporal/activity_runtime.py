@@ -8195,16 +8195,8 @@ class TemporalAgentRuntimeActivities:
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
-        # Whether a resume must restore a workspace checkpoint is decided and
-        # enforced at the authoritative RunWorkflow ``before_recovery_restoration``
-        # boundary, which runs the restore activity before the failed step re-runs.
-        # The real resume payloads carry that decision under
-        # ``parameters["recoverySource"]`` / ``parameters["workflow"]["resume"]`` â€”
-        # never as a top-level ``recoveryMode == "resume_from_workspace_checkpoint"``
-        # sentinel (that value is produced nowhere), so the former sentinel gate
-        # was dead. When the restoration producer supplies verified evidence in the
-        # launch payload, verify it here as defense-in-depth before the agent
-        # starts.
+        # When the restoration producer supplies verified evidence in the launch
+        # payload, verify it here as defense-in-depth before the agent starts.
         restoration_requirement = payload.get("restoration_requirement")
         if restoration_requirement is not None:
             if not isinstance(restoration_requirement, Mapping):
