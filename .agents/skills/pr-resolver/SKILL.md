@@ -230,8 +230,9 @@ metadata flag.
    - `ci_failures`: follow `fix-ci` completely.
    - `ci_infra_transient`: every failed check on this head is a GitHub Actions
      platform failure (artifact storage quota, lost runner, Actions service
-     error) that no PR change can fix, or a downstream gate that failed only
-     because of one. Finalize already reran the failed jobs on the same head
+     error) that no PR change can fix, or a downstream gate whose failed steps
+     evaluate such a job's result; the gate stays unverified until a rerun
+     clears that job. Finalize already reran the failed jobs on the same head
      when they were due, and its `gatedContinuation` carries the wait. Do not
      start `fix-ci`, edit code, or rerun CI yourself; wait the reported
      `retryAfterSeconds` (or return `reenter_gate` to an owning gate) and

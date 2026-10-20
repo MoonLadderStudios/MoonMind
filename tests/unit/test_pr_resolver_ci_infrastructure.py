@@ -248,7 +248,11 @@ def test_gate_evaluating_a_quota_failed_dependency_is_infrastructure_only(
     messages = {
         item["name"]: item["message"] for item in summary["infrastructureFailures"]
     }
-    assert messages["CI Gate"] == BARE_EXIT
+    # The gate is reported as unverified, naming the dependency it evaluates.
+    assert messages["CI Gate"] == (
+        f"{BARE_EXIT} Unverified until a rerun: it evaluates PR Preflight, which "
+        "hit a GitHub Actions platform failure."
+    )
     assert messages["PR Preflight"].startswith("Failed to CreateArtifact")
     assert summary["infrastructureRuns"][0]["kinds"] == [
         "artifact_storage_quota",
@@ -279,6 +283,63 @@ def test_gate_that_also_needs_a_slower_successful_job_is_infrastructure_only(
     )
 
     assert summary["infrastructureOnly"] is True
+
+
+MATRIX_WORKFLOW = """
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [linux, windows]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Build
+        run: make
+  gate:
+    name: Gate
+    if: always()
+    needs: build
+    runs-on: linux
+    steps:
+      - name: Check build
+        run: test "${{ needs.build.result }}" = success
+"""
+
+
+@pytest.mark.parametrize(
+    ("workflow", "dependency_check", "expected"),
+    [
+        (MATRIX_WORKFLOW, "build (linux)", True),
+        # An expression name renders per leg and cannot be matched, so the
+        # dependency stays unknown and the gate fails closed.
+        (
+            MATRIX_WORKFLOW.replace(
+                "  build:\n", "  build:\n    name: Build ${{ matrix.os }}\n"
+            ),
+            "Build linux",
+            False,
+        ),
+    ],
+    ids=["default-matrix-name", "expression-name"],
+)
+def test_gate_on_a_matrix_dependency(
+    snapshot_module: dict[str, Any],
+    workflow: str,
+    dependency_check: str,
+    expected: bool,
+) -> None:
+    summary = _summarize(
+        snapshot_module,
+        [
+            _check_run(10, dependency_check, run_id=39193540093),
+            _check_run(11, "Gate", run_id=39193540093),
+        ],
+        {10: [_failure(QUOTA_MESSAGE)], 11: [_failure(BARE_EXIT)]},
+        jobs={11: _job("Check build")},
+        workflow=workflow,
+    )
+
+    assert summary["infrastructureOnly"] is expected
 
 
 def test_independent_job_that_ran_later_stays_a_ci_failure(
