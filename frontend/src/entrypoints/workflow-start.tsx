@@ -9310,7 +9310,7 @@ function WorkflowStartPageContent({
         return false;
       }
       if (
-        skillId ||
+        hasExplicitSkillSelection(skillId) ||
         skillArgsRaw ||
         Object.keys(structuredSkillInputs.values).length > 0 ||
         caps.length > 0 ||
