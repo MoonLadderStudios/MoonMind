@@ -22,21 +22,26 @@ from tests.integration.temporal.test_linked_recovery_retained_history import (
     register_deployment_search_attributes,
 )
 
-SOURCE_REVISION = "78cbe1682249deeaa33b64791859dedbf7188005"
+SOURCE_REVISIONS = {
+    "pre-retirement": "78cbe1682249deeaa33b64791859dedbf7188005",
+    "retirement-v1": "edc57563594680f0b0e11e47f5681510d80d0788",
+}
 
 
-def recording_destination() -> Path:
+def recording_destination() -> tuple[Path, str]:
     parser = argparse.ArgumentParser(
-        description="Record linked-recovery histories from the unmodified pre-retirement workflow."
+        description="Record linked-recovery histories from an unmodified source workflow."
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--generation", choices=SOURCE_REVISIONS, default="pre-retirement")
     args = parser.parse_args()
+    source_revision = SOURCE_REVISIONS[args.generation]
     repo = Path(__file__).resolve().parents[4]
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()
-    if revision != SOURCE_REVISION:
-        raise SystemExit(f"Record only from {SOURCE_REVISION}, not {revision}")
+    if revision != source_revision:
+        raise SystemExit(f"Record only from {source_revision}, not {revision}")
     for extra in ([], ["--cached"]):
         subprocess.run(
             ["git", "diff", "--exit-code", *extra, "--", "moonmind", "api_service"],
@@ -47,18 +52,22 @@ def recording_destination() -> Path:
 
     if not Path(run_module.__file__).resolve().is_relative_to(repo):
         raise SystemExit("Imported workflow does not belong to the recording checkout")
-    return args.output
+    return args.output, args.generation
 
 
 async def main():
-    destination = recording_destination()
+    destination, generation = recording_destination()
+    retired = generation == "retirement-v1"
     destination.mkdir(parents=True, exist_ok=True)
     async with await WorkflowEnvironment.start_local(
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
     ) as env:
         await register_deployment_search_attributes(env)
         for state_machine in (False, True):
-            kind = "typed-state-machine" if state_machine else "legacy-policy"
+            kind = (
+                "retirement-v1-" + ("typed" if state_machine else "legacy") if retired
+                else "typed-state-machine" if state_machine else "legacy-policy"
+            )
             fake = FakeActivities()
             queue = f"pre-retirement-{kind}"
             async with AsyncExitStack() as stack:
@@ -69,11 +78,11 @@ async def main():
                 )
                 result = await asyncio.wait_for(handle.result(), 30)
                 assert result["status"] == "success", result
-                assert fake.steps == ["implement", "finish"], fake.steps
+                assert fake.steps == (["prepare", "implement", "finish"] if retired else ["implement", "finish"]), fake.steps
                 ledger = await handle.query("get_step_ledger")
-                assert ledger["steps"][0]["preservedFrom"]["workflowId"] == "mm:source"
+                assert bool(ledger["steps"][0].get("preservedFrom")) is not retired
                 history = await handle.fetch_history()
-                assert RUN_LINKED_RECOVERY_RETIREMENT_PATCH not in _patches(history)
+                assert (RUN_LINKED_RECOVERY_RETIREMENT_PATCH in _patches(history)) is retired
                 effects = [
                     name
                     for name in _activity_names(history)
@@ -85,9 +94,10 @@ async def main():
                     }
                 ]
                 assert effects == (
-                    [RESTORE_ACTIVITY]
-                    if state_machine
-                    else ["step_checkpoint.validate", "workspace.apply_policy"]
+                    [] if retired else (
+                        [RESTORE_ACTIVITY] if state_machine
+                        else ["step_checkpoint.validate", "workspace.apply_policy"]
+                    )
                 ), effects
                 (destination / f"{kind}.json.gz").write_bytes(
                     gzip.compress(history.to_json().encode(), mtime=0)

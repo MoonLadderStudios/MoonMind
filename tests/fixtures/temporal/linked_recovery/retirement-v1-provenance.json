@@ -1,0 +1,21 @@
+{
+  "sourceRevision": "edc57563594680f0b0e11e47f5681510d80d0788",
+  "workflowType": "MoonMind.UserWorkflow",
+  "temporalSdkVersion": "1.34.0",
+  "recording": "Complete real Temporal histories recorded from unmodified source production files before the admission fix. The source integration test fake activities and unversioned legacy/typed recovery input builders were used without mocking workflow functions or patch markers. All three steps execute, including prepare. Payloads and owners are synthetic.",
+  "fixtures": {
+    "retirement-v1-legacy.json.gz": {
+      "events": 308,
+      "restoreActivities": [],
+      "sha256": "9c0d2e730fd02b6ff8c3303854a3207f73947bb38b7b15995458788365d0bebf"
+    },
+    "retirement-v1-typed.json.gz": {
+      "events": 308,
+      "restoreActivities": [],
+      "sha256": "4bd5e38d4ee4c19c1ac5d536f94ebf47ea286746d8ff262f39930bcf2fb09469"
+    }
+  },
+  "requiredPatchMarker": "run-linked-recovery-retirement-v1",
+  "absentPatchMarker": "run-linked-recovery-admission-v1",
+  "regeneration": "Copy this fixture directory recorder and integration test helpers into the source checkout, preserving repository-relative paths. Run record.py --generation retirement-v1 --output <directory>. Do not regenerate in tests."
+}

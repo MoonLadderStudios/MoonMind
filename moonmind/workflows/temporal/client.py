@@ -47,6 +47,7 @@ from moonmind.omnigent.git_identity import admitted_publication_git_identity
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
     RENAMED_USER_WORKFLOW_TYPE,
+    admit_user_workflow_input,
     resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.temporal.workers import (
@@ -466,6 +467,7 @@ class TemporalClientAdapter:
 
         task_queue = self._get_task_queue(workflow_type, task_queue=task_queue, memo=memo)
 
+        input_args = admit_user_workflow_input(workflow_type, input_args)
         args = [input_args] if input_args is not None else []
 
         formatted_search_attributes = {
@@ -1335,7 +1337,8 @@ class TemporalClientAdapter:
         schedule_id = make_schedule_id(definition_uuid)
         task_queue = self._get_task_queue(workflow_type, memo=memo)
 
-        args = [workflow_input] if workflow_input is not None else []
+        admitted_input = admit_user_workflow_input(workflow_type, workflow_input)
+        args = [admitted_input] if admitted_input is not None else []
 
         formatted_sa = {
             k: v if isinstance(v, list) else [v]
@@ -1526,7 +1529,8 @@ class TemporalClientAdapter:
                 )
 
             if workflow_type is not None:
-                args = [workflow_input] if workflow_input is not None else []
+                admitted_input = admit_user_workflow_input(workflow_type, workflow_input)
+                args = [admitted_input] if admitted_input is not None else []
                 schedule.action = ScheduleActionStartWorkflow(
                     workflow_type,
                     args=args,
