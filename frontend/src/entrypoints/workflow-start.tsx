@@ -2794,7 +2794,7 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
     !step.instructions.trim() &&
     !step.toolId.trim() &&
     (!step.toolInputs.trim() || step.toolInputs.trim() === "{}") &&
-    !step.skillId.trim() &&
+    !hasExplicitSkillSelection(step.skillId) &&
     !step.skillArgs.trim() &&
     step.explicitRequiredCapabilities.length === 0 &&
     !step.presetKey.trim() &&
@@ -6123,7 +6123,9 @@ function WorkflowStartPageContent({
     dashboardConfig.system?.defaultTaskEffortByRuntime ||
     {};
 
-  const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
+  const [steps, setSteps] = useState<StepState[]>([
+    createStepStateEntry(1, { skillId: "auto" }),
+  ]);
   const stepsRef = useRef<StepState[]>(steps);
   const [nextStepNumber, setNextStepNumber] = useState(2);
   // MM-964: the create page remembers the operator's guided vs expert default.
@@ -9308,7 +9310,7 @@ function WorkflowStartPageContent({
         return false;
       }
       if (
-        skillId ||
+        hasExplicitSkillSelection(skillId) ||
         skillArgsRaw ||
         Object.keys(structuredSkillInputs.values).length > 0 ||
         caps.length > 0 ||
@@ -11681,44 +11683,6 @@ function WorkflowStartPageContent({
         <PageHeader
           title={visiblePageTitle}
           documentTitle={pageTitle}
-          actions={
-            // The Advanced toggle precedes every control it reveals.
-            <div className="queue-advanced-row">
-              <label className="checkbox queue-advanced-checkbox">
-                <input
-                  type="checkbox"
-                  checked={showAdvancedStepOptions}
-                  onChange={(event) => {
-                    const advancedEnabled = event.target.checked;
-                    setShowAdvancedStepOptions(advancedEnabled);
-                    updateDashboardPreferences({
-                      createExpertMode: advancedEnabled,
-                    });
-                  }}
-                />
-                Advanced mode
-              </label>
-              {!showAdvancedStepOptions && advancedOverridesSummary ? (
-                <span className="small queue-advanced-override-count">
-                  {advancedOverridesSummary}
-                </span>
-              ) : null}
-              <InfoTooltip
-                label="Advanced mode info"
-                panelId="queue-advanced-info-panel"
-                title="About advanced mode"
-                className="queue-advanced-info-toggle"
-              >
-                <div className="notice queue-advanced-info-panel">
-                  <p className="small">
-                    Shows optional Skill inputs, skill args, required capabilities,
-                    and worker routing overrides. Harness, publish mode, skills, and
-                    presets already add common capabilities automatically.
-                  </p>
-                </div>
-              </InfoTooltip>
-            </div>
-          }
         />
       </section>
 
@@ -12825,7 +12789,7 @@ function WorkflowStartPageContent({
                           ariaLabel={`Step ${index + 1} skill`}
                           placeholder={
                             isPrimaryStep
-                              ? "auto (default), moonspec-orchestrate, ..."
+                              ? "auto"
                               : "optional Skill name"
                           }
                           onChange={(nextValue) =>
@@ -13833,6 +13797,41 @@ function WorkflowStartPageContent({
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
+          <div className="queue-advanced-row">
+            <label className="checkbox queue-advanced-checkbox">
+              <input
+                type="checkbox"
+                checked={showAdvancedStepOptions}
+                onChange={(event) => {
+                  const advancedEnabled = event.target.checked;
+                  setShowAdvancedStepOptions(advancedEnabled);
+                  updateDashboardPreferences({
+                    createExpertMode: advancedEnabled,
+                  });
+                }}
+              />
+              Advanced mode
+            </label>
+            {!showAdvancedStepOptions && advancedOverridesSummary ? (
+              <span className="small queue-advanced-override-count">
+                {advancedOverridesSummary}
+              </span>
+            ) : null}
+            <InfoTooltip
+              label="Advanced mode info"
+              panelId="queue-advanced-info-panel"
+              title="About advanced mode"
+              className="queue-advanced-info-toggle"
+            >
+              <div className="notice queue-advanced-info-panel">
+                <p className="small">
+                  Shows optional Skill inputs, skill args, required capabilities,
+                  and worker routing overrides. Harness, publish mode, skills, and
+                  presets already add common capabilities automatically.
+                </p>
+              </div>
+            </InfoTooltip>
+          </div>
         <div
           className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
           role="group"

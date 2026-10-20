@@ -264,6 +264,31 @@ describe("Workflow Create form trust", () => {
     vi.restoreAllMocks();
   });
 
+  it("starts with auto selected and offers explicit skills from the dropdown", async () => {
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+
+    const skill = await screen.findByRole("combobox", { name: "Step 1 skill" }) as HTMLInputElement;
+    expect(skill.value).toBe("auto");
+    expect(skill.placeholder).toBe("auto");
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Show skill options" }));
+    expect(screen.getByRole("option", { name: "auto", selected: true })).toBeTruthy();
+    const explicitSkill = await screen.findByRole("option", { name: "moonspec-orchestrate" });
+    fireEvent.pointerDown(explicitSkill);
+    expect(skill.value).toBe("moonspec-orchestrate");
+  });
+
+  it("places Advanced mode at the bottom of the form and reveals optional controls", async () => {
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+
+    const advanced = await screen.findByRole("checkbox", { name: "Advanced mode" });
+    expect(within(screen.getByRole("region", { name: "Header" })).queryByRole("checkbox")).toBeNull();
+    expect(within(screen.getByRole("region", { name: "Submit" })).getByRole("checkbox", { name: "Advanced mode" })).toBe(advanced);
+    expect(screen.queryByLabelText("Priority")).toBeNull();
+    fireEvent.click(advanced);
+    expect(screen.getByLabelText("Priority")).toBeTruthy();
+  });
+
   it("shows an off-screen validation error in the submit bar and focuses the invalid field", async () => {
     renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
 

@@ -4,7 +4,7 @@
 **Viewpoint:** System / Feature Design View  
 **Status:** Current
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-10-16
+**Updated:** 2026-10-20
 **Audience:** Dashboard, workflow authoring, schema-form, and API contributors  
 **Authority:** Create-page information architecture, single-context presentation, schema-driven task inputs, preview/error behavior, and submission/reconstruction UX. Backend providing contracts remain authoritative for execution and policy.  
 **Owning Surface:** Shared /workflows/new authoring form and its catalog/compiler consumers  
@@ -39,7 +39,7 @@ Submission preserves defaulted, inherited, and explicitly selected intent. The A
 
 ### Simple Workflow
 
-The user enters instructions, chooses repository/source and branch when needed, accepts the normal step or selects another capability, reviews the single publishing selection and its explanation, and clicks **Start Workflow**. A goal without an explicit step, plan, tool/Skill, or preset can be conservatively mapped to a seeded preset by the backend. The same compiler then validates and admits it.
+The user enters instructions, chooses repository/source and branch when needed, accepts the initial **auto** Skill selection or selects another capability, reviews the single publishing selection and its explanation, and clicks **Start Workflow**. A goal without an explicit step, plan, tool/Skill, or preset can be conservatively mapped to a seeded preset by the backend. The same compiler then validates and admits it.
 
 ### Preset Workflow
 
@@ -281,7 +281,7 @@ Static conflicts are rejected before parent launch, issue creation, or child enq
 
 ## Advanced Controls
 
-Advanced mode shows meaningful optional Skill inputs, required capabilities, worker routing, Priority, Max Attempts, host policy, and a Backend alternative only where supported. Opening or closing disclosure never changes supported authored values: hidden values are still validated and submitted, and the collapsed summary names the non-default values it holds (for example "Overrides: priority 7, max attempts 5"). The Advanced toggle sits in the page header, before everything it reveals. Schedule, Dependencies, Report, and Preset management are collapsed groups with a one-line summary of their values; a group opens when it already holds a value or a validation error, and its fields stay mounted while closed. An exceptional Backend remains visible in the collapsed summary. Controls that are genuinely retired or inapplicable follow their owning intent-preserving normalization, not a blanket reset merely because they are hidden.
+Advanced mode shows meaningful optional Skill inputs, required capabilities, worker routing, Priority, Max Attempts, host policy, and a Backend alternative only where supported. Opening or closing disclosure never changes supported authored values: hidden values are still validated and submitted, and the collapsed summary names the non-default values it holds (for example "Overrides: priority 7, max attempts 5"). The Advanced toggle sits at the bottom of the form, above the submission controls. Schedule, Dependencies, Report, and Preset management are collapsed groups with a one-line summary of their values; a group opens when it already holds a value or a validation error, and its fields stay mounted while closed. An exceptional Backend remains visible in the collapsed summary. Controls that are genuinely retired or inapplicable follow their owning intent-preserving normalization, not a blanket reset merely because they are hidden.
 
 MoonMind does not provide native retrieval, so Create has no context-retrieval/RAG controls in either mode. Edit and rerun never resubmit an inherited `rag` or `followUpRetrieval` value; the server rejects an explicit retired value with an actionable error. Supply context through explicit attachments, artifact refs, or scoped workspace access.
 

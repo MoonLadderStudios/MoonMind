@@ -14,7 +14,7 @@ function Harness({ initialValue = "" }: { initialValue?: string }): ReactElement
       value={value}
       options={OPTIONS}
       onChange={setValue}
-      placeholder="auto (default), moonspec-orchestrate, ..."
+      placeholder="auto"
       dataStepIndex="0"
       ariaLabel="Step 1 skill"
     />
@@ -30,7 +30,7 @@ function HarnessWithLinkedDescription(): ReactElement {
           value={value}
           options={OPTIONS}
           onChange={setValue}
-          placeholder="auto (default), moonspec-orchestrate, ..."
+          placeholder="auto"
           dataStepIndex="0"
           ariaLabel="Step 1 skill"
         />
