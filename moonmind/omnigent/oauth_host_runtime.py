@@ -4396,10 +4396,17 @@ class OmnigentOAuthHostRuntime:
         # Only the admitted credential reaches Git: ambient tokens, helpers,
         # headers, askpass and config overrides are excluded for selected and
         # anonymous clones alike (MoonLadderStudios/MoonMind#4011).
-        git_env = build_isolated_git_environment(
-            github_token if source_kind == "github_https" else None,
-            base_env=os.environ,
-        )
+        try:
+            git_env = build_isolated_git_environment(
+                github_token if source_kind == "github_https" else None,
+                repository_url=source if source_kind == "github_https" else None,
+                base_env=os.environ,
+            )
+        except ValueError as exc:
+            raise OmnigentOAuthHostError(
+                "workspace repository credential target is invalid",
+                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
+            ) from exc
 
         clone_args = ["git", "clone"]
         # A remote clone can fetch just the authored branch; a local source keeps
