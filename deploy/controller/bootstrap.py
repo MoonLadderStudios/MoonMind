@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -62,6 +63,10 @@ HANDOFF_SETTLE_SECONDS = 5
 # Bound readiness separately from the CLI so failed starts can reach rollback.
 CONTROLLER_START_TIMEOUT_SECONDS = 60
 CONTROLLER_START_COMMAND_TIMEOUT_SECONDS = 120
+# The caller allows 300 seconds; leave time to deliver the final receipt.
+HANDOFF_TIMEOUT_SECONDS = 270
+HANDOFF_RECOVERY_SECONDS = 90
+COMMAND_CLEANUP_SECONDS = 5
 
 
 # The standalone controller image repository. Any other image is the MoonMind
@@ -87,12 +92,13 @@ def controller_capabilities(url: str, secret: str) -> set[str]:
     return set(body.get("capabilities") or ())
 
 
-def _checked_capture(command: list[str], *, environment=None) -> str:
-    result = (
-        _run_capture(command)
-        if environment is None
-        else _run_capture(command, environment=environment)
-    )
+def _checked_capture(command: list[str], *, environment=None, deadline=None) -> str:
+    options = {}
+    if environment is not None:
+        options["environment"] = environment
+    if deadline is not None:
+        options["deadline"] = deadline
+    result = _run_capture(command, **options)
     if result.returncode:
         raise RuntimeError(
             f"Controller prerequisite {command[1]} failed (exit {result.returncode})."
@@ -188,7 +194,7 @@ def _first_capable_controller_image(candidates: list[str], requested: str) -> st
     )
 
 
-def _running_controller_image(project: str) -> str | None:
+def _running_controller_image(project: str, *, deadline=None) -> str | None:
     """The image the live controller container runs; ``None`` when none runs.
 
     The Compose file is not proof: an interrupted refresh can name the
@@ -203,13 +209,15 @@ def _running_controller_image(project: str) -> str | None:
             f"label=com.docker.compose.project={project}",
             "--filter",
             f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
-        ]
+        ],
+        **({"deadline": deadline} if deadline is not None else {}),
     )
     identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
     if len(identifiers) != 1:
         return None
     inspected = _run_capture(
-        ["docker", "inspect", "--format", "{{.Image}}", identifiers[0]]
+        ["docker", "inspect", "--format", "{{.Image}}", identifiers[0]],
+        **({"deadline": deadline} if deadline is not None else {}),
     )
     if inspected.returncode:
         return None
@@ -312,7 +320,9 @@ def cmd_ensure(args, env) -> int:
             time.sleep(1)
 
 
-def _retargeted_controller_lines(compose_file: Path, image: str) -> list[str]:
+def _retargeted_controller_lines(
+    compose_file: Path, image: str, *, deadline=None
+) -> list[str]:
     """The installed controller Compose file, running ``image``'s controller.
 
     Reuse the generated file so daemon host paths, networks, identity and
@@ -348,7 +358,8 @@ def _retargeted_controller_lines(compose_file: Path, image: str) -> list[str]:
                     "--format",
                     "{{json .Config.User}}",
                     previous_image,
-                ]
+                ],
+                **({"deadline": deadline} if deadline is not None else {}),
             )
         )
         if not isinstance(previous_user, str):
@@ -378,20 +389,39 @@ def cmd_handoff(args, env) -> int:
     kernel lock with it; the new controller resumes the operation from its
     record. Only that operation may be open, and each attempt group hands
     off once, so a controller that cannot take over never loops: the running
-    controller keeps applying. A replacement that fails or does not stay
-    running is reverted.
+    controller keeps applying. Failed replacement recovery is bounded by
+    the same deadline and requires confirmed command cleanup and state.
     """
     _ensure_outside_controller(env)
+    deadline = time.monotonic() + HANDOFF_TIMEOUT_SECONDS
+    # Docker stop/cancellation must unwind the owned CLI before the helper
+    # exits, without treating cancellation as a reason to launch recovery.
+    previous_handler = signal.signal(signal.SIGTERM, _cancel_handoff)
+    try:
+        return _handoff(args, deadline=deadline)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        return _print_handoff_receipt("unavailable", reason=str(exc))
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+
+def _cancel_handoff(signum, frame):
+    raise SystemExit(128 + signum)
+
+
+def _handoff(args, *, deadline: float) -> int:
+    forward_deadline = deadline - HANDOFF_RECOVERY_SECONDS
     state_dir = Path(args.state_dir).resolve()
     compose_file = state_dir / "controller-compose.yaml"
     if not compose_file.is_file():
         return _print_handoff_receipt("unavailable", reason="no installed controller")
-    identity = recover_identity(state_dir)
+    identity = recover_identity(state_dir, deadline=forward_deadline)
     project = str(identity["project"])
     image = _checked_capture(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", args.image]
+        ["docker", "image", "inspect", "--format", "{{.Id}}", args.image],
+        deadline=forward_deadline,
     ).strip()
-    previous = _running_controller_image(project)
+    previous = _running_controller_image(project, deadline=forward_deadline)
     if previous == image:
         return _print_handoff_receipt("current", image=image)
     store = record_mod.OperationStore(state_dir)
@@ -417,27 +447,44 @@ def cmd_handoff(args, env) -> int:
     recorded = load_controller_image(state_dir) or {}
     try:
         _write_controller_compose(
-            compose_file, _retargeted_controller_lines(compose_file, image)
+            compose_file,
+            _retargeted_controller_lines(
+                compose_file, image, deadline=forward_deadline
+            ),
         )
         record_controller_image(state_dir, requested=args.image, pinned=image)
-        _ensure_identity_network(identity)
-        code = _compose_up(state_dir, project, "--pull", "never")
+        _ensure_identity_network(identity, deadline=forward_deadline)
+        code = _compose_up(
+            state_dir, project, "--pull", "never", deadline=forward_deadline
+        )
         if code:
             raise RuntimeError(f"controller recreation failed (exit {code})")
-        if not _controller_stays_running(project, image):
+        if not _controller_stays_running(project, image, deadline=forward_deadline):
             raise RuntimeError("the requested controller did not stay running")
-    except (OSError, RuntimeError, ValueError) as exc:
-        compose_file.write_text(original, encoding="utf-8")
-        if recorded:
-            record_controller_image(
-                state_dir,
-                requested=str(recorded.get("requested") or ""),
-                pinned=recorded.get("pinned"),
-            )
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         try:
-            code = _compose_up(state_dir, project, "--pull", "never")
-            restored = "restored" if code == 0 else f"restore failed (exit {code})"
-        except (OSError, RuntimeError, ValueError) as restore_error:
+            compose_file.write_text(original, encoding="utf-8")
+            if recorded:
+                record_controller_image(
+                    state_dir,
+                    requested=str(recorded.get("requested") or ""),
+                    pinned=recorded.get("pinned"),
+                )
+            if isinstance(exc, CommandCleanupError):
+                raise RuntimeError("recovery skipped: command cleanup is unverified")  # noqa: TRY004 - outcome, not argument validation
+            _reconcile_controller(project, images={image, previous}, deadline=deadline)
+            code = _compose_up(state_dir, project, "--pull", "never", deadline=deadline)
+            if code:
+                raise RuntimeError(f"exit {code}")
+            if not _controller_stays_running(project, previous, deadline=deadline):
+                raise RuntimeError("previous controller readiness is unverified")
+            restored = "restored"
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            subprocess.SubprocessError,
+        ) as restore_error:
             restored = f"restore failed ({restore_error})"
         return _print_handoff_receipt(
             "unavailable", reason=f"{exc}; previous controller {restored}"
@@ -445,8 +492,10 @@ def cmd_handoff(args, env) -> int:
     return _print_handoff_receipt("handed-off", image=image)
 
 
-def _controller_stays_running(project: str, image: str) -> bool:
+def _controller_stays_running(project: str, image: str, *, deadline=None) -> bool:
     """The replacement still runs ``image`` without a restart after settling."""
+    if deadline is not None and _remaining(deadline) <= HANDOFF_SETTLE_SECONDS:
+        raise RuntimeError("handoff readiness budget exhausted")
     time.sleep(HANDOFF_SETTLE_SECONDS)
     listed = _run_capture(
         [
@@ -457,13 +506,21 @@ def _controller_stays_running(project: str, image: str) -> bool:
             f"label=com.docker.compose.project={project}",
             "--filter",
             f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
-        ]
+        ],
+        **({"deadline": deadline} if deadline is not None else {}),
     )
     identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
     if len(identifiers) != 1:
         return False
     inspected = _run_capture(
-        ["docker", "inspect", "--format", "{{.Image}} {{.RestartCount}}", identifiers[0]]
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{.Image}} {{.RestartCount}}",
+            identifiers[0],
+        ],
+        **({"deadline": deadline} if deadline is not None else {}),
     )
     return inspected.returncode == 0 and (inspected.stdout or "").split() == [image, "0"]
 
@@ -531,7 +588,7 @@ def load_identity(state_dir: Path) -> dict | None:
     return identity
 
 
-def describe_installation(state_dir: Path) -> dict:
+def describe_installation(state_dir: Path, *, deadline=None) -> dict:
     """Read installed identity and bind authority through one Compose inspection."""
     compose_file = state_dir / "controller-compose.yaml"
     if not compose_file.is_file():
@@ -556,6 +613,7 @@ def describe_installation(state_dir: Path) -> dict:
                 "json",
             ],
             environment=compose_environment,
+            **({"deadline": deadline} if deadline is not None else {}),
         )
     )
     controller = (config.get("services") or {}).get(CONTROLLER_SERVICE) or {}
@@ -607,12 +665,14 @@ def describe_installation(state_dir: Path) -> dict:
     return {"identity": identity, "bindSources": sources}
 
 
-def recover_identity(state_dir: Path) -> dict:
+def recover_identity(state_dir: Path, *, deadline=None) -> dict:
     """Restore lost metadata without recreating the controller or touching work."""
     existing = load_identity(state_dir)
     if existing:
         return existing
-    identity = describe_installation(state_dir)["identity"]
+    identity = describe_installation(
+        state_dir, **({"deadline": deadline} if deadline is not None else {})
+    )["identity"]
     # This metadata contains no credential. Host callers must be able to read
     # it after recovery runs with the controller's root-owned state authority.
     temporary = None
@@ -687,7 +747,7 @@ def target_project_for_repo(repo: Path, env=None) -> str:
     return normalized or "moonmind"
 
 
-def ensure_target_network(network: str, project: str) -> None:
+def ensure_target_network(network: str, project: str, *, deadline=None) -> None:
     """Create the API link network when the MoonMind stack has not yet.
 
     The network carries the Compose labels of the MoonMind project so a later
@@ -695,8 +755,9 @@ def ensure_target_network(network: str, project: str) -> None:
     controller stays attached, a target-project shutdown leaves the network
     (and the controller endpoint) in place.
     """
+    options = {"deadline": deadline} if deadline is not None else {}
     try:
-        inspected = _run_capture(["docker", "network", "inspect", network])
+        inspected = _run_capture(["docker", "network", "inspect", network], **options)
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"Cannot inspect Docker network {network!r}: {exc}") from exc
     if inspected.returncode == 0:
@@ -712,7 +773,8 @@ def ensure_target_network(network: str, project: str) -> None:
             "--label",
             f"com.docker.compose.network={TARGET_NETWORK_KEY}",
             network,
-        ]
+        ],
+        **options,
     )
     if created.returncode != 0:
         raise RuntimeError(
@@ -795,7 +857,148 @@ def split_image_reference(image: str) -> tuple[str, str | None, str | None]:
     return text, tag, digest
 
 
-def _run_capture(args: list, *, environment=None) -> subprocess.CompletedProcess:
+class CommandCleanupError(RuntimeError):
+    """The prior CLI may still mutate Docker; no recovery mutation is safe."""
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError("controller handoff budget exhausted")
+    return remaining
+
+
+def _group_running(group: int) -> bool:
+    """Linux zombies cannot issue Docker requests; all live group members count."""
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+        except FileNotFoundError:
+            continue
+        if int(fields[2]) == group and fields[0] not in {"Z", "X"}:
+            return True
+    return False
+
+
+def _stop_command(process, *, deadline: float) -> None:
+    """Stop the owned CLI and Compose plugin before inspecting Docker again."""
+    try:
+        for signum, grace in ((signal.SIGTERM, 1), (signal.SIGKILL, 3)):
+            try:
+                os.killpg(process.pid, signum)
+            except ProcessLookupError:
+                pass
+            until = min(deadline, time.monotonic() + grace)
+            while _group_running(process.pid) and time.monotonic() < until:
+                time.sleep(min(0.05, max(0, until - time.monotonic())))
+            if not _group_running(process.pid):
+                process.wait(timeout=_remaining(deadline))
+                return
+        raise RuntimeError("process group still running")
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise CommandCleanupError(
+            f"controller command cleanup unverified: {exc}"
+        ) from exc
+
+
+def _run_owned(command: list[str], *, deadline: float, capture=False, environment=None):
+    """Use the shared phase budget, including bounded descendant cleanup.
+
+    Handoff runs in a Linux one-off. Host/Windows discovery and cold-image
+    downloads retain their existing subprocess path without this deadline.
+    """
+    timeout = min(
+        CONTROLLER_START_COMMAND_TIMEOUT_SECONDS,
+        _remaining(deadline) - COMMAND_CLEANUP_SECONDS,
+    )
+    if timeout <= 0:
+        raise RuntimeError("controller handoff command budget exhausted")
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("controller handoff requires its Linux helper")
+    process = subprocess.Popen(
+        command,
+        start_new_session=True,
+        text=True,
+        env=environment,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException as exc:
+        try:
+            _stop_command(process, deadline=deadline)
+        except CommandCleanupError as cleanup:
+            if not isinstance(exc, Exception):
+                exc.add_note(str(cleanup))
+                raise exc
+            raise CommandCleanupError(f"{exc}; {cleanup}") from exc
+        if isinstance(exc, subprocess.TimeoutExpired):
+            raise RuntimeError(  # noqa: TRY004 - translate subprocess failure
+                f"controller command timed out after {timeout:g} seconds"
+            ) from exc
+        raise
+    # Even a successful launcher must not leave a plugin mutating the daemon.
+    try:
+        if _group_running(process.pid):
+            _stop_command(process, deadline=deadline)
+    except OSError as exc:
+        raise CommandCleanupError(
+            f"controller command cleanup unverified: {exc}"
+        ) from exc
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _reconcile_controller(project: str, *, images: set[str], deadline: float) -> None:
+    """Fail closed on ambiguous or transitional exact-project container state."""
+    identifiers = _checked_capture(
+        [
+            "docker",
+            "ps",
+            "--all",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
+        ],
+        deadline=deadline,
+    ).split()
+    if not identifiers:
+        return
+    if len(identifiers) != 1:
+        raise RuntimeError("recovery skipped: ambiguous controller containers")
+    containers = json.loads(
+        _checked_capture(["docker", "inspect", *identifiers], deadline=deadline)
+    )
+    if not isinstance(containers, list) or len(containers) != 1:
+        raise RuntimeError("recovery skipped: controller inspection unavailable")
+    container = containers[0]
+    if not isinstance(container, dict):
+        raise ValueError("recovery skipped: invalid controller inspection")  # noqa: TRY004 - invalid Docker response
+    labels = (container.get("Config") or {}).get("Labels") or {}
+    state = container.get("State") or {}
+    if (
+        labels.get("com.docker.compose.project") != project
+        or labels.get("com.docker.compose.service") != CONTROLLER_SERVICE
+        or container.get("Image") not in images
+        or state.get("Status") not in {"running", "exited", "restarting"}
+        or state.get("Paused")
+    ):
+        # A known candidate in a daemon restart loop is precisely what
+        # rollback repairs. Removing/unknown state is not safe to repeat.
+        raise RuntimeError("recovery skipped: controller state is uncertain")
+
+
+def _run_capture(
+    args: list, *, environment=None, deadline=None
+) -> subprocess.CompletedProcess:
+    if deadline is not None:
+        return _run_owned(
+            args, deadline=deadline, capture=True, environment=environment
+        )
     return subprocess.run(
         args, capture_output=True, text=True, timeout=120, check=False, env=environment
     )
@@ -1036,7 +1239,7 @@ def is_application_image(image: str) -> bool:
     return repository not in standalone
 
 
-def _compose(state_dir: Path, project: str, *args: str) -> int:
+def _compose(state_dir: Path, project: str, *args: str, deadline=None) -> int:
     command = [
         "docker",
         "compose",
@@ -1046,6 +1249,8 @@ def _compose(state_dir: Path, project: str, *args: str) -> int:
         str(state_dir / "controller-compose.yaml"),
         *args,
     ]
+    if deadline is not None:
+        return _run_owned(command, deadline=deadline).returncode
     timeout = (
         CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
         if args[0] == "rm" or (
@@ -1065,7 +1270,7 @@ def _compose(state_dir: Path, project: str, *args: str) -> int:
         ) from exc
 
 
-def _compose_up(state_dir: Path, project: str, *options: str) -> int:
+def _compose_up(state_dir: Path, project: str, *options: str, deadline=None) -> int:
     """Start the controller, replacing a container that is not running.
 
     A stopped container keeps the network IDs it last joined, and Compose
@@ -1074,13 +1279,21 @@ def _compose_up(state_dir: Path, project: str, *options: str) -> int:
     ``compose rm`` removes only a container that is not running, so a live
     controller is untouched; its state lives in the bind-mounted state dir.
     """
-    code = _compose(state_dir, project, "rm", "--force", CONTROLLER_SERVICE)
+    budget = {"deadline": deadline} if deadline is not None else {}
+    code = _compose(state_dir, project, "rm", "--force", CONTROLLER_SERVICE, **budget)
     if code:
         return code
     return _compose(
-        state_dir, project, "up", "-d", "--wait",
-        "--wait-timeout", str(CONTROLLER_START_TIMEOUT_SECONDS),
-        *options, CONTROLLER_SERVICE
+        state_dir,
+        project,
+        "up",
+        "-d",
+        "--wait",
+        "--wait-timeout",
+        str(CONTROLLER_START_TIMEOUT_SECONDS),
+        *options,
+        CONTROLLER_SERVICE,
+        **budget,
     )
 
 
@@ -1103,11 +1316,13 @@ def _project_for_state(state_dir: Path, repo: Path) -> str:
     return project_for_repo(repo)
 
 
-def _ensure_identity_network(identity: dict | None) -> None:
+def _ensure_identity_network(identity: dict | None, *, deadline=None) -> None:
     network = (identity or {}).get("targetNetwork")
     if network:
         ensure_target_network(
-            str(network), str((identity or {}).get("targetProject") or "moonmind")
+            str(network),
+            str((identity or {}).get("targetProject") or "moonmind"),
+            **({"deadline": deadline} if deadline is not None else {}),
         )
 
 

@@ -399,7 +399,7 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
             return subprocess.CompletedProcess(command, 0, json.dumps(image_user), "")
         raise AssertionError(command)
 
-    def compose_run(state_dir, project, *args):
+    def compose_run(state_dir, project, *args, **kwargs):
         nonlocal upgraded
         assert lock_mod.StackLock(state_dir, "moonmind").probe()
         if args[0] == "up":
@@ -512,7 +512,7 @@ def test_ensure_prefer_requested_replaces_a_capable_controller_that_failed_the_r
         # The installed application images are never consulted.
         raise AssertionError(command)
 
-    def compose_run(state_dir, project, *args):
+    def compose_run(state_dir, project, *args, **kwargs):
         assert lock_mod.StackLock(state_dir, "moonmind").probe()
         if args[0] != "up":
             return 0
@@ -1433,6 +1433,36 @@ class _HandoffDocker:
             return subprocess.CompletedProcess(command, 0, "live-controller\n", "")
         if command[:2] == ["docker", "inspect"]:
             assert command[-1] == "live-controller"
+            if "--format" not in command:
+                import json
+
+                project_filter = next(
+                    arg
+                    for cmd in reversed(self.commands)
+                    if cmd[:2] == ["docker", "ps"]
+                    for arg in cmd
+                    if arg.startswith("label=com.docker.compose.project=")
+                )
+                project = project_filter.split("=", 2)[2]
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "Config": {
+                                    "Labels": {
+                                        "com.docker.compose.project": project,
+                                        "com.docker.compose.service": "controller",
+                                    }
+                                },
+                                "State": {"Status": "running"},
+                                "Image": self.live,
+                            }
+                        ]
+                    ),
+                    "",
+                )
             if command[3] == "{{.Image}}":
                 return subprocess.CompletedProcess(command, 0, self.live + "\n", "")
             return subprocess.CompletedProcess(
@@ -1473,7 +1503,7 @@ def test_handoff_lets_the_requested_release_controller_resume_the_operation(
     docker = _HandoffDocker()
     recreations = []
 
-    def compose_run(state_dir, project, *args):
+    def compose_run(state_dir, project, *args, **kwargs):
         if args[0] == "up":
             recreations.append(args)
             docker.live = "sha256:" + "c" * 64
@@ -1545,7 +1575,7 @@ def test_failed_handoff_restores_the_previous_controller(
     docker = _HandoffDocker(settles=failure != "restarting")
     ups = []
 
-    def compose_run(state_dir, project, *args):
+    def compose_run(state_dir, project, *args, **kwargs):
         if args[0] != "up":
             return 0
         ups.append(compose.read_text())
@@ -1553,6 +1583,9 @@ def test_failed_handoff_restores_the_previous_controller(
             if failure == "recreation":
                 return 1
             docker.live = "sha256:" + "c" * 64
+        else:
+            docker.live = "sha256:" + "a" * 64
+            docker.restarts = "0"
         return 0
 
     monkeypatch.setattr(bootstrap, "_run_capture", docker.run)
@@ -1618,9 +1651,8 @@ def test_bootstrap_restore_never_replaces_a_controller_that_owns_the_stack(
     monkeypatch.setattr(
         bootstrap, "ensure_target_network", lambda network, project: None
     )
-    with lock_mod.StackLock(tmp_path, "moonmind").acquire():
-        with pytest.raises(lock_mod.LockBusyError):
-            bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={})
+    with lock_mod.StackLock(tmp_path, "moonmind").acquire(), pytest.raises(lock_mod.LockBusyError):
+        bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={})
     assert held_during_compose == []
     assert bootstrap.main(["restore", "--state-dir", str(tmp_path)], env={}) == 0
     assert held_during_compose and all(held_during_compose)
@@ -1643,15 +1675,16 @@ def test_handoff_startup_timeout_restores_saved_controller_and_keeps_failure(
     def run(command, **kwargs):
         if command[:2] != ["docker", "compose"]:
             return docker.run(command, **kwargs)
-        assert 0 < kwargs["timeout"] <= 120
+        assert 0 < kwargs["deadline"] - bootstrap.time.monotonic() <= 270
         if "up" in command:
             assert command[command.index("--wait-timeout") + 1] == "60"
             ups.append(compose.read_text())
             if len(ups) == 1 or restore_timeout:
-                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+                raise subprocess.TimeoutExpired(command, 120)
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(bootstrap.subprocess, "run", run)
+    monkeypatch.setattr(bootstrap, "_run_owned", run)
+    monkeypatch.setattr(bootstrap, "HANDOFF_SETTLE_SECONDS", 0)
     receipt = _handoff(bootstrap, state, capsys)
 
     assert receipt["status"] == "unavailable"
@@ -1696,3 +1729,420 @@ def test_cold_controller_start_does_not_apply_handoff_budget_to_image_download(
     monkeypatch.setattr(bootstrap.subprocess, "run", run)
     assert bootstrap._compose_up(tmp_path, "moonmind-test-cold") == 0
     assert any("up" in command for command in calls)
+
+
+def test_handoff_preflight_timeout_is_a_bounded_receipt(
+    controller_path, tmp_path, monkeypatch, capsys
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    state, compose, _ = _handoff_installation(bootstrap, load("record"), tmp_path)
+    before = compose.read_text()
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], 1)
+
+    monkeypatch.setattr(bootstrap, "_run_capture", timeout)
+    receipt = _handoff(bootstrap, state, capsys)
+    assert receipt["status"] == "unavailable"
+    assert compose.read_text() == before
+
+
+def test_owned_command_uses_remaining_budget(controller_path, monkeypatch):
+    bootstrap = load("bootstrap")
+    monkeypatch.setattr(bootstrap.time, "monotonic", lambda: 20)
+    with pytest.raises(RuntimeError, match="budget"):
+        bootstrap._run_owned(["must-not-start"], deadline=20)
+
+
+@pytest.mark.parametrize(
+    "failure", ["rm", "up", "settle", "inspect", "reconcile", "exhausted"]
+)
+def test_handoff_shares_deadline_and_reserves_bounded_recovery(
+    controller_path, tmp_path, monkeypatch, capsys, failure
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    state, compose, _ = _handoff_installation(bootstrap, load("record"), tmp_path)
+    original = compose.read_text()
+    docker = _HandoffDocker()
+    clock = [1000.0]
+    calls = []
+    failed = [False]
+    monkeypatch.setattr(bootstrap.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        bootstrap.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+
+    def run(command, *, deadline, **kwargs):
+        # All subprocesses, including preflight and post-start probes, share
+        # either the forward phase cutoff or the final recovery cutoff.
+        assert deadline in {1180, 1270}
+        assert deadline > clock[0]
+        calls.append((command, deadline, clock[0]))
+        recovering = deadline == 1270
+        if command[:2] == ["docker", "compose"]:
+            verb = "up" if "up" in command else "rm"
+            if recovering:
+                assert any(
+                    c[:2] == ["docker", "inspect"] and "--format" not in c
+                    for c, d, _ in calls
+                    if d == 1270
+                )
+                docker.live = "sha256:" + "a" * 64
+                docker.restarts = "0"
+            elif verb == "up":
+                docker.live = "sha256:" + "c" * 64
+            if not recovering and (
+                failure == verb or failure == "exhausted" and verb == "up"
+            ):
+                failed[0] = True
+                clock[0] = deadline - 1
+                raise subprocess.TimeoutExpired(command, 1)
+            clock[0] += 20
+            return subprocess.CompletedProcess(command, 0)
+        if (
+            not recovering
+            and command[:2] == ["docker", "inspect"]
+            and command[3] == "{{.Image}} {{.RestartCount}}"
+        ):
+            if failure in {"inspect", "reconcile", "exhausted"}:
+                failed[0] = True
+                clock[0] = deadline - 1
+                raise subprocess.TimeoutExpired(command, 1)
+            if failure == "settle":
+                failed[0] = True
+                docker.restarts = "1"
+        if recovering and failure == "reconcile":
+            raise subprocess.TimeoutExpired(command, 1)
+        if recovering and failure == "exhausted":
+            clock[0] = deadline
+            raise RuntimeError("controller handoff budget exhausted")
+        clock[0] += 1
+        return docker.run(command)
+
+    monkeypatch.setattr(bootstrap, "_run_owned", run)
+    receipt = _handoff(bootstrap, state, capsys)
+    assert failed[0]
+    assert receipt["status"] == "unavailable"
+    assert clock[0] <= 1270
+    assert compose.read_text() == original
+    if failure in {"reconcile", "exhausted"}:
+        assert "restore failed" in receipt["reason"]
+        assert not any(
+            c[:2] == ["docker", "compose"] and d == 1270 for c, d, _ in calls
+        )
+    else:
+        assert "previous controller restored" in receipt["reason"]
+
+
+@pytest.mark.parametrize(
+    "uncertainty",
+    ["duplicate", "removing", "wrong-project", "inspection-error", "wrong-image"],
+)
+def test_handoff_does_not_mutate_after_uncertain_reconciliation(
+    controller_path, monkeypatch, uncertainty
+):
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1] == "ps":
+            return subprocess.CompletedProcess(
+                command, 0, "one two" if uncertainty == "duplicate" else "one", ""
+            )
+        if uncertainty == "inspection-error":
+            return subprocess.CompletedProcess(command, 1, "", "unavailable")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                [
+                    {
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.project": (
+                                    "other"
+                                    if uncertainty == "wrong-project"
+                                    else "exact"
+                                ),
+                                "com.docker.compose.service": "controller",
+                            }
+                        },
+                        "State": {
+                            "Status": (
+                                "removing" if uncertainty == "removing" else "running"
+                            )
+                        },
+                        "Image": "unknown" if uncertainty == "wrong-image" else "known",
+                    }
+                ]
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    with pytest.raises(RuntimeError):
+        bootstrap._reconcile_controller(
+            "exact", images={"known"}, deadline=bootstrap.time.monotonic() + 20
+        )
+    assert all(
+        "label=com.docker.compose.project=exact" in c for c in calls if c[1] == "ps"
+    )
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform != "linux", reason="Linux handoff helper"
+)
+@pytest.mark.parametrize("mode", ["timeout", "interrupt", "sigterm", "success"])
+def test_owned_command_stops_compose_plugin_before_recovery(
+    controller_path, tmp_path, monkeypatch, mode
+):
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    bootstrap = load("bootstrap")
+    marker = tmp_path / "plugin-pid"
+    # The CLI and its plugin ignore TERM. The plugin stays alive after the
+    # launcher dies, reproducing subprocess.run's former single-PID cleanup.
+    script = """
+import os, signal, subprocess, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child = subprocess.Popen([sys.executable, '-c',
+    'import os,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+    'open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(60)', sys.argv[1]])
+if sys.argv[2] == "success":
+    while not os.path.exists(sys.argv[1]):
+        time.sleep(0.01)
+else:
+    time.sleep(60)
+"""
+    if mode in {"interrupt", "sigterm"}:
+
+        def interrupt(process, **kwargs):
+            until = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < until:
+                time.sleep(0.01)
+            if mode == "sigterm":
+                os.kill(os.getpid(), signal.SIGTERM)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess.Popen, "communicate", interrupt)
+    monkeypatch.setattr(bootstrap, "CONTROLLER_START_COMMAND_TIMEOUT_SECONDS", 0.3)
+    started = time.monotonic()
+    previous_handler = signal.signal(signal.SIGTERM, bootstrap._cancel_handoff)
+    try:
+        command = [sys.executable, "-c", script, str(marker), mode]
+        if mode == "success":
+            assert bootstrap._run_owned(command, deadline=started + 7).returncode == 0
+        else:
+            error = {
+                "timeout": RuntimeError,
+                "interrupt": KeyboardInterrupt,
+                "sigterm": SystemExit,
+            }[mode]
+            with pytest.raises(error):
+                bootstrap._run_owned(command, deadline=started + 7)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+    assert time.monotonic() - started < 7
+    assert marker.exists()
+    pid = int(marker.read_text())
+    try:
+        stat = __import__("pathlib").Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        pass
+    else:
+        assert stat.rsplit(")", 1)[1].split()[0] == "Z"
+    # Only after the helper returns could the caller begin reconciliation.
+    # No live plugin remains to race that inspection/recovery.
+
+
+def test_owned_commands_spend_one_cumulative_allowance(controller_path, monkeypatch):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    clock = [0]
+    timeouts = []
+    monkeypatch.setattr(bootstrap.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(bootstrap, "_group_running", lambda pid: False)
+
+    class Process:
+        pid = 123
+        returncode = 0
+
+        def __init__(self, command, **kwargs):
+            assert kwargs["start_new_session"] is True
+
+        def communicate(self, *, timeout):
+            timeouts.append(timeout)
+            clock[0] += timeout
+            if len(timeouts) > 1:
+                raise subprocess.TimeoutExpired("compose up", timeout)
+            return "", ""
+
+        def wait(self, *, timeout):
+            return 0
+
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", Process)
+    monkeypatch.setattr(bootstrap.os, "killpg", lambda *args: None)
+    bootstrap._run_owned(["compose", "rm"], deadline=180)
+    with pytest.raises(RuntimeError, match="timed out"):
+        bootstrap._run_owned(["compose", "up"], deadline=180)
+    assert timeouts == [120, 55]
+    assert clock[0] == 175
+    with pytest.raises(RuntimeError, match="budget"):
+        bootstrap._run_owned(["must-not-start"], deadline=180)
+
+
+def test_handoff_skips_recovery_when_plugin_cleanup_is_unverified(
+    controller_path, tmp_path, monkeypatch, capsys
+):
+    bootstrap = load("bootstrap")
+    state, _, _ = _handoff_installation(bootstrap, load("record"), tmp_path)
+    monkeypatch.setattr(bootstrap, "_run_capture", _HandoffDocker().run)
+    mutations = []
+
+    def compose(*args, **kwargs):
+        mutations.append(args)
+        raise bootstrap.CommandCleanupError("plugin may still be running")
+
+    monkeypatch.setattr(bootstrap, "_compose", compose)
+    receipt = _handoff(bootstrap, state, capsys)
+    assert len(mutations) == 1
+    assert "recovery skipped" in receipt["reason"]
+    assert "plugin may still be running" in receipt["reason"]
+
+
+def test_owned_command_preserves_timeout_when_cleanup_also_fails(
+    controller_path, monkeypatch
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+
+    class Process:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def communicate(self, *, timeout):
+            raise subprocess.TimeoutExpired("docker compose up", timeout)
+
+    def cleanup(*args, **kwargs):
+        raise bootstrap.CommandCleanupError("plugin cleanup unverified")
+
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", Process)
+    monkeypatch.setattr(bootstrap, "_stop_command", cleanup)
+    with pytest.raises(bootstrap.CommandCleanupError) as caught:
+        bootstrap._run_owned(
+            ["docker", "compose", "up"], deadline=bootstrap.time.monotonic() + 10
+        )
+    assert "timed out" in str(caught.value)
+    assert "plugin cleanup unverified" in str(caught.value)
+
+
+def test_handoff_reconciles_known_restarting_candidate(controller_path, monkeypatch):
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+
+    def run(command, **kwargs):
+        if command[1] == "ps":
+            return subprocess.CompletedProcess(command, 0, "candidate", "")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                [
+                    {
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.project": "exact",
+                                "com.docker.compose.service": "controller",
+                            }
+                        },
+                        "State": {"Status": "restarting", "Restarting": True},
+                        "Image": "requested",
+                    }
+                ]
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    bootstrap._reconcile_controller(
+        "exact", images={"requested", "previous"}, deadline=10
+    )
+
+
+def test_handoff_sigterm_is_cancellation_not_recovery(
+    controller_path, tmp_path, monkeypatch
+):
+    import os
+    import signal
+
+    bootstrap = load("bootstrap")
+    state, _, _ = _handoff_installation(bootstrap, load("record"), tmp_path)
+    previous = signal.getsignal(signal.SIGTERM)
+    calls = []
+
+    def cancelled(*args, **kwargs):
+        calls.append(args)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(bootstrap, "_run_capture", _HandoffDocker().run)
+    monkeypatch.setattr(bootstrap, "_compose", cancelled)
+    with pytest.raises(SystemExit) as caught:
+        bootstrap.main(
+            [
+                "handoff",
+                "--state-dir",
+                str(state),
+                "--operation",
+                "ui-handoff",
+                "--image",
+                "ghcr.io/org/moonmind:latest",
+            ],
+            env={},
+        )
+    assert caught.value.code == 128 + signal.SIGTERM
+    assert len(calls) == 1
+    assert signal.getsignal(signal.SIGTERM) == previous
+
+
+def test_handoff_keeps_original_error_when_saved_config_restore_fails(
+    controller_path, tmp_path, monkeypatch, capsys
+):
+    from pathlib import Path
+
+    bootstrap = load("bootstrap")
+    state, compose, _ = _handoff_installation(bootstrap, load("record"), tmp_path)
+    monkeypatch.setattr(bootstrap, "_run_capture", _HandoffDocker().run)
+    writes = Path.write_text
+    mutations = []
+
+    def restore_error(path, *args, **kwargs):
+        if path == compose:
+            raise OSError("saved compose restore denied")
+        return writes(path, *args, **kwargs)
+
+    def failed_start(*args, **kwargs):
+        mutations.append(args)
+        raise RuntimeError("original startup timeout")
+
+    monkeypatch.setattr(Path, "write_text", restore_error)
+    monkeypatch.setattr(bootstrap, "_compose", failed_start)
+    receipt = _handoff(bootstrap, state, capsys)
+    assert len(mutations) == 1
+    assert "original startup timeout" in receipt["reason"]
+    assert "saved compose restore denied" in receipt["reason"]
