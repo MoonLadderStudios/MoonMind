@@ -10,14 +10,17 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import ipaddress
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from contextlib import contextmanager
@@ -656,6 +659,22 @@ _CONTROLLER_SOURCE_EXPORT = (
     "print(json.dumps({f.name:f.read_text() for f in p.glob('*.py')} if supported else {}))"
 )
 
+# Docker Desktop reaches a host-loopback endpoint through its host gateway.
+# Route only that TCP destination; HTTP Host and TLS SNI/verification must
+# continue to identify the endpoint the operator selected.
+_CONTROLLER_LOOPBACK_CONNECT = """
+import runpy, socket, sys
+selected = (sys.argv[1], int(sys.argv[2]))
+connect = socket.create_connection
+def host_connect(address, *args, **kwargs):
+    if (address[0].lower(), address[1]) == selected:
+        address = ("host.docker.internal", address[1])
+    return connect(address, *args, **kwargs)
+socket.create_connection = host_connect
+sys.argv = sys.argv[3:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
 
 def _controller_sources(image, repo, *, identity_recovery=False, bind_discovery=False):
     """Export the controller's trusted, image-owned Python sources.
@@ -820,6 +839,77 @@ def _recover_controller_identity(record, repo):
     )
 
 
+def _public_certificate_pem(path):
+    """Carry public certificates, retaining OpenSSL trust/reject metadata."""
+    try:
+        content = Path(path).read_bytes()
+    except OSError:
+        return b""
+    return b"".join(
+        match.group(0) + b"\n"
+        for match in re.finditer(
+            rb"-----BEGIN (TRUSTED CERTIFICATE|X509 CERTIFICATE|CERTIFICATE)-----\s+"
+            rb"[A-Za-z0-9+/=\s]+-----END \1-----",
+            content,
+        )
+    )
+
+
+def _controller_ca_options(bootstrap):
+    """Preserve Windows host HTTPS trust inside the existing bootstrap mount."""
+    trust = bootstrap.parent / "host-trust"
+    trust.mkdir()
+    certificates = []
+    enumerate_certificates = getattr(ssl, "enum_certificates", None)
+    if enumerate_certificates is not None:
+        # Match ssl.load_default_certs(SERVER_AUTH), not every Windows root.
+        validator = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        for store in ("CA", "ROOT"):
+            try:
+                entries = enumerate_certificates(store)
+            except PermissionError:
+                continue
+            for certificate, encoding, purposes in entries:
+                if encoding != "x509_asn" or not (
+                    purposes is True or ssl.Purpose.SERVER_AUTH.oid in purposes
+                ):
+                    continue
+                try:
+                    validator.load_verify_locations(cadata=certificate)
+                except ssl.SSLError:
+                    continue
+                certificates.append(ssl.DER_cert_to_PEM_cert(certificate).encode("ascii"))
+    paths = ssl.get_default_verify_paths()
+    if paths.cafile:
+        certificates.append(_public_certificate_pem(paths.cafile))
+    (trust / "ca.pem").write_bytes(b"".join(certificates))
+
+    # Hashed directories load lazily. Preserve lookup names and order instead
+    # of turning every file into an eagerly trusted, unrestricted certificate.
+    directories = []
+    selected = os.environ.get(paths.openssl_capath_env, paths.openssl_capath)
+    for index, source in enumerate((selected or "").split(os.pathsep)):
+        if not source:
+            continue
+        try:
+            entries = sorted(Path(source).iterdir())
+        except OSError:
+            continue
+        target = trust / str(index)
+        target.mkdir()
+        for entry in entries:
+            if re.fullmatch(r"[0-9a-fA-F]{8}\.[0-9]+", entry.name):
+                (target / entry.name.lower()).write_bytes(_public_certificate_pem(entry))
+        directories.append(f"/controller-bootstrap/host-trust/{index}")
+    if not directories:
+        (trust / "empty").mkdir()
+        directories.append("/controller-bootstrap/host-trust/empty")
+    return [
+        "--env", "SSL_CERT_FILE=/controller-bootstrap/host-trust/ca.pem",
+        "--env", f"SSL_CERT_DIR={':'.join(directories)}",
+    ]
+
+
 def _controller_bootstrap_command(
     bootstrap,
     record,
@@ -834,9 +924,7 @@ def _controller_bootstrap_command(
     command = [sys.executable, str(bootstrap)]
     state_dir = str(repo / "deploy" / "state" / "controller")
     target_repo = str(repo)
-    if privileged or sys.platform == "win32":
-        # Windows has no POSIX process-group cleanup or kernel stack lock.
-        # Use the same Linux helper without changing the selected target image.
+    if privileged or os.name != "posix":
         identity = _controller_identity(repo)
         if not identity:
             _recover_controller_identity(record, repo)
@@ -844,10 +932,33 @@ def _controller_bootstrap_command(
         network = identity.get("targetNetwork") or (
             f"{record['project']}_deployment-controller-network"
         )
-        controller_url = f"http://moonmind-controller:{identity.get('port', 8472)}"
+        if privileged:
+            controller_url = f"http://moonmind-controller:{identity.get('port', 8472)}"
         command = _controller_bootstrap_container(
             bootstrap, repo, source_image, network=network
         )
+        if not privileged:
+            endpoint = urllib.parse.urlsplit(controller_url)
+            if endpoint.scheme == "https":
+                index = command.index("--entrypoint")
+                command[index:index] = _controller_ca_options(bootstrap)
+            try:
+                loopback = ipaddress.ip_address(endpoint.hostname or "").is_loopback
+            except ValueError:
+                loopback = endpoint.hostname in {"localhost", "localhost."}
+            if loopback:
+                port = (
+                    endpoint.port
+                    if endpoint.port is not None
+                    else (443 if endpoint.scheme == "https" else 80)
+                )
+                command[-1:] = [
+                    "-c",
+                    _CONTROLLER_LOOPBACK_CONNECT,
+                    endpoint.hostname,
+                    str(port),
+                    command[-1],
+                ]
         state_dir = "/var/lib/moonmind-controller"
         target_repo = "/deployment"
     return [
@@ -880,7 +991,8 @@ def _ensure_controller_journal_transition(
     installed controller supports journals. Rollbacks can use installed
     repair code when the target predates this lifecycle. Explicit endpoints
     keep their controller unless journal support is missing. When one
-    source's repair fails, the next source's repair code runs.
+    source's repair fails, the next source's repair code runs. Native Windows
+    uses the same Linux helper without changing the explicit release choice.
     """
     try:
         _, health = _controller_call(
@@ -897,7 +1009,7 @@ def _ensure_controller_journal_transition(
     failure = None
     for image in _controller_source_images(record, repo, refresh=refresh):
         bundle = _controller_sources(
-            image, repo, bind_discovery=refresh or sys.platform == "win32"
+            image, repo, bind_discovery=refresh or os.name != "posix"
         )
         if not bundle:
             continue

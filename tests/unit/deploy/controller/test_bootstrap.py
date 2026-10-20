@@ -1441,7 +1441,8 @@ class _HandoffDocker:
 
     def __init__(self, *, settles=True):
         self.live = "sha256:" + "a" * 64
-        self.restarts = "0" if settles else "1"
+        self.restarts = "0"
+        self.settles = settles
         self.commands = []
 
     def run(self, command, **kwargs):
@@ -1466,19 +1467,23 @@ class _HandoffDocker:
                     if arg.startswith("label=com.docker.compose.project=")
                 )
                 project = project_filter.split("=", 2)[2]
+                if not self.settles and self.live == "sha256:" + "c" * 64:
+                    self.restarts = str(int(self.restarts) + 1)
                 return subprocess.CompletedProcess(
                     command,
                     0,
                     json.dumps(
                         [
                             {
+                                "Id": "live-controller",
+                                "RestartCount": int(self.restarts),
                                 "Config": {
                                     "Labels": {
                                         "com.docker.compose.project": project,
                                         "com.docker.compose.service": "controller",
                                     }
                                 },
-                                "State": {"Status": "running"},
+                                "State": {"Status": "running", "StartedAt": "earlier"},
                                 "Image": self.live,
                             }
                         ]
@@ -1965,7 +1970,7 @@ def test_handoff_shares_deadline_and_reserves_bounded_recovery(
         if (
             not recovering
             and command[:2] == ["docker", "inspect"]
-            and command[3] == "{{.Image}} {{.RestartCount}}"
+            and "--format" not in command
         ):
             if failure in {"inspect", "reconcile", "exhausted"}:
                 failed[0] = True
@@ -1973,7 +1978,7 @@ def test_handoff_shares_deadline_and_reserves_bounded_recovery(
                 raise subprocess.TimeoutExpired(command, 1)
             if failure == "settle":
                 failed[0] = True
-                docker.restarts = "1"
+                docker.restarts = str(int(docker.restarts) + 1)
         if recovering and failure == "reconcile":
             raise subprocess.TimeoutExpired(command, 1)
         if recovering and failure == "exhausted":
@@ -2701,3 +2706,92 @@ def test_no_pull_exhausted_budget_reconciles_without_launching_again(
         bootstrap._compose_up(tmp_path, "exact-project", "--pull", "never")
     assert len(commands) == 2
     assert observed == ["exact-project"]
+
+
+@pytest.mark.parametrize(
+    "after,expected",
+    [
+        ({}, True),
+        ({"RestartCount": 5}, False),
+        ({"Id": "replacement"}, False),
+        ({"State": {"Status": "restarting"}}, False),
+        ({"State": {"Health": {"Status": "unhealthy"}}}, False),
+        ({"State": {"Health": {"Status": "starting"}}}, False),
+        ({"State": {"Health": {}}}, False),
+        ({"State": {"Paused": True}}, False),
+        ({"State": {"StartedAt": "later"}}, False),
+    ],
+)
+def test_controller_settle_compares_history_not_lifetime_zero(
+    controller_path, monkeypatch, after, expected
+):
+    import copy
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    snapshots = [
+        {
+            "Id": "container",
+            "Image": "image",
+            "RestartCount": 4,
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "project",
+                    "com.docker.compose.service": "controller",
+                }
+            },
+            "State": {
+                "Status": "running",
+                "StartedAt": "earlier",
+                "Health": {"Status": "healthy"},
+            },
+        }
+    ]
+    second = copy.deepcopy(snapshots[0])
+    for key, value in after.items():
+        if key == "State":
+            second[key].update(value)
+        else:
+            second[key] = value
+    snapshots.append(second)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+
+    def capture(command, **kwargs):
+        if command[1] == "ps":
+            assert "--no-trunc" in command
+            return subprocess.CompletedProcess(command, 0, "container\n", "")
+        snapshot = snapshots.pop(0)
+        assert "--format" not in command
+        return subprocess.CompletedProcess(command, 0, json.dumps([snapshot]), "")
+
+    monkeypatch.setattr(bootstrap, "_run_capture", capture)
+    assert bootstrap._controller_stays_running(
+        "project", "image", allow_prior_restarts=True
+    ) is expected
+
+
+def test_failed_handoff_retains_healthy_prior_controller_with_restart_history(
+    controller_path, tmp_path, monkeypatch, capsys
+):
+    bootstrap = load("bootstrap")
+    state, compose, _ = _handoff_installation(bootstrap, load("record"), tmp_path)
+    original = compose.read_text()
+    docker = _HandoffDocker()
+    docker.restarts = "7"
+    calls = []
+
+    def compose_run(state_dir, project, *args, **kwargs):
+        calls.append(args[0])
+        if len(calls) == 1:
+            raise RuntimeError("forward removal failed")
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_run_capture", docker.run)
+    monkeypatch.setattr(bootstrap, "_compose", compose_run)
+    monkeypatch.setattr(bootstrap, "HANDOFF_SETTLE_SECONDS", 0)
+    receipt = _handoff(bootstrap, state, capsys)
+    assert "previous controller restored" in receipt["reason"]
+    assert "forward removal failed" in receipt["reason"]
+    assert docker.restarts == "7"
+    assert compose.read_text() == original
