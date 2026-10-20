@@ -842,7 +842,7 @@ def test_ensure_replaces_a_stopped_controller_on_wsl_spelled_binds(
     composes = [call for call in calls if call[0] == "compose"]
     assert [call[1] for call in composes] == [
         ("rm", "--force", "controller"),
-        ("up", "-d", "--wait", "--wait-timeout", "60", "--pull", "never", "controller"),
+        ("up", "-d", "--wait", "--wait-timeout", "30", "--pull", "never", "controller"),
     ]
     # The link network exists before Compose resolves it by name.
     kinds = [call[:2] for call in calls]
@@ -851,6 +851,28 @@ def test_ensure_replaces_a_stopped_controller_on_wsl_spelled_binds(
     )
     # The recreated controller binds the directories this client sees.
     assert composes[1][2].split("    volumes:", 1)[1] == local_mounts
+
+
+def test_controller_startup_deadline_returns_failure_to_the_lifecycle_owner(
+    controller_path, tmp_path, monkeypatch
+):
+    """A restarting controller cannot hold startup indefinitely and prevent rollback."""
+    import subprocess
+
+    bootstrap = load("bootstrap")
+
+    def restarting_controller(command, *, check, timeout):
+        assert 0 < timeout <= bootstrap.CONTROLLER_START_COMMAND_TIMEOUT_SECONDS
+        if "up" in command:
+            assert "--wait-timeout" in command
+            timeout = int(command[command.index("--wait-timeout") + 1])
+            assert 0 < timeout <= 30
+            return subprocess.CompletedProcess(command, 1)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", restarting_controller)
+
+    assert bootstrap._compose_up(tmp_path, "controller", "--pull", "never") == 1
 
 
 @pytest.mark.parametrize("command", ["start", "update", "restore"])
@@ -1677,7 +1699,7 @@ def test_handoff_startup_timeout_restores_saved_controller_and_keeps_failure(
             return docker.run(command, **kwargs)
         assert 0 < kwargs["deadline"] - bootstrap.time.monotonic() <= 270
         if "up" in command:
-            assert command[command.index("--wait-timeout") + 1] == "60"
+            assert command[command.index("--wait-timeout") + 1] == "30"
             ups.append(compose.read_text())
             if len(ups) == 1 or restore_timeout:
                 raise subprocess.TimeoutExpired(command, 120)
@@ -1723,7 +1745,7 @@ def test_cold_controller_start_does_not_apply_handoff_budget_to_image_download(
         calls.append(command)
         if "up" in command:
             assert kwargs["timeout"] is None
-            assert command[command.index("--wait-timeout") + 1] == "60"
+            assert command[command.index("--wait-timeout") + 1] == "30"
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(bootstrap.subprocess, "run", run)

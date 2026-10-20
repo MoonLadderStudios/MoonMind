@@ -61,7 +61,7 @@ HANDOFF_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_HANDOFF="
 # A replacement that exits or restarts this soon after starting is reverted.
 HANDOFF_SETTLE_SECONDS = 5
 # Bound readiness separately from the CLI so failed starts can reach rollback.
-CONTROLLER_START_TIMEOUT_SECONDS = 60
+CONTROLLER_START_TIMEOUT_SECONDS = 30
 CONTROLLER_START_COMMAND_TIMEOUT_SECONDS = 120
 # The caller allows 300 seconds; leave time to deliver the final receipt.
 HANDOFF_TIMEOUT_SECONDS = 270
@@ -1279,6 +1279,7 @@ def _compose_up(state_dir: Path, project: str, *options: str, deadline=None) -> 
     the link network, that restart fails with "network ... not found".
     ``compose rm`` removes only a container that is not running, so a live
     controller is untouched; its state lives in the bind-mounted state dir.
+    Bound startup so a restarting replacement returns control for rollback.
     """
     budget = {"deadline": deadline} if deadline is not None else {}
     code = _compose(state_dir, project, "rm", "--force", CONTROLLER_SERVICE, **budget)

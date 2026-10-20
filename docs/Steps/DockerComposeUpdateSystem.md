@@ -178,7 +178,7 @@ The primary result is persisted before secondary cleanup, and ownership is relea
 
 A development bind mount can change files without restarting imported code, so affected processes are recreated through the same owner. Actual startup provenance is recorded for diagnosis but is not a runtime admission or compatibility gate.
 
-Bind sources use the issuing Docker client's namespace. Windows drive paths map to Docker Desktop's `/run/desktop/mnt/host/<drive>`; WSL clients and their socket-mounted containers keep `/mnt/<drive>`. Bootstrap resolves these paths and fails on missing required sources rather than covering them with empty directories. Before `up`, it removes a stopped controller container whose saved network IDs may have disappeared when the target stack recreated the link network. Controller readiness remains bounded at 60 seconds; cold starts retain image download time. Handoff uses the shared deadline and recovery rules below.
+Bind sources use the issuing Docker client's namespace. Windows drive paths map to Docker Desktop's `/run/desktop/mnt/host/<drive>`; WSL clients and their socket-mounted containers keep `/mnt/<drive>`. Bootstrap resolves these paths and fails on missing required sources rather than covering them with empty directories. Before `up`, it removes a stopped controller container whose saved network IDs may have disappeared when the target stack recreated the link network. Controller readiness times out after 30 seconds; cold starts retain image download time. Handoff uses the shared deadline and recovery rules below.
 
 ## 11. Updater runner execution model
 
