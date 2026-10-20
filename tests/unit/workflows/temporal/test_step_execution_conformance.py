@@ -181,7 +181,6 @@ def test_canonical_terminology_fixture_decisions_are_enforced() -> None:
 
     assert terminology["term-step-executions"]["decision"] == "valid"
     assert terminology["term-executionOrdinal"]["decision"] == "valid"
-    assert terminology["term-recover_from_failed_step"]["decision"] == "valid"
     assert terminology["term-step-attempt"]["decision"] == "invalid"
     assert terminology["term-step-attempt"]["expected"] == "invalid"
 
@@ -247,7 +246,6 @@ def test_api_contract_fixture_exposes_refs_and_canonical_terms_only() -> None:
 
     assert fixture["route"] == "/api/executions/{execution_id}/step-executions"
     assert fixture["projection"]["executionOrdinal"] == 2
-    assert fixture["projection"]["recoveryAction"] == "recover_from_failed_step"
     assert "providerPayload" not in fixture["projection"]
     assert "verificationReport" not in fixture["projection"]
     assert fixture["projection"]["artifactRefs"]["manifestRef"].startswith(

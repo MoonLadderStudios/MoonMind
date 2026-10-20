@@ -1,4 +1,4 @@
-"""Canonical typed workflow recovery target contract (MoonMind#3478).
+"""Typed recovery target decoder for retained linked-recovery histories.
 
 The contract is deliberately ref-only and immutable.  It is validated before
 any destination workspace is reserved or any recovery activity is scheduled.

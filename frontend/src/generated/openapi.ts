@@ -9534,46 +9534,8 @@ export interface components {
         ExecutionTargetDiagnosticsModel: {
             /** Targets */
             targets?: components["schemas"]["ExecutionTargetDiagnosticTargetModel"][];
-            recovery?: components["schemas"]["ExecutionTargetDiagnosticsRecoveryModel"] | null;
             /** Degradedreason */
             degradedReason?: string | null;
-        };
-        /**
-         * ExecutionTargetDiagnosticsPreservedStepModel
-         * @description Source provenance for a step output preserved into a resumed run.
-         */
-        ExecutionTargetDiagnosticsPreservedStepModel: {
-            /** Logicalstepid */
-            logicalStepId: string;
-            /** Title */
-            title?: string | null;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            /** Sourceworkflowid */
-            sourceWorkflowId?: string | null;
-            /** Sourcerunid */
-            sourceRunId?: string | null;
-        };
-        /**
-         * ExecutionTargetDiagnosticsRecoveryModel
-         * @description Failed-step recovery provenance and degraded recovery diagnostics.
-         */
-        ExecutionTargetDiagnosticsRecoveryModel: {
-            /**
-             * Resumed
-             * @default false
-             */
-            resumed: boolean;
-            /** Sourceworkflowid */
-            sourceWorkflowId?: string | null;
-            /** Sourcerunid */
-            sourceRunId?: string | null;
-            /** Checkpointref */
-            checkpointRef?: string | null;
-            /** Preservedsteps */
-            preservedSteps?: components["schemas"]["ExecutionTargetDiagnosticsPreservedStepModel"][];
-            /** Failedrecoveryphase */
-            failedRecoveryPhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
         };
         /** ExternalStateLocator */
         ExternalStateLocator: {
@@ -10696,28 +10658,6 @@ export interface components {
              * @default 1
              */
             completedWaitCycles: number;
-        };
-        /**
-         * PreservedStepProvenanceDetailModel
-         * @description Ref-backed provenance for steps preserved during recovery.
-         */
-        PreservedStepProvenanceDetailModel: {
-            /** Logicalstepid */
-            logicalStepId: string;
-            /** Title */
-            title?: string | null;
-            /** Sourceworkflowid */
-            sourceWorkflowId?: string | null;
-            /** Sourcerunid */
-            sourceRunId?: string | null;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            /** Statecheckpointref */
-            stateCheckpointRef?: string | null;
-            /** Outputrefs */
-            outputRefs?: {
-                [key: string]: string;
-            };
         };
         /**
          * PreservedStepProvenanceModel
@@ -13619,9 +13559,6 @@ export interface components {
             logicalStepId: string;
             /** Executionordinal */
             executionOrdinal: number;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
             reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
@@ -13685,28 +13622,6 @@ export interface components {
             dependencyEffectRefs?: {
                 [key: string]: unknown;
             };
-            /** Preservedstepprovenance */
-            preservedStepProvenance?: components["schemas"]["PreservedStepProvenanceDetailModel"][];
-        };
-        /**
-         * StepExecutionLineageModel
-         * @description Optional cross-run provenance for recovered or related executions.
-         */
-        StepExecutionLineageModel: {
-            /** Sourceworkflowid */
-            sourceWorkflowId: string;
-            /** Sourcerunid */
-            sourceRunId: string;
-            /** Sourcelogicalstepid */
-            sourceLogicalStepId: string;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal: number;
-            /** Relationship */
-            relationship?: string | null;
-            /** Lineageexecutionordinal */
-            lineageExecutionOrdinal?: number | null;
-            /** Preservedsteps */
-            preservedSteps?: components["schemas"]["PreservedStepProvenanceDetailModel"][];
         };
         /**
          * StepExecutionListModel
@@ -13769,9 +13684,6 @@ export interface components {
             logicalStepId: string;
             /** Executionordinal */
             executionOrdinal: number;
-            /** Sourceexecutionordinal */
-            sourceExecutionOrdinal?: number | null;
-            lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
             branch?: components["schemas"]["StepExecutionBranchMetadataModel"] | null;
             /** Reason */
             reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "checkpoint_branch" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
@@ -13978,13 +13890,13 @@ export interface components {
             refs?: components["schemas"]["StepLedgerRefsModel"];
             artifacts?: components["schemas"]["StepLedgerArtifactsModel"];
             preservedFrom?: components["schemas"]["PreservedStepProvenanceModel"] | null;
+            recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             /** Statecheckpointref */
             stateCheckpointRef?: string | null;
             /** Workspacecheckpointref */
             workspaceCheckpointRef?: string | null;
             /** Stepcheckpointref */
             stepCheckpointRef?: string | null;
-            recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
             executionOutcome?: components["schemas"]["StepExecutionOutcomeModel"] | null;
             finalizationOutcome?: components["schemas"]["StepFinalizationOutcomeModel"] | null;

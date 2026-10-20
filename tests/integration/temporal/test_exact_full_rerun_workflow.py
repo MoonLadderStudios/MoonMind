@@ -51,25 +51,13 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
                 initial_parameters={
                     "repository": "MoonLadderStudios/MoonMind",
                     "agentRunId": "old-agent-run",
-                    "recoverySource": {"workflowId": "mm:old", "runId": "run-old"},
-                    "recoveryCheckpointRef": "artifact://checkpoint/old",
-                    "preservedSteps": [{"logicalStepId": "plan"}],
-                    "completedSteps": [{"logicalStepId": "plan"}],
                     "workflow": {
                         "title": "Original task",
                         "instructions": "Run the original task input unchanged.",
                         "recovery": {
-                            "kind": "recover_from_failed_step",
+                            "kind": "exact_full_rerun",
                             "sourceWorkflowId": "mm:old",
                             "sourceRunId": "run-old",
-                        },
-                        "resume": {
-                            "kind": "recover_from_failed_step",
-                            "sourceWorkflowId": "mm:old",
-                            "sourceRunId": "run-old",
-                            "failedStepId": "implement",
-                            "recoveryCheckpointRef": "artifact://checkpoint/old",
-                            "taskInputSnapshotRef": "artifact://snapshot/old",
                         },
                     },
                 },
@@ -128,8 +116,3 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
         },
     }
     assert "agentRunId" not in rerun.parameters
-    assert "recoverySource" not in rerun.parameters
-    assert "recoveryCheckpointRef" not in rerun.parameters
-    assert "preservedSteps" not in rerun.parameters
-    assert "completedSteps" not in rerun.parameters
-    assert "resume" not in rerun.parameters["workflow"]

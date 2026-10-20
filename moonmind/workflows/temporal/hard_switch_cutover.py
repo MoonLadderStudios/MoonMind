@@ -16,6 +16,7 @@ historical-read loader, not a new-write alias.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -91,3 +92,18 @@ def registered_user_workflow_type(temporal_settings: TemporalSettings) -> str:
     """Return the single user workflow type this worker build should serve."""
 
     return resolve_user_workflow_start_contract(temporal_settings).workflow_type
+
+
+def admit_user_workflow_input(
+    workflow_type: str,
+    input_args: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Freeze new-start semantics before Temporal queues the first task.
+
+    This server-owned field is outside operator parameters and always
+    overwritten at admission. Its absence identifies older queued starts;
+    changing a schedule's timing alone must not re-admit its durable action.
+    """
+    if workflow_type != RENAMED_USER_WORKFLOW_TYPE:
+        return input_args
+    return {**(input_args or {}), "linked_recovery_retired": True}

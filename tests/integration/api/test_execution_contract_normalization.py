@@ -5,9 +5,6 @@ compose networking required) and verify the executions API normalization path
 for canonical workflow submissions.
 
 Acceptance scenarios covered:
-  SC-001  Well-formed recover_from_failed_step payload accepted; fields preserved
-  SC-002  recover_from_failed_step without resume block → WorkflowContractError
-  SC-003  resume block with wrong recovery.kind → WorkflowContractError
   SC-006  workflow.git.targetBranch stripped as active authored branch input
   MM-945  git capability derived only from repository-backed execution context
 """
@@ -26,15 +23,6 @@ from tests.helpers.step_type_payloads import (
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
-
-_VALID_RESUME_BLOCK = {
-    "kind": "recover_from_failed_step",
-    "sourceWorkflowId": "mm:abc123",
-    "sourceRunId": "run-1",
-    "failedStepId": "step-3",
-    "recoveryCheckpointRef": "art_ckpt_abc",
-    "taskInputSnapshotRef": "art_snap_abc",
-}
 
 _BASE_PAYLOAD = {
     "repository": "test/repo",
@@ -116,72 +104,6 @@ def test_non_capable_skill_rejects_auto_publish_mode() -> None:
 
 
 # T017 — SC-001
-def test_sc001_well_formed_recover_from_failed_step_accepted() -> None:
-    """MM-638 SC-001: Complete recover_from_failed_step payload is accepted;
-    all recovery and resume fields are preserved in the normalized output."""
-    result = build_canonical_workflow_view(
-        job_type="task",
-        payload=_workflow_payload(
-            {
-                "recovery": {
-                    "kind": "recover_from_failed_step",
-                    "sourceWorkflowId": "mm:abc123",
-                    "sourceRunId": "run-1",
-                },
-                "resume": _VALID_RESUME_BLOCK,
-            }
-        ),
-    )
-
-    workflow = result["workflow"]
-    assert workflow["recovery"]["kind"] == "recover_from_failed_step"
-    assert workflow["recovery"]["sourceWorkflowId"] == "mm:abc123"
-    assert workflow["recovery"]["sourceRunId"] == "run-1"
-    assert workflow["resume"]["failedStepId"] == "step-3"
-    assert workflow["resume"]["recoveryCheckpointRef"] == "art_ckpt_abc"
-    assert workflow["resume"]["taskInputSnapshotRef"] == "art_snap_abc"
-
-
-# T018 — SC-002
-def test_sc002_recover_from_failed_step_without_recovery_block_raises() -> None:
-    """MM-638 SC-002: recover_from_failed_step without a resume block raises
-    WorkflowContractError with an operator-readable message identifying the missing field."""
-    with pytest.raises(WorkflowContractError, match="task.resume is required"):
-        build_canonical_workflow_view(
-            job_type="task",
-            payload=_workflow_payload(
-                {
-                    "recovery": {
-                        "kind": "recover_from_failed_step",
-                        "sourceWorkflowId": "mm:abc123",
-                        "sourceRunId": "run-1",
-                    },
-                }
-            ),
-        )
-
-
-# T019 — SC-003
-def test_sc003_recovery_block_with_wrong_recovery_kind_raises() -> None:
-    """MM-638 SC-003: resume block paired with recovery.kind != recover_from_failed_step
-    raises WorkflowContractError preventing ambiguous recovery inference."""
-    with pytest.raises(WorkflowContractError, match="recover_from_failed_step"):
-        build_canonical_workflow_view(
-            job_type="task",
-            payload=_workflow_payload(
-                {
-                    "recovery": {
-                        "kind": "exact_full_rerun",
-                        "sourceWorkflowId": "mm:abc123",
-                        "sourceRunId": "run-1",
-                    },
-                    "resume": _VALID_RESUME_BLOCK,
-                }
-            ),
-        )
-
-
-# T020 — SC-006
 def test_sc006_target_branch_rejected_as_active_authored_input() -> None:
     """MM-668: workflow.git.targetBranch is legacy metadata, not active authored input."""
     result = build_canonical_workflow_view(
