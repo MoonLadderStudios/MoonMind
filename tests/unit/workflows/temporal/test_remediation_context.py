@@ -3498,6 +3498,52 @@ def test_remediation_action_redaction_handles_null_and_single_segment_paths(
     assert remediation_actions._redact_text("/tmp") == "[REDACTED_PATH]"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "MoonLadderStudios/MoonMind",
+        "feature/retained-repair",
+    ],
+)
+def test_remediation_authority_serialization_preserves_opaque_refs_and_relative_ids(value):
+    assert remediation_actions._redact_payload({"instructionRef": value}) == {
+        "instructionRef": value
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/tmp",
+        "inspect /work/private",
+        "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV/private",
+        "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV?token=raw-secret",
+        "artifact://user:raw-secret@art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV /work/private",
+        "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV#raw-secret",
+        "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV\nAuthorization: Bearer raw-secret",
+        "artifact://art_81ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAI",
+        "artifact://art_01arz3ndektsv4rrffq69g5fav",
+        "artifact://not-an-artifact-id",
+        "https://example.test/object?X-Amz-Signature=raw-secret",
+    ],
+)
+def test_remediation_authority_serialization_does_not_exempt_sensitive_or_invalid_refs(value):
+    serialized = remediation_actions._redact_payload({"instructionRef": value})
+    assert serialized["instructionRef"] != value
+    assert "[REDACTED" in serialized["instructionRef"]
+    assert "raw-secret" not in serialized["instructionRef"]
+    assert "/work/private" not in serialized["instructionRef"]
+
+
+def test_remediation_authority_artifact_ref_does_not_exempt_sensitive_key():
+    assert remediation_actions._redact_payload({
+        "token": "artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    }) == {"token": "[REDACTED]"}
+
+
 def test_remediation_tool_redaction_handles_null_redactor_and_single_pass_payload(
     monkeypatch,
 ):

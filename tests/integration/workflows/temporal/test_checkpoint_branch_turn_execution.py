@@ -7,6 +7,8 @@ import copy
 import hashlib
 import json
 from contextlib import AsyncExitStack
+from contextvars import ContextVar
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -22,7 +24,7 @@ from temporalio import activity, workflow
 from temporalio.client import WorkflowFailureError
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
-from temporalio.testing import WorkflowEnvironment
+from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from temporalio.workflow import ActivityCancellationType
 
@@ -68,6 +70,7 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     omnigent_profile_bound_execute_activity,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactService,
 )
@@ -636,7 +639,11 @@ async def _run(
                             "agent-run-turn-1" if durable_terminal else None
                         ),
                     ),
-                    id=f"checkpoint-branch-owner-{correlation_id}-{uuid4()}",
+                    id=(
+                        "checkpoint-branch-turn:turn-1"
+                        if durable_terminal
+                        else f"checkpoint-branch-owner-{correlation_id}-{uuid4()}"
+                    ),
                     task_queue=queue,
                 )
                 if cancel:
@@ -716,7 +723,11 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Drive the complete public production boundary with hermetic interfaces."""
+    """Drive public launch/retention with real owners and fake producers.
+
+    Fake capture keeps this separate from the real create_v2 Activity's
+    semantic Step run versus actual Temporal run identity validation.
+    """
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/public-owner.db")
     sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -753,11 +764,26 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     principal = str(user.id)
     artifact_refs: dict[tuple[str, str], str] = {}
     artifact_digests: dict[str, str] = {}
+    provider_execution: ContextVar[ExecutionRef | None] = ContextVar(
+        "public_owner_provider_execution", default=None
+    )
 
-    async def write_artifact(kind: str, key: str, body: bytes) -> str:
+    async def write_artifact(
+        kind: str, key: str, body: bytes, *, execution: ExecutionRef | None = None
+    ) -> str:
         identity = (kind, key)
         if identity in artifact_refs:
             return artifact_refs[identity]
+        execution = execution or provider_execution.get()
+        if execution is None:
+            info = activity.info()
+            execution = ExecutionRef(
+                namespace=info.namespace,
+                workflow_id=info.workflow_id,
+                run_id=info.workflow_run_id,
+                link_type=f"output.integration.{kind}",
+                created_by_activity_type=info.activity_type,
+            )
         async with sessions() as artifact_session:
             artifacts = artifact_service(artifact_session)
             digest = hashlib.sha256(body).hexdigest()
@@ -769,6 +795,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                 size_bytes=len(body),
                 sha256=digest,
                 retention_class=TemporalArtifactRetentionClass.LONG,
+                link=execution,
                 metadata_json={
                     "kind": f"integration.checkpoint_branch.{kind}",
                     "identity": key,
@@ -787,15 +814,27 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
             artifact_digests[ref] = f"sha256:{digest}"
             return ref
 
+    async def write_source_artifact(kind: str, key: str, body: bytes) -> str:
+        # These inputs predate the Activities and belong to the stored source.
+        return await write_artifact(
+            kind, key, body,
+            execution=ExecutionRef(
+                namespace="default",
+                workflow_id="mm:wf-public-owner",
+                run_id="run-public-owner",
+                link_type=f"output.integration.{kind}",
+            ),
+        )
+
     policy = checkpoint_branch_policy_snapshot()
-    source_external_ref = await write_artifact(
+    source_external_ref = await write_source_artifact(
         "source-external", "source", b"source external state"
     )
-    source_head_ref = await write_artifact("source-head", "source", b"def456")
-    source_workspace_ref = await write_artifact(
+    source_head_ref = await write_source_artifact("source-head", "source", b"def456")
+    source_workspace_ref = await write_source_artifact(
         "source-workspace", "source", b"source workspace archive"
     )
-    source_instruction_ref = await write_artifact(
+    source_instruction_ref = await write_source_artifact(
         "instruction", "source", b"Original source workflow input"
     )
     source_checkpoint = StepExecutionCheckpointModel(
@@ -871,7 +910,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     source_checkpoint_bytes = source_checkpoint.model_dump_json(
         by_alias=True, exclude_none=True
     ).encode()
-    source_checkpoint_ref = await write_artifact(
+    source_checkpoint_ref = await write_source_artifact(
         "source-checkpoint", "source", source_checkpoint_bytes
     )
     source_parameters = {
@@ -1048,11 +1087,27 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
     created_checkpoint_refs: dict[str, str] = {}
 
     async def execute_profile_bound(request: AgentExecutionRequest) -> AgentRunResult:
-        return await execute_checkpoint_branch_request(
-            request,
-            ledger=ledger,
-            policy_snapshot=policy,
+        # Match TemporalOmnigentArtifactGateway._execution_link: provider
+        # artifacts belong to the admitted Step, not the child session workflow.
+        step = request.step_execution
+        assert step is not None
+        token = provider_execution.set(
+            ExecutionRef(
+                namespace="default",
+                workflow_id=step.workflow_id,
+                run_id=step.run_id,
+                link_type="output.integration.omnigent",
+                created_by_activity_type="integration.omnigent.execute",
+            )
         )
+        try:
+            return await execute_checkpoint_branch_request(
+                request,
+                ledger=ledger,
+                policy_snapshot=policy,
+            )
+        finally:
+            provider_execution.reset(token)
 
     monkeypatch.setattr(
         omnigent_activities,
@@ -1175,7 +1230,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         branch_id = f"cbr-public-mismatch-{case}"
         turn_id = f"cbt-public-mismatch-{case}"
         instruction_body = f"Reject changed {case} authority.".encode()
-        instruction_ref = await write_artifact(
+        instruction_ref = await write_source_artifact(
             "instruction", f"mismatch-{case}", instruction_body
         )
         async with sessions() as mismatch_session:
@@ -1816,6 +1871,20 @@ async def test_cancel_after_successful_child_keeps_actual_result_canceled() -> N
     ).replay_workflow(history)
 
 
+def _terminal_activity_environment() -> ActivityEnvironment:
+    """Use the actual workflow owner persisted by the terminal launch fixture."""
+    env = ActivityEnvironment()
+    env.info = replace(
+        env.info,
+        namespace="default",
+        workflow_namespace="default",
+        workflow_id="checkpoint-branch-turn:turn-1",
+        workflow_run_id="7da1c334-3430-4625-8a8a-9f9aa87f6975",
+        workflow_type="MoonMind.CheckpointBranchTurn",
+    )
+    return env
+
+
 async def _terminal_activity_database(tmp_path, monkeypatch):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/terminal.db")
     async with engine.begin() as connection:
@@ -1843,6 +1912,7 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
             TemporalExecutionCanonicalRecord(
                 workflow_id="source-workflow",
                 run_id="source-run",
+                namespace="default",
                 workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 entry="api",
             )
@@ -1902,6 +1972,12 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
                 size_bytes=len(body),
                 sha256=None,
                 retention_class=TemporalArtifactRetentionClass.EPHEMERAL,
+                link=ExecutionRef(
+                    namespace="default",
+                    workflow_id="checkpoint-branch-turn:turn-1",
+                    run_id="branch-turn-turn-1",
+                    link_type=f"output.integration.{kind}",
+                ),
                 metadata_json={"kind": f"seed.{kind}"},
             )
             await artifacts.write_complete(
@@ -2324,8 +2400,12 @@ async def test_terminal_activity_retry_reuses_exact_owned_artifacts(
         "checkpoint": {},
     }
 
-    first = await persist_checkpoint_branch_turn_terminal(payload)
-    replay = await persist_checkpoint_branch_turn_terminal(payload)
+    first = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal, payload
+    )
+    replay = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal, payload
+    )
 
     assert replay == first
     assert first["terminalDisposition"] == "provider_failure"
@@ -2378,8 +2458,12 @@ async def test_terminal_activity_persists_successful_verification_handoff(
         "checkpoint": {"checkpointRef": refs["checkpoint"]},
     }
 
-    first = await persist_checkpoint_branch_turn_terminal(payload)
-    replay = await persist_checkpoint_branch_turn_terminal(payload)
+    first = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal, payload
+    )
+    replay = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal, payload
+    )
 
     assert replay == first
     assert first["status"] == "checking"
@@ -2441,7 +2525,9 @@ async def test_terminal_activity_keeps_child_saved_candidate_on_parent_capture_f
         },
     }
 
-    result = await persist_checkpoint_branch_turn_terminal(payload)
+    result = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal, payload
+    )
 
     assert result["status"] == "failed"
     assert result["checkpointRef"] is None
@@ -2454,6 +2540,7 @@ async def test_terminal_activity_keeps_child_saved_candidate_on_parent_capture_f
         _artifact, body = await artifacts.read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
             principal="service:checkpoint-branch-turn",
+            admitted_principal="workflow:source-workflow",
             allow_restricted_raw=True,
         )
         stored = json.loads(body)
@@ -2503,6 +2590,12 @@ async def test_terminal_activity_retains_saved_manifest_dependencies(
                 size_bytes=len(body),
                 sha256=None,
                 retention_class=TemporalArtifactRetentionClass.EPHEMERAL,
+                link=ExecutionRef(
+                    namespace="default",
+                    workflow_id="checkpoint-branch-turn:turn-1",
+                    run_id="branch-turn-turn-1",
+                    link_type="output.integration.saved-dependency",
+                ),
                 metadata_json={"kind": "seed.saved-dependency"},
             )
             await artifacts.write_complete(
@@ -2538,7 +2631,8 @@ async def test_terminal_activity_retains_saved_manifest_dependencies(
         "manifestRef": manifest_ref,
         "checkpointRef": refs["checkpoint"],
     }
-    result = await persist_checkpoint_branch_turn_terminal(
+    result = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal,
         {
             "workflowId": "source-workflow",
             "branchId": "branch-1",
@@ -2567,6 +2661,7 @@ async def test_terminal_activity_retains_saved_manifest_dependencies(
         _artifact, body = await artifacts.read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
             principal="service:checkpoint-branch-turn",
+            admitted_principal="workflow:source-workflow",
             allow_restricted_raw=True,
         )
         candidate = json.loads(body)["metadata"]["savedWorkspaceCheckpoint"]
@@ -2575,6 +2670,7 @@ async def test_terminal_activity_retains_saved_manifest_dependencies(
             _metadata, _links, pinned, _policy = await artifacts.get_metadata(
                 artifact_id=ref.removeprefix("artifact://"),
                 principal="service:checkpoint-branch-turn",
+                admitted_principal="workflow:source-workflow",
             )
             assert pinned, ref
     await engine.dispose()
@@ -2623,7 +2719,8 @@ async def test_terminal_activity_persists_failure_dispositions(
     engine, _sessions, _refs = await _terminal_activity_database(
         tmp_path, monkeypatch
     )
-    result = await persist_checkpoint_branch_turn_terminal(
+    result = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal,
         {
             "workflowId": "source-workflow",
             "branchId": "branch-1",
@@ -2678,7 +2775,8 @@ async def test_terminal_activity_rejects_secret_and_local_path_evidence(
         tmp_path, monkeypatch
     )
     with pytest.raises(CheckpointBranchRetainedEvidenceError):
-        await persist_checkpoint_branch_turn_terminal(
+        await _terminal_activity_environment().run(
+            persist_checkpoint_branch_turn_terminal,
             {
                 "workflowId": "source-workflow",
                 "branchId": "branch-1",
@@ -2701,7 +2799,8 @@ async def test_terminal_activity_rejects_unresolvable_durable_ref(
         tmp_path, monkeypatch
     )
     with pytest.raises(CheckpointBranchRetainedEvidenceError, match="not resolvable"):
-        await persist_checkpoint_branch_turn_terminal(
+        await _terminal_activity_environment().run(
+            persist_checkpoint_branch_turn_terminal,
             {
                 "workflowId": "source-workflow",
                 "branchId": "branch-1",
@@ -2737,8 +2836,12 @@ async def test_terminal_rejection_activity_is_retry_stable_and_terminalizes_row(
         "terminalPayloadDigest": "sha256:" + "9" * 64,
     }
 
-    first = await persist_checkpoint_branch_turn_terminal_rejection(payload)
-    replay = await persist_checkpoint_branch_turn_terminal_rejection(payload)
+    first = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal_rejection, payload
+    )
+    replay = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal_rejection, payload
+    )
 
     assert replay == first
     assert first["status"] == "blocked"
@@ -2759,6 +2862,7 @@ async def test_terminal_rejection_activity_is_retry_stable_and_terminalizes_row(
         _artifact, body = await artifacts.read(
             artifact_id=rejection_id,
             principal="service:checkpoint-branch-turn",
+            admitted_principal="workflow:source-workflow",
             allow_restricted_raw=True,
         )
         assert b"terminalPayloadDigest" in body
@@ -2770,7 +2874,8 @@ async def test_terminal_handoff_pins_every_retained_ref_across_lifecycle_sweep(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
-    result = await persist_checkpoint_branch_turn_terminal(
+    result = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal,
         {
             "workflowId": "source-workflow",
             "branchId": "branch-1",
@@ -2862,6 +2967,7 @@ async def test_terminal_handoff_pins_every_retained_ref_across_lifecycle_sweep(
             _artifact, body = await artifacts.read(
                 artifact_id=artifact_id,
                 principal="service:checkpoint-branch-turn",
+                admitted_principal="workflow:source-workflow",
                 allow_restricted_raw=True,
             )
             assert body
@@ -2888,7 +2994,8 @@ async def test_terminal_handoff_promotes_omnigent_refs_before_recording(
         "moonmind.omnigent.bridge_artifacts.LocalOmnigentArtifactGateway",
         _Gateway,
     )
-    result = await persist_checkpoint_branch_turn_terminal(
+    result = await _terminal_activity_environment().run(
+        persist_checkpoint_branch_turn_terminal,
         {
             "workflowId": "source-workflow",
             "branchId": "branch-1",
@@ -2920,6 +3027,7 @@ async def test_terminal_handoff_promotes_omnigent_refs_before_recording(
         _artifact, body = await artifacts.read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
             principal="service:checkpoint-branch-turn",
+            admitted_principal="workflow:source-workflow",
             allow_restricted_raw=True,
         )
         stored = json.loads(body)
@@ -2943,7 +3051,6 @@ async def test_pre_cutover_pending_persistence_invocations_keep_real_handlers(
     from pathlib import Path
     from temporalio.client import WorkflowHistory
     from temporalio.converter import DataConverter
-    from temporalio.testing import ActivityEnvironment
     from moonmind.workflows.temporal.workflow_registry import (
         workflow_fleet_activity_handlers,
     )
@@ -2979,7 +3086,7 @@ async def test_pre_cutover_pending_persistence_invocations_keep_real_handlers(
                 # Replay payload values are scenario data. Resolve the current
                 # durable row identity through the production branch service.
                 payload["agentRunWorkflowId"] = expected_agent
-            result = await ActivityEnvironment().run(handlers[name], payload)
+            result = await _terminal_activity_environment().run(handlers[name], payload)
             if name.endswith("persist_terminal_rejection"):
                 assert result["status"] == "blocked"
             elif name.endswith("persist_terminal"):

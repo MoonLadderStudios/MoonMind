@@ -11,11 +11,12 @@ import re
 import secrets
 import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable, Mapping
 from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
 
@@ -27,8 +28,9 @@ if TYPE_CHECKING:
 
 import boto3
 from botocore.exceptions import ClientError
-from sqlalchemy import Select, delete, exists, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Select, delete, exists, insert, or_, select, update
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
@@ -941,6 +943,25 @@ class TemporalArtifactRepository:
     async def flush(self) -> None:
         await self._session.flush()
 
+    async def begin_use_claim_savepoint(
+        self,
+    ) -> tuple[AsyncSessionTransaction, AsyncSessionTransaction]:
+        """Isolate an optional claim write from the caller's transaction.
+
+        Preflush and physical SAVEPOINT creation must finish before the
+        optional-write error boundary; neither is an observation failure.
+        """
+        savepoint = await self._session.begin_nested()
+        try:
+            # SQLAlchemy otherwise emits SAVEPOINT lazily on the first query.
+            await self._session.connection()
+        except BaseException:
+            await savepoint.rollback()
+            raise
+        outer = self._session.get_transaction()
+        assert outer is not None
+        return outer, savepoint
+
     async def create_artifact(
         self,
         *,
@@ -1495,20 +1516,38 @@ class TemporalArtifactRepository:
             if current.tzinfo is None:
                 current = current.replace(tzinfo=UTC)
             if current < expires_at:
-                existing.expires_at = expires_at
-                await self._session.flush()
+                existing = (
+                    await self._session.execute(
+                        update(db_models.TemporalArtifactUseClaim)
+                        .where(db_models.TemporalArtifactUseClaim.id == existing.id)
+                        .values(expires_at=expires_at)
+                        .returning(db_models.TemporalArtifactUseClaim),
+                        execution_options={
+                            "autoflush": False,
+                            "synchronize_session": "fetch",
+                            "populate_existing": True,
+                        },
+                    )
+                ).scalar_one()
             return existing
-        claim = db_models.TemporalArtifactUseClaim(
-            id=uuid4(),
-            artifact_id=artifact_id,
-            owner_principal=owner,
-            request_id=request,
-            operation_kind=kind,
-            expires_at=expires_at,
-        )
-        self._session.add(claim)
-        await self._session.flush()
-        return claim
+        # Execute directly so an optional observation's savepoint owner is
+        # responsible for recovery. ORM flush can attempt its own rollback and
+        # replace the write error with a failed-rollback error.
+        return (
+            await self._session.execute(
+                insert(db_models.TemporalArtifactUseClaim)
+                .values(
+                    id=uuid4(),
+                    artifact_id=artifact_id,
+                    owner_principal=owner,
+                    request_id=request,
+                    operation_kind=kind,
+                    expires_at=expires_at,
+                )
+                .returning(db_models.TemporalArtifactUseClaim),
+                execution_options={"autoflush": False},
+            )
+        ).scalar_one()
 
     async def release_use_claim(
         self,
@@ -2444,9 +2483,11 @@ class TemporalArtifactService:
         Records a TTL-bounded use claim at each real serving boundary
         (inline reads, streaming, signed downloads, preview derivation)
         so lifecycle sweeps observe actual consumers instead of expiring
-        artifacts mid-use. Observation never blocks the operation:
-        admission/quota failures are logged and the read proceeds under
-        the sweep's row-lock recheck. Returns the claim request id when
+        artifacts mid-use. Recoverable database write failures roll back
+        only the observation savepoint and are logged; the read proceeds
+        under the sweep's row-lock recheck. Transaction-control failures
+        propagate rather than hiding an unusable caller session.
+        Returns the claim request id when
         recorded so bounded operations can release it on completion;
         bearer uses (signed URLs) hold the claim for its TTL instead.
         Claims expire on their own and are pruned by the sweeper; explicit
@@ -2459,6 +2500,7 @@ class TemporalArtifactService:
         if not owner:
             return None
         request_id = f"{operation_kind}-{uuid4().hex}"
+        outer, savepoint = await self._repository.begin_use_claim_savepoint()
         try:
             await self._repository.acquire_use_claim(
                 artifact_id=artifact_id,
@@ -2468,15 +2510,24 @@ class TemporalArtifactService:
                 expires_at=datetime.now(UTC)
                 + timedelta(seconds=max(60, int(ttl_seconds))),
             )
-            await self._repository.commit()
-        except Exception:  # noqa: BLE001 - observation is best-effort
-            logger.debug(
+        except BaseException as exc:
+            await savepoint.rollback()
+            if (
+                not isinstance(exc, DBAPIError)
+                or exc.connection_invalidated
+                or not outer.is_active
+            ):
+                raise
+            logger.warning(
                 "Temporal artifact use observation skipped artifact_id=%s "
                 "kind=%s",
                 artifact_id,
                 operation_kind,
+                exc_info=True,
             )
             return None
+        await savepoint.commit()
+        await self._repository.commit()
         return request_id
 
     async def _release_observed_use(
@@ -2495,18 +2546,74 @@ class TemporalArtifactService:
         )
         if not owner:
             return
+        outer, savepoint = await self._repository.begin_use_claim_savepoint()
         try:
             await self._repository.release_use_claim(
                 artifact_id=artifact_id,
                 owner_principal=owner,
                 request_id=request_id,
             )
-            await self._repository.commit()
-        except Exception:  # noqa: BLE001 - observation is best-effort
-            logger.debug(
+        except BaseException as exc:
+            await savepoint.rollback()
+            if (
+                not isinstance(exc, DBAPIError)
+                or exc.connection_invalidated
+                or not outer.is_active
+            ):
+                raise
+            logger.warning(
                 "Temporal artifact use observation release skipped artifact_id=%s",
                 artifact_id,
+                exc_info=True,
             )
+            return
+        await savepoint.commit()
+        await self._repository.commit()
+
+    @asynccontextmanager
+    async def _bounded_consumer_use(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        admitted_principal: str | None,
+        ttl_seconds: int,
+    ) -> AsyncIterator[None]:
+        """Release observation without replacing an existing serving failure."""
+        request_id = await self._observe_consumer_use(
+            artifact_id=artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            operation_kind="restore",
+            ttl_seconds=ttl_seconds,
+        )
+        arguments = dict(
+            artifact_id=artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            request_id=request_id,
+        )
+        try:
+            yield
+        except BaseException as primary:
+            try:
+                await self._release_observed_use(**arguments)
+            except BaseException as cleanup:
+                primary.add_note(
+                    "Artifact consumer-use release also failed: "
+                    f"{type(cleanup).__name__}; see the release diagnostic"
+                )
+                logger.warning(
+                    "Temporal artifact release failed while preserving serving "
+                    "failure artifact_id=%s",
+                    artifact_id,
+                    exc_info=True,
+                )
+            raise
+        else:
+            # With no primary failure, cancellation and transaction/control
+            # errors must still fail the operation rather than return bytes.
+            await self._release_observed_use(**arguments)
 
     @staticmethod
     def _normalize_parts(parts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -3225,26 +3332,18 @@ class TemporalArtifactService:
             artifact, principal=principal, admitted_principal=admitted_principal,
             recovery_principal=recovery_principal
         )
-        observed_request_id = await self._observe_consumer_use(
+        async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
-            operation_kind="restore",
             ttl_seconds=300,
-        )
-        try:
-            data = await asyncio.get_running_loop().run_in_executor(
-                None, self._store.read_bytes, artifact.storage_key
-            )
-        except Exception as exc:
-            raise TemporalArtifactStateError("artifact bytes are missing") from exc
-        finally:
-            await self._release_observed_use(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-                admitted_principal=admitted_principal,
-                request_id=observed_request_id,
-            )
+        ):
+            try:
+                data = await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_bytes, artifact.storage_key
+                )
+            except Exception as exc:
+                raise TemporalArtifactStateError("artifact bytes are missing") from exc
         logger.info(
             "Temporal artifact read operation principal=%s artifact_id=%s",
             principal,
@@ -3308,14 +3407,12 @@ class TemporalArtifactService:
             artifact, principal=principal, admitted_principal=admitted_principal,
             recovery_principal=recovery_principal
         )
-        observed_request_id = await self._observe_consumer_use(
+        async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
-            operation_kind="restore",
             ttl_seconds=300,
-        )
-        try:
+        ):
             try:
                 path = await asyncio.get_running_loop().run_in_executor(
                     None, self._store.read_path, artifact.storage_key
@@ -3329,13 +3426,6 @@ class TemporalArtifactService:
             if not path.exists():
                 raise TemporalArtifactStateError("artifact bytes are missing")
             return artifact, path
-        finally:
-            await self._release_observed_use(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-                admitted_principal=admitted_principal,
-                request_id=observed_request_id,
-            )
 
     async def get_read_policy(
         self,
@@ -4150,14 +4240,12 @@ class TemporalArtifactService:
             )
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
-        observed_request_id = await self._observe_consumer_use(
+        async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
-            operation_kind="restore",
             ttl_seconds=3600,
-        )
-        try:
+        ):
             try:
                 payload = await asyncio.get_running_loop().run_in_executor(
                     None, self._store.read_bytes, artifact.storage_key
@@ -4171,13 +4259,6 @@ class TemporalArtifactService:
                 principal=principal,
                 payload=payload,
                 policy=policy or "manual",
-            )
-        finally:
-            await self._release_observed_use(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-                admitted_principal=admitted_principal,
-                request_id=observed_request_id,
             )
         preview_id = (artifact.metadata_json or {}).get("preview_artifact_id")
         if not preview_id:

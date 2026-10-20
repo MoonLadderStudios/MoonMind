@@ -76,11 +76,32 @@ def _child_info():
     )
 
 
+@pytest.fixture
+def publisher_parent_client(monkeypatch):
+    from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+    from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
+        _recorded_server,
+    )
+
+    server, _ = _recorded_server(DescribeWorkflowExecutionResponse(
+        workflow_execution_info={
+            "execution": {"workflow_id": "parent:agent:verify", "run_id": "child-run"},
+            "parent_execution": {"workflow_id": "parent", "run_id": "parent-run"},
+            "parent_namespace_id": "namespace-default",
+        }
+    ))
+    monkeypatch.setattr(
+        activity, "client",
+        lambda: SimpleNamespace(namespace="default", workflow_service=server),
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("requirement_count", [1, 40])
 @pytest.mark.parametrize("remediation_wrapper", [False, True])
 async def test_published_full_report_is_readable_by_parent_only(
-    tmp_path, monkeypatch, source_bound_report, requirement_count, remediation_wrapper  # noqa: F811
+    tmp_path, monkeypatch, source_bound_report, requirement_count, remediation_wrapper,  # noqa: F811
+    publisher_parent_client,
 ):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     workspace = tmp_path / "workspace"
@@ -315,7 +336,7 @@ def test_handoff_identity_comes_from_workflow_and_admitted_parent(monkeypatch):
     "case", ["omitted", "empty", "null", "unresolved", "failed", "mixed"]
 )
 async def test_publisher_preserves_source_bound_unverified_evidence(
-    tmp_path, monkeypatch, source_bound_report, case  # noqa: F811
+    tmp_path, monkeypatch, source_bound_report, case, publisher_parent_client  # noqa: F811
 ):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
     workspace = tmp_path / "workspace"

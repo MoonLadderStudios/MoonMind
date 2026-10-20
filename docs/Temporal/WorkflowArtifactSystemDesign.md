@@ -456,17 +456,17 @@ Baseline policy:
 
 ## 9.3 Service and worker access
 
-A worker's service identity names the caller; it is not a read grant. Under every authenticated mode a bare `service:` or runtime principal reads only artifacts it owns. Readers of execution inputs pass the admitted execution as `admitted_principal=workflow:<id>`, and the service then requires the artifact to be owned by or linked to that execution. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only, so admission never releases protected content.
+A worker's service identity names the caller; authenticated modes apply the existing artifact owner and execution-scope checks. Readers of execution inputs pass `admitted_principal=workflow:<id>`, allowing artifacts owned by or linked to that execution. Local disabled mode retains its historical read, metadata, list and saved-work owner-check bypass for retained consumers. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only in every mode, so admission never releases protected content.
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
 * Omnigent admission verifies the persisted execution plan and links its artifact inputs to the Step Execution, including the admitted Skill bodies and required strict support evidence. Plan and strict-evidence pointers must match their persisted digests before receiving grants; ordinary optional certificates remain outside the required input closure. Snapshots produced by another execution or left unlinked by the operator become readable without copying bytes or rewriting owners.
 * Session-supervisor resolve and continuation reads reuse that execution's existing grant. Continuations bind the sealed intent and plan to the canonical session; mutating commands validate ownership, revision and fence before reading plan inputs. Retries and cleanup never create replacement input grants.
-* `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Generic-host and Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
-* Workspace checkpoint, restore-input and attachment projection and managed-runtime Skill loading carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope.
+* `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Typed, retained-reference, and freshly planned dispatch all admit step-bound inputs before host resolution. Host launch resolution, native-chat bridge authorization, and generic-host/Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
+* Workspace checkpoint, restore-input and attachment projection, managed-runtime Skill loading, and remediation head/evidence reads carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope. Story breakdown and source-brief handoffs verify the exact Activity execution's parent and namespace against Temporal before delegating; neither artifact creator values nor provider-supplied parent fields grant access. Parent Temporal run UUIDs are recorded separately from semantic Step Execution run IDs. Semantic branch-turn identities, including retained payloads, are reconciled only against that exact child run’s recorded launch and server parent; missing or conflicting history grants no authority.
 * Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.
 
-Missing or mismatched authority fails with the service's authorization error. Readers do not fall back to a local path, another identity or disabled-mode behavior. Only disabled local mode skips these checks.
+Verified readers retain their immutable input-closure, recorded Step and parent checks independently of artifact visibility. Parent-lookup failures use publication's existing bounded retry policy before writes. Readers never substitute artifact creator identities; authenticated artifact checks preserve the admitted operator's instance visibility.
 
 ## 9.4 Auditing
 
@@ -493,7 +493,7 @@ this section only binds them to artifact routes.
 | `accounts` | Require the MoonMind session for the resolved `User.id`, then execution-linked authorization | fresh installs and shared deployments |
 | `oidc` | Require the MoonMind session minted from the verified `(issuer, subject)` pair, then execution-linked authorization | shared dev/staging/prod behind an external IdP |
 | `header` | Require the MoonMind session minted from the proxy-asserted identity (ingress strips and replaces identity headers; direct bypass blocked), then execution-linked authorization | authenticated ingress only |
-| `disabled` | No end-user credential required at user-facing metadata/presign endpoints, but only behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`); execution-linked authorization still applies | one-click local/dev |
+| `disabled` | No end-user credential required at user-facing metadata/presign endpoints, but only behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`); historical artifact owner-check bypass remains, with raw/quarantine protection | one-click local/dev |
 
 User versus machine credentials at artifact routes:
 
@@ -518,8 +518,9 @@ binding facade, not an unrestricted upstream proxy.
 Artifacts are instance resources for the admitted operator: the stable
 `operator` principal (and legacy human-owner UUID strings as
 provenance) inspects and controls instance artifacts and saved-work reads
-without a human-owner lookup. `workflow:`/`service:` machine principals
-stay execution-bound via owner-equality and linked-execution checks.
+without a human-owner lookup. In authenticated modes, `workflow:`/`service:`
+machine principals retain owner-equality and linked-execution checks; local
+disabled mode keeps the historical visibility behavior described above.
 Restricted raw bytes, quarantine, redaction, and explicit-grant gates are
 enforced independently of ordinary artifact visibility. See
 [Single-User Application Design](../SingleUserApplicationDesign.md).
@@ -802,6 +803,15 @@ The current raw and normalized journals referenced by a non-terminal Omnigent
 bridge session remain recovery data and are excluded from expiry and destructive
 deletion. Once that session is terminal, ordinary retention applies. Pins and
 live use claims continue to protect all artifact classes.
+
+Read-use observations isolate optional claim writes in savepoints. A recoverable
+database write failure preserves the caller's work and artifact data; failed
+release leaves the committed claim protected until its TTL. Connection loss,
+outer-transaction failure and transaction-control errors propagate rather than
+returning bytes with an unusable session. If serving already failed, a release
+failure is logged and attached as a diagnostic note without replacing the
+original error or cancellation. Successful observations retain their existing
+durable commit.
 
 Omnigent commits each complete replacement journal pair before reclaiming its
 superseded numbered prefixes. The replacement retains the accumulated events;

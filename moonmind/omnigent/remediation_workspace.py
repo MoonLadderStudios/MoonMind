@@ -110,14 +110,21 @@ class RemediationHeadLoader(Protocol):
 
 
 class ArtifactRemediationHeadLoader:
-    def __init__(self, artifact_service: Any) -> None:
+    def __init__(self, artifact_service: Any, *, workflow_id: str | None) -> None:
         self.artifact_service = artifact_service
+        self.workflow_id = str(workflow_id or "").strip()
 
     async def load(self, ref: str) -> Mapping[str, Any]:
+        if not self.workflow_id:
+            raise RemediationWorkspaceError(
+                "REMEDIATION_WORKSPACE_AUTHORITY_INVALID",
+                "durable loop-head reads require admitted workflow authority",
+            )
         try:
             _artifact, payload = await self.artifact_service.read(
                 artifact_id=ref.removeprefix("artifact://"),
                 principal="service:remediation_workspace",
+                admitted_principal=f"workflow:{self.workflow_id}",
                 allow_restricted_raw=True,
             )
             value = json.loads(payload)

@@ -1130,8 +1130,8 @@ async def native_journey(
         # off to the normal positive runtime uid without weakening ownership.
         resolve_host = production.OmnigentPlannedHostResolver.__call__
 
-        async def resolve_controlled_host(resolver, selected_plan):
-            host, policy = await resolve_host(resolver, selected_plan)
+        async def resolve_controlled_host(resolver, selected_plan, *, request):
+            host, policy = await resolve_host(resolver, selected_plan, request=request)
             return (
                 host.model_copy(
                     update={
@@ -1153,7 +1153,12 @@ async def native_journey(
         services = production.build_generic_omnigent_execution_services(
             session_factory=session_factory, artifact_gateway=gateway
         )
-        docker.host_class, _policy = await services.planned_host_resolver(plan)
+        # Direct realizer journeys cross the same input admission boundary as
+        # Activity dispatch before any execution-scoped reader consumes a ref.
+        await gateway.admit_execution_plan_inputs(request=request, plan=plan)
+        docker.host_class, _policy = await services.planned_host_resolver(
+            plan, request=request
+        )
         realizer = services.realizer_registry.require("generic-omnigent-host@1")
         assert plan.payload.executionRealizerRef == realizer.ref
         yield SimpleNamespace(
