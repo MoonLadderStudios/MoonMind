@@ -729,8 +729,12 @@ def test_windows_loopback_launcher_preserves_http_and_tls_identity(
 
         ca, certificate, key = _write_certificates(tmp_path, certificate_host)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = tls_version
-        context.maximum_version = tls_version
+        # Explicit secure bounds let static analysis verify both TLS fixtures.
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        if tls_version == ssl.TLSVersion.TLSv1_3:
+            context.maximum_version = ssl.TLSVersion.TLSv1_3
+            context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.load_cert_chain(certificate, key)
         context.set_servername_callback(
             lambda _socket, name, _context: server_names.append(name)
