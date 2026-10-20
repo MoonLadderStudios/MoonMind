@@ -1051,12 +1051,21 @@ def _compose_up(state_dir: Path, project: str, *options: str) -> int:
     the link network, that restart fails with "network ... not found".
     ``compose rm`` removes only a container that is not running, so a live
     controller is untouched; its state lives in the bind-mounted state dir.
+    Bound startup so a restarting replacement returns control for rollback.
     """
     code = _compose(state_dir, project, "rm", "--force", CONTROLLER_SERVICE)
     if code:
         return code
     return _compose(
-        state_dir, project, "up", "-d", "--wait", *options, CONTROLLER_SERVICE
+        state_dir,
+        project,
+        "up",
+        "-d",
+        "--wait",
+        "--wait-timeout",
+        "30",
+        *options,
+        CONTROLLER_SERVICE,
     )
 
 
