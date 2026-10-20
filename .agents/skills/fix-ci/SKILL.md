@@ -77,9 +77,9 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - If every failure is a GitHub Actions platform failure with no code defect
   (for example `Artifact storage quota has been hit`, a lost runner, or an
   Actions service error) and any downstream gate failed only because that
-  job's artifact is missing, there is no code to fix. Do not edit code or
-  recommend manual review. Recover by rerunning the failed jobs on the same
-  head; no other owner reruns CI when this Skill reaches this case:
+  job failed or its artifact is missing, there is no code to fix. Do not edit
+  code or recommend manual review. Recover by rerunning the failed jobs on the
+  same head; no other owner reruns CI when this Skill reaches this case:
   - Read the run with
     `gh run view <run-id> --json attempt,status,updatedAt,headSha` and the
     current head with `gh pr view --json headRefOid` (or the branch head when
