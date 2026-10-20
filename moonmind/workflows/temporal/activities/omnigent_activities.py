@@ -901,7 +901,9 @@ async def _try_generic_realizer_dispatch(
 
             realizer_registry = get_default_registry()
         realizer = realizer_registry.require(plan.payload.executionRealizerRef)
-        if getattr(plan.payload, "resolvedTools", {}).get("repositoryAccess"):
+        if request.step_execution is not None or getattr(
+            plan.payload, "resolvedTools", {}
+        ).get("repositoryAccess"):
             from moonmind.omnigent.bridge_artifacts import (
                 TemporalOmnigentArtifactGateway,
             )

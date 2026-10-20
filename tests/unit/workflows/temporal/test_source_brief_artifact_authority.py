@@ -15,14 +15,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 from temporalio import activity
+from temporalio.workflow import ParentInfo
 from temporalio.api.failure.v1 import Failure
-from temporalio.converter import DefaultFailureConverter, DefaultPayloadConverter
+from temporalio.converter import DataConverter, DefaultFailureConverter, DefaultPayloadConverter
 from temporalio.service import RPCError, RPCStatusCode, WorkflowService
 from temporalio.api.workflowservice.v1 import (
     DescribeNamespaceResponse,
     DescribeWorkflowExecutionResponse,
 )
 
+from api_service.services.checkpoint_branch_turn_execution import (
+    build_branch_turn_execution_identity,
+)
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
@@ -61,13 +65,30 @@ from tests.unit.workflows.temporal.test_acceptance_boundary_regressions import (
 )
 
 
-def _recorded_server(described):
+def _recorded_server(described, launch_request=None):
     async def rpc(*, rpc, req, service, resp_type, retry, metadata, timeout):
         assert service == "workflow"
         assert retry is True
         assert timeout == timedelta(seconds=10)
         if rpc == "describe_workflow_execution":
             return described
+        if rpc == "get_workflow_execution_history" and launch_request is not None:
+            from temporalio.api.workflowservice.v1 import GetWorkflowExecutionHistoryResponse
+
+            record = described.workflow_execution_info
+            return GetWorkflowExecutionHistoryResponse(history={"events": [{
+                "event_id": 1,
+                "workflow_execution_started_event_attributes": {
+                    "workflow_type": {"name": "MoonMind.AgentRun"},
+                    "original_execution_run_id": record.execution.run_id,
+                    "parent_workflow_namespace": "default",
+                    "parent_workflow_namespace_id": record.parent_namespace_id,
+                    "parent_workflow_execution": record.parent_execution,
+                    "input": {"payloads": await DataConverter.default.encode([
+                        launch_request.model_dump(mode="json", by_alias=True),
+                    ])},
+                },
+            }]})
         assert rpc == "describe_namespace"
         return DescribeNamespaceResponse(namespace_info={"id": "namespace-default"})
 
@@ -77,6 +98,7 @@ def _recorded_server(described):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("new_history", (True, False))
+@pytest.mark.parametrize("parent_identity", ("ordinary", "branch"))
 @pytest.mark.parametrize(
     "scope", ("own", "unrelated", "missing", "restricted", "quarantined", "temporary")
 )
@@ -87,7 +109,16 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
     source_bound_report,  # noqa: F811
     scope,
     new_history,
+    parent_identity,
 ):
+    parent_id, child_id, semantic_run_id = "parent", "parent:agent:verify", "parent-run"
+    if parent_identity == "branch":
+        identity = build_branch_turn_execution_identity(
+            branch_id="source-branch", branch_turn_id="source-turn",
+            logical_step_id="verify", ordinal=1,
+        )
+        parent_id, child_id = identity.workflow_id, identity.agent_run_workflow_id
+        semantic_run_id = identity.semantic_run_id
     workspace = tmp_path / "workspace"
     report_path = workspace / "artifacts/verify.json"
     report_path.parent.mkdir(parents=True)
@@ -113,9 +144,11 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
         run_module.workflow,
         "info",
         lambda: SimpleNamespace(
-            workflow_id="parent:agent:verify",
+            workflow_id=child_id,
             run_id="child-run",
             task_queue="mm.workflow.user.v2",
+            namespace="default",
+            parent=ParentInfo(namespace="default", workflow_id=parent_id, run_id="parent-run"),
         ),
     )
     monkeypatch.setattr(
@@ -123,7 +156,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
         "info",
         lambda: SimpleNamespace(
             namespace="default",
-            workflow_id="parent",
+            workflow_id=parent_id,
             workflow_run_id="parent-run",
         ),
     )
@@ -157,13 +190,13 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
                 "inputs": {},
             },
             registry_snapshot=snapshot,
-            principal="workflow:parent",
+            principal=f"workflow:{parent_id}",
         )
         brief_id = loaded.outputs["briefArtifactRef"]
         brief, source_bytes = await service.read(
-            artifact_id=brief_id, principal="workflow:parent"
+            artifact_id=brief_id, principal=f"workflow:{parent_id}"
         )
-        assert brief.created_by_principal == "workflow:parent"
+        assert brief.created_by_principal == f"workflow:{parent_id}"
         if scope == "restricted":
             from api_service.db.models import TemporalArtifactRedactionLevel
 
@@ -196,6 +229,11 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             acceptanceScopeContract="source-bound/v1",
             briefArtifactRef=brief_id,
         )
+        request.step_execution = request.step_execution.model_copy(update={
+            "workflow_id": parent_id,
+            "run_id": semantic_run_id,
+            "step_execution_id": f"{parent_id}:{semantic_run_id}:verify:execution:1",
+        })
         if scope == "unrelated":
             request.step_execution = request.step_execution.model_copy(
                 update={
@@ -210,7 +248,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             request=request,
             include_parent_execution=True,
             result=AgentRunResult(
-                metadata={"parentWorkflowId": "parent", "parentRunId": "parent-run"}
+                metadata={"parentWorkflowId": parent_id, "parentRunId": semantic_run_id}
             ),
         )
         monkeypatch.setattr(
@@ -218,7 +256,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             "info",
             lambda: SimpleNamespace(
                 namespace="default",
-                workflow_id="parent:agent:verify",
+                workflow_id=child_id,
                 workflow_run_id="child-run",
             ),
         )
@@ -226,14 +264,14 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             None
             if scope == "missing"
             else {
-                "workflow_id": "unrelated" if scope == "unrelated" else "parent",
+                "workflow_id": "unrelated" if scope == "unrelated" else parent_id,
                 "run_id": "other-run" if scope == "unrelated" else "parent-run",
             }
         )
         described = DescribeWorkflowExecutionResponse(
             workflow_execution_info={
                 "execution": {
-                    "workflow_id": "parent:agent:verify",
+                    "workflow_id": child_id,
                     "run_id": "child-run",
                 },
                 **(
@@ -246,7 +284,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
                 ),
             }
         )
-        server, calls = _recorded_server(described)
+        server, calls = _recorded_server(described, launch_request=request)
         if scope == "temporary":
             real_transport = calls.side_effect
             unavailable = RPCError(
@@ -262,7 +300,9 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
         monkeypatch.setattr(
             activity,
             "client",
-            lambda: SimpleNamespace(namespace="default", workflow_service=server),
+            lambda: SimpleNamespace(
+                namespace="default", workflow_service=server, data_converter=DataConverter.default,
+            ),
         )
         if scope == "temporary":
             enriched.metadata["instructionRef"] = brief_id
@@ -318,7 +358,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             assert not gate.get("contractViolations")
             assert "acceptanceProjection" in gate["validatedRefs"]
             if scope == "temporary":
-                assert calls.await_count == 3
+                assert calls.await_count == (4 if parent_identity == "branch" else 3)
                 activities.execution_notify_completion.assert_awaited_once()
         else:
             assert (

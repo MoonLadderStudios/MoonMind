@@ -1432,6 +1432,7 @@ def _temporal_snapshot_from_payload(
 
 async def _verified_artifact_parent_scope(
     *, info: Any, parent_workflow_id: str, parent_run_id: str,
+    parent_temporal_run_id: str | None = None,
 ) -> str | None:
     """Delegate only to this exact Activity run's server-recorded parent.
 
@@ -1444,11 +1445,12 @@ async def _verified_artifact_parent_scope(
     from temporalio.api.workflowservice.v1 import (
         DescribeNamespaceRequest,
         DescribeWorkflowExecutionRequest,
+        GetWorkflowExecutionHistoryRequest,
     )
 
     try:
         # Native retry handles transient RPC errors; the outer deadline bounds
-        # both lookups together, including any final SDK retry attempt.
+        # all lookups together, including any final SDK retry attempt.
         async with asyncio.timeout(10):
             client = temporal_activity.client()
             if client.namespace != info.namespace:
@@ -1469,7 +1471,7 @@ async def _verified_artifact_parent_scope(
                 or record.execution.run_id != info.workflow_run_id
                 or not record.HasField("parent_execution")
                 or record.parent_execution.workflow_id != parent_workflow_id
-                or record.parent_execution.run_id != parent_run_id
+                or not record.parent_execution.run_id
                 or not record.parent_namespace_id
             ):
                 return None
@@ -1480,6 +1482,61 @@ async def _verified_artifact_parent_scope(
             )
             if record.parent_namespace_id != namespace.namespace_info.id:
                 return None
+            if parent_temporal_run_id and record.parent_execution.run_id != parent_temporal_run_id:
+                return None
+            if record.parent_execution.run_id != parent_run_id:
+                # Branch turns retain a semantic Step Execution run ID. Even
+                # with the server UUID, prove the semantic link from this exact
+                # launch: retained inputs may contain provider-authored fields.
+                branch_prefix = "checkpoint-branch-turn:"
+                if (
+                    not parent_workflow_id.startswith(branch_prefix)
+                    or parent_run_id != "branch-turn-" + parent_workflow_id[len(branch_prefix):]
+                ):
+                    return None
+                history = await client.workflow_service.get_workflow_execution_history(
+                    GetWorkflowExecutionHistoryRequest(
+                        namespace=info.namespace,
+                        execution=WorkflowExecution(
+                            workflow_id=info.workflow_id, run_id=info.workflow_run_id,
+                        ),
+                        maximum_page_size=1,
+                    ),
+                    timeout=timedelta(seconds=10),
+                    retry=True,
+                )
+                if not history.history.events:
+                    return None
+                event = history.history.events[0]
+                if event.event_id != 1 or not event.HasField(
+                    "workflow_execution_started_event_attributes"
+                ):
+                    return None
+                started = event.workflow_execution_started_event_attributes
+                # The exact RPC target and describe response bind this run.
+                # original_execution_run_id can differ after a workflow reset.
+                if (
+                    started.workflow_type.name != "MoonMind.AgentRun"
+                    or started.parent_workflow_namespace != info.namespace
+                    or started.parent_workflow_namespace_id != record.parent_namespace_id
+                    or started.parent_workflow_execution != record.parent_execution
+                    or len(started.input.payloads) != 1
+                ):
+                    return None
+                try:
+                    launch_payloads = await client.data_converter.decode(started.input.payloads)
+                    launch = AgentExecutionRequest.model_validate(launch_payloads[0])
+                except (ValueError, TypeError):
+                    return None
+                step = launch.step_execution
+                # Model validation also binds stepExecutionId to workflow, run,
+                # logical step and ordinal. Preserve that semantic link intact.
+                if (
+                    step is None
+                    or step.workflow_id != parent_workflow_id
+                    or step.run_id != parent_run_id
+                ):
+                    return None
     except Exception as exc:
         logger.warning(
             "Artifact parent authority is unavailable for %s (%s)",
@@ -8579,6 +8636,7 @@ class TemporalAgentRuntimeActivities:
                     info=info,
                     parent_workflow_id=_metadata_text("parentWorkflowId"),
                     parent_run_id=_metadata_text("parentRunId"),
+                    parent_temporal_run_id=_metadata_text("parentTemporalRunId"),
                 )
                 parent_scope_checked = True
             return verified_parent_scope

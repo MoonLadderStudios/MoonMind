@@ -11,11 +11,12 @@ import re
 import secrets
 import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable, Mapping
 from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
 
@@ -2569,6 +2570,51 @@ class TemporalArtifactService:
         await savepoint.commit()
         await self._repository.commit()
 
+    @asynccontextmanager
+    async def _bounded_consumer_use(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        admitted_principal: str | None,
+        ttl_seconds: int,
+    ) -> AsyncIterator[None]:
+        """Release observation without replacing an existing serving failure."""
+        request_id = await self._observe_consumer_use(
+            artifact_id=artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            operation_kind="restore",
+            ttl_seconds=ttl_seconds,
+        )
+        arguments = dict(
+            artifact_id=artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            request_id=request_id,
+        )
+        try:
+            yield
+        except BaseException as primary:
+            try:
+                await self._release_observed_use(**arguments)
+            except BaseException as cleanup:
+                primary.add_note(
+                    "Artifact consumer-use release also failed: "
+                    f"{type(cleanup).__name__}; see the release diagnostic"
+                )
+                logger.warning(
+                    "Temporal artifact release failed while preserving serving "
+                    "failure artifact_id=%s",
+                    artifact_id,
+                    exc_info=True,
+                )
+            raise
+        else:
+            # With no primary failure, cancellation and transaction/control
+            # errors must still fail the operation rather than return bytes.
+            await self._release_observed_use(**arguments)
+
     @staticmethod
     def _normalize_parts(parts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         if not parts:
@@ -3286,26 +3332,18 @@ class TemporalArtifactService:
             artifact, principal=principal, admitted_principal=admitted_principal,
             recovery_principal=recovery_principal
         )
-        observed_request_id = await self._observe_consumer_use(
+        async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
-            operation_kind="restore",
             ttl_seconds=300,
-        )
-        try:
-            data = await asyncio.get_running_loop().run_in_executor(
-                None, self._store.read_bytes, artifact.storage_key
-            )
-        except Exception as exc:
-            raise TemporalArtifactStateError("artifact bytes are missing") from exc
-        finally:
-            await self._release_observed_use(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-                admitted_principal=admitted_principal,
-                request_id=observed_request_id,
-            )
+        ):
+            try:
+                data = await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_bytes, artifact.storage_key
+                )
+            except Exception as exc:
+                raise TemporalArtifactStateError("artifact bytes are missing") from exc
         logger.info(
             "Temporal artifact read operation principal=%s artifact_id=%s",
             principal,
@@ -3369,14 +3407,12 @@ class TemporalArtifactService:
             artifact, principal=principal, admitted_principal=admitted_principal,
             recovery_principal=recovery_principal
         )
-        observed_request_id = await self._observe_consumer_use(
+        async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
-            operation_kind="restore",
             ttl_seconds=300,
-        )
-        try:
+        ):
             try:
                 path = await asyncio.get_running_loop().run_in_executor(
                     None, self._store.read_path, artifact.storage_key
@@ -3390,13 +3426,6 @@ class TemporalArtifactService:
             if not path.exists():
                 raise TemporalArtifactStateError("artifact bytes are missing")
             return artifact, path
-        finally:
-            await self._release_observed_use(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-                admitted_principal=admitted_principal,
-                request_id=observed_request_id,
-            )
 
     async def get_read_policy(
         self,
@@ -4211,14 +4240,12 @@ class TemporalArtifactService:
             )
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
-        observed_request_id = await self._observe_consumer_use(
+        async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
             principal=principal,
             admitted_principal=admitted_principal,
-            operation_kind="restore",
             ttl_seconds=3600,
-        )
-        try:
+        ):
             try:
                 payload = await asyncio.get_running_loop().run_in_executor(
                     None, self._store.read_bytes, artifact.storage_key
@@ -4232,13 +4259,6 @@ class TemporalArtifactService:
                 principal=principal,
                 payload=payload,
                 policy=policy or "manual",
-            )
-        finally:
-            await self._release_observed_use(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-                admitted_principal=admitted_principal,
-                request_id=observed_request_id,
             )
         preview_id = (artifact.metadata_json or {}).get("preview_artifact_id")
         if not preview_id:
