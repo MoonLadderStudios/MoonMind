@@ -843,3 +843,42 @@ def test_host_controller_calls_never_traverse_an_ambient_proxy(
 
     assert status == 200
     assert "active-journal-transition" in health["capabilities"]
+
+
+@pytest.mark.parametrize("operation", ["ensure", "refresh"])
+def test_uncertain_controller_state_refuses_alternate_source_retry(
+    installed, monkeypatch, operation
+):
+    repo, controller = installed()
+    attempted = []
+    monkeypatch.setattr(
+        update, "_controller_bootstrap_command", lambda *a, **k: ["bootstrap", "ensure"]
+    )
+    monkeypatch.setattr(update, "_controller_call", lambda *a, **k: (200, {}))
+    monkeypatch.setattr(
+        update, "_controller_source_images", lambda *a, **k: ["first", "second"]
+    )
+    monkeypatch.setattr(
+        update, "_controller_sources", lambda *a, **k: {"bootstrap.py": "# lifecycle"}
+    )
+
+    def run(command, **kwargs):
+        attempted.append(command)
+        raise RuntimeError(
+            "prerequisite failed: MOONMIND_CONTROLLER_RETRY_UNSAFE=state unverified"
+        )
+
+    monkeypatch.setattr(update, "run", run)
+    record = {"project": "moonmind", "image": IMAGE}
+    if operation == "ensure":
+        with pytest.raises(RuntimeError, match="RETRY_UNSAFE"):
+            update._ensure_controller_journal_transition(
+                record, repo, controller.url, SECRET
+            )
+    else:
+        changed, reason = update._refresh_controller_to_requested(
+            record, repo, controller.url
+        )
+        assert not changed
+        assert "RETRY_UNSAFE" in reason
+    assert len(attempted) == 1
