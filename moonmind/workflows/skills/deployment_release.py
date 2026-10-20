@@ -222,20 +222,8 @@ async def prepare_journal_transition(project, *, compact=True):
     wait for a workflow to finish or alter its requested outcome/status.
     Repeat observation and compaction on retry: partial Compose recreation can
     have produced more chunks after an earlier successful preparation.
-
-    After a failed apply (``compact=False``) the only hazard is an old reader
-    beside a new chunk writer. Consumers that all run one image cannot mix
-    formats, so they keep running: a failed update with no retry coming must
-    not leave agent launches stranded. A retry still fences and recompacts.
     """
     consumers = await _journal_consumers(project)
-    images = sorted({str(row.get("Image") or "") for row in consumers})
-    if not compact and len(images) == 1 and images[0]:
-        stopped = [row["Id"] for row in consumers if not row["State"]["Running"]]
-        if stopped:
-            await docker("start", *stopped)
-        return {"status": "resumed", "consumers": [row["Id"] for row in consumers],
-                "image": images[0]}
     running = [row["Id"] for row in consumers if row["State"]["Running"]]
     if running:
         # Respect the installed stop_grace_period (normally six minutes).
@@ -245,13 +233,9 @@ async def prepare_journal_transition(project, *, compact=True):
     observed = await _journal_consumers(project)
     if any(row["State"]["Running"] or row["State"].get("Restarting") for row in observed):
         raise RuntimeError("Journal consumers are still running; no journal was compacted")
-    if not compact:
-        return {"status": "quiesced", "consumers": [row["Id"] for row in observed],
-                "images": images,
-                "reason": "Journal consumers run mixed images and stay stopped. "
-                          "Retry the update to recompact journals and recreate them."}
-    receipt = await compact_active_journals()
-    return {"status": "prepared", "consumers": [row["Id"] for row in observed], **receipt}
+    receipt = await compact_active_journals() if compact else {}
+    return {"status": "prepared" if compact else "quiesced",
+            "consumers": [row["Id"] for row in observed], **receipt}
 
 
 # The controller lifecycle this image ships, and the receipt its handoff prints.

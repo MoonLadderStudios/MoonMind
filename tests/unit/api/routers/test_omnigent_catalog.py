@@ -2038,7 +2038,33 @@ def test_catalog_blames_unready_worker_not_egress_configuration(monkeypatch):
     # The agent runtime worker reports the enforced networks. While it is
     # down they are unknown, not misconfigured: report a recoverable worker
     # reason so the start page keeps polling instead of asking for config.
-    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    identity = SimpleNamespace(
+        policy_id="claude-on-demand", name="Claude on-demand host",
+        default_version=1, visibility="deployment", owner_user_id=None,
+    )
+    version = SimpleNamespace(
+        version=1, state="active", validation_json={"valid": True},
+        document_json={
+            "execution": {"profileRef": "omnigent-claude@1", "harness": "claude-native"},
+            "host": {
+                "mode": "on_demand_docker",
+                "serverImageRef": "registry.test/server@sha256:" + "1" * 64,
+                "hostImageRef": "registry.test/host@sha256:" + "2" * 64,
+            },
+            "network": {
+                "attachmentRef": OMNIGENT_EGRESS_NETWORK_REF,
+                "egressProfileRef": OMNIGENT_EGRESS_PROFILE.ref,
+            },
+        },
+    )
+    claude = _profile(
+        profile_id="claude-oauth", provider_id="anthropic", runtime_id="claude_code",
+    )
+    app = _app(
+        monkeypatch,
+        session=_Session([_profile(), claude], policies=[(identity, version)]),
+    )
 
     async def readiness():
         return catalog.LiveDeploymentReadiness(endpoint_ready=True, backend_ready=False)
@@ -2046,10 +2072,22 @@ def test_catalog_blames_unready_worker_not_egress_configuration(monkeypatch):
     monkeypatch.setattr(catalog, "_live_deployment_readiness", readiness)
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
-    codes = {reason["code"] for reason in body["gateReasons"]}
     assert body["available"] is False
-    assert "on_demand_backend_unavailable" in codes
-    assert "network_policy_unavailable" not in codes
+    # Mirrors OMNIGENT_RECOVERABLE_GATE_CODES in workflow-start.tsx: the page
+    # polls only while every reason is recoverable.
+    recoverable = {
+        "bridge_conformance_gated", "bridge_endpoint_not_ready",
+        "immutable_image_unavailable", "no_eligible_codex_oauth_profile",
+        "on_demand_backend_unavailable", "profile_capacity_unavailable",
+        "static_host_not_ready",
+    }
+    for reasons in [body["gateReasons"]] + [
+        profile["gateReasons"] for profile in body["executionProfiles"]
+    ]:
+        codes = [reason["code"] for reason in reasons]
+        assert "on_demand_backend_unavailable" in codes
+        assert set(codes) <= recoverable, codes
+        assert len(codes) == len(set(codes)), codes
 
 
 def test_catalog_reports_stale_persisted_observation_without_blocking_launch(
