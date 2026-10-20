@@ -1460,7 +1460,9 @@ class TemporalClientAdapter:
         Only provided (non-``None``) fields are modified; everything else
         is preserved from the current schedule description. Automatic repairs
         preserve existing admission; explicit execution-target replacements
-        retain the default new-admission behavior.
+        retain the default new-admission behavior. Without a workflow replacement,
+        supplied memo/search attributes are merged by key onto the current
+        action; its execution inputs and other options remain untouched.
 
         Raises:
             ScheduleNotFoundError: if the schedule does not exist.
@@ -1572,6 +1574,18 @@ class TemporalClientAdapter:
                         else {}
                     ),
                 )
+
+            elif isinstance(schedule.action, ScheduleActionStartWorkflow):
+                # Refresh future-start projections without changing durable
+                # args/admission, routing, identity, or already-started runs.
+                if memo is not None:
+                    schedule.action.memo = {**(schedule.action.memo or {}), **memo}
+                if typed_search_attributes:
+                    schedule.action.typed_search_attributes = (
+                        schedule.action.typed_search_attributes.updated(
+                            *typed_search_attributes
+                        )
+                    )
 
             return ScheduleUpdate(schedule=schedule)
 

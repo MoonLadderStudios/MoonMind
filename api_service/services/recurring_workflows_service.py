@@ -643,6 +643,14 @@ class RecurringWorkflowsService:
             "mm_owner_id": str(owner_user_id),
         }
 
+    async def _provider_profile_projection(
+        self, parameters: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], str]:
+        return build_provider_profile_projection(
+            parameters,
+            labels=await provider_profile_label_snapshot(self._session, parameters),
+        )
+
     async def _workflow_start_metadata(
         self,
         *,
@@ -663,10 +671,7 @@ class RecurringWorkflowsService:
             publication_git_identity_admission,
         )
 
-        summary, search_value = build_provider_profile_projection(
-            parameters,
-            labels=await provider_profile_label_snapshot(self._session, parameters),
-        )
+        summary, search_value = await self._provider_profile_projection(parameters)
         return {
             "memo": {
                 "definitionId": str(definition_id),
@@ -2046,6 +2051,15 @@ class RecurringWorkflowsService:
                         owner_user_id=definition.owner_user_id,
                         workflow_input=workflow_input,
                     ),
+                }
+            else:
+                # Refresh only the provider projection for future occurrences.
+                # Do not rebuild execution input or re-admit retained actions.
+                parameters = dict(definition.target.get("initialParameters") or {})
+                summary, search_value = await self._provider_profile_projection(parameters)
+                action_update = {
+                    "memo": {PROVIDER_PROFILE_MEMO_KEY: summary},
+                    "search_attributes": {PROVIDER_PROFILE_SEARCH_ATTRIBUTE: search_value},
                 }
             await self._adapter.update_schedule(
                 definition_id=definition.id,
