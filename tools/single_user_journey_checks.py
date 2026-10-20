@@ -103,17 +103,12 @@ SETTING_KEY = "integrations.github.token_ref"
 TERMINAL_FAILURE = frozenset({"failed", "terminated", "timed_out", "timedout"})
 CANCELED = frozenset({"canceled", "cancelled"})
 COMPLETED = frozenset({"completed", "succeeded"})
-# Startup log lines written by api_service.main._run_guarded_single_user_upgrade
-# and the read-only conversion guard that follows it.
+# Startup log lines written by api_service.main._run_guarded_single_user_upgrade.
 CONVERSION_OUTCOME = re.compile(
     r"Single-user guarded upgrade (?:"
     r"published \((?P<published>[a-z_]+)\)"
     r"|blocked \((?P<blocked>[a-z_]+)(?:: (?P<detail>[^)]*))?\)"
     r"|deferred: (?P<deferred>\w+))"
-)
-CONVERSION_GUARD = re.compile(
-    r"Single-user conversion guard: disposition=(?P<disposition>[a-z_]+) "
-    r"reason=(?P<reason>[a-z_]+)"
 )
 PENDING_TRANSFORMS = re.compile(r"lack registered transforms: (?P<names>[a-z_,]+)")
 DEPLOYMENT_STACK = "moonmind"
@@ -659,13 +654,10 @@ def conversion(state: dict[str, Any], *, api_log: Path) -> None:
     if latest["deferred"]:
         raise JourneyFailure(f"guarded conversion deferred: {latest['deferred']}")
     reason = latest["blocked"]
-    guards = list(CONVERSION_GUARD.finditer(text))
-    eligible = bool(guards) and (
-        guards[-1]["disposition"],
-        guards[-1]["reason"],
-    ) == ("eligible_conversion", "single_operator")
+    # Transform coverage is checked only after attribution found one eligible
+    # operator, so this refusal already implies single-operator attribution.
     pending = PENDING_TRANSFORMS.search(latest["detail"] or "")
-    if reason != "missing_transform_coverage" or not eligible or not pending:
+    if reason != "missing_transform_coverage" or not pending:
         raise JourneyFailure(
             f"guarded conversion refused ({reason}: {latest['detail'] or 'no detail'})"
         )

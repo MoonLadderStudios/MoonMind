@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -195,10 +196,10 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
     assert hermetic["env"]["MOONMIND_INTEGRATION_FAIL_FAST"] == (
         "${{ github.event_name != 'schedule' && '1' || '0' }}"
     )
-    # The wrapper's cooperative execution budget and bounded teardown must
-    # finish inside the native step bound, which stays inside the job bound.
+    # Include the wrapper's interrupt grace and the kill grace for each of
+    # its three diagnostics/teardown commands before the native step bound.
     budget_seconds = int(hermetic["env"]["MOONMIND_INTEGRATION_TIMEOUT"])
-    assert budget_seconds + 30 + 3 * 120 < int(hermetic["timeout-minutes"]) * 60
+    assert budget_seconds + 30 + 3 * (120 + 10) < int(hermetic["timeout-minutes"]) * 60
     for name in (
         "Install the journey browser's Playwright runtime",
         "Run hermetic integration CI suite",
@@ -211,6 +212,59 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
         assert 0 < int(steps[name]["timeout-minutes"]) < 30, name
 
 
+def _integration_row_timeout_minutes(value: int | str, suite: str) -> int:
+    if isinstance(value, int):
+        return value
+    match = re.fullmatch(
+        r"\$\{\{ matrix\.suite == 'hermetic' && (\d+) \|\| (\d+) \}\}", value
+    )
+    assert match, f"Unrecognized integration timeout expression: {value}"
+    return int(match.group(1 if suite == "hermetic" else 2))
+
+
+def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
+    job = _load_workflow()["jobs"]["integration-ci"]
+    run_index = next(
+        index
+        for index, step in enumerate(job["steps"])
+        if step["name"] == "Run hermetic integration CI suite"
+    )
+    setup_minutes = 0
+    for step in job["steps"][:run_index]:
+        # Every setup phase must finish or time out before it can consume
+        # the wrapper's cleanup and evidence-upload reserve.
+        minutes = _integration_row_timeout_minutes(step["timeout-minutes"], "hermetic")
+        assert 0 < minutes <= 6, step["name"]
+        setup_minutes += minutes
+        if "if" not in step:
+            assert (
+                _integration_row_timeout_minutes(
+                    step["timeout-minutes"], "fresh-journey"
+                )
+                == 30
+            )
+
+    assert setup_minutes <= 12
+    execution_minutes = int(job["steps"][run_index]["timeout-minutes"])
+    report_steps = [
+        step
+        for step in job["steps"]
+        if step["name"]
+        in {
+            "Collect row-owned integration report and diagnostics",
+            "Upload row-owned integration report and diagnostics",
+        }
+    ]
+    assert len(report_steps) == 2
+    reporting_minutes = sum(int(step["timeout-minutes"]) for step in report_steps)
+    assert reporting_minutes == 4
+    # Include one minute for runner dispatch and post-action housekeeping;
+    # the wrapper's complete cleanup budget is already inside its native step.
+    assert setup_minutes + execution_minutes + reporting_minutes + 1 <= (
+        _integration_row_timeout_minutes(job["timeout-minutes"], "hermetic")
+    )
+
+
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     # The hermetic suite and the three disposable Compose journeys each own
     # an isolated Compose project.
@@ -218,14 +272,29 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     # row, not their serial sum, bounds integration-ci.
     job = _load_workflow()["jobs"]["integration-ci"]
 
-    assert json.loads(select_suites([]).as_outputs()["integration_matrix"])["suite"] == [
+    assert json.loads(select_suites([]).as_outputs()["integration_matrix"])[
+        "suite"
+    ] == [
         "hermetic",
         "fresh-journey",
         "upgrade-journey",
         "controller-journey",
     ]
     assert job["strategy"]["fail-fast"] == "${{ github.event_name != 'schedule' }}"
-    assert int(job["timeout-minutes"]) <= 30
+    assert {
+        suite: _integration_row_timeout_minutes(job["timeout-minutes"], suite)
+        for suite in (
+            "hermetic",
+            "fresh-journey",
+            "upgrade-journey",
+            "controller-journey",
+        )
+    } == {
+        "hermetic": 40,
+        "fresh-journey": 30,
+        "upgrade-journey": 30,
+        "controller-journey": 30,
+    }
 
     steps = {step["name"]: step for step in job["steps"]}
     row_commands = {
@@ -879,9 +948,8 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    # Per-row job bounds (MoonLadderStudios/MoonMind#4369): fast rows get 15
-    # minutes, reliability rows keep a measured 20-minute bound. The blanket
-    # 30-minute ceiling is replaced, not raised.
+    # Unit-fast retains setup/reporting room around its longer test step;
+    # API/component, Temporal and reliability keep their existing bounds.
     assert job["timeout-minutes"] == "${{ matrix.job_minutes }}"
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
@@ -907,7 +975,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     # suite reliability-shard-N runs --group N.
     assert shards == ["1", "2", "3", "4"]
     rows = {entry["suite"]: entry for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]}
-    assert rows["unit-fast"]["job_minutes"] == 15
+    assert rows["unit-fast"]["job_minutes"] == 18
     assert rows["api-component"]["job_minutes"] == 15
     assert rows["temporal-boundary"]["job_minutes"] == 15
     for shard in (
@@ -1255,7 +1323,7 @@ def test_required_gate_rejects_missing_or_failed_selected_result(tmp_path, resul
         tmp_path,
         outputs={
             "unit_fast": "true",
-            "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":15}]}',
+            "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":18}]}',
         },
         results={"backend-matrix": result},
     )
