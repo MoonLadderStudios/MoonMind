@@ -461,7 +461,9 @@ def subprocess_runner() -> Runner:
                 raise CommandError(
                     str(args[2]) if len(args) > 2 else str(args),
                     124,
-                    redact_text(tail_text((exc.stdout or "") + (exc.stderr or ""))),
+                    redact_text(tail_text(
+                        f"{tail_text(exc.stdout)}\n{tail_text(exc.stderr)}"
+                    )),
                 ) from exc
             output = redact_text(
                 tail_text(f"{completed.stdout or ''}\n{completed.stderr or ''}".strip())

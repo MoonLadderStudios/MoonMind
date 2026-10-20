@@ -31,3 +31,17 @@ def test_redact_truncates_long_tails_for_records(controller_path):
     redact = load("redact")
     out = redact.tail_text("x" * 5000, max_chars=100)
     assert len(out) == 100
+
+
+def test_authorization_redacts_the_entire_header_value(controller_path):
+    redact = load("redact")
+    for header in (
+        "Authorization: Bearer SYNTHETIC_TEST_TOKEN_12345",
+        "authorization=Basic c3ludGhldGljLXRlc3Q=",
+        '"Authorization": "Custom synthetic-short extra-value"',
+    ):
+        out = redact.redact_text(header + "\nhelper timed out")
+        assert out.splitlines()[0].endswith("***")
+        assert "SYNTHETIC" not in out and "c3ludG" not in out
+        assert "synthetic-short" not in out and "extra-value" not in out
+        assert out.endswith("helper timed out")
