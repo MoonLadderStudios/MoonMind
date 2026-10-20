@@ -100,7 +100,7 @@ bound sized from observed setup, testing, and bounded diagnostics/cleanup:
 
 | Lane | Per-test timeout | Test-step bound | Job bound |
 | --- | --- | --- | --- |
-| Unit-fast | 60s (`--timeout 60`) | 7-minute native test step | 15-minute job |
+| Unit-fast | 60s (`--timeout 60`) | 12-minute native test step | 18-minute job |
 | API/component | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
 | Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
 | Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
@@ -123,13 +123,15 @@ evidence summary reports the termination as a cooperative deadline stop
 (124), a hard kill (137), an ordinary pytest exit, or unavailable when the
 native step bound, cancellation or runner loss stopped the step first.
 
-Fast 15-minute jobs cover observed setup (~2-3 minutes: checkout,
-Python, dependencies, submodules), the 7-minute test step, and bounded
-reporting (2-minute caps that typically finish in seconds). Reliability
-20-minute jobs cover the same setup shape plus Compose pull/up (~1-2
-minutes), the 12-minute test step, and bounded diagnostics/cleanup (2-minute
-caps each). The 20-minute reliability bound is a measured exception: the
-heaviest duration-balanced partition holds ~500s of tests plus
+Unit-fast keeps six minutes outside its 12-minute test step for setup and
+reporting. Its full suite can take about nine minutes before final process
+exit. Warm setup has taken about 35 seconds; the normal summary and upload
+steps each have a 2-minute cap. API/component and Temporal retain 15-minute
+jobs and 7-minute test steps. Reliability 20-minute jobs also cover Compose
+pull/up (~1-2 minutes), their 12-minute test step, and bounded diagnostics/
+cleanup. Job deadlines remain hard ceilings: slow setup or multiple exhausted
+failure-diagnostic caps can prevent final uploads. The reliability bound
+reflects measured load: its heaviest duration-balanced partition holds ~500s of tests plus
 collection/shutdown overhead, so it must not receive a shorter aspirational
 cutoff. A justified individual slow test can use the installed
 pytest-timeout per-test marker as a documented exception; global defaults
