@@ -478,7 +478,9 @@ def _handoff(args, *, deadline: float) -> int:
             code = _compose_up(state_dir, project, "--pull", "never", deadline=deadline)
             if code:
                 raise RuntimeError(f"exit {code}")
-            if not _controller_stays_running(project, previous, deadline=deadline):
+            if not _controller_stays_running(
+                project, previous, deadline=deadline, allow_prior_restarts=True
+            ):
                 raise RuntimeError("previous controller readiness is unverified")
             restored = "restored"
         except (
@@ -494,11 +496,30 @@ def _handoff(args, *, deadline: float) -> int:
     return _print_handoff_receipt("handed-off", image=image)
 
 
-def _controller_stays_running(project: str, image: str, *, deadline=None) -> bool:
-    """The replacement still runs ``image`` without a restart after settling."""
+def _controller_stays_running(
+    project: str, image: str, *, deadline=None, allow_prior_restarts=False
+) -> bool:
+    """Require a stable recovery container, or a replacement with no restarts."""
     if deadline is not None and _remaining(deadline) <= HANDOFF_SETTLE_SECONDS:
         raise RuntimeError("handoff readiness budget exhausted")
+    baseline = None
+    if allow_prior_restarts:
+        baseline = _controller_running_state(project, image, deadline=deadline)
+        if baseline is None:
+            return False
+        if deadline is not None and _remaining(deadline) <= HANDOFF_SETTLE_SECONDS:
+            raise RuntimeError("handoff readiness budget exhausted")
     time.sleep(HANDOFF_SETTLE_SECONDS)
+    observed = _controller_running_state(project, image, deadline=deadline)
+    return observed is not None and (
+        observed == baseline if allow_prior_restarts else observed[1] == 0
+    )
+
+
+def _controller_running_state(
+    project: str, image: str, *, deadline=None
+) -> tuple[str, int] | None:
+    """Observe the unique running controller's identity and restart count."""
     listed = _run_capture(
         [
             "docker",
@@ -513,7 +534,7 @@ def _controller_stays_running(project: str, image: str, *, deadline=None) -> boo
     )
     identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
     if len(identifiers) != 1:
-        return False
+        return None
     inspected = _run_capture(
         [
             "docker",
@@ -524,7 +545,16 @@ def _controller_stays_running(project: str, image: str, *, deadline=None) -> boo
         ],
         **({"deadline": deadline} if deadline is not None else {}),
     )
-    return inspected.returncode == 0 and (inspected.stdout or "").split() == [image, "0"]
+    fields = (inspected.stdout or "").split()
+    if (
+        inspected.returncode != 0
+        or len(fields) != 2
+        or fields[0] != image
+        or not fields[1].isascii()
+        or not fields[1].isdecimal()
+    ):
+        return None
+    return identifiers[0], int(fields[1])
 
 
 def _print_handoff_receipt(status: str, **details: str) -> int:

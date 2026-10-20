@@ -677,13 +677,19 @@ def test_host_repairs_the_controller_with_the_requested_source_when_installed_fa
     assert len(controller.applied) == 1
 
 
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
 def test_explicit_controller_without_request_identity_is_refreshed(
-    installed, monkeypatch
+    installed, monkeypatch, platform
 ):
     # A controller predating request identity answers a new `latest` request
     # with an earlier success, so journal transition alone is not enough.
     repo, controller = installed()
     refreshed = []
+    sources = []
+    monkeypatch.setattr(update.sys, "platform", platform)
+    monkeypatch.setattr(
+        update, "_controller_source_images", lambda *a, **k: ["sha256:installed-source"]
+    )
 
     def health(url, secret, method, path, *args, **kwargs):
         if refreshed:
@@ -694,10 +700,18 @@ def test_explicit_controller_without_request_identity_is_refreshed(
         return 200, {"capabilities": ["active-journal-transition"]}
 
     def run(command, **kwargs):
-        if command[:2] == ["docker", "ps"]:
-            return ""
+        if "describe-installation" in command:
+            return json.dumps(
+                {"bindSources": {"repo": "/installed", "state": "/state"}}
+            )
         if command[:2] == ["docker", "run"] and "ensure" not in command:
-            return json.dumps({"bootstrap.py": "# lifecycle"})
+            sources.append(command)
+            return json.dumps(
+                {
+                    "bootstrap.py": "# lifecycle",
+                    "mounts.py": "def resolve_bind_source(source):\n    return '/bootstrap'\n",
+                }
+            )
         assert "ensure" in command
         refreshed.append(command)
         return ""
@@ -708,6 +722,21 @@ def test_explicit_controller_without_request_identity_is_refreshed(
         {"project": "moonmind", "image": IMAGE}, repo, controller.url, SECRET
     )
     assert len(refreshed) == 1
+    command = refreshed[0]
+    assert command[command.index("--image") + 1] == IMAGE
+    if platform == "win32":
+        assert "bind-discovery" in sources[0]
+        assert command[:2] == ["docker", "run"]
+        assert "sha256:installed-source" in command
+        assert "type=bind,source=/installed,target=/deployment,readonly" in command
+        assert "type=bind,source=/state,target=/var/lib/moonmind-controller" in command
+        assert command[command.index("--repo") + 1] == "/deployment"
+        assert command[command.index("--controller-url") + 1].startswith(
+            "http://moonmind-controller:"
+        )
+    else:
+        assert command[:2] != ["docker", "run"]
+        assert command[command.index("--controller-url") + 1] == controller.url
     assert controller.applied == []
 
 
