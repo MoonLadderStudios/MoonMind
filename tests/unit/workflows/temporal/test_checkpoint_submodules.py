@@ -21,18 +21,26 @@ def git(workspace: Path, *arguments: str) -> str:
     ).strip()
 
 
-def repository_with_submodule(tmp_path: Path) -> tuple[Path, Path]:
+def repository_with_submodule(
+    tmp_path: Path, module_path: str = "module"
+) -> tuple[Path, Path]:
     module_origin, _ = _repo(tmp_path / "module-origin")
     git(module_origin, "commit", "--allow-empty", "-m", "Submodule base")
     module_head = git(module_origin, "rev-parse", "HEAD")
     remote, _ = _repo(tmp_path / "remote")
     (remote / ".gitmodules").write_text(
         '[submodule "module"]\n'
-        "\tpath = module\n"
+        f"\tpath = {module_path}\n"
         "\turl = https://example.invalid/module.git\n"
     )
     git(remote, "add", ".gitmodules")
-    git(remote, "update-index", "--add", "--cacheinfo", f"160000,{module_head},module")
+    git(
+        remote,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{module_head},{module_path}",
+    )
     git(remote, "commit", "-m", "Add submodule")
     source = tmp_path / "temporal_sandbox" / "source"
     source.parent.mkdir()
@@ -44,6 +52,8 @@ async def capture_checkpoint(
     source: Path,
     store: InMemoryArtifactStore,
     activities: TemporalSandboxActivities | None = None,
+    *,
+    include_untracked: bool = True,
 ) -> dict:
     activities = activities or TemporalSandboxActivities(
         workspace_root=source.parent.parent, artifact_store=store
@@ -61,7 +71,7 @@ async def capture_checkpoint(
             "workspacePath": str(source),
             "artifactNamespace": "checkpoint",
             "idempotencyKey": "capture",
-            "includeUntracked": True,
+            "includeUntracked": include_untracked,
         }
     )
 
@@ -124,6 +134,51 @@ async def test_uninitialized_submodule_restores_after_source_loss(
         remote / ".gitmodules"
     ).read_bytes()
     assert await service.restore(request) == result
+
+
+@pytest.mark.asyncio
+async def test_newly_staged_gitlink_is_not_a_restorable_empty_directory(tmp_path):
+    _, source = repository_with_submodule(tmp_path)
+    module_head = git(source, "rev-parse", ":module")
+    added = source / "added-module"
+    added.mkdir()
+    git(
+        source,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{module_head},added-module",
+    )
+    assert git(source, "status", "--porcelain=v1") == "A  added-module"
+
+    with pytest.raises(ValueError, match="submodule"):
+        await capture_checkpoint(source, InMemoryArtifactStore())
+
+    assert added.is_dir() and not any(added.iterdir())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_untracked", [False, True])
+async def test_submodule_parent_symlink_cannot_hide_worktree_deletion(
+    tmp_path, include_untracked
+):
+    _, source = repository_with_submodule(tmp_path, "deps/module")
+    shutil.rmtree(source / "deps")
+    target = source / "empty-target"
+    (target / "module").mkdir(parents=True)
+    parent = source / "deps"
+    parent.symlink_to(target, target_is_directory=True)
+    if include_untracked:
+        # Even a parent omitted by Git's ignore rules must be checked.
+        (source / ".git" / "info" / "exclude").write_text("deps\n")
+    assert "D deps/module" in git(source, "status", "--porcelain=v1")
+
+    with pytest.raises(ValueError, match="submodule"):
+        await capture_checkpoint(
+            source, InMemoryArtifactStore(), include_untracked=include_untracked
+        )
+
+    assert parent.is_symlink() and not any((target / "module").iterdir())
 
 
 @pytest.mark.asyncio
