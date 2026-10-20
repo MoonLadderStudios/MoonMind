@@ -43,6 +43,13 @@ const UNAVAILABLE_TOGGLE_KEY = 'unavailable-toggle';
  * actions collapse under "Unavailable (n)". Items that carry a confirmation
  * open a dialog and run only when it is confirmed.
  */
+// The menu item holding native focus. Focus can reach an item (keyboard,
+// assistive technology, scripts) before React commits activeKey for it.
+function focusedItemKey(items: Map<string, HTMLElement>, target: Node | null): string | null {
+  if (!target) return null;
+  return [...items].find(([, item]) => item.contains(target))?.[0] ?? null;
+}
+
 export function WorkflowActionsMenu({
   items,
   triggerContent = 'Workflow actions',
@@ -148,12 +155,18 @@ export function WorkflowActionsMenu({
   useEffect(() => {
     if (!open) return;
     if (activeKey === null || !navKeys.includes(activeKey)) {
-      if (activeKey !== initialKey) setActiveKey(initialKey);
+      const focused = focusedItemKey(itemRefs.current, document.activeElement);
+      const next = focused !== null && navKeys.includes(focused) ? focused : initialKey;
+      if (activeKey !== next) setActiveKey(next);
     }
   }, [activeKey, initialKey, navKeys, open]);
 
   useEffect(() => {
     if (!open) return;
+    // An effect from an earlier render must not pull focus off the item the
+    // operator already moved to; that item's focus handler updates activeKey.
+    const focused = focusedItemKey(itemRefs.current, document.activeElement);
+    if (focused !== null && navKeys.includes(focused)) return;
     const target = (activeKey && itemRefs.current.get(activeKey)) || menuRef.current;
     if (target && document.activeElement !== target) target.focus();
   }, [activeKey, open, navKeys]);
@@ -167,9 +180,7 @@ export function WorkflowActionsMenu({
   const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Native focus can move before React commits activeKey. Keyboard actions
     // belong to the event's item, not the previous render's roving tab stop.
-    const focusedKey = [...itemRefs.current].find(([, item]) =>
-      item.contains(event.target as Node),
-    )?.[0] ?? activeKey;
+    const focusedKey = focusedItemKey(itemRefs.current, event.target as Node) ?? activeKey;
     if (event.key === 'Escape') {
       event.preventDefault();
       closeMenu();
