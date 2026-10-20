@@ -181,7 +181,7 @@ It also pins lineage, immutable instruction/context refs, capture time, and prod
 | `ephemeral_workspace_ref` | Valid only within TTL/reachability. |
 | `external_state_ref` | Adapter-specific; may not support direct restoration. |
 
-Worktree archives store Git's index as a digested binary patch relative to the saved HEAD, so partially staged files keep both staged and unstaged bytes; index and patch bytes pass the same bounded secret scan as other evidence. A staged-path list without index content cannot authorize reconstruction from worktree bytes.
+Worktree archives store Git's index as a digested binary patch relative to the saved HEAD, preserving staged and unstaged bytes under the same bounded secret scan. A staged-path list alone cannot reconstruct index content. HEAD and the index preserve uninitialized submodule references whose directories are empty. Capture refuses populated, removed, or symlinked submodule worktrees to avoid omitting nested work or losing deletion state.
 
 Capture and recovery select a child workspace; the shared `temporal_sandbox` store itself is never a capture or replacement target. A selected commit that touches a credential-sensitive path under the shared exclusion policy cannot be exported even with heuristic scanning disabled; capture rejects the bundle rather than rewriting history.
 
