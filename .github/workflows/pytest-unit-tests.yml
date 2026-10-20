@@ -866,26 +866,33 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_ci == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Hermetic worst case: 12m bounded setup + 23m execution/cleanup + 4m
+    # evidence collection/upload + 1m runner/post-action overhead. Keep the
+    # independent journey rows at their existing 30m deadline.
+    timeout-minutes: ${{ matrix.suite == 'hermetic' && 40 || 30 }}
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix: ${{ fromJSON(needs.select-test-suites.outputs.integration_matrix) }}
     steps:
       - name: Check out code
+        timeout-minutes: ${{ matrix.suite == 'hermetic' && 2 || 30 }}
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
       - name: Initialize pinned Omnigent verifier source
+        timeout-minutes: ${{ matrix.suite == 'hermetic' && 2 || 30 }}
         run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Docker Buildx
+        timeout-minutes: ${{ matrix.suite == 'hermetic' && 2 || 30 }}
         uses: docker/setup-buildx-action@v3
       - name: Build the pytest image with a shared layer cache
         # The compose ``pytest`` service otherwise rebuilds the dependency
         # layers from scratch on every run. The GitHub Actions cache keeps
         # them across runs; only the layers behind changed inputs rebuild.
         if: matrix.suite == 'hermetic'
+        timeout-minutes: 6
         uses: docker/build-push-action@v6
         with:
           context: .

@@ -197,7 +197,7 @@ If the change removes an authorized obsolete capability, identify the retired wo
 
 ### Hermetic Integration CI Selection
 
-The integration matrix selects four independent lanes: hermetic, fresh-journey, upgrade-journey, and controller-journey (including host journal transitions). Each row owns its checkout, Compose project, artifacts and teardown. Native matrix fail-fast and the wrapper's `--maxfail=1` apply outside schedules. Each run step has a finite native deadline with room for diagnostics and teardown. Their Compose commands each get `MOONMIND_TEST_CLEANUP_TIMEOUT` seconds (default 120) plus a 10-second kill grace. After teardown, each row collects only its own redacted outputs: the hermetic JUnit report, streamed log and project diagnostics on every run, or a failed journey's log tree, plus the journal transition test's phase, ps and log evidence on controller-journey. A hard job kill or runner loss can still prevent collection and upload.
+The integration matrix selects four independent lanes: hermetic, fresh-journey, upgrade-journey, and controller-journey (including host journal transitions). Each row owns its checkout, Compose project, artifacts and teardown. Native matrix fail-fast and the wrapper's `--maxfail=1` apply outside schedules. Each run step has a finite native deadline with room for diagnostics and teardown. Their Compose commands each get `MOONMIND_TEST_CLEANUP_TIMEOUT` seconds (default 120) plus a 10-second kill grace. The hermetic job reserves 12 minutes for bounded checkout, submodule, Buildx and image setup, 23 for execution and cleanup, four for evidence collection/upload and one for runner overhead within its 40-minute deadline; journey jobs retain 30 minutes. After teardown, each row collects only its own redacted outputs: the hermetic JUnit report, streamed log and project diagnostics on every run, or a failed journey's log tree, plus the journal transition test's phase, ps and log evidence on controller-journey. Runner loss, cancellation or overhead beyond the reserve can still prevent collection and upload.
 
 The executable dependency map narrows only audited lane-local inputs: ordinary integration tests/fixtures select hermetic; the journal transition test selects controller-journey; unclassified host tests/fixtures retain hermetic plus controller-journey; shared journey scripts select all three journeys. Mixed changes union their lanes. The shared changed-file helper includes rename sources and destinations and deleted paths, so removal does not erase an owner.
 
@@ -220,8 +220,12 @@ supplies a replacement worker's required next item before execution. The latter
 matches [the upstream pytest-xdist fix](https://github.com/pytest-dev/pytest-xdist/pull/1328).
 `tests/unit/workflows/temporal/test_pytest_worker_crash_recovery.py` is the slow,
 real-subprocess compatibility coverage, including a replacement facing queued
-single-test files. When updating the declared xdist dependency, run these cases
-against the native scheduler; remove the override once a released version
+single-test files. Crash readiness (real operation and ownership receipt) has
+a separate 10-second setup bound before the 3-second fatal test-body timeout.
+Child test timers exclude fixture setup; a 40-second outer deadline bounds
+the full subprocess, including startup, setup, and recovery.
+When updating the declared xdist dependency, run these cases against the native
+scheduler; remove the override once a released version
 preserves the failed exit, runs each survivor once, and finishes those cases.
 The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
 cleans only SDK time-skipping and local dev-server children directly owned by
