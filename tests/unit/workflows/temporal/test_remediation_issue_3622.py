@@ -1,5 +1,6 @@
 """Exact-result verification through production persistence and readers."""
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -248,7 +249,9 @@ async def test_observation_interruption_retains_accepted_obligation(
         assert executor.effects == 1
 
 
-async def _prepare(session, tmp_path, mock_client_adapter, action_kind):
+async def _prepare(
+    session, tmp_path, mock_client_adapter, action_kind, *, branch_instruction=None
+):
     target, remediation = await _create_target_and_remediation(
         session, mock_client_adapter, authority_mode="admin_auto"
     )
@@ -256,7 +259,7 @@ async def _prepare(session, tmp_path, mock_client_adapter, action_kind):
         TemporalArtifactRepository(session),
         store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
     )
-    await RemediationContextBuilder(
+    context = await RemediationContextBuilder(
         session=session, artifact_service=artifacts
     ).build_context(remediation_workflow_id=remediation.workflow_id)
     parameters = {"reason": "controlled repair"}
@@ -273,6 +276,30 @@ async def _prepare(session, tmp_path, mock_client_adapter, action_kind):
             logicalStepId="repair",
             executionOrdinal=1,
         )
+    if branch_instruction is not None:
+        assert action_kind.startswith("checkpoint_branch")
+        digest = hashlib.sha256(branch_instruction).hexdigest()
+        artifact, _ = await artifacts.create(
+            principal="service:remediation-context",
+            content_type="text/markdown",
+            sha256=digest,
+        )
+        await artifacts.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal="service:remediation-context",
+            payload=branch_instruction,
+            content_type="text/markdown",
+        )
+        parameters.update(
+            instructionRef=f"artifact://{artifact.artifact_id}",
+            instructionDigest=f"sha256:{digest}",
+            remediationContextRef=f"artifact://{context.artifact.artifact_id}",
+            # This fixture begins after source validation. Keep its source
+            # checkpoint identity opaque without fabricating checkpoint bytes.
+            checkpointRef="artifact://art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            baseBranch="feature/repair-base",
+            gitWorkBranch="repair/retained-work",
+        )
     authority = await RemediationActionAuthorityService(
         session=session
     ).evaluate_action_request(
@@ -285,6 +312,8 @@ async def _prepare(session, tmp_path, mock_client_adapter, action_kind):
         permissions=_admin_permissions(),
         security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
     )
+    if branch_instruction is not None:
+        assert authority.to_dict()["request"]["params"] == parameters
     guard = await RemediationMutationGuardService(session=session).evaluate(
         remediation_workflow_id=remediation.workflow_id,
         remediation_run_id=remediation.run_id,
