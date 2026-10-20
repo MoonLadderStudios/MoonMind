@@ -1,7 +1,7 @@
 """MoonLadderStudios/MoonMind#4369: bounded backend-matrix execution.
 
 Fast/API/Temporal lanes get tight per-test pytest-timeout defaults with
-explicit 7-minute native test-step bounds and 15-minute per-row job bounds;
+explicit native test-step and per-row job bounds sized for each suite;
 reliability keeps its 150s/300s per-test and 12-minute step bounds under a
 reduced 20-minute per-row job bound (down from the blanket 30). Ordinary
 validation stops promptly with ``--maxfail=1`` while schedules keep
@@ -205,19 +205,55 @@ def test_fast_lanes_have_explicit_step_bounds() -> None:
     steps = _workflow_steps()
     matrix = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
     by_suite = {row["suite"]: row for row in matrix}
-    for name, suite, measured_seconds in (
-        # Slowest observed unit-fast test step on main (433s) overran a
-        # 7-minute bound; a step bound must leave headroom over it.
-        ("Run selected unit suite", "unit-fast", 433),
-        ("Run API/component suite", "api-component", 0),
-        ("Run Temporal boundary suite", "temporal-boundary", 0),
+    for name, suite, measured_seconds, exit_margin in (
+        # A complete 543s unit run printed JUnit and its passing summary but
+        # hit the native deadline before the pipeline recorded its exit.
+        ("Run selected unit suite", "unit-fast", 543, 30),
+        ("Run API/component suite", "api-component", 0, 0),
+        ("Run Temporal boundary suite", "temporal-boundary", 0, 0),
     ):
         bound = steps[name].get("timeout-minutes")
         assert isinstance(bound, int), name
-        assert bound * 60 >= measured_seconds * 1.2, name
-        # Setup (~2-3 minutes) and bounded reporting (2-minute caps) fit
-        # inside the row's job budget after a full-length test step.
+        assert bound * 60 >= measured_seconds * 1.2 + exit_margin, name
+        # Retain the existing five-minute minimum setup/reporting reserve;
+        # the unit-fast normal reporting caps are also checked below.
         assert bound + 3 + 2 <= by_suite[suite]["job_minutes"], name
+
+
+def test_unit_fast_budget_leaves_room_for_normal_reporting() -> None:
+    steps = _workflow_steps()
+    rows = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
+    unit = next(row for row in rows if row["suite"] == "unit-fast")
+    step_minutes = steps["Run selected unit suite"]["timeout-minutes"]
+    # Warm setup was 35s; reserve a minute plus both normal reporting caps.
+    # Extra failure diagnostics remain best-effort under the global job cap.
+    report_minutes = sum(
+        steps[name]["timeout-minutes"]
+        for name in (
+            "Write backend-matrix evidence summary",
+            "Upload backend-matrix pytest evidence",
+        )
+    )
+    assert step_minutes + 1 + report_minutes < unit["job_minutes"]
+
+
+def test_fast_lane_evidence_reports_effective_native_budgets() -> None:
+    steps = _workflow_steps()
+    rows = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
+    by_suite = {row["suite"]: row for row in rows}
+    summary = steps["Write backend-matrix evidence summary"]["run"]
+    for name, suite in (
+        ("Run selected unit suite", "unit-fast"),
+        ("Run API/component suite", "api-component"),
+        ("Run Temporal boundary suite", "temporal-boundary"),
+    ):
+        case = summary.split(f"{suite})", 1)[1].split(";;", 1)[0]
+        reported = re.search(r'step_budget="([^"]+)"', case)
+        assert reported is not None, suite
+        assert reported.group(1) == (
+            f'{steps[name]["timeout-minutes"]}-min test step within '
+            f'{by_suite[suite]["job_minutes"]}-min job'
+        ), suite
 
 
 def test_ordinary_validation_uses_maxfail_but_schedules_collect() -> None:
@@ -241,7 +277,7 @@ def test_per_row_job_bounds_replace_blanket_thirty_minutes() -> None:
     assert job.get("timeout-minutes") != 30
     matrix = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
     by_suite = {row["suite"]: row for row in matrix}
-    assert by_suite["unit-fast"].get("job_minutes") == 15
+    assert by_suite["unit-fast"].get("job_minutes") == 18
     assert by_suite["api-component"].get("job_minutes") == 15
     assert by_suite["temporal-boundary"].get("job_minutes") == 15
     for shard in (
