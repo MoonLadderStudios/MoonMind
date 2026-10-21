@@ -1560,8 +1560,9 @@ class TemporalArtifactRepository:
                 exists().where(column == artifact_id, *conditions).correlate(artifact)
             )
 
+        # The pin row is the protection: soft deletion removes it but leaves
+        # the PINNED retention class behind.
         return [
-            artifact.retention_class == db_models.TemporalArtifactRetentionClass.PINNED,
             referenced(db_models.TemporalArtifactPin.artifact_id),
             referenced(claim.artifact_id, claim.expires_at > now),
             # The remediation link would lose its context ref (ON DELETE SET
@@ -3876,7 +3877,9 @@ class TemporalArtifactService:
         principal: str,
         execution_ref: dict[str, Any] | ExecutionRef,
     ) -> db_models.TemporalArtifactLink:
-        artifact = await self._repository.get_artifact(artifact_id)
+        # Lock before the insert so a tombstone purge cannot delete the row
+        # between this read and the link's foreign-key check.
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
         coerced_execution_ref = self._coerce_execution_ref(execution_ref)
         # Single-user (#4351): execution-scoped workflow principals may link
         # to their own execution without an operator bypass; linking to any
@@ -3970,7 +3973,8 @@ class TemporalArtifactService:
         principal: str,
         reason: str | None,
     ) -> db_models.TemporalArtifactPin:
-        artifact = await self._repository.get_artifact(artifact_id)
+        # Locked for the same reason as link_artifact.
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
         pin = await self._repository.pin_artifact(
             artifact_id=artifact_id,

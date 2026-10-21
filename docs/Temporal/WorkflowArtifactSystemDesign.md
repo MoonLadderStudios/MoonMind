@@ -835,12 +835,12 @@ A tombstone alone never authorizes purge: the row needs no deletion intent, and
 either another live row owns its shared bytes or the store reports the key
 absent. Present or unknown bytes return to deletion-intent reconciliation; a
 store error is not progress, so an outage hands over at most a page per pass.
-Pins, live use claims, non-terminal journal refs and remediation context refs
-keep the tombstone; candidates are locked with `SKIP LOCKED` and rechecked, so a
-concurrent protection wins. Rows and links go in one transaction; a failed
-commit or crash leaves the tombstone for the next pass. The sweep result counts
-candidates, purged rows and links, retained protected tombstones, unconfirmed
-deletions and store errors.
+Pin rows, live use claims, non-terminal journal refs and remediation context
+refs keep the tombstone; a `PINNED` class left by deletion does not. Pin
+and link requests lock the row first; candidates are locked with
+`SKIP LOCKED` and rechecked, so a concurrent protection wins or finds the
+artifact gone. Rows and links go in one transaction, so a failed commit leaves
+the tombstone.
 
 Seven days matches the ephemeral class and outlasts Activity retries,
 interrupted-step recovery and the hourly sweep, so recent refs see a truthful

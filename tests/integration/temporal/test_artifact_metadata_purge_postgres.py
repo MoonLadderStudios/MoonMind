@@ -1,12 +1,14 @@
 """PostgreSQL evidence for bounded tombstone metadata reclamation.
 
 SQLite cannot prove row locking, so these checks run against the supported
-backend: a multi-page backlog drains through the lifecycle owner, and a
-protection being written concurrently keeps its tombstone.
+backend: a multi-page backlog drains through the lifecycle owner, a
+protection being written concurrently keeps its tombstone, and a protection
+requested after the purge locked its tombstone reports the artifact as gone.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -28,7 +30,9 @@ from api_service.db.models import (
 )
 from moonmind.omnigent.bridge_store import SEALED_JOURNAL_CHUNKS_KEY
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
+    TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
     TemporalArtifactService,
     generate_artifact_id,
@@ -186,3 +190,48 @@ async def test_tombstone_with_an_in_flight_pin_is_skipped_and_retained(
         assert remaining == {contested}
         assert free not in remaining
         assert await _count(sweeping, TemporalArtifactPin) == 1
+
+
+@pytest.mark.parametrize("protection", ["pin", "link"])
+async def test_protection_requested_during_a_purge_reports_the_artifact_missing(
+    pg_maker, tmp_path: Path, protection: str
+) -> None:
+    (contested,) = await _seed_journal_tombstones(
+        pg_maker, 1, deleted_at=datetime.now(UTC) - HORIZON * 2
+    )
+
+    async with pg_maker() as sweeping, pg_maker() as protecting:
+        repository = TemporalArtifactRepository(sweeping)
+        now = datetime.now(UTC)
+        candidates = await repository.list_purge_candidates(
+            cutoff=now - HORIZON,
+            now=now,
+            storage_backend=TemporalArtifactStorageBackend.LOCAL_FS,
+        )
+        assert [item for item, _key, _at in candidates] == [contested]
+
+        service = _service(protecting, tmp_path / "artifacts")
+        if protection == "pin":
+            request = service.pin(
+                artifact_id=contested, principal="service:omnigent", reason="audit"
+            )
+        else:
+            request = service.link_artifact(
+                artifact_id=contested,
+                principal="service:omnigent",
+                execution_ref=ExecutionRef(
+                    namespace="default",
+                    workflow_id="wf-journal",
+                    run_id="run-2",
+                    link_type="runtime.omnigent.sse.raw",
+                ),
+            )
+        pending = asyncio.ensure_future(request)
+        await asyncio.sleep(0.5)
+        assert not pending.done()
+
+        await repository.purge_artifacts([contested])
+        await sweeping.commit()
+
+        with pytest.raises(TemporalArtifactNotFoundError):
+            await pending

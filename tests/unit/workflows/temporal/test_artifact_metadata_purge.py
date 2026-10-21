@@ -451,6 +451,44 @@ async def test_purge_preserves_protected_tombstones(
             assert not await _exists(service, unprotected)
 
 
+async def test_purge_reclaims_a_tombstone_whose_pin_ended_with_deletion(
+    tmp_path: Path,
+) -> None:
+    store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = _service(session, store)
+            artifact, _upload = await service.create(
+                principal="user-1", content_type="text/plain"
+            )
+            await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="user-1",
+                payload=b"pinned",
+                content_type="text/plain",
+            )
+            await service.pin(
+                artifact_id=artifact.artifact_id, principal="user-1", reason="keep"
+            )
+            # Deletion removes the pin row; the retention class it set must
+            # not withhold the tombstone forever.
+            await service.soft_delete(
+                artifact_id=artifact.artifact_id, principal="user-1"
+            )
+            await service.hard_delete(
+                artifact_id=artifact.artifact_id, principal="user-1"
+            )
+
+            summary = await service.sweep_lifecycle(
+                principal=PRINCIPAL,
+                now=datetime.now(UTC) + HORIZON + timedelta(minutes=5),
+            )
+
+            assert summary.purged_count == 1
+            assert summary.purge_protected_count == 0
+            assert not await _exists(service, artifact.artifact_id)
+
+
 async def test_purge_rechecks_protection_acquired_after_candidate_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
