@@ -34,6 +34,7 @@ from moonmind.schemas.temporal_artifact_models import (
 from moonmind.workflows.temporal.artifacts import (
     COLLECTION_CATEGORY_LINK_PREFIXES,
     TemporalArtifactAuthorizationError,
+    TemporalArtifactExpiredError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -93,6 +94,15 @@ def _attachment_upload_diagnostics(
     return {"events": [diagnostic_event]}
 
 def _raise_temporal_artifact_http(error: Exception) -> None:
+    if isinstance(error, TemporalArtifactExpiredError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "artifact_expired",
+                "message": str(error),
+                "createdAt": error.created_at.isoformat(),
+            },
+        ) from error
     if isinstance(error, TemporalArtifactNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
