@@ -160,27 +160,41 @@ async def _served_product(app):
     import asyncio
     import uvicorn
 
-    listener = socket.socket()
-    listener.bind(("0.0.0.0", 0))
-    listener.listen(128)
-    port = listener.getsockname()[1]
+    # Serve loopback and the workload address on one port, so the backend probe
+    # can send the operator's exact Host, without listening on every interface.
+    hosts = list(dict.fromkeys(("127.0.0.1", socket.gethostbyname(socket.gethostname()))))
+    for _ in range(20):
+        listeners = [socket.socket() for _ in hosts]
+        try:
+            listeners[0].bind((hosts[0], 0))
+            port = listeners[0].getsockname()[1]
+            for listener, host in zip(listeners[1:], hosts[1:]):
+                listener.bind((host, port))
+            break
+        except OSError:
+            for listener in listeners:
+                listener.close()
+    else:
+        pytest.fail("No port is free on both the loopback and workload addresses")
+    for listener in listeners:
+        listener.listen(128)
     server = uvicorn.Server(uvicorn.Config(app, lifespan="off", log_level="error",
                                           access_log=False, proxy_headers=False))
-    task = asyncio.create_task(server.serve(sockets=[listener]))
+    task = asyncio.create_task(server.serve(sockets=listeners))
     try:
         for _ in range(100):
             if server.started:
                 break
             if task.done():
-                await task
-                pytest.fail("Product HTTP server exited before readiness")
+                pytest.fail(f"Product HTTP server exited before readiness: {task.exception()!r}")
             await asyncio.sleep(0.05)
         assert server.started, "Product HTTP server did not become ready"
-        yield f"http://127.0.0.1:{port}", f"http://{socket.gethostbyname(socket.gethostname())}:{port}"
+        yield f"http://127.0.0.1:{port}", f"http://{hosts[-1]}:{port}"
     finally:
         server.should_exit = True
         await asyncio.wait_for(task, 10)
-        listener.close()
+        for listener in listeners:
+            listener.close()
 
 
 @pytest.mark.asyncio
