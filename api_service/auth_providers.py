@@ -334,9 +334,6 @@ async def _strict_current_user(
     application JWTs fail closed as ``auth_invalid``.
     """
     if is_disabled_local_mode():
-        from api_service.operator_admission import enforce_disabled_mode_ingress
-
-        await enforce_disabled_mode_ingress(request)
         user = await _load_disabled_user(session)
         request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
         return user
@@ -409,9 +406,6 @@ async def _optional_current_user(
     if isinstance(marker, str) and marker.strip() == "v1":
         return None
     if is_disabled_local_mode():
-        from api_service.operator_admission import enforce_disabled_mode_ingress
-
-        await enforce_disabled_mode_ingress(request)
         user = await _load_disabled_user(session)
         request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
         return user
