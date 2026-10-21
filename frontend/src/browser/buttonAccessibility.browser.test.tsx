@@ -37,7 +37,9 @@ describe('dashboard control accessibility', () => {
 
     it(`retains keyboard focus during hover (${theme})`, async () => {
       document.documentElement.classList.toggle('dark', theme === 'dark');
-      const { getByRole } = render(<Button variant="secondary">Refresh</Button>);
+      // Tab from a focused field: Firefox's first Tab from an unfocused document can leave focus on <body>.
+      const { getByRole } = render(<><input aria-label="Start" /><Button variant="secondary">Refresh</Button></>);
+      getByRole('textbox').focus();
       await userEvent.tab();
       const button = getByRole('button');
       expect(document.activeElement).toBe(button);
