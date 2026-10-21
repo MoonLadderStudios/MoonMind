@@ -125,7 +125,8 @@ The page needs the following schedule data:
 | `lastScheduledFor` | Recent-run summary |
 | `lastDispatchStatus` | Attention/error state |
 | `lastDispatchError` | Error detail |
-| `scopeType` / `scopeRef` | Authorization and facts rail |
+| `scopeType` / `scopeRef` | Legacy provenance only; never visibility or action authorization |
+| `permissions` / `actions` | Backend-owned action availability and disabled reasons |
 | `target` | Workflow type, runtime, model, repository, input refs |
 | `policy` | Overlap, catchup, jitter |
 | `temporalScheduleId` | Advanced/debug fact when available |
@@ -141,24 +142,9 @@ The page uses the existing schedule endpoints. Delete is surfaced only when the 
 | `GET` | `/api/recurring-workflows/{definitionId}/runs` | Load run history |
 | `DELETE` | `/api/recurring-workflows/{definitionId}` | Delete schedule and stop future dispatch |
 
-Runtime config should expose matching endpoint templates under `sources.schedules`:
-
-```json
-{
-  "sources": {
-    "schedules": {
-      "list": "/api/recurring-workflows?scope=personal",
-      "create": "/api/recurring-workflows",
-      "detail": "/api/recurring-workflows/{definitionId}",
-      "update": "/api/recurring-workflows/{definitionId}",
-      "runNow": "/api/recurring-workflows/{definitionId}/run",
-      "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200",
-      "delete": "/api/recurring-workflows/{definitionId}"
-    }
-  }
-}
-```
-
+Current runtime config exposes these templates under `sources.schedules`;
+the [shared API example](./RecurringSchedulesPage.md#14-api-and-runtime-config-expectations)
+records the producer and list-query compatibility behavior.
 `sources.schedules.delete` is required for rendering the destructive delete action.
 
 ---
@@ -243,12 +229,20 @@ This keeps the recurring schedule page focused on controlling the cadence and re
 
 ## 12. Authorization Rules
 
-Authorization should match recurring schedule ownership rules:
+The recurring router owns instance visibility and action permissions. It still
+admits requests through the predecessor `get_current_user()` dependency; this
+does not imply migration to the account-free admission primitive.
 
-- Personal schedules can be viewed, edited, and deleted by their owner.
-- Global schedules currently require operator privileges for detail access, including read-only `GET` requests.
-- Users without detail access should see the normal unauthorized or not-found state instead of a read-only global schedule page.
-- Users with detail access but without edit permission may still view the detail page, but edit/delete actions must be hidden or disabled with a clear explanation.
+- After admission, the operator can view and manage every instance schedule.
+  Stored `ownerUserId`, `scopeType`, and `scopeRef` are legacy provenance, not
+  personal/global authorization gates.
+- The client uses returned `permissions` / `actions` (`canEdit`, `canRunNow`,
+  `canDelete`, `disabledReasons`), never owner or scope fields, for action
+  availability. Denied actions retain useful explanations; delete also requires
+  `sources.schedules.delete`.
+- Requests without admission must not expose schedule identities. Preserve
+  existing admission, execution-state validation, and scoped machine authority
+  as the shared authentication boundary changes.
 
 ---
 

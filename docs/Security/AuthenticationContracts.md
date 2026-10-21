@@ -5,7 +5,7 @@
 **Status:** Predecessor account model; superseded target\
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
-**Authority:** Account-era authentication contracts and guidance for deployments that still use them. The [single-user application model](../MoonMindArchitecture.md#single-user-application-model) and [Single-User Application Design](../SingleUserApplicationDesign.md) govern the desired application architecture.\
+**Authority:** Account-era authentication contracts and guidance for deployments that still use them. The [Single-User Application Design](../SingleUserApplicationDesign.md) governs the desired application architecture.\
 **Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner), `moonmind/security/session_authority_4121.py` + `api_service/services/session_store.py` (session/revocation/CSRF owner), `moonmind/security/account_lifecycle_4122.py` (enrollment/administration rules) + `api_service/services/account_lifecycle_store_4122.py` + `MoonmindAccountNonce` (production User-table wiring and operated runbook), `moonmind/security/oidc_advanced_4124.py` + `trusted_proxy_4124.py` + `advanced_identity_4124.py` + `api_service/services/advanced_auth_service_4124.py` + `api_service/api/routers/auth_advanced_4124.py` (advanced identity owner), `api_service/db/models.py` (`User`)  
 **Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md)
 
@@ -48,23 +48,36 @@ hits.
 
 One selector, `AUTH_PROVIDER` (`moonmind/config/settings.py`, `OIDCSettings`).
 No competing enable switch. Runtime-server `OMNIGENT_AUTH_*` variables never
-select MoonMind's mode, key, or identity store.
+select MoonMind's mode, key, or identity store. The typed setting and Compose
+default to restricted `disabled` authentication. The other modes below
+are retained predecessor interfaces, not an account-enrollment target.
 
-| Mode | Intended use |
+| Mode | Current use and limits |
 | --- | --- |
-| `accounts` | Default for new installations. Built-in accounts with protected first-owner setup and invite-only enrollment. No Keycloak or mandatory SMTP service. |
+| `disabled` | Default Compose local path, restricted to loopback or an approved ingress boundary. Retains an existing default user when present; guarded fresh initialization or eligible conversion permits a transient local principal without persisting a user. Never an error fallback. |
+| `accounts` | Retained predecessor built-in accounts with protected first-owner setup and invite-only enrollment. No Keycloak or mandatory SMTP service. |
 | `oidc` | Advanced external identity-provider integration through a qualified generic OIDC flow (authorization code + PKCE). |
 | `header` | Advanced authenticated ingress. Only a trusted proxy may assert identity; direct API connections never accept user-controlled identity headers. |
-| `disabled` | Explicit local single-user mode with a stable persisted user and fail-closed restricted ingress (startup/deployment validator; loopback-only bind or documented trusted-ingress evidence; see inventory §5.3). Never an error fallback. |
+
+When no default user exists, `api_service/auth_providers.py` admits that transient
+principal only after the conversion ledger records completed, published
+`fresh_init` or `eligible_conversion`. Missing or unreadable conversion evidence
+fails closed with `503 setup_required`; an identity-store failure returns
+`503 unavailable`. This compatibility path does not establish that product
+routes use the account-free admission primitive described in §13.
 
 Unknown or retired selectors fail startup with migration guidance. `keycloak`
 must not translate to `disabled`, `default` is not an undocumented alias, and
 any `google`-specific discovery branch migrates to the declared generic `oidc`
 path.
 
-A new installation starts with `docker compose up -d` and no mandatory `.env`.
-Existing installations with omitted authentication settings receive a versioned
-migration decision, not an unannounced default change that creates a new owner.
+A fresh `docker compose up -d` needs no `.env`; Compose supplies `disabled`
+explicitly. Direct API startup with a blank or omitted `AUTH_PROVIDER` still
+uses the predecessor classifier: a fresh database selects `accounts`, while a
+populated database requires a versioned migration decision. That compatibility
+behavior does not make account enrollment the desired product. Preserve
+installed authentication choices rather than silently changing modes or
+creating an owner.
 
 ### Deployment exposure and existing access
 
@@ -318,7 +331,7 @@ only the durable support, cutover, and compatibility contracts.
 
 | Combination | Status | Evidence owner |
 | --- | --- | --- |
-| `disabled` clean boot and seeding, no Keycloak DNS/connect attempt, retired selectors/tokens/routes rejected, rendered Compose without the bundled service | Supported and tested (hermetic unit tests) | Selector-owner unit tests |
+| Restricted `disabled` default, guarded fresh initialization/conversion without a persisted default user, retained-user compatibility, no Keycloak connection, and retired selectors rejected | Implemented with hermetic coverage; installed startup and access require separate evidence | Selector/startup, guarded-conversion, and authentication-provider tests |
 | Session authority, revocation/CSRF bounds, account lifecycle (first-owner setup, expiring one-use invites, last-admin protection, operator recovery), OIDC/proxy identity, and API user-resolution cutover (cookie/bearer precedence, conflict rejection, §8 error mapping, legacy JWT refusal) | Supported and tested hermetically (unit + Postgres integration, route enumeration); account lifecycle additionally wired to the production User table (unit on SQLite + integration on PostgreSQL) | Session-authority, account-lifecycle, advanced-identity, and API cutover tests |
 | `accounts` / `oidc` / `header` end-to-end browser journeys (two-user login, admin/worker negative matrix, stream expiry and revocation, restart and replica consistency) | Blocked: hermetic implementation only, pending product qualification | Product qualification evidence (not yet collected) |
 | Live external IdP and MFA qualification, deployment-owner protected inventory, coordinated release, retirement execution, retention disposition | Blocked by design: operator-gated steps requiring named-owner approval and separately authorized live checks | Deployment owner; rehearsal gate prerequisites |
@@ -415,31 +428,36 @@ actionable error; omitted values never silently select a mode.
 
 Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/operator_admission.py` (FastAPI adapter),
-`api_service/api/routers/operator_boundary_4347.py` (mounted surfaces).
-This section describes implemented behavior, not a proposal.
+`api_service/api/routers/operator_boundary_4347.py` (test-only demonstration).
 
-There is one shared operator admission boundary. Admission establishes
-permission to use the operator interface; it never resolves, imports,
-or creates a persisted person. Business services receive resources and
-requested actions, not an always-admin `User` substitute. No new
-`AUTH_PROVIDER` value, native password/unlock product, principal
-framework, default container, account identity/session store, or mode
-matrix was introduced.
+The shared primitive is implemented, but `api_service/main.py` intentionally
+does not mount the demonstration routers. Real workflow, artifact, stream, and
+chat routes retain their predecessor authentication until their consumers
+migrate through this boundary with scoped machine authority preserved. A merged
+helper or its tests do not establish production-route conversion or deployed
+access.
+
+The rules below describe that primitive. Admission grants operator-interface
+access without resolving or creating a persisted person. Consumer migration
+must pass resources and requested actions to business services without an
+always-admin `User` substitute. It introduces no new `AUTH_PROVIDER` selector,
+account product, or mandatory service.
 
 ### 13.1 Admitted paths
 
-| Deployment | Admission rule |
+| Deployment | Primitive admission rule |
 | --- | --- |
-| Fresh local (no `MOONMIND_PUBLIC_BASE_URL`) | Loopback transport only: the connecting client address must be `127.0.0.0/8` or `::1`. No database, cookie, token, or always-on service is consulted. |
-| Remote (`MOONMIND_PUBLIC_BASE_URL` configured) | Only the deployment's approved trusted ingress: `MOONMIND_TRUSTED_INGRESS=1` with `MOONMIND_TRUSTED_PROXIES` matching the connecting peer, plus a single well-formed proxy identity assertion, admitted as a boolean (no local account mapping, no role/subject import). |
+| Local (`MOONMIND_PUBLIC_BASE_URL` omitted or explicitly loopback) | Both the connecting client address and `Host` must be loopback. No database, cookie, token, or always-on service is consulted. |
+| Remote (non-loopback `MOONMIND_PUBLIC_BASE_URL`) | Only the deployment's approved trusted ingress: `MOONMIND_TRUSTED_INGRESS=1` with `MOONMIND_TRUSTED_PROXIES` matching the connecting peer, plus a single well-formed proxy identity assertion, admitted as a boolean (no local account mapping, no role/subject import). |
 
-Mounted enforcement covers HTTP queries and mutations
+Test-only routers exercise HTTP queries and mutations
 (`/api/v1/operator/status`, `/api/v1/operator/control`), artifact
 previews/downloads (`/api/v1/operator/artifacts/{name}`), SSE
 (`/api/v1/operator/events`), WebSocket handshake and reconnects
 (`/ws/v1/operator/console`), and control actions of the chat-control
-class. Intentionally public probes are narrow: `/healthz`, `/health`,
-`/ready`, `/api/health`, `/api/v1/health` only.
+class. These demonstration URLs are not production API endpoints. The primitive
+recognizes only narrow public probes: `/healthz`, `/health`, `/ready`,
+`/api/health`, `/api/v1/health`.
 
 ### 13.2 Denied paths (fail closed, never a default user)
 
@@ -467,11 +485,14 @@ class. Intentionally public probes are narrow: `/healthz`, `/health`,
   authority). Losing browser admission never cancels already-admitted
   durable work, which continues under its own recorded intent and scoped
   machine authority.
-- Limitations: the predecessor account stack remains mounted alongside
-  this boundary while consumers still use the account session authority.
-  Activating the new boundary on retained data additionally requires the
-  single-user data conversion and a coordinated release. The test-only bypass
-  topology (`docker-compose.operator-admission-test.yaml`, rendered and
-  pinned by `tests/unit/security/test_operator_isolation_4347.py`) runs
-  live in CI; this checkout proves the rendered isolation plus the
-  application-layer denials hermetically.
+- Retained-data activation also requires the guarded single-user conversion;
+  mixed or unresolved sources follow the existing
+  [upgrade eligibility and disposition](../SingleUserApplicationDesign.md#upgrade-eligibility-and-disposition).
+  Existing access protections remain until the real consumers convert.
+- The test-only topology (`docker-compose.operator-admission-test.yaml`),
+  isolation tests (`tests/unit/security/test_operator_isolation_4347.py`), and
+  route tests (`tests/unit/api/test_operator_boundary_mount_4347.py`) cover the
+  primitive and its wiring limits. They do not certify an installation's
+  ingress, product-route migration, or live stream behavior; those need evidence
+  from the actual operator access path. Independent host repair remains with
+  the [deployment controller](../Steps/DockerComposeUpdateSystem.md).
