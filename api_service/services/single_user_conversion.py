@@ -27,7 +27,7 @@ are not multiple people (non-UUID machine principals are ignored).
 Consistency: the existing conversion advisory claim serializes converters;
 transaction-held locks on the authoritative inventory tables exclude ordinary
 writers until publication. SQLite reserves its writer transaction instead.
-Preflight binds ownership, counts, and content hashes (including retained
+Eligible preflight binds ownership, counts, and content hashes (including retained
 artifact children) to detect changes preceding those locks. Inspection errors
 roll back only their savepoint, never the transaction holding authority locks.
 No in-progress row is committed; interruption rolls back grants and completion
@@ -342,7 +342,7 @@ def _record_inventory_error(inv: ConversionInventory, surface: str) -> None:
     """
     if surface not in inv.inventory_errors:
         inv.inventory_errors.append(surface)
-    logger.warning("single-user conversion inventory unreadable: %s", surface)
+        logger.warning("single-user conversion inventory unreadable: %s", surface)
 
 
 def _is_absent_table_error(exc: BaseException) -> bool:
@@ -563,7 +563,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         if table is None or column_name not in table.c:
             continue
         col = table.c[column_name]
-        stmt = select(col).where(col.is_not(None))
+        # Attribution depends on identities, not the number of rows written by
+        # each identity. Keep millions of repeated artifact creators in SQL;
+        # the separate count below still binds retained row counts.
+        stmt = select(col).where(col.is_not(None)).distinct()
         if kind == "active_artifact_claim":
             # Expired claims no longer protect retention or count quota. Their
             # owner, like pin/deletion actors, is preserved provenance only.
@@ -601,6 +604,12 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
 
     artifact_content_entries: list[str] = []
     for table_name in _ARTIFACT_EVIDENCE_TABLES:
+        if inv.inventory_errors:
+            # Unknown principal evidence already forbids conversion. Hashing
+            # retained content cannot repair it or authorize a mutation, and
+            # can hold startup for minutes on a large refused source. Keep the
+            # original error and leave source values untouched.
+            break
         table = metadata.tables.get(table_name)
         if table is None:
             continue

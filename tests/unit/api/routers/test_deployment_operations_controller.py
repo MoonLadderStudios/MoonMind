@@ -438,6 +438,79 @@ def test_explicit_retry_after_exhaustion_preserves_the_first_failure(
     assert temporal.calls == []
 
 
+def test_readiness_completion_time_is_separate_from_the_installed_checkpoint(
+    controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    installed_at = "2026-10-19T23:06:00+00:00"
+    finished_at = "2026-10-19T23:15:40+00:00"
+    clock = {"now": installed_at}
+
+    def await_readiness(controller: InProcessController, operation: dict) -> None:
+        controller.store.confirm_installed(
+            operation["operationId"],
+            image=operation["desired"]["image"],
+            verification_pending=True,
+        )
+        assert release.wait(timeout=30)
+        clock["now"] = finished_at
+        controller.store.finish_verification(operation["operationId"], complete=True)
+
+    controller = controller_factory(await_readiness)
+    monkeypatch.setattr(controller.record, "_utc_now", lambda: clock["now"])
+    monkeypatch.setattr(controller_client, "CONTROLLER_SUBMIT_TIMEOUT_SECONDS", 0.5)
+    client, _temporal = _client()
+    try:
+        submitted = client.post("/api/v1/operations/deployment/update", json=_update())
+        assert submitted.status_code == 202, submitted.text
+        assert submitted.json()["status"] == "RUNNING"
+        pending = _stack(client)
+        assert pending["latestAction"]["installedImage"] == _desired(
+            "sha256:" + "b" * 64
+        )
+        assert pending["latestAction"]["completedAt"] is None
+        assert pending["currentImage"]["updatedAt"] == installed_at
+    finally:
+        release.set()
+
+    for _ in range(100):
+        final = _stack(client)
+        if final["latestAction"]["status"] == "SUCCEEDED":
+            break
+        threading.Event().wait(0.05)
+    assert final["latestAction"]["completedAt"] == finished_at
+    assert final["currentImage"]["updatedAt"] == installed_at
+    assert final["currentImage"]["deployedImage"] == _desired("sha256:" + "b" * 64)
+
+
+def test_later_diagnostics_do_not_reorder_confirmed_installations(
+    controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = controller_factory()
+    clock = {"now": "2026-10-19T23:06:00+00:00"}
+    monkeypatch.setattr(controller.record, "_utc_now", lambda: clock["now"])
+    client, _temporal = _client()
+    first = client.post("/api/v1/operations/deployment/update", json=_update())
+    assert first.status_code == 202, first.text
+    clock["now"] = "2026-10-19T23:20:00+00:00"
+    second = client.post(
+        "/api/v1/operations/deployment/update",
+        json=_update("sha256:" + "c" * 64),
+    )
+    assert second.status_code == 202, second.text
+    clock["now"] = "2026-10-19T23:30:00+00:00"
+    controller.store.note_reporting_failure(
+        first.json()["operationId"],
+        error="secondary reporting unavailable",
+    )
+
+    current = _stack(client)["currentImage"]
+    assert current["deployedImage"] == _desired("sha256:" + "c" * 64)
+    assert current["updatedAt"] == "2026-10-19T23:20:00+00:00"
+
+
 def test_failed_postcheck_is_partially_verified_with_the_failed_check(
     controller_factory: Callable[..., InProcessController],
 ) -> None:
@@ -472,6 +545,41 @@ def test_failed_postcheck_is_partially_verified_with_the_failed_check(
         }
     ]
     assert latest["retryAllowed"] is False
+
+
+def test_compose_failure_cause_survives_operations_diagnostic_limits(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    progress = " Container moonmind-worker-1 Waiting\n" * 150
+    error = f"apply failed: up failed (exit 1)\n{progress}container moonmind-api-1 is unhealthy"
+
+    def fail(controller: InProcessController, operation: dict) -> None:
+        controller.store.record_attempt_error(operation["operationId"], error=error)
+        raise controller.engine.ApplyError(
+            "up", 1, "container moonmind-api-1 is unhealthy"
+        )
+
+    controller = controller_factory(fail)
+    client, _temporal = _client()
+    submitted = client.post("/api/v1/operations/deployment/update", json=_update())
+
+    assert submitted.status_code == 202, submitted.text
+    latest = _stack(client)["latestAction"]
+    assert latest["status"] == "FAILED"
+    assert latest["errorSummary"].startswith(
+        "attempt 1: container moonmind-api-1 is unhealthy"
+    )
+    assert (
+        "latest attempt 3: container moonmind-api-1 is unhealthy"
+        in latest["errorSummary"]
+    )
+    assert all(
+        item["error"].endswith("container moonmind-api-1 is unhealthy")
+        and len(item["error"]) <= 2000
+        for item in latest["attempts"]
+    )
+    saved = controller.store.load(submitted.json()["operationId"])
+    assert all(item["error"] == error for item in saved["attempts"])
 
 
 def test_submission_observes_through_a_controller_handoff_restart(
