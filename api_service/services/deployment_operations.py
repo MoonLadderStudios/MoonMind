@@ -52,6 +52,13 @@ def _bounded_text(value: object) -> str | None:
     return text[:_MAX_CONTROLLER_TEXT_CHARS] if text else None
 
 
+def _bounded_diagnostic(value: object) -> str:
+    text = str(value or "").strip()
+    if len(text) > _MAX_CONTROLLER_TEXT_CHARS:
+        return "..." + text[-(_MAX_CONTROLLER_TEXT_CHARS - 3) :]
+    return text
+
+
 def recent_action_from_controller(operation: dict[str, Any]) -> "DeploymentRecentAction":
     """Project one controller record onto the Operations action shape."""
     operation_id = str(operation.get("operationId") or "")
@@ -62,7 +69,7 @@ def recent_action_from_controller(operation: dict[str, Any]) -> "DeploymentRecen
     attempts = tuple(
         DeploymentAttempt(
             attempt=int(item.get("attempt") or 0),
-            error=_bounded_text(item.get("error")) or "",
+            error=_bounded_diagnostic(item.get("error")),
             at=_bounded_text(item.get("at")),
         )
         for item in list(operation.get("attempts") or [])[-_MAX_CONTROLLER_ATTEMPTS_SHOWN:]
@@ -87,7 +94,7 @@ def recent_action_from_controller(operation: dict[str, Any]) -> "DeploymentRecen
         reason=_bounded_text(desired.get("reason")),
         started_at=_bounded_text(operation.get("createdAt")),
         completed_at=(
-            _bounded_text(installed.get("confirmedAt") or operation.get("updatedAt"))
+            _bounded_text(operation.get("updatedAt") or installed.get("confirmedAt"))
             if terminal
             else None
         ),
@@ -95,6 +102,7 @@ def recent_action_from_controller(operation: dict[str, Any]) -> "DeploymentRecen
         run_id=None,
         owner="controller",
         operation_id=operation_id or None,
+        installed_at=_bounded_text(installed.get("confirmedAt")),
         error_summary=_bounded_text(
             operation.get("errorSummary") or operation.get("supersededReason")
         ),
@@ -200,6 +208,7 @@ class DeploymentRecentAction:
     owner: Literal["controller", "workflow"] = "workflow"
     operation_id: str | None = None
     installed_image: str | None = None
+    installed_at: str | None = None
     error_summary: str | None = None
     attempts: tuple[DeploymentAttempt, ...] = ()
     attempt_group: int | None = None
@@ -469,7 +478,9 @@ def current_image_from_controller(
     ]
     if not confirmed:
         return None
-    newest = max(confirmed, key=lambda action: action.completed_at or "")
+    newest = max(
+        confirmed, key=lambda action: action.installed_at or action.completed_at or ""
+    )
     installed = str(newest.installed_image)
     repository, reference, digest = _split_image_reference(installed)
     return DeploymentCurrentImage(
@@ -479,7 +490,7 @@ def current_image_from_controller(
         reference=reference,
         resolved_digest=digest,
         source_run_id=newest.operation_id,
-        updated_at=newest.completed_at,
+        updated_at=newest.installed_at or newest.completed_at,
         evidence="controller",
     )
 
