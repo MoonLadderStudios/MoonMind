@@ -46,7 +46,7 @@ describe('dashboard page layout styles', () => {
     expect(clickedSubmit).toContain('color: rgb(var(--mm-action-primary));');
   });
 
-  it('morphs the clicked create workflow arrow into a green check', () => {
+  it('morphs the clicked create workflow arrow into a check in the primary color', () => {
     expect(
       cssRuleBlock(
         '.queue-submit-primary--icon.queue-submit-primary--arrow-exit .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"]',
@@ -60,93 +60,17 @@ describe('dashboard page layout styles', () => {
     expect(
       cssRuleBlock('.queue-submit-primary--icon .queue-submit-primary-arrow-glyph--check'),
     ).toContain('opacity: 0;');
-    // The check inherits the button's clicked color, which is the green action token.
+    // The check inherits the button's clicked color, which is the primary action token.
     expect(cssRuleBlock('.queue-submit-primary-arrow svg')).toContain(
       'stroke: currentcolor;',
     );
   });
+  // Rendered coverage: browser/controlPresentation.browser.test.tsx and buttonAccessibility.browser.test.tsx.
 
-  it('keeps the skill combobox chevron a chromeless indicator in every state', () => {
-    // The field already signals interaction with its focus ring and the open
-    // listbox. The chevron must never grow a box of its own, so it is opted out
-    // of the filled-CTA globals and restates the reset for every state those
-    // globals target.
-    const filledCtaSelectors: string[] = [];
-    cssRoot().walkRules((rule: Rule) => {
-      // Match the whole selector: the exclusion list itself contains commas,
-      // so it cannot be split on them.
-      if (/(?:^|,)\s*\.?button:where\(:not\(/.test(rule.selector)) {
-        filledCtaSelectors.push(rule.selector);
-      }
-    });
-    expect(filledCtaSelectors.length).toBeGreaterThan(0);
-    filledCtaSelectors.forEach((selector) => {
-      expect(selector).toContain('.skill-combobox-toggle');
-      // The attachment thumbnail and its lightbox close button opt out for the
-      // same reason: neither is a filled call to action.
-      expect(selector).toContain('.attachment-thumbnail');
-      expect(selector).toContain('.attachment-lightbox-close');
-    });
-
-    const toggle = cssRuleBlock('.skill-combobox-toggle');
-    expect(toggle).toContain('background: none;');
-    expect(toggle).toContain('border: 0;');
-    expect(toggle).toContain('border-radius: 0;');
-    expect(toggle).toContain('box-shadow: none;');
-    expect(toggle).toContain('-webkit-tap-highlight-color: transparent;');
-
-    for (const state of [
-      '.skill-combobox-toggle:hover',
-      '.skill-combobox-toggle:focus',
-      '.skill-combobox-toggle:focus-visible',
-      '.skill-combobox-toggle:active',
-      '.skill-combobox-toggle.is-clicked',
-    ]) {
-      const block = cssRuleBlock(state);
-      expect(block).toContain('background: none;');
-      expect(block).toContain('box-shadow: none;');
-      expect(block).toContain('transform: none;');
-      expect(block).toContain('filter: none;');
-      // No hover/active color shift either: the glyph stays muted and only
-      // rotates to report the open state.
-      expect(block).toContain('color: rgb(var(--mm-muted));');
-    }
-    expect(cssRuleBlock('.skill-combobox-toggle[aria-expanded="true"] svg')).toContain(
-      'transform: rotate(180deg);',
-    );
-  });
 });
 
 describe('dashboard masthead brand styles', () => {
-  it('keeps Moon white and renders the MoonMind header at the compact size', () => {
-    expect(cssRuleBlock('.masthead-brand')).toContain('color: rgb(var(--mm-ink));');
-    expect(cssRuleBlock('.masthead-brand')).toContain('text-decoration: none;');
-    expect(cssRuleBlock('.masthead-brand:hover')).toContain('text-decoration: none;');
-    expect(cssRuleBlock('.masthead-brand:focus-visible')).toContain('text-decoration: none;');
-    expect(cssRuleBlock('.masthead-brand-moon')).toContain('color: rgb(255 255 255);');
-    expect(cssRuleBlock('.masthead-brand-mind')).toContain('color: inherit;');
-    expect(cssRuleBlock('.masthead-wordmark')).toContain(
-      'font-size: clamp(1.12rem, 1.7vw, 1.52rem);',
-    );
-  });
-
-  it('MM-1114 hides the workflow list display control on mobile and preserves accessible focus tokens', () => {
-    expect(dashboardCss).toMatch(
-      /@media \(max-width: 767px\)\s*\{[\s\S]*\.workflow-list-display-control\s*\{[^}]*display:\s*none/s,
-    );
-    expect(cssRuleBlock('.workflow-list-display-option:focus-visible')).toContain(
-      'box-shadow: var(--mm-control-focus-ring);',
-    );
-    expect(cssRuleBlock('.workflow-list-display-option[aria-checked="true"]')).toContain(
-      'color: rgb(var(--mm-accent));',
-    );
-    expect(cssRuleBlock('.workflow-list-display-option[aria-checked="true"]:hover')).toContain(
-      'border-color: rgb(var(--mm-accent-2) / 0.72);',
-    );
-    expect(cssRuleBlock('.workflow-list-display-option[aria-checked="true"]:hover')).not.toContain(
-      'color: rgb(var(--mm-ink));',
-    );
-  });
+  // Rendered coverage: browser/controlPresentation.browser.test.tsx and buttonAccessibility.browser.test.tsx.
 
   it('MM-1192 layers the compact navigation without overlap and disables large reduced-motion transitions', () => {
     expect(dashboardCss).toMatch(
@@ -156,161 +80,8 @@ describe('dashboard masthead brand styles', () => {
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.route-nav,[\s\S]*\.dashboard-nav-backdrop\s*\{[^}]*animation:\s*none !important;[^}]*transition:\s*none !important;[^}]*transform:\s*none !important;/s,
     );
   });
+  // Rendered coverage: browser/controlPresentation.browser.test.tsx and buttonAccessibility.browser.test.tsx.
 
-  it('MM-1200 preserves System popover geometry, focus, active, mobile, and motion contracts', () => {
-    const popover = cssRuleBlock('.dashboard-system-popover');
-    expect(popover).toContain('position: absolute;');
-    expect(popover).toContain('right: 0;');
-    expect(popover).toContain('z-index: 60;');
-    expect(popover).toContain('background: rgb(var(--mm-panel));');
-    expect(popover).toContain('box-shadow: var(--mm-elevation-panel);');
-    expect(dashboardCss).not.toMatch(
-      /@media \(min-width: 1181px\)\s*\{[\s\S]*\.route-nav-primary\s*\{[^}]*overflow-[xy]:\s*(?:auto|hidden|scroll);/s,
-    );
-    expect(dashboardCss).not.toMatch(
-      /@media \(min-width: 1181px\)\s*\{[\s\S]*\.masthead-nav\s*\{[^}]*overflow-[xy]:\s*(?:auto|hidden|scroll);/s,
-    );
+  // Active selection and simultaneous focus are covered in controlPresentation.browser.test.tsx.
 
-    expect(cssRuleBlock('.dashboard-system-trigger:focus-visible')).toContain(
-      'box-shadow: var(--mm-control-focus-ring);',
-    );
-    expect(cssRuleBlock('.dashboard-system-trigger.active')).toContain('color: rgb(var(--mm-ink));');
-    expect(cssRuleBlock('.dashboard-system-trigger.active::after')).toContain(
-      'background: rgb(var(--mm-accent));',
-    );
-    const unavailableDestination = cssRuleBlock(
-      '.route-nav .dashboard-system-destination-unavailable',
-    );
-    expect(unavailableDestination).toContain('color: rgb(var(--mm-muted) / 0.78);');
-    expect(unavailableDestination).toContain('cursor: not-allowed;');
-    expect(dashboardCss).toMatch(
-      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.dashboard-system-menu\s*\{[^}]*display:\s*none;[\s\S]*\.dashboard-system-inline\s*\{[^}]*display:\s*block;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.dashboard-system-trigger,[\s\S]*\.dashboard-system-popover\s*\{[^}]*animation:\s*none !important;[^}]*transition:\s*none !important;[^}]*transform:\s*none !important;/s,
-    );
-  });
-
-  it('gives the nav buttons and list display control the highlight-edge look with a sliding thumb', () => {
-    // The shared liquid-glass treatment: the edge light is a masked gradient
-    // ring built from two corner-anchored radials — white bleeding out of the
-    // top-left corner, violet out of the bottom-right, fading to nothing
-    // before the other two corners — plus a quite faint under-glow kept
-    // almost entirely on the bottom edge. The hover variant swaps the glow to
-    // light blue.
-    const highlightShadow =
-      /box-shadow:\s*var\(--mm-shadow-highlight-edge\);/;
-    expect(dashboardCss).toMatch(
-      /--mm-highlight-edge-ring:\s*radial-gradient\(\s*130% 220% at 0% 0%,\s*rgb\(255 255 255 \/ 0\.6\) 0%,[\s\S]*?transparent 45%\s*\),\s*radial-gradient\(\s*130% 220% at 100% 100%,\s*rgb\(167 139 250 \/ 0\.7\) 0%,[\s\S]*?transparent 45%\s*\);/,
-    );
-    expect(dashboardCss).toMatch(
-      /--mm-shadow-highlight-edge:\s*0 5px 9px -5px rgb\(var\(--mm-accent\) \/ 0\.45\);/,
-    );
-    expect(dashboardCss).toMatch(
-      /--mm-shadow-highlight-edge-hover:\s*0 5px 9px -5px rgb\(110 180 255 \/ 0\.6\);/,
-    );
-    // The shadow tokens carry only the under-glow — no inset edge lines and
-    // no perimeter ring — so the edge light comes solely from the diagonal
-    // gradient ring and cannot read as a full outline.
-    expect(dashboardCss).not.toMatch(
-      /--mm-shadow-highlight-edge(?:-hover)?:[^;]*(?:inset|0 0 0 1px)/s,
-    );
-    // The ring is drawn on a pseudo-element masked down to a 1px border band;
-    // the radio group uses ::after because ::before is its sliding thumb.
-    const ring = cssRuleBlock('.route-nav-primary a::before');
-    expect(ring).toContain('background: var(--mm-highlight-edge-ring);');
-    expect(ring).toContain('padding: 1px;');
-    expect(ring).toContain('mask-composite: exclude;');
-    expect(ring).toContain('pointer-events: none;');
-    expect(cssRuleBlock('.dashboard-system-trigger::before')).toContain(
-      'background: var(--mm-highlight-edge-ring);',
-    );
-    expect(cssRuleBlock('.workflow-list-display-control::after')).toContain(
-      'background: var(--mm-highlight-edge-ring);',
-    );
-    // The collapsed mobile nav renders flat menu rows without the ring.
-    expect(dashboardCss).toMatch(
-      /@media \(max-width: 1180px\)\s*\{[\s\S]*\.route-nav-primary a::before\s*\{[^}]*content:\s*none;/s,
-    );
-
-    // Radio group: highlight-edge chrome, tightened enough (option < 2rem,
-    // padding < 0.18rem) that it does not out-size the nav buttons, plus a
-    // segmented-control-style sliding thumb driven by the checked option.
-    const control = cssRuleBlock('.workflow-list-display-control');
-    expect(control).toContain('border: 0;');
-    expect(control).toContain('background: transparent;');
-    expect(control).toMatch(highlightShadow);
-    expect(control).toContain('padding: 0.12rem;');
-    const thumb = cssRuleBlock('.workflow-list-display-control::before');
-    expect(thumb).toContain(
-      'transform: translateX(calc(var(--list-display-active-index) * 1.8rem));',
-    );
-    expect(thumb).toContain('box-shadow: inset 0 0 0 1px rgb(var(--mm-accent) / 0.6);');
-    expect(thumb).toMatch(/transition: transform \d+ms/);
-    expect(dashboardCss).toMatch(
-      /\.workflow-list-display-control:has\(\.workflow-list-display-option:nth-child\(2\)\[aria-checked="true"\]\)\s*\{[^}]*--list-display-active-index: 1;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*\.workflow-list-display-control::before\s*\{[^}]*transition:\s*none;/s,
-    );
-    expect(cssRuleBlock('.workflow-list-display-option')).toContain('width: 1.6rem;');
-    // Icons keep their size regardless of the tighter borders.
-    expect(cssRuleBlock('.workflow-list-display-option svg')).toContain('width: 0.95rem;');
-
-    // Workflows/Create and the System trigger share the same highlight-edge
-    // look. The shadows are non-layout-affecting so the active underline
-    // geometry is unchanged.
-    const primary = cssRuleBlock('.route-nav-primary a');
-    expect(primary).not.toContain('var(--mm-glass-fill)');
-    expect(primary).toMatch(highlightShadow);
-    const trigger = cssRuleBlock('.dashboard-system-trigger');
-    expect(trigger).toContain('background: transparent;');
-    expect(trigger).toMatch(highlightShadow);
-
-    // Hover: all three buttons brighten, grow slightly, and swap the purple
-    // under-glow for light blue. The trigger states these explicitly so
-    // the filled-CTA global button:hover shadow cannot leak onto it.
-    for (const hover of [
-      cssRuleBlock('.route-nav-primary a:hover'),
-      cssRuleBlock('.dashboard-system-trigger:hover'),
-    ]) {
-      expect(hover).toContain('box-shadow: var(--mm-shadow-highlight-edge-hover);');
-      expect(hover).toContain('transform: scale(var(--mm-control-hover-scale));');
-      expect(hover).toMatch(/filter: brightness\([\d.]+\)/);
-    }
-
-    // Opening the System popover keeps its highlighted surface without
-    // leaving the trigger scaled or brightened after hover ends.
-    const expandedTrigger = cssRuleBlock('.dashboard-system-trigger[aria-expanded="true"]');
-    expect(expandedTrigger).toContain('box-shadow: var(--mm-shadow-highlight-edge-hover);');
-    expect(expandedTrigger).not.toContain('transform:');
-    expect(expandedTrigger).not.toContain('filter:');
-  });
-
-  it('marks the open System selection like the sidebar instead of the trigger underline', () => {
-    // The trigger keeps its purple underline when a System destination is
-    // active (asserted above); the selected row inside the open popover must
-    // not repeat it, and instead gets the sidebar-style left accent bar + fill.
-    const underlineSuppression = cssRuleBlock('.dashboard-system-popover a.active::after');
-    expect(underlineSuppression).toContain('content: none;');
-    const activeRow = cssRuleBlock('.dashboard-system-popover a.active');
-    expect(activeRow).toContain('box-shadow: inset 3px 0 0 rgb(var(--mm-accent));');
-    expect(activeRow).toContain('background: rgb(var(--mm-accent) / 0.12);');
-
-    // The active-row rule shares specificity with the earlier
-    // `a:focus-visible` rule, so a later, more specific rule must combine the
-    // focus ring with the active inset shadow; otherwise a keyboard-focused
-    // active row loses its distinct focus indicator.
-    const activeFocus = cssRuleBlock('.dashboard-system-popover a.active:focus-visible');
-    expect(activeFocus).toContain(
-      'box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));',
-    );
-  });
-
-  it('keeps the masthead-nav skills create button green and offset below the nav height', () => {
-    const button = cssRuleBlock('.skills-create-nav-button');
-    expect(button).toContain('color: rgb(var(--mm-ok));');
-    expect(button).toContain('background: rgb(var(--mm-ok) / 0.16);');
-    expect(button).toMatch(/box-shadow:\s*inset 0 0 0 1px rgb\(var\(--mm-ok\) \/ 0\.55\),\s*inset 0 1px 0 var\(--mm-glass-edge\);/);
-  });
 });

@@ -618,6 +618,24 @@ describe('Skills Entrypoint', () => {
     });
   });
 
+  it('moves through preview tabs with arrows, Home and End', async () => {
+    renderSkills({ path: '/skills/speckit-orchestrate', mode: 'sidebar' });
+    const rendered = await screen.findByRole('tab', { name: 'Rendered' });
+    rendered.focus();
+    fireEvent.keyDown(rendered, { key: 'ArrowRight' });
+    const raw = screen.getByRole('tab', { name: 'Raw Markdown' });
+    expect(document.activeElement).toBe(raw);
+    expect(raw.getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe(raw.id);
+    fireEvent.keyDown(raw, { key: 'End' });
+    const metadata = screen.getByRole('tab', { name: 'Metadata' });
+    expect(document.activeElement).toBe(metadata);
+    fireEvent.keyDown(metadata, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(rendered);
+    fireEvent.keyDown(rendered, { key: 'Home' });
+    expect(document.activeElement).toBe(rendered);
+  });
+
   it('validates the skill name before submitting a create request', async () => {
     renderSkills({ path: '/skills' });
 

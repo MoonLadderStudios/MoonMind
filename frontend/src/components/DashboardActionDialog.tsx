@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import {
   useEffect,
   useId,
@@ -180,7 +181,7 @@ export function DashboardActionDialog({
             </div>
             <button
               type="button"
-              className="secondary dashboard-dialog-close"
+              className="dashboard-dialog-close"
               aria-label={`Close ${title}`}
               onClick={onCancel}
             >
@@ -229,23 +230,22 @@ export function DashboardActionDialog({
           {error ? (
             <div className="notice error dashboard-dialog-error" role="alert">
               <span>{error}</span>
-              <button type="button" className="secondary" onClick={() => void copyDiagnostics()}>
+              <Button variant="secondary" type="button" onClick={() => void copyDiagnostics()}>
                 {copyLabel}
-              </button>
+              </Button>
             </div>
           ) : null}
           <div className="dashboard-dialog-actions">
-            <button type="button" className="secondary" onClick={onCancel}>
+            <Button variant="secondary" type="button" onClick={onCancel}>
               {cancelLabel}
-            </button>
-            <button
+            </Button>
+            <Button variant={danger ? 'danger' : 'primary'}
               type="submit"
-              className={danger ? 'button dashboard-dialog-danger' : 'button'}
               disabled={confirmDisabled}
               aria-busy={confirmPending}
             >
               {confirmLabel}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

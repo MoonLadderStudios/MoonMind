@@ -1,3 +1,4 @@
+import { Button } from '../components/Button';
 import { runtimeUnavailableReason } from "../runtime/runtimeTargets";
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -339,16 +340,16 @@ function InstanceSettingsContent({ payload }: { payload: BootPayload }) {
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
           Clear browser-local list layouts, selected workflows and recurring schedules, and other dashboard choices.
         </p>
-        <button
+        <Button variant="ghost"
           type="button"
-          className="mt-4 rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          className="mt-4 text-sm"
           onClick={() => {
             resetDashboardPreferences();
             setNotice({ level: 'ok', text: 'Dashboard preferences reset.' });
           }}
         >
           Reset dashboard preferences
-        </button>
+        </Button>
       </section>
     </SettingsPageFrame>
   );

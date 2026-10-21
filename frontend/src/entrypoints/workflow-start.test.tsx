@@ -14927,75 +14927,10 @@ describe("Task Create submit arrow animation", () => {
       /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::before/,
     );
   });
+  // Submit interaction is covered in createValidationFeedback.browser.test.tsx.
 
-  it("cycles the create arrow out right and back in from the left on hover", async () => {
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon \.queue-submit-primary-arrow\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*overflow:\s*hidden;/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon:not\(\.queue-submit-primary--arrow-exit\):not\(:disabled\):not\(\[aria-disabled="true"\]\):hover\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*animation:\s*queue-submit-primary-arrow-cycle\s+460ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
-    );
-    expect(css).toMatch(
-      /@keyframes queue-submit-primary-arrow-cycle\s*\{[\s\S]*38%\s*\{[\s\S]*transform:\s*translateX\(145%\);[\s\S]*39%\s*\{[\s\S]*transform:\s*translateX\(-145%\);[\s\S]*100%\s*\{[\s\S]*transform:\s*translateX\(0\);/,
-    );
-    expect(css).toMatch(
-      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.queue-submit-primary--icon \.queue-submit-primary-arrow svg\s*\{[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
-    );
-  });
+  // Submit interaction is covered in createValidationFeedback.browser.test.tsx.
 
-  it("outlines the create button on click while morphing its arrow into a green check and preserving the shockwave", async () => {
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*color:\s*rgb\(var\(--mm-action-primary\)\);[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon \.queue-submit-primary-arrow-glyph--check\s*\{[^}]*opacity:\s*0;[^}]*transform:\s*scale\(0\.6\);/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="arrow"\]\s*\{[^}]*animation:\s*queue-submit-primary-arrow-exit\s+230ms\s+cubic-bezier\(0\.33,\s*0,\s*0\.2,\s*1\)\s+both;/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[^}]*animation:\s*queue-submit-primary-check-pop\s+260ms\s+cubic-bezier\(0\.34,\s*1\.56,\s*0\.64,\s*1\)\s+both;/s,
-    );
-    expect(css).toMatch(
-      /@keyframes queue-submit-primary-arrow-exit\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);[\s\S]*100%\s*\{[\s\S]*opacity:\s*0;[\s\S]*transform:\s*scale\(0\.6\);/,
-    );
-    expect(css).toMatch(
-      /@keyframes queue-submit-primary-check-pop\s*\{[\s\S]*0%\s*\{[\s\S]*opacity:\s*0;[\s\S]*60%\s*\{[\s\S]*transform:\s*scale\(1\.15\);[\s\S]*100%\s*\{[\s\S]*transform:\s*scale\(1\);/,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary-arrow svg\s*\{[^}]*stroke:\s*currentcolor;/s,
-    );
-    expect(css).toMatch(
-      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\.queue-submit-primary-arrow-glyph\[data-submit-icon="check"\]\s*\{[\s\S]*opacity:\s*1;[\s\S]*transform:\s*scale\(1\);/,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon\.queue-submit-primary--arrow-exit\s*\{[^}]*background-color:\s*rgb\(var\(--mm-action-primary\) \/ 0\.12\);[^}]*background-image:\s*none;[^}]*border-color:\s*rgb\(var\(--mm-action-primary\)\);/s,
-    );
-    expect(css).not.toMatch(
-      /\.queue-submit-primary--icon[^{]*:active\s*\.queue-submit-primary-arrow\s*svg\s*\{[^}]*queue-submit-primary-arrow-exit/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*animation:\s*queue-submit-primary-ripple\s+620ms\s+cubic-bezier\(0\.22,\s*0\.61,\s*0\.36,\s*1\)\s+forwards;/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*2px solid rgb\(var\(--mm-action-primary\) \/ 0\.92\);[^}]*box-shadow:[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.64\)[^}]*filter:\s*none;/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.5\)\s*41%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.16\)\s*68%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*100%/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*62%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.44\)\s*62%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.92\)\s*77%,[^}]*rgb\(var\(--mm-action-primary\) \/ 0\)\s*77%/s,
-    );
-    expect(css).not.toMatch(
-      /\.queue-submit-primary-ripple\s*\{[^}]*filter:\s*blur/s,
-    );
-    expect(css).toMatch(
-      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 32px 2px rgb\(var\(--mm-accent-2\) \/ 0\.36\)[^}]*0 0 62px -2px rgb\(var\(--mm-accent-2\) \/ 0\.24\)/s,
-    );
-    expect(css).not.toMatch(
-      /\.queue-submit-primary--icon:hover\s*\{[^}]*0 0 0 3px rgb\(var\(--mm-action-primary\) \/ 0\.6\)/s,
-    );
-  });
 
   it("renders both the create arrow and check glyphs so the click can morph between them", async () => {
     const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -18958,7 +18893,7 @@ describe("Task Create schema-driven capability inputs", () => {
 
     const unsupported = (await waitFor(() => {
       const input = step.querySelector<HTMLInputElement>(
-        "#queue-capability-input-externalLookup",
+        '[id^="queue-capability-input-"][id$="-externalLookup"]',
       );
       expect(input).toBeTruthy();
       return input as HTMLInputElement;
@@ -21830,61 +21765,6 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
     expect(chip.removable).toBe(true);
   });
 });
-
-describe("Task Create MM-937 step hover containment", () => {
-  let dashboardCss: string;
-
-  beforeAll(async () => {
-    const { readFileSync } = await import("node:fs");
-    dashboardCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/dashboard.css`,
-      "utf8",
-    );
-  });
-
-  it("anchors step header control hover scaling to the trailing edge so a step does not spill past the steps container", () => {
-    // The step header controls are right-aligned (margin-left: auto), so the
-    // trailing control sits flush against the steps container edge.
-    expect(dashboardCss).toMatch(
-      /\.queue-step-controls\s*\{[^}]*margin-left:\s*auto;/s,
-    );
-    // The hover scale that would otherwise push that control outward.
-    expect(dashboardCss).toMatch(
-      /\.queue-step-icon-button:hover\s*\{[^}]*transform:\s*scale\(var\(--mm-control-hover-scale\)\);/s,
-    );
-    // The containment fix: scale only the trailing control from its right edge
-    // so it grows inward instead of spilling past the container boundary when
-    // hovered, while the leading controls keep their natural center scaling.
-    expect(dashboardCss).toMatch(
-      /\.queue-step-controls\s+\.queue-step-icon-button:last-child\s*\{[^}]*transform-origin:\s*right center;/s,
-    );
-  });
-
-  it("keeps context chip remove buttons compact after the generic icon-button rules", () => {
-    expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s*\{[^}]*width:\s*0\.78rem;[^}]*height:\s*0\.78rem;[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*padding:\s*0;[^}]*box-shadow:\s*none;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove\s+svg,\s*\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\s+svg\s*\{[^}]*width:\s*0\.46rem;[^}]*height:\s*0\.46rem;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /\.queue-step-capability-chip\s+\.queue-step-capability-chip-remove:hover,[^{]+\.queue-step-attachment-chip\s+\.queue-step-attachment-chip-remove\.is-clicked\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;[^}]*box-shadow:\s*none;[^}]*transform:\s*none;[^}]*filter:\s*none;/s,
-    );
-  });
-
-  it("keeps dependency remove buttons in a fixed right column beside wrapping text", () => {
-    expect(dashboardCss).toMatch(
-      /#queue-dependency-list\s+li\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[^}]*align-items:\s*center;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /#queue-dependency-list\s+li\s*>\s*span:first-child\s*\{[^}]*display:\s*block;[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;/s,
-    );
-    expect(dashboardCss).toMatch(
-      /#queue-dependency-list\s+\.queue-step-icon-button\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*align-self:\s*center;[^}]*justify-self:\s*end;/s,
-    );
-  });
-});
-
 
 describe('removed target drafts (#4644)', () => {
   let fetchSpy: MockInstance;

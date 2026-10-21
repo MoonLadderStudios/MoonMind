@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { useEffect, type HTMLAttributes, type ReactNode } from 'react';
 
 const DOCUMENT_TITLE_SUFFIX = 'MoonMind';
@@ -61,15 +62,14 @@ export function PageHeader({
           <div className="page-header__actions">
             {actions}
             {onRefresh ? (
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="secondary"
                 onClick={onRefresh}
                 disabled={refreshing}
                 aria-busy={refreshing || undefined}
               >
                 {refreshing ? 'Refreshing…' : refreshLabel}
-              </button>
+              </Button>
             ) : null}
           </div>
         ) : null}

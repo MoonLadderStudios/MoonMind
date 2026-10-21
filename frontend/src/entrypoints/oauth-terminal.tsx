@@ -1,3 +1,4 @@
+import { Button } from '../components/Button';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
@@ -679,16 +680,16 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           <h1>Provider Login Terminal</h1>
         </div>
         <div className="oauth-terminal-actions">
-          <button type="button" className="secondary" onClick={copyTerminalSelection}>
+          <Button variant="ghost" type="button" onClick={copyTerminalSelection}>
             Copy selection
-          </button>
-          <button type="button" className="secondary" onClick={selectTerminalText}>
+          </Button>
+          <Button variant="secondary" type="button" onClick={selectTerminalText}>
             Select terminal text
-          </button>
+          </Button>
           {showAuthenticationPasteBox ? (
-            <button type="button" className="secondary" onClick={pasteClipboardToTerminal}>
+            <Button variant="secondary" type="button" onClick={pasteClipboardToTerminal}>
               Paste from clipboard
-            </button>
+            </Button>
           ) : null}
           <span className="oauth-terminal-status">{formatStatusLabel(status)}</span>
         </div>
@@ -708,9 +709,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
             readOnly
             value={selectableOutput}
           />
-          <button type="button" className="secondary" onClick={() => setSelectableOutput(null)}>
+          <Button variant="ghost" type="button" onClick={() => setSelectableOutput(null)}>
             Close selectable text
-          </button>
+          </Button>
         </section>
       ) : null}
       {showAuthenticationPasteBox ? (
@@ -737,9 +738,9 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
                 }
               }}
             />
-            <button type="button" className="primary" onClick={sendPastedInput}>
+            <Button variant="primary" type="button" onClick={sendPastedInput}>
               Send to terminal
-            </button>
+            </Button>
           </div>
         </section>
       ) : null}
@@ -747,36 +748,33 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
         <section className="oauth-terminal-session-panel" aria-label="OAuth session status and actions">
           <div className="oauth-terminal-session-actions">
             {TERMINAL_FINALIZE_STATUSES.includes(session.status) && !awaitingFinalizeOutcome ? (
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="primary"
                 onClick={() => runSessionAction('finalize', 'Failed to finalize OAuth session.')}
                 disabled={actionPending !== null}
               >
                 Finalize
-              </button>
+              </Button>
             ) : null}
             {['pending', 'starting', 'bridge_ready', 'awaiting_user', 'verifying'].includes(
               session.status,
             ) ? (
-              <button
+              <Button variant="ghost"
                 type="button"
-                className="secondary"
                 onClick={() => runSessionAction('cancel', 'Failed to cancel OAuth session.')}
                 disabled={actionPending !== null}
               >
                 Cancel
-              </button>
+              </Button>
             ) : null}
             {['failed', 'cancelled', 'expired'].includes(session.status) ? (
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="secondary"
                 onClick={() => runSessionAction('reconnect', 'Failed to reconnect OAuth session.')}
                 disabled={actionPending !== null}
               >
                 Reconnect
-              </button>
+              </Button>
             ) : null}
           </div>
           {session.failure_reason ? (
@@ -817,7 +815,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(event) => event.preventDefault()}
         >
-          <button
+          <Button variant="ghost"
             ref={contextMenuItemRef}
             type="button"
             role="menuitem"
@@ -827,7 +825,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
             }}
           >
             Copy selection
-          </button>
+          </Button>
         </div>
       ) : null}
     </main>
