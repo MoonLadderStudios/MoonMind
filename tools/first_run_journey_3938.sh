@@ -60,9 +60,9 @@
 # save/finalization and owned cleanup run. The saved archive is downloaded
 # before and after workspace removal. External model catalog observation and
 # native-turn execution are controlled; no live-provider availability is claimed.
-# The conversion outcome is printed either way. It publishes only when every
-# retained subsystem has a registered transform; until then it refuses
-# without mutation and the journey reports it as not published.
+# The eligible upgrade must publish. Unsupported personal data still refuses
+# without mutation; that refusal fails this lane and remains a distinct
+# preservation case in the PostgreSQL conversion suite.
 #
 # Teardown is project-owned (down --remove-orphans on this project only; no
 # global prune). Credential-bearing named volumes are re-scoped to the

@@ -359,6 +359,123 @@ async def test_postgres_guarded_upgrade_refuses_multi_without_mutation(pg_maker)
 
 
 @pytest.mark.asyncio
+async def test_postgres_populated_instance_resources_publish_and_remain_usable(
+    pg_maker, tmp_path,
+) -> None:
+    """Already instance-scoped resources need preservation, not no-op plugins."""
+    from api_service.services import single_user_conversion as suc
+    from api_service.services.presets.catalog import PresetCatalogService
+    from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+    from api_service.services.secrets import SecretsService
+    from api_service.services.settings_catalog import SettingsCatalogService
+    from moonmind.statuses.workflow import MoonMindWorkflowState
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService,
+    )
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+
+    store = LocalTemporalArtifactStore(tmp_path / "retained-artifacts")
+    async with pg_maker() as source:
+        owner = await _mk_user(source)
+        owner_id = owner.id
+        source.add(ManagedSecret(slug="retained-binding", ciphertext="synthetic-credential",
+                                 status=SecretStatus.ACTIVE))
+        source.add(SettingsOverride(scope="workspace", key="integrations.github.token_ref",
+                                    value_json="db://retained-binding"))
+        preset = Preset(slug="retained-custom", scope_type=PresetScopeType.GLOBAL,
+            title="Retained custom preset", description="Keep explicit inputs",
+            created_by=owner_id,
+            inputs_schema=[{"name": "audience", "label": "Audience", "type": "text",
+                            "required": True, "default": "default audience"}],
+            steps=[{"instructions": "Write for {{ inputs.audience }}."}])
+        schedule = RecurringWorkflowDefinition(name="retained-paused", cron="17 * * * *",
+            timezone="UTC", owner_user_id=owner_id, enabled=False,
+            target={"kind": "workflow", "publishMode": "none"})
+        source.add_all([preset, schedule])
+        source.add(TemporalExecutionRecord(workflow_id="retained-accepted", run_id="original-run",
+            entry="e", workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_id=str(owner_id), owner_type=TemporalExecutionOwnerType.USER,
+            state=MoonMindWorkflowState.EXECUTING))
+        source.add(TemporalExecutionCanonicalRecord(workflow_id="retained-accepted",
+            run_id="original-run", entry="e", workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_id=str(owner_id), owner_type=TemporalExecutionOwnerType.USER,
+            state=MoonMindWorkflowState.EXECUTING))
+        await source.commit()
+        schedule_id = schedule.id
+        catalog = PresetCatalogService(source)
+        before_preset = await catalog.get_template(slug=preset.slug, scope="global", scope_ref=None)
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(source), store=store)
+        artifact, _ = await artifacts.create(principal=str(owner_id), content_type="text/plain")
+        await artifacts.write_complete(artifact_id=artifact.artifact_id, principal=str(owner_id),
+                                       payload=b"retained output", content_type="text/plain")
+        artifact_id = artifact.artifact_id
+
+    async with pg_maker() as converter:
+        result = await suc.run_guarded_upgrade(converter, operator_authorized=True)
+        assert result.published, result.to_sanitized_dict()
+        assert result.decision.disposition == "eligible_conversion"
+        assert set(result.decision.present_subsystems) >= {
+            "settings", "presets", "schedules", "temporal", "artifacts"}
+        assert "synthetic-credential" not in str(result.to_sanitized_dict())
+
+    # New connections exercise the actual persistence consumers after cutover.
+    # No test-only conversion, authority object, dispatcher or service is used.
+    async with pg_maker() as restarted:
+        value = await SettingsCatalogService(session=restarted).effective_value_async(
+            "integrations.github.token_ref", scope="workspace")
+        assert value.value == "db://retained-binding"
+        assert await SecretsService.get_secret(restarted, "retained-binding") == "synthetic-credential"
+        catalog = PresetCatalogService(restarted)
+        assert await catalog.get_template(slug="retained-custom", scope="global", scope_ref=None) == before_preset
+        expanded = await catalog.expand_template(slug="retained-custom", scope="global",
+            scope_ref=None, inputs={"audience": "explicit operator input"})
+        assert expanded["steps"][0]["instructions"] == "Write for explicit operator input."
+        schedules = await RecurringWorkflowsService(restarted).list_definitions()
+        retained = next(row for row in schedules if row.id == schedule_id)
+        assert retained.cron == "17 * * * *" and not retained.enabled
+        assert retained.owner_user_id == owner_id
+        assert retained.target == {"kind": "workflow", "publishMode": "none"}
+        execution = (await TemporalExecutionService(restarted).list_executions(page_size=10)).items[0]
+        assert execution.workflow_id == "retained-accepted"
+        assert execution.run_id == "original-run"
+        assert execution.state == MoonMindWorkflowState.EXECUTING
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
+        _, payload = await artifacts.read(artifact_id=artifact_id, principal="operator")
+        assert payload == b"retained output"
+        replay = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
+        assert replay.published and replay.digest == result.digest
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_surface", ["personal_setting", "context_setting", "personal_preset"])
+async def test_postgres_default_still_refuses_unsupported_personal_data(
+    pg_maker, legacy_surface,
+) -> None:
+    from api_service.services import single_user_conversion as suc
+
+    async with pg_maker() as source:
+        owner = await _mk_user(source)
+        if legacy_surface == "personal_preset":
+            source.add(Preset(slug="retained-personal", scope_type=PresetScopeType.PERSONAL,
+                scope_ref=str(owner.id), created_by=owner.id, title="Keep me",
+                description="Do not publish invisible personal data",
+                steps=[{"instructions": "Preserve this exact content"}]))
+        else:
+            source.add(SettingsOverride(scope="user" if legacy_surface == "personal_setting" else "workspace",
+                workspace_id=uuid.uuid4() if legacy_surface == "context_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
+                user_id=owner.id if legacy_surface == "personal_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
+                key="integrations.github.token_ref", value_json="db://retained-personal"))
+        await source.commit()
+        tables = (User.__table__, SettingsOverride.__table__, Preset.__table__)
+        before = [(await source.execute(select(table))).all() for table in tables]
+        result = await suc.run_guarded_upgrade(source, operator_authorized=True)
+        assert not result.published
+        assert result.decision.reason_code == "missing_transform_coverage"
+        assert [(await source.execute(select(table))).all() for table in tables] == before
+        assert (await source.execute(select(SingleUserConversionRun))).scalars().all() == []
+
+
+@pytest.mark.asyncio
 async def test_postgres_migration_386_ledger_ddl(pg_maker) -> None:
     """Migration 386 revision chain is ledger-only and enforceable."""
     import importlib
@@ -904,3 +1021,71 @@ async def test_postgres_converted_recovery_refuses_schema_downgrade(pg_maker):
         await session.rollback()
     async with pg_maker() as restarted:
         assert (await restarted.get(TemporalArtifact, "granted")).operator_recovery_granted
+
+
+@pytest.mark.asyncio
+async def test_postgres_product_routes_enforce_remote_operator_ingress(pg_maker, monkeypatch):
+    """Real app/dependencies/persistence; only ingress transport is controlled."""
+    import httpx
+
+    from api_service.db import base
+    from api_service.services.single_user_conversion import run_guarded_upgrade
+    from moonmind.config.settings import settings
+    from moonmind.security import auth_modes_4120
+
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "https://operator.example")
+    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
+    monkeypatch.setenv("MOONMIND_TRUSTED_PROXIES", "192.0.2.10")
+    monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
+    import api_service.main as main
+
+    async def database():
+        async with pg_maker() as db:
+            yield db
+
+    previous = dict(main.app.dependency_overrides)
+    main.app.dependency_overrides[base.get_async_session] = database
+    monkeypatch.setattr(base, "async_session_maker", pg_maker)
+    try:
+        async with pg_maker() as db:
+            assert (await run_guarded_upgrade(db, operator_authorized=True)).published
+            assert (await db.execute(select(User))).scalars().all() == []
+        headers = {"X-Moonmind-User": "trusted-ingress-assertion"}
+        body = {"title": "Preserved custom input", "slug": "served-instance-preset",
+                "description": "Actual product route write", "scope": "global",
+                "inputs": [{"name": "audience", "label": "Audience", "type": "text",
+                            "required": True, "default": "default audience"}],
+                "steps": [{"instructions": "Write for {{ inputs.audience }}."}]}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(
+            app=main.app, client=("192.0.2.10", 32000)),
+            base_url="https://operator.example") as client:
+            assert (await client.get("/api/v1/settings/catalog", headers=headers)).status_code == 200
+            assert (await client.post("/api/presets", headers=headers, json=body)).status_code == 201
+            foreign_host = await client.get("/api/v1/settings/catalog",
+                headers={**headers, "Host": "foreign.example"})
+            assert foreign_host.status_code == 403
+            foreign_origin = await client.post("/api/presets",
+                headers={**headers, "Origin": "https://foreign.example"}, json={**body, "slug": "denied-origin"})
+            assert foreign_origin.status_code == 403
+            assert (await client.get("/api/v1/settings/catalog")).status_code == 401
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(
+            app=main.app, client=("192.0.2.99", 32000)),
+            base_url="https://operator.example") as direct:
+            assert (await direct.get("/api/v1/settings/catalog", headers=headers)).status_code == 401
+            assert (await direct.get("/api/v1/settings/catalog", headers={
+                "Authorization": "Bearer synthetic-machine-material",
+                "X-Moonmind-Execution-Fanout": "v1"})).status_code == 401
+        monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(
+            app=main.app, client=("127.0.0.1", 32000)),
+            base_url="http://localhost:7000") as local:
+            assert (await local.get("/api/v1/settings/catalog")).status_code == 200
+            assert (await local.post("/api/presets", headers={"Origin": "http://foreign.example"},
+                json={**body, "slug": "denied-local-origin"})).status_code == 403
+        async with pg_maker() as db:
+            assert (await db.execute(select(User))).scalars().all() == []
+            assert (await db.execute(select(Preset.slug))).scalars().all() == [body["slug"]]
+    finally:
+        main.app.dependency_overrides.clear()
+        main.app.dependency_overrides.update(previous)

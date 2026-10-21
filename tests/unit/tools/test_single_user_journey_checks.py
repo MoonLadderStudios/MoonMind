@@ -530,7 +530,7 @@ def test_account_era_source_that_converts_as_fresh_fails(tmp_path):
     assert code == 1
 
 
-def test_missing_transform_coverage_is_recorded_as_unpublished(tmp_path, capsys):
+def test_missing_transform_coverage_fails_populated_upgrade(tmp_path, capsys):
     code, state = _conversion(
         tmp_path,
         "Single-user guarded upgrade blocked (missing_transform_coverage: "
@@ -539,13 +539,13 @@ def test_missing_transform_coverage_is_recorded_as_unpublished(tmp_path, capsys)
         "conversion-side mutation.\n",
     )
 
-    assert code == 0
+    assert code == 1
     assert state["conversion"] == {
         "outcome": "blocked",
         "reason": "missing_transform_coverage",
         "pendingSubsystems": ["schedules", "temporal"],
     }
-    assert "NOT published" in capsys.readouterr().out
+    assert "NOT published" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

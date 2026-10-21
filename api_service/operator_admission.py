@@ -24,6 +24,7 @@ from moonmind.security.operator_admission import (
     OperatorAdmission,
     OperatorAdmissionError,
     resolve_operator_admission,
+    validate_browser_host_and_origin,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,36 @@ async def require_operator(request: Request) -> OperatorAdmission:
     """Strict operator boundary: every operator-facing path resolves here."""
     try:
         return resolve_operator_admission(**_request_inputs(request))
+    except OperatorAdmissionError as exc:
+        raise _http_exception(exc) from exc
+
+
+async def enforce_disabled_mode_ingress(request: Request) -> None:
+    """Protect legacy UUID consumers without changing their persisted actors.
+
+    Remote access consumes the existing trusted-ingress authority. Local
+    Compose still uses its startup-validated loopback publish binding while
+    product consumers migrate off User and its transport adapter is qualified;
+    a Docker bridge peer is not itself loopback proof. Presented foreign browser
+    origins must already fail on this path, before any principal is loaded.
+    Remove this transitional adapter when those consumers use require_operator.
+    """
+    import os
+
+    from moonmind.security.auth_modes_4120 import public_base_url_is_loopback
+
+    base_url = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+    if base_url and not public_base_url_is_loopback(base_url):
+        await require_operator(request)
+        return
+    try:
+        validate_browser_host_and_origin(
+            method=request.method,
+            host_header=request.headers.get("host"),
+            origin=request.headers.get("origin"),
+            referer=request.headers.get("referer"),
+            base_url="",
+        )
     except OperatorAdmissionError as exc:
         raise _http_exception(exc) from exc
 
