@@ -408,6 +408,7 @@ def test_successful_startup_preserves_complete_fresh_journey_and_cleanup(
     assert len(journey.startups()) == 1
     calls = [json.loads(line)[0] for line in journey.api_calls.read_text().splitlines()]
     assert calls == [
+        "controller_conversion",
         "populate",
         "access",
         "vector_free",
@@ -618,6 +619,22 @@ def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> No
     assert files[0].endswith("/docker-compose.yaml")
     assert files[1].endswith("/isolation.json")
     assert not receipt["candidate_work_started"]
+    phases = [json.loads(line) for line in journey.api_calls.read_text().splitlines()]
+    names = [call[0] for call in phases]
+    assert names.index("conversion") < names.index("controller_conversion")
+    assert names.index("controller_conversion") < names.index(
+        "populate", names.index("conversion")
+    )
+    check = phases[names.index("controller_conversion")]
+    assert check[check.index("--label") + 1] == "before-upgrade"
+    assert check[check.index("--expect") + 1] == "eligible_conversion"
+    assert check[check.index("--project") + 1] == "moonmind-test-startup-unit"
+    assert check[check.index("--repo") + 1] == files[0].removesuffix(
+        "/docker-compose.yaml"
+    )
+    assert [
+        check[index + 1] for index, item in enumerate(check) if item == "--compose-file"
+    ] == files
     journey.assert_cleaned()
 
 

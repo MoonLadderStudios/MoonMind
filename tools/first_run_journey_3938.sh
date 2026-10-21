@@ -35,7 +35,9 @@
 # candidate revision in place, as an operator's update would, and the stack
 # is recreated on the candidate image (MOONMIND_IMAGE) against the same
 # volumes and state directories. The API startup log must show the guarded
-# conversion classifying the retained data as one eligible operator. The
+# conversion classifying the retained data as one eligible operator, and the
+# deployment controller's own conversion check, run against the live stack,
+# must record it as published (a fresh install must record fresh_init). The
 # saved work, settings, credential binding, and preset version must be
 # readable through the API and dashboard, and a new journey runs on the
 # upgraded instance.
@@ -606,6 +608,19 @@ require_conversion_outcome() {
   checks conversion "$1" --api-log "$STATE_DIR/api-after-upgrade.log"
 }
 
+# The deployment controller's own update-result check, run against this live
+# stack from the deployed checkout's deploy/controller: it observes the API
+# with compose ps and reads its startup conversion disposition with compose
+# exec, as it does after an update.
+require_controller_conversion() {
+  local files=(--compose-file "$DEPLOY_DIR/docker-compose.yaml" --compose-file "$ISOLATION_OVERRIDE") item
+  for item in ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"}; do
+    [[ "$item" == "-f" ]] || files+=(--compose-file "$item")
+  done
+  checks controller_conversion "$1" --repo "$DEPLOY_DIR" --project "$PROJECT_NAME" \
+    --expect "$2" "${files[@]}" | tee "$LOG_DIR/$1-controller-conversion.log"
+}
+
 restart_workflow_worker() {
   echo "Restarting the workflow worker with work in flight..."
   compose restart temporal-worker-workflow 2>&1 | redact | tail -n 5
@@ -675,6 +690,7 @@ if [[ "$MODE" == "fresh" ]]; then
   prepare_disposable_source
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
   bring_up
+  require_controller_conversion fresh fresh_init
   fresh_journey fresh
 elif [[ "$MODE" == "controller" ]]; then
   prepare_disposable_source
@@ -702,6 +718,7 @@ else
   bring_up
   converge_upgrade_routing
   require_conversion_outcome before-upgrade
+  require_controller_conversion before-upgrade eligible_conversion
   checks verify before-upgrade
   browser before-upgrade
   checks release before-upgrade
