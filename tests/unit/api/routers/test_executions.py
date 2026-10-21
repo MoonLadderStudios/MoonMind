@@ -8213,6 +8213,75 @@ def test_execution_projection_exposes_bounded_objective_outcome(
 
 
 @pytest.mark.parametrize(
+    "serializer", [_serialize_execution, _serialize_execution_list_item]
+)
+@pytest.mark.parametrize("summary_source", ["record", "memo"])
+@pytest.mark.parametrize(
+    "stored_outcome, final_outcome",
+    [
+        ("active", "failed"),
+        (None, "verification_blocked"),
+        ("active", "idle"),
+        ("active", "cancelled"),
+        ("active", "succeeded"),
+    ],
+)
+def test_terminal_execution_projection_recovers_objective_from_finish_summary(
+    serializer, summary_source, stored_outcome, final_outcome
+) -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.memo["objectiveOutcome"] = stored_outcome
+    finish_summary = {
+        "finishOutcome": {"code": "PUBLISHED_PR"},
+        "publishContext": {"objectiveOutcome": final_outcome},
+    }
+    if summary_source == "record":
+        record.finish_summary_json = finish_summary
+    else:
+        record.memo["finishSummary"] = finish_summary
+
+    payload = serializer(record).model_dump(by_alias=True, mode="json")
+
+    assert payload["objectiveOutcome"] == final_outcome
+    assert payload["state"] == "completed"
+    assert payload["closeStatus"] == "completed"
+    assert record.memo["objectiveOutcome"] == stored_outcome
+    if serializer is _serialize_execution:
+        expected_success = (
+            None if final_outcome == "idle" else final_outcome == "succeeded"
+        )
+        assert payload["runMetrics"]["success"] is expected_success
+
+
+@pytest.mark.parametrize(
+    "serializer", [_serialize_execution, _serialize_execution_list_item]
+)
+@pytest.mark.parametrize(
+    "state, stored_outcome, summary_outcome, expected",
+    [
+        (MoonMindWorkflowState.COMPLETED, "failed", "succeeded", "failed"),
+        (MoonMindWorkflowState.COMPLETED, "succeeded", "failed", "succeeded"),
+        (MoonMindWorkflowState.COMPLETED, "active", "active", "active"),
+        (MoonMindWorkflowState.COMPLETED, "active", "unknown", "active"),
+        (MoonMindWorkflowState.COMPLETED, None, {"outcome": "failed"}, None),
+        (MoonMindWorkflowState.EXECUTING, "active", "failed", "active"),
+        (MoonMindWorkflowState.NO_COMMIT, "succeeded", "failed", "succeeded"),
+    ],
+)
+def test_finish_summary_does_not_override_settled_or_active_objective(
+    serializer, state, stored_outcome, summary_outcome, expected
+) -> None:
+    record = _build_execution_record(state=state)
+    record.memo["objectiveOutcome"] = stored_outcome
+    record.finish_summary_json = {
+        "publishContext": {"objectiveOutcome": summary_outcome}
+    }
+
+    assert serializer(record).objective_outcome == expected
+
+
+@pytest.mark.parametrize(
     "state, close_status, outcome, success, sample_size",
     [
         (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED, "idle", None, 0),

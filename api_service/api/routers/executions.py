@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, cast, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -232,7 +232,10 @@ from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
 )
-from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
+from moonmind.statuses.workflow import (
+    TERMINAL_WORKFLOW_STATES,
+    workflow_objective_outcome,
+)
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows import get_temporal_artifact_service
@@ -4717,6 +4720,9 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         if isinstance(finish_summary_json, Mapping)
         else memo_finish_summary
     )
+    objective_outcome = workflow_objective_outcome(
+        state=state_value, memo=memo, finish_summary=finish_summary
+    )
     progress = _bounded_execution_progress_from_sources(
         record=record,
         memo=memo,
@@ -4744,7 +4750,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         title=title,
         status=dashboard_status,
         dashboard_status=dashboard_status,
-        objective_outcome=_objective_outcome_from_memo(memo),
+        objective_outcome=objective_outcome,
         completion_disposition=(
             "gated_continuation"
             if state_value == "completed"
@@ -5140,6 +5146,9 @@ def _serialize_execution(
         else memo_finish_summary
     )
     finish_summary = _normalize_no_commit_finish_summary(finish_summary)
+    objective_outcome = workflow_objective_outcome(
+        state=state_value, memo=memo, finish_summary=finish_summary
+    )
     retry_from_step = _build_retry_from_step_summary(
         record, actions=actions, finish_summary=finish_summary
     )
@@ -5152,7 +5161,7 @@ def _serialize_execution(
         finish_summary=finish_summary,
         close_status=close_status,
         state_value=state_value,
-        objective_outcome=_objective_outcome_from_memo(memo),
+        objective_outcome=objective_outcome,
     )
     improvement_signals = _improvement_signals_from_summary(
         finish_summary=finish_summary,
@@ -5237,7 +5246,7 @@ def _serialize_execution(
         task_instructions=_derive_full_workflow_instructions(task_payload),
         status=dashboard_status,
         dashboard_status=dashboard_status,
-        objective_outcome=_objective_outcome_from_memo(memo),
+        objective_outcome=objective_outcome,
         completion_disposition=(
             "gated_continuation"
             if state_value == "completed"
@@ -5402,15 +5411,6 @@ def _int_or_none(value: object) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
-
-
-def _objective_outcome_from_memo(
-    memo: Mapping[str, Any],
-) -> ObjectiveOutcomeValue | None:
-    value = memo.get("objectiveOutcome")
-    if isinstance(value, str) and value in get_args(ObjectiveOutcomeValue):
-        return cast(ObjectiveOutcomeValue, value)
-    return None
 
 
 def _run_metrics_from_summary(

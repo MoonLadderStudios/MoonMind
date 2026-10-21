@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import enum
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal, cast, get_args
 
 from moonmind.statuses.close_status import TemporalExecutionCloseStatus
 
@@ -47,6 +48,37 @@ TemporalCloseStatus = Literal[
     "continued_as_new",
 ]
 SimplifiedTemporalStatus = Literal["running", "completed", "failed", "canceled"]
+ObjectiveOutcomeValue = Literal[
+    "active", "succeeded", "failed", "cancelled", "idle", "verification_blocked"
+]
+
+
+def workflow_objective_outcome(
+    *,
+    state: str,
+    memo: Mapping[str, Any],
+    finish_summary: Mapping[str, Any] | None,
+) -> ObjectiveOutcomeValue | None:
+    """Settle a completed projection whose memo predates its terminal Activity."""
+    value = memo.get("objectiveOutcome")
+    outcome = (
+        cast(ObjectiveOutcomeValue, value)
+        if isinstance(value, str) and value in get_args(ObjectiveOutcomeValue)
+        else None
+    )
+    if state == "completed" and outcome in {None, "active"}:
+        context = finish_summary.get("publishContext") if finish_summary else None
+        final = (
+            context.get("objectiveOutcome") if isinstance(context, Mapping) else None
+        )
+        if (
+            isinstance(final, str)
+            and final != "active"
+            and final in get_args(ObjectiveOutcomeValue)
+        ):
+            return cast(ObjectiveOutcomeValue, final)
+    return outcome
+
 
 WORKFLOW_STATE_VALUES: frozenset[str] = frozenset(
     item.value for item in MoonMindWorkflowState
@@ -170,7 +202,9 @@ __all__ = [
     "WORKFLOW_LIFECYCLE_STATES",
     "WorkflowLifecycleState",
     "MoonMindWorkflowState",
+    "ObjectiveOutcomeValue",
     "coerce_workflow_state",
     "simplified_temporal_status",
+    "workflow_objective_outcome",
     "workflow_state_to_close_status",
 ]
