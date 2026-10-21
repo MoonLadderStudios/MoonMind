@@ -78,7 +78,7 @@ async def test_child_preset_expansion_preserves_authority_and_valid_recent_attri
                 / "api_service/data/presets"
             )
             task = {
-                "taskTemplate": {"slug": "pr-review-resolve", "scope": "global"},
+                "taskTemplate": {"slug": "pr-review-resolve"},
                 "inputs": {
                     "pull_request": "2754",
                     "review_provider": "none",

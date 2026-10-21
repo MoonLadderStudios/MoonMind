@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, Preset, PresetScopeType
+from api_service.db.models import Base, Preset
 from api_service.services.presets.catalog import (
     PresetCatalogService,
     PresetValidationError,
@@ -53,7 +53,7 @@ async def _load_preset(session, slug: str) -> Preset:
     result = await session.execute(
         select(Preset).where(
             Preset.slug == slug,
-            Preset.scope_type == PresetScopeType.GLOBAL,
+            Preset.scope_type.is_(None),
             Preset.scope_ref.is_(None),
         )
     )
@@ -157,8 +157,6 @@ async def test_github_issue_breakdown_implement_expands_downstream_contract(tmp_
 
             expanded = await service.expand_template(
                 slug="github-issue-breakdown-implement",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "Split MM-1063 work.",
                     "source_design_path": "",
@@ -196,8 +194,6 @@ async def test_github_issue_breakdown_requires_source_input(tmp_path):
             with pytest.raises(PresetValidationError) as excinfo:
                 await service.expand_template(
                     slug="github-issue-breakdown-implement",
-                    scope="global",
-                    scope_ref=None,
                     inputs={
                         "feature_request": "",
                         "source_design_path": "",

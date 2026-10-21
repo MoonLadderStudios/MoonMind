@@ -89,7 +89,7 @@ def api_server():
                     self._send(
                         execution.admission_status, {"detail": "admission refused"}
                     )
-            elif self.path.startswith("/api/presets/") and ":expand?" in self.path:
+            elif self.path.startswith("/api/presets/") and self.path.endswith(":expand"):
                 execution.preset_expansions.append(
                     {"path": self.path, "body": json.loads(body)}
                 )
@@ -387,8 +387,6 @@ def test_preset_read_back_requires_the_saved_version(api_server, tmp_path):
     base, execution = api_server
     saved = {
         "slug": "journey-preset",
-        "scope": "personal",
-        "scopeRef": None,
         "title": "single-user journey preset",
         "presetDigest": "sha256:saved",
         "steps": [{"instructions": "Say hello."}],
@@ -418,8 +416,6 @@ def test_preset_read_back_requires_the_saved_version(api_server, tmp_path):
 def _preset_with_explicit_input(execution):
     execution.preset = {
         "slug": "instance-journey-preset",
-        "scope": "global",
-        "scopeRef": None,
         "title": "Operator custom preset",
         "presetDigest": "sha256:custom",
         "inputs": [
@@ -467,7 +463,7 @@ def test_preset_expands_saved_explicit_input_without_person_scope(api_server):
 
     assert execution.preset_expansions == [
         {
-            "path": "/api/presets/instance-journey-preset:expand?scope=global",
+            "path": "/api/presets/instance-journey-preset:expand",
             "body": {"inputs": {"audience": "operator choice"}},
         }
     ]

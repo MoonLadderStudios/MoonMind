@@ -2669,7 +2669,6 @@ describe("WorkflowStart schedule mode entry", () => {
               items: [
                 {
                   slug: "speckit-demo",
-                  scope: "global",
                   title: "Spec Kit Demo",
                   description: "Seed a two-step planning flow.",
                 },
@@ -2677,18 +2676,11 @@ describe("WorkflowStart schedule mode entry", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=personal")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ items: [] }),
-          } as Response);
-        }
-        if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
+        if (url === "/api/presets/speckit-demo") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
               slug: "speckit-demo",
-              scope: "global",
               title: "Spec Kit Demo",
               description: "Seed a two-step planning flow.",
               requiredCapabilities: ["jira"],
@@ -2696,7 +2688,7 @@ describe("WorkflowStart schedule mode entry", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -2899,31 +2891,20 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=personal")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              items: [
-                {
-                  slug: "personal-demo",
-                  scope: "personal",
-                  title: "Personal Demo",
-                  description: "A user-owned preset.",
-                  latestVersion: "1",
-                  version: "1",
-                },
-              ],
-            }),
-          } as Response);
-        }
         if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
               items: [
                 {
+                  slug: "personal-demo",
+                  title: "Personal Demo",
+                  description: "A user-owned preset.",
+                  latestVersion: "1",
+                  version: "1",
+                },
+                {
                   slug: "speckit-demo",
-                  scope: "global",
                   title: "Spec Kit Demo",
                   description: "Seed a two-step planning flow.",
                   latestVersion: "1.2.3",
@@ -2931,7 +2912,6 @@ describe.skip("Task Create Entrypoint", () => {
                 },
                 {
                   slug: "objective-demo",
-                  scope: "global",
                   title: "Objective Request Demo",
                   description:
                     "Use template inputs to derive the task objective.",
@@ -2940,7 +2920,6 @@ describe.skip("Task Create Entrypoint", () => {
                 },
                 {
                   slug: "pr-resolver",
-                  scope: "global",
                   title: "PR Resolver",
                   description: "Resolve pull request checks and feedback.",
                   latestVersion: "1",
@@ -2971,13 +2950,12 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          url.startsWith("/api/presets/speckit-demo?scope=global")
+          (url === "/api/presets/speckit-demo")
         ) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
               slug: "speckit-demo",
-              scope: "global",
               title: "Spec Kit Demo",
               description: "Seed a two-step planning flow.",
               latestVersion: "1.2.3",
@@ -2995,13 +2973,12 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          url.startsWith("/api/presets/objective-demo?scope=global")
+          (url === "/api/presets/objective-demo")
         ) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
               slug: "objective-demo",
-              scope: "global",
               title: "Objective Request Demo",
               description: "Use template inputs to derive the task objective.",
               latestVersion: "2",
@@ -3017,12 +2994,11 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets/pr-resolver?scope=global")) {
+        if (url === "/api/presets/pr-resolver") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
               slug: "pr-resolver",
-              scope: "global",
               title: "PR Resolver",
               description: "Resolve pull request checks and feedback.",
               latestVersion: "1",
@@ -3032,9 +3008,7 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          url.startsWith(
-            "/api/presets/speckit-demo:expand?scope=global",
-          )
+          (url === "/api/presets/speckit-demo:expand")
         ) {
           return Promise.resolve({
             ok: true,
@@ -3064,9 +3038,7 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          url.startsWith(
-            "/api/presets/objective-demo:expand?scope=global",
-          )
+          (url === "/api/presets/objective-demo:expand")
         ) {
           return Promise.resolve({
             ok: true,
@@ -3096,9 +3068,7 @@ describe.skip("Task Create Entrypoint", () => {
           } as Response);
         }
         if (
-          url.startsWith(
-            "/api/presets/pr-resolver:expand?scope=global",
-          )
+          (url === "/api/presets/pr-resolver:expand")
         ) {
           return Promise.resolve({
             ok: true,
@@ -3334,7 +3304,7 @@ describe.skip("Task Create Entrypoint", () => {
                       stepType: "preset",
                       instructions: "Expand the configured preset.",
                       preset: {
-                        id: "global::::speckit-demo",
+                        id: "speckit-demo",
                         slug: "speckit-demo",
                         version: "1.2.3",
                         inputs: { feature_name: "MM-566" },
@@ -4221,7 +4191,6 @@ describe.skip("Task Create Entrypoint", () => {
             ok: true,
             json: async () => ({
               slug: "saved-preset",
-              scope: "personal",
               title: "Saved preset",
               latestVersion: "1",
             }),
@@ -4660,67 +4629,58 @@ describe.skip("Task Create Entrypoint", () => {
   it("prefers the seeded Jira Orchestrate template over MoonSpec and legacy SpecKit rows", () => {
     const preferred = preferredTemplate([
       {
-        key: "global::::jira-orchestrate",
+        key: "jira-orchestrate",
         slug: "jira-orchestrate",
-        scope: "global",
         title: "Jira Orchestrate",
         description: "Jira preset.",
       },
       {
-        key: "global::::speckit-orchestrate",
+        key: "speckit-orchestrate",
         slug: "speckit-orchestrate",
-        scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
       },
       {
-        key: "global::::moonspec-orchestrate",
+        key: "moonspec-orchestrate",
         slug: "moonspec-orchestrate",
-        scope: "global",
         title: "MoonSpec Orchestrate",
         description: "MoonSpec preset.",
       },
     ]);
 
     expect(preferred?.slug).toBe("jira-orchestrate");
-    expect(preferred?.scope).toBe("global");
   });
 
   it("falls back to the seeded MoonSpec orchestrate template when Jira Orchestrate is absent", () => {
     const preferred = preferredTemplate([
       {
-        key: "global::::speckit-orchestrate",
+        key: "speckit-orchestrate",
         slug: "speckit-orchestrate",
-        scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
       },
       {
-        key: "global::::moonspec-orchestrate",
+        key: "moonspec-orchestrate",
         slug: "moonspec-orchestrate",
-        scope: "global",
         title: "MoonSpec Orchestrate",
         description: "MoonSpec preset.",
       },
     ]);
 
     expect(preferred?.slug).toBe("moonspec-orchestrate");
-    expect(preferred?.scope).toBe("global");
   });
 
   it("does not prefer the legacy SpecKit orchestrate template when newer presets are absent", () => {
     const preferred = preferredTemplate([
       {
-        key: "global::::other-template",
+        key: "other-template",
         slug: "other-template",
-        scope: "global",
         title: "Other Template",
         description: "Other preset.",
       },
       {
-        key: "global::::speckit-orchestrate",
+        key: "speckit-orchestrate",
         slug: "speckit-orchestrate",
-        scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
       },
@@ -5865,7 +5825,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(getStepTypeRadio(step, "Preset").checked).toBe(true);
       expect(
         (within(step).getByLabelText("Preset Template") as HTMLSelectElement).value,
-      ).toBe("global::::speckit-demo");
+      ).toBe("speckit-demo");
     });
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -5875,7 +5835,7 @@ describe.skip("Task Create Entrypoint", () => {
         fetchSpy.mock.calls.some(([url, init]) => {
           if (
             !String(url).startsWith(
-              "/api/presets/speckit-demo:expand?scope=global",
+              "/api/presets/speckit-demo:expand",
             )
           ) {
             return false;
@@ -8767,7 +8727,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "jira-breakdown",
-                scope: "global",
                 title: "Jira Breakdown",
                 description: "Create Jira stories from a breakdown.",
                 latestVersion: "1",
@@ -8775,7 +8734,6 @@ describe.skip("Task Create Entrypoint", () => {
               },
               {
                 slug: "moonspec-orchestrate",
-                scope: "global",
                 title: "MoonSpec Orchestrate",
                 description: "Keep the default preset off Jira Breakdown.",
                 latestVersion: "1",
@@ -8800,7 +8758,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     await waitFor(() => {
       expect((presetSelect as HTMLSelectElement).value).toBe(
-        "global::::moonspec-orchestrate",
+        "moonspec-orchestrate",
       );
     });
 
@@ -8810,7 +8768,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(publishSelect.value).toBe("pr");
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-breakdown" },
+      target: { value: "jira-breakdown" },
     });
 
     await waitFor(() => {
@@ -8831,7 +8789,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "jira-breakdown-orchestrate",
-                scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
                 latestVersion: "1",
@@ -8839,7 +8796,6 @@ describe.skip("Task Create Entrypoint", () => {
               },
               {
                 slug: "moonspec-orchestrate",
-                scope: "global",
                 title: "MoonSpec Orchestrate",
                 description: "Default preset.",
                 latestVersion: "1",
@@ -8864,7 +8820,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-breakdown-orchestrate" },
+      target: { value: "jira-breakdown-orchestrate" },
     });
 
     await waitFor(() => {
@@ -8891,7 +8847,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "jira-orchestrate",
-                scope: "global",
                 title: "Jira Orchestrate",
                 description: "Run MoonSpec from a Jira issue.",
                 latestVersion: "1",
@@ -8902,13 +8857,12 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith("/api/presets/jira-orchestrate?scope=global")
+        (url === "/api/presets/jira-orchestrate")
       ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "jira-orchestrate",
-            scope: "global",
             title: "Jira Orchestrate",
             description: "Run MoonSpec from a Jira issue.",
             latestVersion: "1",
@@ -8955,7 +8909,7 @@ describe.skip("Task Create Entrypoint", () => {
     const presetSelect = await within(presetSection).findByLabelText("Preset");
     await waitFor(() => {
       expect((presetSelect as HTMLSelectElement).value).toBe(
-        "global::::jira-orchestrate",
+        "jira-orchestrate",
       );
     });
     expect(
@@ -8983,7 +8937,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "moonspec-orchestrate",
-                scope: "global",
                 title: "MoonSpec Orchestrate",
                 description: "Run MoonSpec.",
                 latestVersion: "1",
@@ -8994,13 +8947,12 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith("/api/presets/moonspec-orchestrate?scope=global")
+        (url === "/api/presets/moonspec-orchestrate")
       ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "moonspec-orchestrate",
-            scope: "global",
             title: "MoonSpec Orchestrate",
             description: "Run MoonSpec.",
             latestVersion: "1",
@@ -9054,7 +9006,7 @@ describe.skip("Task Create Entrypoint", () => {
     const presetSelect = await within(presetSection).findByLabelText("Preset");
     await waitFor(() => {
       expect((presetSelect as HTMLSelectElement).value).toBe(
-        "global::::moonspec-orchestrate",
+        "moonspec-orchestrate",
       );
     });
     expect(within(presetSection).queryByLabelText("Feature Request")).toBeNull();
@@ -9073,7 +9025,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "jira-orchestrate",
-                scope: "global",
                 title: "Jira Orchestrate",
                 description: "Run MoonSpec from a Jira issue.",
                 latestVersion: "1",
@@ -9083,12 +9034,11 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
+      if (url === "/api/presets/jira-orchestrate") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "jira-orchestrate",
-            scope: "global",
             title: "Jira Orchestrate",
             description: "Run MoonSpec from a Jira issue.",
             latestVersion: "1",
@@ -9105,9 +9055,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-orchestrate:expand?scope=global",
-        )
+        (url === "/api/presets/jira-orchestrate:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -9198,7 +9146,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "jira-breakdown-orchestrate",
-                scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
                 latestVersion: "1",
@@ -9209,15 +9156,12 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate?scope=global",
-        )
+        (url === "/api/presets/jira-breakdown-orchestrate")
       ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "jira-breakdown-orchestrate",
-            scope: "global",
             title: "Jira Breakdown and Orchestrate",
             description: "Create dependent Jira Orchestrate tasks.",
             latestVersion: "1",
@@ -9255,7 +9199,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     const presetSelect = await screen.findByLabelText("Preset");
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-breakdown-orchestrate" },
+      target: { value: "jira-breakdown-orchestrate" },
     });
 
     const presetSection = screen.getByLabelText("Task Presets");
@@ -9282,7 +9226,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "jira-breakdown",
-                scope: "global",
                 title: "Jira Breakdown",
                 description: "Create Jira stories from a breakdown.",
                 latestVersion: "1",
@@ -9292,12 +9235,11 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/jira-breakdown?scope=global")) {
+      if (url === "/api/presets/jira-breakdown") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "jira-breakdown",
-            scope: "global",
             title: "Jira Breakdown",
             description: "Create Jira stories from a breakdown.",
             latestVersion: "1",
@@ -9336,7 +9278,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith("/api/presets/jira-breakdown:expand?scope=global")
+        (url === "/api/presets/jira-breakdown:expand")
       ) {
         const body = JSON.parse(String(init?.body || "{}"));
         return Promise.resolve({
@@ -9381,7 +9323,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
         String(url).startsWith(
-          "/api/presets/jira-breakdown:expand?scope=global",
+          "/api/presets/jira-breakdown:expand",
         ),
       );
       expect(expandCall).toBeTruthy();
@@ -9401,7 +9343,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "option-demo",
-                scope: "global",
                 title: "Option Demo",
                 description: "Preset options.",
                 latestVersion: "1",
@@ -9411,12 +9352,11 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/option-demo?scope=global")) {
+      if (url === "/api/presets/option-demo") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "option-demo",
-            scope: "global",
             title: "Option Demo",
             description: "Preset options.",
             latestVersion: "1",
@@ -9445,7 +9385,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/option-demo:expand?scope=global")) {
+      if (url === "/api/presets/option-demo:expand") {
         const body = JSON.parse(String(init?.body || "{}"));
         return Promise.resolve({
           ok: true,
@@ -9486,7 +9426,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
         String(url).startsWith(
-          "/api/presets/option-demo:expand?scope=global",
+          "/api/presets/option-demo:expand",
         ),
       );
       expect(expandCall).toBeTruthy();
@@ -9507,7 +9447,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "preset-a",
-                scope: "global",
                 title: "Preset A",
                 description: "First preset.",
                 latestVersion: "1",
@@ -9523,7 +9462,6 @@ describe.skip("Task Create Entrypoint", () => {
               },
               {
                 slug: "preset-b",
-                scope: "global",
                 title: "Preset B",
                 description: "Second preset.",
                 latestVersion: "1",
@@ -9541,12 +9479,11 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/preset-a?scope=global")) {
+      if (url === "/api/presets/preset-a") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "preset-a",
-            scope: "global",
             title: "Preset A",
             description: "First preset.",
             latestVersion: "1",
@@ -9570,12 +9507,11 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/preset-b?scope=global")) {
+      if (url === "/api/presets/preset-b") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "preset-b",
-            scope: "global",
             title: "Preset B",
             description: "Second preset.",
             latestVersion: "1",
@@ -9599,7 +9535,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/preset-b:expand?scope=global")) {
+      if (url === "/api/presets/preset-b:expand") {
         const body = JSON.parse(String(init?.body || "{}"));
         return Promise.resolve({
           ok: true,
@@ -9629,16 +9565,16 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.value === "global::::preset-a",
+          (option) => option.value === "preset-a",
         ),
       ).toBe(true);
     });
-    fireEvent.change(presetSelect, { target: { value: "global::::preset-a" } });
+    fireEvent.change(presetSelect, { target: { value: "preset-a" } });
     await screen.findByLabelText("Jira Dependency Mode");
     fireEvent.change(screen.getByLabelText("Jira Dependency Mode"), {
       target: { value: "linear_blocker_chain" },
     });
-    fireEvent.change(presetSelect, { target: { value: "global::::preset-b" } });
+    fireEvent.change(presetSelect, { target: { value: "preset-b" } });
     await waitFor(() => {
       expect(
         (screen.getByLabelText("Jira Dependency Mode") as HTMLSelectElement).value,
@@ -9652,7 +9588,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       const expandCall = fetchSpy.mock.calls.find(([url]) =>
-        String(url).startsWith("/api/presets/preset-b:expand?scope=global"),
+        String(url).startsWith("/api/presets/preset-b:expand"),
       );
       expect(expandCall).toBeTruthy();
       const body = JSON.parse(String(expandCall?.[1]?.body || "{}"));
@@ -9671,7 +9607,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "jira-breakdown",
-                scope: "global",
                 title: "Jira Breakdown",
                 description: "Create Jira stories from a breakdown.",
                 latestVersion: "1",
@@ -9690,7 +9625,7 @@ describe.skip("Task Create Entrypoint", () => {
     const presetSelect = await screen.findByLabelText("Preset");
     await waitFor(() => {
       expect((presetSelect as HTMLSelectElement).value).toBe(
-        "global::::jira-breakdown",
+        "jira-breakdown",
       );
     });
     await waitFor(() => {
@@ -9950,7 +9885,7 @@ describe.skip("Task Create Entrypoint", () => {
       ).toBe(true);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::pr-resolver" },
+      target: { value: "pr-resolver" },
     });
     await clickApplyButton();
 
@@ -10112,6 +10047,7 @@ describe.skip("Task Create Entrypoint", () => {
       .toBeTruthy();
   });
 
+
   it("deletes a listed preset from the unified instance catalog regardless of scope", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -10130,7 +10066,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/presets/speckit-demo?scope=global",
+        "/api/presets/speckit-demo",
         expect.objectContaining({
           method: "DELETE",
         }),
@@ -10157,7 +10093,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/presets/personal-demo?scope=personal",
+        "/api/presets/personal-demo",
         expect.objectContaining({
           method: "DELETE",
         }),
@@ -10437,7 +10373,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "preset-a",
-                scope: "global",
                 title: "Preset A",
                 description: "First preset.",
                 latestVersion: "1",
@@ -10453,7 +10388,6 @@ describe.skip("Task Create Entrypoint", () => {
               },
               {
                 slug: "preset-b",
-                scope: "global",
                 title: "Preset B",
                 description: "Second preset.",
                 latestVersion: "1",
@@ -10488,12 +10422,12 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::preset-a" },
+      target: { value: "preset-a" },
     });
     expect(await within(step).findByLabelText("Preset A Input")).toBeTruthy();
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::preset-b" },
+      target: { value: "preset-b" },
     });
     await waitFor(() => {
       expect(within(step).queryByLabelText("Preset A Input")).toBeNull();
@@ -10501,8 +10435,8 @@ describe.skip("Task Create Entrypoint", () => {
     });
     expect(
       fetchSpy.mock.calls.some(([url]) =>
-        String(url).startsWith("/api/presets/preset-a?scope=global") ||
-        String(url).startsWith("/api/presets/preset-b?scope=global"),
+        String(url).startsWith("/api/presets/preset-a") ||
+        String(url).startsWith("/api/presets/preset-b"),
       ),
     ).toBe(false);
   });
@@ -10518,7 +10452,6 @@ describe.skip("Task Create Entrypoint", () => {
             items: [
               {
                 slug: "summary-preset",
-                scope: "global",
                 title: "Summary Preset",
                 description: "Summary-only catalog row.",
                 latestVersion: "1",
@@ -10528,12 +10461,11 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/summary-preset?scope=global")) {
+      if (url === "/api/presets/summary-preset") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "summary-preset",
-            scope: "global",
             title: "Summary Preset",
             description: "Loaded detail.",
             latestVersion: "1",
@@ -10551,7 +10483,7 @@ describe.skip("Task Create Entrypoint", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/summary-preset:expand?scope=global")) {
+      if (url === "/api/presets/summary-preset:expand") {
         const body = JSON.parse(String(init?.body || "{}")) as {
           inputs?: Record<string, unknown>;
         };
@@ -10587,7 +10519,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::summary-preset" },
+      target: { value: "summary-preset" },
     });
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Build summary fallback." },
@@ -10598,7 +10530,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(await screen.findByDisplayValue("Generated from detail.")).toBeTruthy();
     expect(
       fetchSpy.mock.calls.some(([url]) =>
-        String(url).startsWith("/api/presets/summary-preset?scope=global"),
+        String(url).startsWith("/api/presets/summary-preset"),
       ),
     ).toBe(true);
   });
@@ -10615,7 +10547,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -10638,9 +10570,7 @@ describe.skip("Task Create Entrypoint", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
+        (url === "/api/presets/speckit-demo:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -10688,7 +10618,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -10725,9 +10655,7 @@ describe.skip("Task Create Entrypoint", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
+        (url === "/api/presets/speckit-demo:expand")
       ) {
         return Promise.resolve({
           ok: false,
@@ -10751,7 +10679,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -10807,7 +10735,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -10816,7 +10744,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) =>
         String(url).startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand",
         ),
       ),
     ).toBe(true);
@@ -11989,9 +11917,7 @@ describe.skip("Task Create Entrypoint", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
+        (url === "/api/presets/speckit-demo:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -12055,7 +11981,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
 
     fireEvent.change(
@@ -12153,13 +12079,12 @@ describe.skip("Task Create Entrypoint", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (
-        url.startsWith("/api/presets/speckit-demo?scope=global")
+        (url === "/api/presets/speckit-demo")
       ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "speckit-demo",
-            scope: "global",
             title: "Spec Kit Demo",
             description: "Seed a repository-aware flow.",
             latestVersion: "1.2.3",
@@ -12182,9 +12107,7 @@ describe.skip("Task Create Entrypoint", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
+        (url === "/api/presets/speckit-demo:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -12221,7 +12144,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
     fireEvent.change(
       screen.getByLabelText("Instructions"),
@@ -12234,7 +12157,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining(
-          "/api/presets/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand",
         ),
         expect.objectContaining({ method: "POST" }),
       );
@@ -12243,7 +12166,7 @@ describe.skip("Task Create Entrypoint", () => {
     const expandCall = fetchSpy.mock.calls
       .filter(([url]) =>
         String(url).startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
+          "/api/presets/speckit-demo:expand",
         ),
       )
       .at(-1);
@@ -12271,7 +12194,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
 
     expect(screen.getByDisplayValue("Keep this authored step.")).toBeTruthy();
@@ -12294,7 +12217,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
     fireEvent.change(
       screen.getByLabelText("Instructions"),
@@ -12338,7 +12261,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
     fireEvent.change(
       screen.getByLabelText("Instructions"),
@@ -12422,7 +12345,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
     fireEvent.change(
       screen.getByLabelText("Instructions"),
@@ -12478,9 +12401,7 @@ describe.skip("Task Create Entrypoint", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/speckit-demo:expand?scope=global",
-        )
+        (url === "/api/presets/speckit-demo:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -12527,7 +12448,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
     fireEvent.change(
       screen.getByLabelText("Instructions"),
@@ -12946,7 +12867,7 @@ describe("Task Create MM-641 authoring validation", () => {
             ],
           } as Response);
         }
-        if (url.startsWith("/api/presets")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -14527,13 +14448,11 @@ describe("Task Create MM-641 authoring validation", () => {
             items: [
               {
                 slug: "moonspec-orchestrate",
-                scope: "global",
                 title: "MoonSpec Orchestrate",
                 description: "Ordinary implementation preset.",
               },
               {
                 slug: "tracker-only",
-                scope: "global",
                 title: "Tracker Only",
                 description: "Declares no repository publication.",
                 workflowPublish: { mode: "none" },
@@ -14748,7 +14667,7 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(publishModeSelect.value).toBe("pr");
 
     fireEvent.change(stepPresetSelect, {
-      target: { value: "global::::tracker-only" },
+      target: { value: "tracker-only" },
     });
     await waitFor(() => {
       expect(publishModeSelect.value).toBe("none");
@@ -14756,10 +14675,10 @@ describe("Task Create MM-641 authoring validation", () => {
 
     fireEvent.change(publishModeSelect, { target: { value: "pr" } });
     fireEvent.change(stepPresetSelect, {
-      target: { value: "global::::moonspec-orchestrate" },
+      target: { value: "moonspec-orchestrate" },
     });
     fireEvent.change(stepPresetSelect, {
-      target: { value: "global::::tracker-only" },
+      target: { value: "tracker-only" },
     });
     expect(publishModeSelect.value).toBe("pr");
   });
@@ -15032,7 +14951,7 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
             } as Response);
-          case url.startsWith("/api/presets"):
+          case (url === "/api/presets"):
             return Promise.resolve({
               ok: true,
               json: async () => ({ items: [] }),
@@ -15152,7 +15071,7 @@ describe("Task Create submit arrow animation", () => {
               ok: true,
               json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
             } as Response);
-          case url.startsWith("/api/presets"):
+          case (url === "/api/presets"):
             return Promise.resolve({
               ok: true,
               json: async () => ({ items: [] }),
@@ -15222,6 +15141,25 @@ describe("Task Create submit arrow animation", () => {
 describe("Task Create MM-578 Preset expansion", () => {
   let fetchSpy: MockInstance;
 
+  it("loads the instance preset catalog once without human scope parameters", async () => {
+    const previousFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/presets") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [{ slug: "instance-demo", title: "Instance Demo", description: "Shared instance preset" }] }),
+        } as Response);
+      }
+      return previousFetch!(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    selectStepType((await screen.findByText("Step 1")).closest("section") as HTMLElement, "Preset");
+    expect(await screen.findByRole("option", { name: "Instance Demo" })).toBeTruthy();
+    const catalogCalls = fetchSpy.mock.calls.filter(([url]) => String(url).split("?")[0] === "/api/presets");
+    expect(catalogCalls.map(([url]) => String(url))).toEqual(["/api/presets"]);
+  });
+
+
   function latestCreateRequest(): Record<string, unknown> {
     const call = fetchSpy.mock.calls
       .filter(([url]) => String(url) === "/api/executions")
@@ -15242,7 +15180,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::mm-578-preset" },
+      target: { value: "mm-578-preset" },
     });
     await waitFor(() => {
       expect(within(step).getByLabelText("Jira Issue Key")).toBeTruthy();
@@ -15276,12 +15214,6 @@ describe("Task Create MM-578 Preset expansion", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets?scope=personal")) {
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({ items: [] }),
-      } as Response);
-    }
     if (url === "/api/presets") {
       return Promise.resolve({
         ok: true,
@@ -15289,7 +15221,6 @@ describe("Task Create MM-578 Preset expansion", () => {
           items: [
             {
               slug: "mm-578-preset",
-              scope: "global",
               title: "MM-578 Preset",
               description: "Expand Preset steps.",
               latestVersion: "1",
@@ -15307,12 +15238,11 @@ describe("Task Create MM-578 Preset expansion", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/mm-578-preset?scope=global")) {
+    if (url === "/api/presets/mm-578-preset") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
           slug: "mm-578-preset",
-          scope: "global",
           title: "MM-578 Preset",
           description: "Expand Preset steps.",
           latestVersion: "1",
@@ -15329,9 +15259,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       } as Response);
     }
     if (
-      url.startsWith(
-        "/api/presets/mm-578-preset:expand?scope=global",
-      )
+      (url === "/api/presets/mm-578-preset:expand")
     ) {
       return Promise.resolve({
         ok: true,
@@ -15455,7 +15383,7 @@ describe("Task Create MM-578 Preset expansion", () => {
                   stepType: "preset",
                   instructions: "Expand MM-578 during update.",
                   preset: {
-                    id: "global::::mm-578-preset",
+                    id: "mm-578-preset",
                     slug: "mm-578-preset",
                     version: "1",
                     inputs: { issue_key: "MM-578" },
@@ -15607,7 +15535,6 @@ describe("Task Create MM-578 Preset expansion", () => {
             items: [
               {
                 slug: "pr-review-resolve",
-                scope: "global",
                 title: "Fix and Review Loop",
                 description: "Resolve and review an existing pull request.",
                 presetDigest: "digest-pr-review-resolve",
@@ -15624,12 +15551,11 @@ describe("Task Create MM-578 Preset expansion", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/pr-review-resolve?scope=global")) {
+      if (url === "/api/presets/pr-review-resolve") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "pr-review-resolve",
-            scope: "global",
             title: "Fix and Review Loop",
             description: "Resolve and review an existing pull request.",
             presetDigest: "digest-pr-review-resolve",
@@ -15645,9 +15571,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/pr-review-resolve:expand?scope=global",
-        )
+        (url === "/api/presets/pr-review-resolve:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -15696,12 +15620,12 @@ describe("Task Create MM-578 Preset expansion", () => {
     await waitFor(() => {
       expect(
         Array.from(presetSelect.options).some(
-          (option) => option.value === "global::::pr-review-resolve",
+          (option) => option.value === "pr-review-resolve",
         ),
       ).toBe(true);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::pr-review-resolve" },
+      target: { value: "pr-review-resolve" },
     });
     fireEvent.change(await within(step).findByLabelText("Pull Request"), {
       target: { value: "242" },
@@ -15744,7 +15668,6 @@ describe("Task Create MM-578 Preset expansion", () => {
             items: [
               {
                 slug: "open-pr",
-                scope: "global",
                 title: "Open PR",
                 description: "Implement and open a pull request.",
                 presetDigest: "digest-open-pr",
@@ -15754,12 +15677,11 @@ describe("Task Create MM-578 Preset expansion", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/open-pr?scope=global")) {
+      if (url === "/api/presets/open-pr") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "open-pr",
-            scope: "global",
             title: "Open PR",
             description: "Implement and open a pull request.",
             presetDigest: "digest-open-pr",
@@ -15767,7 +15689,7 @@ describe("Task Create MM-578 Preset expansion", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/open-pr:expand?scope=global")) {
+      if (url === "/api/presets/open-pr:expand") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -15805,11 +15727,11 @@ describe("Task Create MM-578 Preset expansion", () => {
     await waitFor(() => {
       expect(
         Array.from(presetSelect.options).some(
-          (option) => option.value === "global::::open-pr",
+          (option) => option.value === "open-pr",
         ),
       ).toBe(true);
     });
-    fireEvent.change(presetSelect, { target: { value: "global::::open-pr" } });
+    fireEvent.change(presetSelect, { target: { value: "open-pr" } });
     const repoInput = screen.getByLabelText("Repository") as HTMLInputElement;
     fireEvent.change(repoInput, { target: { value: "" } });
 
@@ -15833,7 +15755,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     let expansionCount = 0;
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/presets/mm-578-preset:expand?scope=global")) {
+      if (url === "/api/presets/mm-578-preset:expand") {
         expansionCount += 1;
         return Promise.resolve({
           ok: true,
@@ -15909,9 +15831,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
+        (url === "/api/presets/mm-578-preset:expand")
       ) {
         expansionCount += 1;
         const stepId = `tpl:mm-578-preset:override:${expansionCount}`;
@@ -15995,7 +15915,6 @@ describe("Task Create MM-578 Preset expansion", () => {
             items: [
               {
                 slug: "jira-orchestrate",
-                scope: "global",
                 title: "Jira Orchestrate",
                 description: "Run MoonSpec from a Jira issue.",
                 latestVersion: "1",
@@ -16005,12 +15924,11 @@ describe("Task Create MM-578 Preset expansion", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
+      if (url === "/api/presets/jira-orchestrate") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "jira-orchestrate",
-            scope: "global",
             title: "Jira Orchestrate",
             description: "Run MoonSpec from a Jira issue.",
             latestVersion: "1",
@@ -16027,9 +15945,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-orchestrate:expand?scope=global",
-        )
+        (url === "/api/presets/jira-orchestrate:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -16072,7 +15988,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       ).toBe(true);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-orchestrate" },
+      target: { value: "jira-orchestrate" },
     });
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
     expect(
@@ -16110,7 +16026,6 @@ describe("Task Create MM-578 Preset expansion", () => {
             items: [
               {
                 slug: "jira-breakdown-orchestrate",
-                scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
                 latestVersion: "1",
@@ -16122,15 +16037,12 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate?scope=global",
-        )
+        (url === "/api/presets/jira-breakdown-orchestrate")
       ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "jira-breakdown-orchestrate",
-            scope: "global",
             title: "Jira Breakdown and Orchestrate",
             description: "Create dependent Jira Orchestrate tasks.",
             latestVersion: "1",
@@ -16155,9 +16067,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate:expand?scope=global",
-        )
+        (url === "/api/presets/jira-breakdown-orchestrate:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -16235,7 +16145,7 @@ describe("Task Create MM-578 Preset expansion", () => {
 
     expect(taskPublishSelect().value).toBe("pr");
     fireEvent.change(stepPresetSelect, {
-      target: { value: "global::::jira-breakdown-orchestrate" },
+      target: { value: "jira-breakdown-orchestrate" },
     });
 
     await waitFor(() => {
@@ -16284,7 +16194,6 @@ describe("Task Create MM-578 Preset expansion", () => {
             items: [
               {
                 slug: "github-issue-breakdown-implement",
-                scope: "global",
                 title: "GitHub Issue Breakdown and Implement",
                 description: "Create dependent GitHub issue workflows.",
                 latestVersion: "1",
@@ -16295,15 +16204,12 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/github-issue-breakdown-implement?scope=global",
-        )
+        (url === "/api/presets/github-issue-breakdown-implement")
       ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "github-issue-breakdown-implement",
-            scope: "global",
             title: "GitHub Issue Breakdown and Implement",
             description: "Create dependent GitHub issue workflows.",
             latestVersion: "1",
@@ -16313,9 +16219,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/github-issue-breakdown-implement:expand?scope=global",
-        )
+        (url === "/api/presets/github-issue-breakdown-implement:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -16360,12 +16264,12 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(
         Array.from(presetSelect.options).some(
           (option) =>
-            option.value === "global::::github-issue-breakdown-implement",
+            option.value === "github-issue-breakdown-implement",
         ),
       ).toBe(true);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::github-issue-breakdown-implement" },
+      target: { value: "github-issue-breakdown-implement" },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -16395,7 +16299,6 @@ describe("Task Create MM-578 Preset expansion", () => {
             items: [
               {
                 slug: "jira-breakdown-orchestrate",
-                scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
                 latestVersion: "1",
@@ -16407,15 +16310,12 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate?scope=global",
-        )
+        (url === "/api/presets/jira-breakdown-orchestrate")
       ) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "jira-breakdown-orchestrate",
-            scope: "global",
             title: "Jira Breakdown and Orchestrate",
             description: "Create dependent Jira Orchestrate tasks.",
             latestVersion: "1",
@@ -16432,9 +16332,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         } as Response);
       }
       if (
-        url.startsWith(
-          "/api/presets/jira-breakdown-orchestrate:expand?scope=global",
-        )
+        (url === "/api/presets/jira-breakdown-orchestrate:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -16500,7 +16398,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       ).toBe(true);
     });
     fireEvent.change(stepPresetSelect, {
-      target: { value: "global::::jira-breakdown-orchestrate" },
+      target: { value: "jira-breakdown-orchestrate" },
     });
     await waitFor(() => {
       expect(taskPublishSelect().value).toBe("none");
@@ -16568,7 +16466,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::mm-578-preset" },
+      target: { value: "mm-578-preset" },
     });
 
     expect(
@@ -16633,7 +16531,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::mm-578-preset" },
+      target: { value: "mm-578-preset" },
     });
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
     expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
@@ -16665,7 +16563,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::mm-578-preset" },
+      target: { value: "mm-578-preset" },
     });
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -16806,7 +16704,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::mm-578-preset" },
+      target: { value: "mm-578-preset" },
     });
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
     const remediationInstructions = await screen.findByDisplayValue(
@@ -16949,7 +16847,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       fetchSpy.mock.calls.filter(([url]) =>
         String(url).startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand",
         ),
       ),
     ).toHaveLength(3);
@@ -16975,9 +16873,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
+        (url === "/api/presets/mm-578-preset:expand")
       ) {
         expansionCount += 1;
         if (expansionCount === 1) {
@@ -17065,6 +16961,28 @@ describe("Task Create MM-578 Preset expansion", () => {
     });
   });
 
+  it("requires explicit reselection for a retained scoped preset key instead of substituting a same-slug preset", async () => {
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fallback(input, init);
+      if (String(input) === "/api/executions/mm%3Aauto-preset-edit?source=temporal") {
+        const data = await response.json();
+        data.inputParameters.workflow.steps[0].preset.id = "personal::legacy-owner::mm-578-preset";
+        return { ...response, json: async () => data } as Response;
+      }
+      return response;
+    });
+    window.history.pushState({}, "Task Edit", "/workflows/new?editExecutionId=mm%3Aauto-preset-edit");
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    await waitFor(() => expect(getStepTypeRadio(step, "Preset").checked).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(screen.getAllByText("This preset is no longer available. Choose a current preset before continuing.").length).toBeGreaterThan(0));
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes(":expand"))).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith("/update"))).toBe(false);
+  });
+
   it("uses the same submit-time expansion path for edit updates", async () => {
     window.history.pushState(
       {},
@@ -17082,7 +17000,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(
         (within(step).getByLabelText("Preset Template") as HTMLSelectElement)
           .value,
-      ).toBe("global::::mm-578-preset");
+      ).toBe("mm-578-preset");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -17184,7 +17102,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       fetchSpy.mock.calls.some(([url]) =>
         String(url).startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand",
         ),
       ),
     ).toBe(false);
@@ -17197,9 +17115,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
+        (url === "/api/presets/mm-578-preset:expand")
       ) {
         return Promise.resolve({
           ok: true,
@@ -17272,9 +17188,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
+        (url === "/api/presets/mm-578-preset:expand")
       ) {
         return new Promise<Response>((resolve) => {
           expansionResolvers.push(resolve);
@@ -17298,7 +17212,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(
       fetchSpy.mock.calls.filter(([url]) =>
         String(url).startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
+          "/api/presets/mm-578-preset:expand",
         ),
       ),
     ).toHaveLength(1);
@@ -17343,9 +17257,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/mm-578-preset:expand?scope=global",
-        )
+        (url === "/api/presets/mm-578-preset:expand")
       ) {
         return Promise.resolve({
           ok: false,
@@ -17369,7 +17281,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::mm-578-preset" },
+      target: { value: "mm-578-preset" },
     });
 
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
@@ -17623,12 +17535,6 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets?scope=personal")) {
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({ items: [] }),
-      } as Response);
-    }
     if (url === "/api/presets") {
       return Promise.resolve({
         ok: true,
@@ -17636,7 +17542,6 @@ describe("Task Create schema-driven capability inputs", () => {
           items: [
             {
               slug: "jira-schema-preset",
-              scope: "global",
               title: "Jira Schema Preset",
               description: "Schema-driven Jira preset.",
               latestVersion: "1",
@@ -17667,7 +17572,6 @@ describe("Task Create schema-driven capability inputs", () => {
             },
             {
               slug: "github-schema-preset",
-              scope: "global",
               title: "GitHub Schema Preset",
               description: "Schema-driven GitHub preset.",
               latestVersion: "1",
@@ -17703,7 +17607,6 @@ describe("Task Create schema-driven capability inputs", () => {
             },
             {
               slug: "batch-schema-preset",
-              scope: "global",
               title: "Batch Schema Preset",
               description: "Schema-driven batch preset.",
               latestVersion: "1",
@@ -17712,7 +17615,6 @@ describe("Task Create schema-driven capability inputs", () => {
             },
             {
               slug: "generic-schema-preset",
-              scope: "global",
               title: "Generic Schema Preset",
               description: "Schema-driven generic preset.",
               latestVersion: "1",
@@ -17774,7 +17676,6 @@ describe("Task Create schema-driven capability inputs", () => {
             },
             {
               slug: "github-search-scope-schema-preset",
-              scope: "global",
               title: "GitHub Search Scope Preset",
               description: "Schema-driven GitHub issue search preset.",
               latestVersion: "1",
@@ -17806,12 +17707,11 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/github-search-scope-schema-preset?scope=global")) {
+    if (url === "/api/presets/github-search-scope-schema-preset") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
           slug: "github-search-scope-schema-preset",
-          scope: "global",
           title: "GitHub Search Scope Preset",
           description: "Schema-driven GitHub issue search preset.",
           latestVersion: "1",
@@ -17841,7 +17741,7 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/github-search-scope-schema-preset:expand?scope=global")) {
+    if (url === "/api/presets/github-search-scope-schema-preset:expand") {
       const payload = JSON.parse(String(init?.body || "{}")) as {
         inputs?: Record<string, unknown>;
       };
@@ -17862,12 +17762,11 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/jira-schema-preset?scope=global")) {
+    if (url === "/api/presets/jira-schema-preset") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
           slug: "jira-schema-preset",
-          scope: "global",
           title: "Jira Schema Preset",
           description: "Schema-driven Jira preset.",
           latestVersion: "1",
@@ -17898,12 +17797,11 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/github-schema-preset?scope=global")) {
+    if (url === "/api/presets/github-schema-preset") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
           slug: "github-schema-preset",
-          scope: "global",
           title: "GitHub Schema Preset",
           description: "Schema-driven GitHub preset.",
           latestVersion: "1",
@@ -17939,12 +17837,11 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/batch-schema-preset?scope=global")) {
+    if (url === "/api/presets/batch-schema-preset") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
           slug: "batch-schema-preset",
-          scope: "global",
           title: "Batch Schema Preset",
           description: "Schema-driven batch preset.",
           latestVersion: "1",
@@ -17953,7 +17850,7 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/batch-schema-preset:expand?scope=global")) {
+    if (url === "/api/presets/batch-schema-preset:expand") {
       const payload = JSON.parse(String(init?.body || "{}")) as {
         inputs?: Record<string, unknown>;
       };
@@ -17978,12 +17875,11 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/generic-schema-preset?scope=global")) {
+    if (url === "/api/presets/generic-schema-preset") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
           slug: "generic-schema-preset",
-          scope: "global",
           title: "Generic Schema Preset",
           description: "Schema-driven generic preset.",
           latestVersion: "1",
@@ -18046,7 +17942,7 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/github-schema-preset:expand?scope=global")) {
+    if (url === "/api/presets/github-schema-preset:expand") {
       const payload = JSON.parse(String(init?.body || "{}")) as {
         inputs?: Record<string, unknown>;
       };
@@ -18067,7 +17963,7 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       } as Response);
     }
-    if (url.startsWith("/api/presets/jira-schema-preset:expand?scope=global")) {
+    if (url === "/api/presets/jira-schema-preset:expand") {
       const payload = JSON.parse(String(init?.body || "{}")) as {
         inputs?: Record<string, unknown>;
       };
@@ -18180,7 +18076,7 @@ describe("Task Create schema-driven capability inputs", () => {
       if (url === "/api/presets") {
         return Promise.resolve({ ok: true, json: async () => ({ items: [detail] }) } as Response);
       }
-      if (url.startsWith(`/api/presets/${slug}?`)) {
+      if (url === `/api/presets/${slug}`) {
         return Promise.resolve({ ok: true, json: async () => detail } as Response);
       }
       if (url.startsWith(`/api/presets/${slug}:expand`)) {
@@ -18201,7 +18097,7 @@ describe("Task Create schema-driven capability inputs", () => {
     selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => expect(presetSelect.options.length).toBeGreaterThan(1));
-    fireEvent.change(presetSelect, { target: { value: `global::::${slug}` } });
+    fireEvent.change(presetSelect, { target: { value: `${slug}` } });
     await within(step).findByLabelText("Run verification");
     if (slug.startsWith("jira-")) {
       fireEvent.change(within(step).getByLabelText("Jira issue"), { target: { value: "MM-4265" } });
@@ -18261,7 +18157,7 @@ describe("Task Create schema-driven capability inputs", () => {
     selectStepType(step, "Preset");
     const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => expect(presetSelect.options.length).toBeGreaterThan(1));
-    fireEvent.change(presetSelect, { target: { value: "global::::batch-schema-preset" } });
+    fireEvent.change(presetSelect, { target: { value: "batch-schema-preset" } });
     expect(within(step).queryByLabelText("Optional override")).toBeNull();
     fireEvent.click(screen.getByLabelText("Advanced mode"));
     expect(await within(step).findByLabelText("Optional override")).toBeTruthy();
@@ -18278,7 +18174,7 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-schema-preset" },
+      target: { value: "jira-schema-preset" },
     });
 
     const issueKeyInput = await within(step).findByLabelText("Jira issue");
@@ -18309,7 +18205,7 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-schema-preset" },
+      target: { value: "jira-schema-preset" },
     });
     await within(step).findByLabelText("Jira issue");
     fireEvent.change(within(step).getByLabelText("Instructions"), {
@@ -18348,7 +18244,7 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::batch-schema-preset" },
+      target: { value: "batch-schema-preset" },
     });
     await within(step).findByLabelText("Run");
     fireEvent.click(screen.getByLabelText("Advanced mode"));
@@ -18480,7 +18376,7 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::github-schema-preset" },
+      target: { value: "github-schema-preset" },
     });
 
     const issueInput = await within(step).findByLabelText("GitHub issue");
@@ -18520,7 +18416,7 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::github-schema-preset" },
+      target: { value: "github-schema-preset" },
     });
     await within(step).findByLabelText("GitHub issue");
 
@@ -18545,7 +18441,7 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-schema-preset" },
+      target: { value: "jira-schema-preset" },
     });
     await within(step).findByLabelText("Jira issue");
 
@@ -18570,7 +18466,7 @@ describe("Task Create schema-driven capability inputs", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::generic-schema-preset" },
+      target: { value: "generic-schema-preset" },
     });
 
     expect(await within(step).findByLabelText("Summary")).toBeTruthy();
@@ -18611,7 +18507,7 @@ describe("Task Create schema-driven capability inputs", () => {
         expect(presetSelect.options.length).toBeGreaterThan(1);
       });
       fireEvent.change(presetSelect, {
-        target: { value: "global::::github-search-scope-schema-preset" },
+        target: { value: "github-search-scope-schema-preset" },
       });
       await within(step).findByLabelText("GitHub Issue Search");
       return step;
@@ -19258,7 +19154,7 @@ describe("Task Create governed Tool authoring", () => {
             json: async () => ({ items: [], defaultBranch: "main", error: null }),
           } as Response);
         }
-        if (url.startsWith("/api/presets")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -19990,12 +19886,11 @@ describe("Task Create governed Tool authoring", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
+      if (url === "/api/presets/speckit-demo") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             slug: "speckit-demo",
-            scope: "global",
             title: "Spec Kit Demo",
             description: "Seed a two-step planning flow.",
             latestVersion: "1.2.3",
@@ -20012,7 +19907,6 @@ describe("Task Create governed Tool authoring", () => {
             items: [
               {
                 slug: "speckit-demo",
-                scope: "global",
                 title: "Spec Kit Demo",
                 description: "Seed a two-step planning flow.",
                 latestVersion: "1.2.3",
@@ -20039,7 +19933,7 @@ describe("Task Create governed Tool authoring", () => {
       expect((presetSelect as HTMLSelectElement).options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::speckit-demo" },
+      target: { value: "speckit-demo" },
     });
 
     const chip = (await within(step).findByText("Jira")).closest(
@@ -20259,7 +20153,7 @@ describe("Task Create runtime command previews", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({ items: [] }),
@@ -20403,7 +20297,7 @@ describe("Task Create runtime command previews", () => {
           json: async () => ({ items: { worker: ["speckit-orchestrate"] } }),
         } as Response);
       }
-      if (url.startsWith("/api/presets")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [] }),
@@ -21526,17 +21420,17 @@ describe("Task Create runtime switch layout stability", () => {
   it.each(presetSelectionFixtures)("#4636 restores expanded $name selection before saving a preset", async (scenario) => {
     const fallback = fetchSpy.getMockImplementation()!;
     const runtime = { ...scenario.selection, ...(Object.keys(scenario.parameters).length ? { parameters: scenario.parameters } : {}) };
-    const detail = { slug: "saved-selection", scope: "global", title: "Saved selection", description: "Saved model intent", inputs: [] };
+    const detail = { slug: "saved-selection", title: "Saved selection", description: "Saved model intent", inputs: [] };
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/presets") return Promise.resolve({ ok: true, json: async () => ({ items: [detail] }) } as Response);
-      if (url.startsWith("/api/presets/saved-selection:expand")) {
+      if (url === "/api/presets/saved-selection:expand") {
         return Promise.resolve({ ok: true, json: async () => ({
           steps: [{ id: "saved-work", type: "skill", instructions: "Restored selection", skill: { id: "auto", args: {}, runtime }, ...(Object.keys(runtime).length ? { runtime } : {}) }],
           appliedTemplate: { slug: detail.slug, stepIds: ["saved-work"] }, capabilities: [], warnings: [],
         }) } as Response);
       }
-      if (url.startsWith("/api/presets/saved-selection?")) return Promise.resolve({ ok: true, json: async () => detail } as Response);
+      if (url === "/api/presets/saved-selection") return Promise.resolve({ ok: true, json: async () => detail } as Response);
       return fallback(input, init);
     });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
@@ -21545,8 +21439,8 @@ describe("Task Create runtime switch layout stability", () => {
     const step = screen.getByText("Step 1").closest("section") as HTMLElement;
     selectStepType(step, "Preset");
     const preset = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
-    await waitFor(() => expect(Array.from(preset.options).some((option) => option.value === "global::::saved-selection")).toBe(true));
-    fireEvent.change(preset, { target: { value: "global::::saved-selection" } });
+    await waitFor(() => expect(Array.from(preset.options).some((option) => option.value === "saved-selection")).toBe(true));
+    fireEvent.change(preset, { target: { value: "saved-selection" } });
     await waitFor(() => expect((within(step).getByRole("button", { name: "Expand" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
     await waitFor(() => expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe("Restored selection"));

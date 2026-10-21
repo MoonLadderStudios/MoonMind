@@ -5,14 +5,13 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     Preset,
-    PresetScopeType,
+    PresetReleaseStatus,
 )
 from api_service.services.presets.catalog import (
     PresetCatalogService,
@@ -32,12 +31,15 @@ _ALLOWED_STEP_KEYS = frozenset(
 )
 logger = logging.getLogger(__name__)
 
+
 def _contains_secret(value: str) -> bool:
     return any(pattern.search(value) is not None for pattern in _SECRET_PATTERNS)
+
 
 def _slug_from_title(title: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", title.strip().lower()).strip("-")
     return slug or "template"
+
 
 class PresetSaveService:
     """Persist user-authored presets sourced from existing workflow steps."""
@@ -62,18 +64,14 @@ class PresetSaveService:
             return hits
         return hits
 
-    async def _next_available_slug(
-        self, *, base_slug: str, scope: str, scope_ref: str | None
-    ) -> str:
+    async def _next_available_slug(self, *, base_slug: str) -> str:
         candidate = base_slug
         suffix = 1
-        normalized_scope = PresetScopeType(scope)
         while True:
             existing = await self._session.execute(
                 select(Preset.id).where(
                     Preset.slug == candidate,
-                    Preset.scope_type == normalized_scope,
-                    Preset.scope_ref == scope_ref,
+                    Preset.scope_type.is_(None),
                 )
             )
             if existing.scalar_one_or_none() is None:
@@ -109,9 +107,7 @@ class PresetSaveService:
             tool = cleaned.get("tool")
             if step_type == "tool":
                 if not isinstance(tool, dict):
-                    raise PresetValidationError(
-                        f"step {index} tool must be an object"
-                    )
+                    raise PresetValidationError(f"step {index} tool must be an object")
                 cleaned.pop("skill", None)
             elif tool is not None:
                 raise PresetValidationError(
@@ -120,9 +116,7 @@ class PresetSaveService:
             skill = cleaned.get("skill")
             if step_type == "skill":
                 if skill is not None and not isinstance(skill, dict):
-                    raise PresetValidationError(
-                        f"step {index} skill must be an object"
-                    )
+                    raise PresetValidationError(f"step {index} skill must be an object")
             else:
                 cleaned.pop("skill", None)
             sanitized.append(cleaned)
@@ -131,20 +125,14 @@ class PresetSaveService:
     async def save_from_workflow(
         self,
         *,
-        scope: str,
         title: str,
         description: str,
         steps: list[dict[str, Any]],
         suggested_inputs: list[dict[str, Any]] | None = None,
         tags: list[str] | None = None,
-        created_by: UUID | None = None,
-        preference_key: UUID | None = None,
-        scope_ref: str | None = None,
         slug: str | None = None,
+        release_status: PresetReleaseStatus = PresetReleaseStatus.DRAFT,
     ) -> dict[str, Any]:
-        normalized_scope = str(scope or "").strip().lower() or "personal"
-        if normalized_scope not in {"personal", "global"}:
-            raise PresetValidationError("scope must be personal or global")
         normalized_title = str(title or "").strip()
         normalized_description = str(description or "").strip() or normalized_title
         if not normalized_title:
@@ -158,62 +146,32 @@ class PresetSaveService:
                 f"paths={', '.join(secret_hits[:10])}"
             )
 
-        normalized_scope_ref = str(scope_ref or "").strip() or None
-        if (
-            normalized_scope == "personal"
-            and normalized_scope_ref is None
-            and created_by is not None
-        ):
-            normalized_scope_ref = str(created_by)
-
         base_slug = _slug_from_title(slug or normalized_title)
         unique_slug = await self._next_available_slug(
             base_slug=base_slug,
-            scope=normalized_scope,
-            scope_ref=normalized_scope_ref,
         )
         try:
             saved = await self._catalog.create_template(
                 slug=unique_slug,
                 title=normalized_title,
                 description=normalized_description,
-                scope=normalized_scope,
-                scope_ref=normalized_scope_ref,
                 tags=tags or [],
                 inputs_schema=suggested_inputs or [],
                 steps=sanitized_steps,
                 annotations={},
                 required_capabilities=[],
-                created_by=created_by,
                 auto_commit=False,
+                release_status=release_status,
             )
-            preference_key = preference_key or created_by
-            if preference_key is not None:
-                await self._catalog.set_favorite(
-                    user_id=preference_key,
-                    slug=unique_slug,
-                    scope=normalized_scope,
-                    scope_ref=normalized_scope_ref,
-                    auto_commit=False,
+            await self._catalog.set_favorite(slug=unique_slug, auto_commit=False)
+            preset_id = (
+                await self._session.execute(
+                    select(Preset.id).where(
+                        Preset.slug == unique_slug, Preset.scope_type.is_(None)
+                    )
                 )
-                preset_id = (
-                    await self._session.execute(
-                        select(Preset.id)
-                        .where(
-                            Preset.slug == unique_slug,
-                            Preset.scope_type
-                            == PresetScopeType(normalized_scope),
-                            Preset.scope_ref == normalized_scope_ref,
-                        )
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-                if preset_id is not None:
-                    await self._catalog.record_recent(
-                        user_id=preference_key,
-                        template_id=preset_id,
-                        auto_commit=False,
-                    )
+            ).scalar_one()
+            await self._catalog.record_recent(template_id=preset_id, auto_commit=False)
             await self._session.commit()
         except Exception:
             await self._session.rollback()
@@ -223,7 +181,6 @@ class PresetSaveService:
             "preset_catalog.save_from_workflow",
             extra={
                 "slug": unique_slug,
-                "scope": normalized_scope,
                 "step_count": len(sanitized_steps),
             },
         )

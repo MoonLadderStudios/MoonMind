@@ -175,8 +175,6 @@ async def test_search_publication_recovers_missing_pr_before_status(
             await catalog.sync_seed_templates(seed_dir=seeds)
             expanded = await catalog.expand_template(
                 slug="github-issue-search-and-implement",
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={"repository": repository},
             )
