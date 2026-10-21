@@ -340,6 +340,6 @@ def test_completed_conversion_admits_account_free_artifact_operator(
         fanout_client.artifact_service.list_authorized_collection.await_args.kwargs[
             "principal"
         ]
-        == "operator"
+        == operator_id
     )
     _assert_no_writes(fanout_client)

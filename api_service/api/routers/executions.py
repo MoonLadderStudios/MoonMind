@@ -78,6 +78,7 @@ from api_service.auth_providers import (
     get_current_user,
     get_instance_access,
     get_instance_access_optional,
+    instance_operator_principal,
 )
 from api_service.core import sync as execution_sync
 from api_service.db import models as db_models
@@ -2609,12 +2610,12 @@ def _owner_id(user: User | OperatorAdmission | None) -> str | None:
 def _execution_principal(user: User | OperatorAdmission | None) -> str:
     """Single-user (#4351) execution principal with instance fallback.
 
-    Permission admission uses the artifact service's ``operator`` scope,
+    Permission admission shares the artifact routes' instance-operator scope,
     distinct from machine execution ownership. Legacy human-owner strings
     remain provenance on retained records.
     """
     if isinstance(user, OperatorAdmission):
-        return "operator"
+        return instance_operator_principal()
     return _owner_id(user) or "system"
 
 
