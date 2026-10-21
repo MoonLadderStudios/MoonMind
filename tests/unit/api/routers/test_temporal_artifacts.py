@@ -17,7 +17,11 @@ from api_service.api.routers.temporal_artifacts import (
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db import models as db_models
-from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactExpiredError,
+    TemporalArtifactNotFoundError,
+    TemporalArtifactValidationError,
+)
 
 def _build_artifact() -> SimpleNamespace:
     now = datetime.now(UTC)
@@ -125,6 +129,26 @@ def test_artifact_collection_returns_compact_safe_rows() -> None:
         assert "created_by_principal" not in row
         assert "sha256" not in row
         service.list_authorized_collection.assert_awaited_once()
+
+def test_reclaimed_artifact_reports_expiration_instead_of_bare_absence() -> None:
+    for test_client, service in _client_with_service():
+        created_at = datetime(2026, 1, 2, tzinfo=UTC)
+        service.get_metadata.side_effect = TemporalArtifactExpiredError(
+            "art_01KEXPIRED", created_at=created_at
+        )
+
+        response = test_client.get("/api/artifacts/art_01KEXPIRED")
+
+        assert response.status_code == 404
+        detail = response.json()["detail"]
+        assert detail["code"] == "artifact_expired"
+        assert detail["createdAt"] == created_at.isoformat()
+        assert "expired" in detail["message"]
+
+        service.get_metadata.side_effect = TemporalArtifactNotFoundError("art_new")
+        response = test_client.get("/api/artifacts/art_new")
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "artifact_not_found"
 
 def test_create_artifact_returns_upload_descriptor() -> None:
     """Create endpoint should return ArtifactRef + upload details."""

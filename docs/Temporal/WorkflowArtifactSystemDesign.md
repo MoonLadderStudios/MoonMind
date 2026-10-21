@@ -768,25 +768,17 @@ Representative mappings:
 
 ## 14.3 Lifecycle manager
 
-A lifecycle manager periodically:
-
-1. finds expired, unpinned artifacts
-2. deletes the blob or marks it for deletion
-3. updates metadata state
-4. preserves tombstones where audit/history policy requires them
-
 The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup` operational workflow invokes
 `artifact.lifecycle_sweep` after its workspace pass. The artifact Activity remains
-the authority for expiry, pin protection, soft deletion, hard deletion, storage
-mutation, and durable metadata. A lifecycle failure marks that maintenance run
+the authority for expiry, pin protection, deletion, storage mutation, and
+durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
-Each sweep processes bounded pages of expired and soft-deleted artifacts and
-pending deletion intents, and keeps paging for up to 40 minutes while pages
-still make progress. The Activity heartbeats periodically while database
-or object-store operations are pending, as well as before each candidate and
-after each page. A page that makes no progress ends the pass instead of
+Each sweep processes bounded pages of expired and soft-deleted artifacts,
+pending deletion intents and purgeable tombstones, and keeps paging for up to 40 minutes while pages
+still make progress. The Activity heartbeats while database or object-store
+operations are pending, before each candidate and after each page. A page that makes no progress ends the pass instead of
 repeating protected or stalled candidates. A short deletion-intent page still
 reports a backlog if any intent remains unresolved after reconciliation. The
 result reports whether a backlog remains; the next hourly pass resumes it, so
@@ -824,15 +816,37 @@ reclamation preserves exact payload references owned by append-only control-plan
 observations. Pins and use claims protect the original snapshots without freezing
 the event index on an older prefix.
 
+Each journal flush adds a raw and normalized pair with their links (four rows,
+whatever the chunk size) and supersedes the previous pair. An idle stream
+flushes after every event because that is the journal's durability guarantee,
+so superseded pairs are the main source of tombstones; purge bounds them.
+
 Deletion must be idempotent.
 
-## 14.4 Soft-delete vs hard-delete
+## 14.4 Soft-delete, hard-delete and purge
 
-Preferred pattern:
+* soft-delete first, denying new presigns
+* hard-delete later: the tombstone commits with a deletion intent before the
+  object delete, and the intent clears only after the delete is confirmed
+* purge the tombstone row and its links once it is older than
+  `TEMPORAL_ARTIFACT_LIFECYCLE_PURGE_AFTER_SECONDS` (default seven days)
 
-* soft-delete first
-* deny new presigns after soft-delete
-* hard-delete later
+A tombstone alone never authorizes purge: the row needs no deletion intent, and
+either another live row owns its shared bytes or the store reports the key
+absent. Present or unknown bytes return to deletion-intent reconciliation; a
+store error is not progress, so an outage hands over at most a page per pass.
+Pins, live use claims, non-terminal journal refs and remediation context refs
+keep the tombstone; candidates are locked with `SKIP LOCKED` and rechecked, so a
+concurrent protection wins. Rows and links go in one transaction; a failed
+commit or crash leaves the tombstone for the next pass. The sweep result counts
+candidates, purged rows and links, protected skips, unconfirmed deletions and
+store errors.
+
+Seven days matches the ephemeral class and outlasts Activity retries,
+interrupted-step recovery and the hourly sweep, so recent refs see a truthful
+deleted state. Afterwards, reading an ID whose embedded creation time is past the
+horizon fails as `artifact_expired` with that time; a newer missing ID stays
+`artifact_not_found`, since purge cannot have removed it.
 
 ---
 
