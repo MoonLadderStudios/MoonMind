@@ -22,6 +22,7 @@ import re
 import socketserver
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
@@ -40,6 +41,9 @@ ONEOFF_EXIT_POLL_SECONDS = 2
 # How long restart recovery waits for a stack another owner holds, such as a
 # bootstrap restore that keeps it until the controller it started is up.
 STACK_LOCK_WAIT_SECONDS = 180
+# Readiness has its own durable budget after detached Compose apply. Restart
+# recovery derives the remainder from installed.confirmedAt, never a fresh wait.
+SERVICE_READINESS_TIMEOUT_SECONDS = 900
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 # Behavior submitters require before trusting an answer. ``request-identity``:
@@ -1761,18 +1765,15 @@ def _finish_installed_verification(
     dispatch_probe, omnigent_migrator,
 ) -> dict:
     """Resume only verification once the operation has confirmed its apply."""
-    routing_cutover = converge_routing_cutover(
-        store, operation, runner=runner, overlay=overlay
-    )
     verification = _verify_applied_release(
         store,
         operation,
         runner=runner,
         project=project,
         env_files=env_files,
+        overlay=overlay,
         dispatch_probe=dispatch_probe,
         omnigent_migrator=omnigent_migrator,
-        extra_checks=[routing_cutover] if routing_cutover else [],
     )
     final = store.finish_verification(
         operation["operationId"], complete=verification["complete"]
@@ -1791,9 +1792,9 @@ def _verify_applied_release(
     runner,
     project: str,
     env_files: list,
+    overlay: str,
     dispatch_probe: Callable[[], bool | None] | None = None,
     omnigent_migrator: Callable[[dict], Any] | None = None,
-    extra_checks: list | None = None,
 ) -> dict:
     """Run post-apply verification and record every check before returning.
 
@@ -1817,17 +1818,43 @@ def _verify_applied_release(
             compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
             env_files=env_files or None,
         )
-        observed = engine.observe_services(runner, base, services)
+        # Reload after apply: the caller's snapshot predates the installation
+        # checkpoint. That same checkpoint bounds readiness after a restart.
+        installed = store.load(operation_id).get("installed") or {}
+        installed_at = datetime.fromisoformat(installed["confirmedAt"]).timestamp()
+        remaining = max(
+            0,
+            min(
+                SERVICE_READINESS_TIMEOUT_SECONDS,
+                installed_at + SERVICE_READINESS_TIMEOUT_SECONDS - time.time(),
+            ),
+        )
+        observed = engine.wait_for_services(
+            runner, base, services, timeout_seconds=remaining
+        )
         services_running = observed["services"]
         completed_services = list(observed.get("completed") or ())
         service_health = observed.get("health") or {}
     except Exception as exc:
-        recorded.append({
-            "name": "service-observation",
-            "status": "unavailable",
-            "detail": f"could not observe Compose services: {exc}",
-        })
+        recorded.append(
+            {
+                "name": "service-observation",
+                "status": "unavailable",
+                "detail": redact_text(
+                    f"could not observe Compose services before readiness deadline: "
+                    f"{exc} {getattr(exc, 'output', '')}"
+                ),
+            }
+        )
         services_running = {}
+    # Readiness precedes routing and dispatch verification. A slow or failed
+    # startup leaves routing untouched and retains the installed checkpoint.
+    if services_running and all(services_running.values()):
+        routing_cutover = converge_routing_cutover(
+            store, operation, runner=runner, overlay=overlay
+        )
+        if routing_cutover:
+            recorded.append(routing_cutover)
     operator_access: dict[str, str] = {}
     for url in target.get("operatorUrls", ()) or ():
         try:
@@ -1860,7 +1887,6 @@ def _verify_applied_release(
         # application handle; the limitation is noted in the outcome instead
         # of failing every update with an unavailable mandatory check.
         recorded = [c for c in recorded if c["name"] != "dispatch"]
-    recorded.extend(extra_checks or ())
     for check in recorded:
         store.record_verification(
             operation_id,
