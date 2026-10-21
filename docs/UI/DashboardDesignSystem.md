@@ -137,7 +137,8 @@ Tokens must be defined as RGB triplets so alpha composition stays flexible.
 | Success | `--mm-ok` | `34 197 94` | `74 222 128` | Completed / healthy states |
 | Warning | `--mm-warn` | `245 158 11` | `251 191 36` | Queue, caution, attention |
 | Danger | `--mm-danger` | `244 63 94` | `251 113 133` | Failure, destructive actions |
-| Primary button | `--mm-button-primary` | `112 48 220` | `112 48 220` | Shared create/apply/launch treatment; `--mm-action-primary` aliases this token |
+| Primary button | `--mm-button-primary` | `112 48 220` | `112 48 220` | Shared create/apply treatment |
+| Launch action | `--mm-action-primary` | `21 147 118` | `26 153 123` | Create page launch button and its click ring |
 | Shadow | `--mm-shadow` | `0 18px 32px -26px rgb(10 8 30 / 0.55)` | `0 24px 52px -34px rgb(0 0 0 / 0.88)` | Base elevation shadow |
 
 ### 5.2 Accent balance
@@ -148,7 +149,7 @@ Accent usage should follow a clear hierarchy:
 - **Cyan** is reserved for live, executing, streaming, or high-energy system states.
 - **Amber / orange** is reserved for warning, queueing, caution, or high-attention utility signals.
 - **Red / rose** is reserved for failure and destructive actions.
-- **Green / teal** identifies healthy or completed states. Status and notice text uses separate per-theme foreground tokens for contrast. Status labels stay continuous and static above the moving fill and border, so animation does not brighten the text.
+- **Green / teal** identifies healthy or completed states and the Create page's launch button. Status and notice text uses separate per-theme foreground tokens for contrast. Status labels stay continuous and static above the moving fill and border, so animation does not brighten the text.
 
 ### 5.3 Background atmosphere
 
@@ -348,7 +349,7 @@ The reduced-motion path covers every non-essential dashboard effect, not only th
 - step type / settings control shimmer and scan border
 - executing sweep effects and status-pill shimmer/glint
 - the masked conic border beam
-- submit arrow animation
+- submit arrow animation and click ring
 - LiquidGL hero surface transition and animation durations
 - hover scan / glint effects
 - general button transform/glow motion
@@ -366,8 +367,8 @@ Effects that are cheap on desktop can be expensive on mobile and touch/low-power
 
 Run this checklist when changing dashboard motion, glass/LiquidGL surfaces, or atmosphere. Verify each combination on a representative route (e.g. the workflows home and a workflow details page):
 
-- **Normal motion (default):** panel enter animation plays once; executing sweeps, shimmer/glint, border beam, hover scans, and LiquidGL hero motion are present and low-amplitude.
-- **Reduced motion (`prefers-reduced-motion: reduce`):** no panel enter animation; sweeps, shimmer/glint, border beam, segmented-control shimmer/scan, submit arrow, and LiquidGL hero motion are stopped or softened; nothing pulses or drifts.
+- **Normal motion (default):** panel enter animation plays once; executing sweeps, shimmer/glint, border beam, submit click ring, hover scans, and LiquidGL hero motion are present and low-amplitude.
+- **Reduced motion (`prefers-reduced-motion: reduce`):** no panel enter animation; sweeps, shimmer/glint, border beam, segmented-control shimmer/scan, submit arrow and click ring, and LiquidGL hero motion are stopped or softened; nothing pulses or drifts.
 - **Dark mode:** atmosphere, glass surfaces, and text contrast read correctly; no readable text relies on blur/refraction.
 - **Light mode:** same verification as dark mode through the light token swap.
 - **Narrow viewport (mobile width) and touch/low-power devices:** background atmosphere uses scroll attachment (no fixed-attachment scroll jank); layout and motion remain comfortable; LiquidGL falls back cleanly where unsupported.
@@ -406,7 +407,7 @@ Collection-sidebar rules:
 
 Primary actions use purple, secondary actions use the panel surface, and ghost/icon actions use a transparent fill. Danger is reserved for irreversible or high-consequence actions; reversible pause, drain and draft removal stay neutral. `Button` associates disabled reasons with the control, displaying them for text buttons and visually hiding them for compact icon buttons.
 
-Hover uses a subtle tint inside `@media (hover: hover)`. Press is darker or inset, without a flash, scale or white ring. Selected controls use a separate fill and border. A shared focus-visible outline stays visible during hover and on focusable unavailable controls, including in forced colors. Text contrast is at least 4.5:1 and focus contrast at least 3:1 in both themes; real-browser tests cover these states.
+Hover uses a subtle tint inside `@media (hover: hover)`. Press is darker or inset, without a flash, scale or white ring. The Create page's launch button (Start, rerun or comparison) is the deliberate exception, so launching work feels distinct: a green glowing fill, a wider halo on hover, and on press a brightness flash, white ring and an expanding green ring portaled outside the clipped submit bar, while its arrow morphs into a check. It keeps the shared focus outline and flat disabled state; Save Changes starts nothing and keeps the standard primary treatment. Selected controls use a separate fill and border. A shared focus-visible outline stays visible during hover and on focusable unavailable controls, including in forced colors. Text contrast is at least 4.5:1 and focus contrast at least 3:1 in both themes; real-browser tests cover these states.
 
 ### 10.3 Inputs, selects, and comboboxes
 

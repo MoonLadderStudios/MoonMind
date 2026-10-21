@@ -112,7 +112,7 @@ afterEach(async () => {
 });
 
 describe('Create validation feedback', () => {
-  it('labels the bottom bar and presses Start without a bright flash or expanding ring', async () => {
+  it('labels the bottom bar and presses Start with a green glow, flash and expanding ring', async () => {
     const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
     cleanupRender = unmount;
     await screen.findByLabelText('Instructions');
@@ -126,6 +126,11 @@ describe('Create validation feedback', () => {
     const harness = screen.getByLabelText('Harness');
     expect(harness.closest('label')?.querySelectorAll('input, select, textarea, button').length).toBe(1);
     expect(screen.getByRole('button', { name: 'Add Step' }).getBoundingClientRect().height).toBeLessThanOrEqual(64);
+    await expect.poll(() => getComputedStyle(start).backgroundColor).toBe('rgb(21, 147, 118)');
+    expect(getComputedStyle(start).backgroundImage).toContain('linear-gradient');
+    expect(getComputedStyle(start).color).toBe('rgb(255, 255, 255)');
+    const restingShadow = getComputedStyle(start).boxShadow;
+    expect(restingShadow).not.toBe('none');
     await userEvent.hover(start);
     const arrow = start.querySelector('.queue-submit-primary-arrow svg')!;
     await expect.poll(async () => {
@@ -135,15 +140,23 @@ describe('Create validation feedback', () => {
       return getComputedStyle(arrow).animationName;
     }).toBe('queue-submit-primary-arrow-cycle');
     await commands.pointerButton('down');
-    expect(getComputedStyle(start).filter).toBe('none');
+    // The arrow-to-check morph lasts about 230ms, so sample it first.
     expect(getComputedStyle(start).backgroundImage).toBe('none');
-    expect(getComputedStyle(start).boxShadow).toContain('inset');
-    expect(document.querySelector('.queue-submit-primary-ripple')).toBeNull();
+    expect(getComputedStyle(start).color).toBe('rgb(21, 147, 118)');
     expect(getComputedStyle(start.querySelector('[data-submit-icon="check"]')!).animationName).toBe('queue-submit-primary-check-pop');
+    await expect.poll(() => {
+      const ripple = document.querySelector('.queue-submit-primary-ripple');
+      return ripple ? getComputedStyle(ripple).animationName : null;
+    }).toBe('queue-submit-primary-ripple');
+    // The flash holds for as long as the button stays pressed.
+    await expect.poll(() => getComputedStyle(start).filter).toContain('brightness(1.22)');
+    expect(getComputedStyle(start).boxShadow).not.toBe(restingShadow);
     // Release away from the button: inspect press without submitting a workflow.
     await userEvent.hover(screen.getByLabelText('Instructions'));
     await commands.pointerButton('up');
     expect(createRequests).toBe(0);
+    // The ring removes itself once it has faded out.
+    await expect.poll(() => document.querySelector('.queue-submit-primary-ripple')).toBeNull();
   });
   it('shows an off-screen step error in the submit bar and focuses the field', async () => {
     await page.viewport(VIEWPORT.width, VIEWPORT.height);
