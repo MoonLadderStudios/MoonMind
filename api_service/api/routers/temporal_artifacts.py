@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import (
-    get_current_user_optional, get_operator_recovery_principal,
+    get_instance_access_optional,
+    get_operator_recovery_principal,
 )
 from api_service.db.base import get_async_session
 from api_service.db.models import User
@@ -31,6 +32,7 @@ from moonmind.schemas.temporal_artifact_models import (
     PresignUploadPartRequest,
     PresignUploadPartResponse,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
     COLLECTION_CATEGORY_LINK_PREFIXES,
     TemporalArtifactAuthorizationError,
@@ -197,12 +199,15 @@ async def _get_temporal_artifact_service(
 ) -> TemporalArtifactService:
     return TemporalArtifactService(TemporalArtifactRepository(session))
 
+
 async def _resolve_principal(
-    user: Optional[User] = Depends(get_current_user_optional()),
+    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
 ) -> str:
     # The optional dependency also serves separately authenticated fan-out
     # requests. A machine marker is not artifact authority, including in local
-    # mode. Ordinary local admission still supplies its conversion-gated user.
+    # mode. Ordinary account-free admission carries no person identity.
+    if isinstance(user, OperatorAdmission):
+        return "operator"
     if user is None or getattr(user, "id", None) is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

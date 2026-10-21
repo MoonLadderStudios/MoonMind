@@ -433,16 +433,22 @@ Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/api/routers/operator_boundary_4347.py` (test-only demonstration).
 
 Disabled-mode product routes share peer, Host and Origin enforcement. Settings,
-presets, secrets and dashboard routes consume permission-only admission after
-published guarded conversion. Other UUID consumers retain their compatibility
-principal. Demonstration routers stay unmounted; isolated route evidence does
-not establish deployed access.
+presets, secrets, dashboard, execution submission/list/detail/cancellation,
+recurrence and artifact routes consume permission-only admission after published
+guarded conversion. Other UUID consumers retain their compatibility principal.
+Demonstration routers stay unmounted; isolated route evidence does not establish
+deployed access.
 
 The rules below describe that primitive. Admission grants operator-interface
 access without resolving or creating a persisted person. Consumer migration
 must pass resources and requested actions to business services without an
-always-admin `User` substitute. It introduces no new `AUTH_PROVIDER` selector,
-account product, or mandatory service.
+always-admin `User` substitute. Artifact operations use the admitted `operator`
+scope; retained creator attribution and conversion-granted protected recovery
+remain separate. Execution creation retains instance ownership and resolves
+already accepted idempotent requests before current defaults. A fan-out marker
+only defers authentication to the execution capability owner; it grants neither
+operator access nor artifact recovery. It introduces no new `AUTH_PROVIDER`
+selector, account product, or mandatory service.
 
 ### 13.1 Admitted paths
 

@@ -33,11 +33,14 @@ from api_service.db.models import (
     PresetFavorite,
     PresetRecent,
     RecurringWorkflowDefinition,
+    RecurringWorkflowRun,
     SecretStatus,
     SettingsOverride,
     SettingsAuditEvent,
     TemporalArtifact,
-    TemporalArtifactLink, TemporalArtifactPin, TemporalArtifactUseClaim,
+    TemporalArtifactLink,
+    TemporalArtifactPin,
+    TemporalArtifactUseClaim,
     TemporalArtifactDeletionIntent,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionOwnerType,
@@ -58,14 +61,17 @@ _TABLES = (
     TemporalExecutionRecord.__table__,
     TemporalExecutionCanonicalRecord.__table__,
     TemporalArtifact.__table__,
-    TemporalArtifactLink.__table__, TemporalArtifactPin.__table__,
-    TemporalArtifactUseClaim.__table__, TemporalArtifactDeletionIntent.__table__,
+    TemporalArtifactLink.__table__,
+    TemporalArtifactPin.__table__,
+    TemporalArtifactUseClaim.__table__,
+    TemporalArtifactDeletionIntent.__table__,
     SettingsOverride.__table__,
     SettingsAuditEvent.__table__,
     Preset.__table__,
     PresetFavorite.__table__,
     PresetRecent.__table__,
     RecurringWorkflowDefinition.__table__,
+    RecurringWorkflowRun.__table__,
 )
 
 
@@ -1280,6 +1286,276 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
     finally:
         main.app.dependency_overrides.clear()
         main.app.dependency_overrides.update(previous)
+
+
+@pytest_asyncio.fixture
+async def account_free_product(pg_maker, monkeypatch, tmp_path, request):
+    """Real main app and persistence; no identity or business-service overrides."""
+    import httpx
+    from api_service import auth_providers
+    from api_service.db import base
+    from api_service.services.single_user_conversion import run_guarded_upgrade
+    from moonmind.config.settings import settings
+    from moonmind.security import auth_modes_4120
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+    import api_service.main as main
+
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
+    monkeypatch.setattr(settings.workflow, "test_mode", False)
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "artifacts")),
+    )
+
+    def no_virtual_person():
+        pytest.fail("Journey consumers must use admission, not a transient User")
+
+    monkeypatch.setattr(
+        auth_providers, "_transient_disabled_operator", no_virtual_person
+    )
+
+    async def database():
+        async with pg_maker() as db:
+            yield db
+
+    previous = dict(main.app.dependency_overrides)
+    main.app.dependency_overrides[base.get_async_session] = database
+    monkeypatch.setattr(base, "async_session_maker", pg_maker)
+    retained_id = None
+    retained_owner = None
+    try:
+        async with pg_maker() as db:
+            if getattr(request, "param", "fresh") == "retained":
+                # A real account-era source is conversion input, never a
+                # request identity override or a shortcut to operator access.
+                from api_service.db.models import TemporalArtifactRedactionLevel
+
+                retained_owner = str((await _mk_user(db)).id)
+                await db.commit()
+                artifacts = TemporalArtifactService(TemporalArtifactRepository(db))
+                retained, _ = await artifacts.create(
+                    principal=retained_owner,
+                    content_type="text/plain",
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                )
+                await artifacts.write_complete(
+                    artifact_id=retained.artifact_id,
+                    principal=retained_owner,
+                    payload=b"retained protected output",
+                    content_type="text/plain",
+                )
+                retained_id = retained.artifact_id
+            assert (await run_guarded_upgrade(db, operator_authorized=True)).published
+        async with _served_product(main.app) as (operator_url, _backend_url):
+            async with httpx.AsyncClient(
+                base_url=operator_url, trust_env=False
+            ) as client:
+                if retained_id is not None:
+                    recovered = await client.get(
+                        f"/api/artifacts/{retained_id}/download"
+                    )
+                    assert recovered.status_code == 200, recovered.text
+                    assert recovered.content == b"retained protected output"
+                yield client
+        async with pg_maker() as db:
+            people = (await db.execute(select(User.id))).scalars().all()
+            assert [str(person) for person in people] == (
+                [retained_owner] if retained_owner else []
+            )
+            if retained_id is not None:
+                retained = await db.get(TemporalArtifact, retained_id)
+                assert retained.created_by_principal == retained_owner
+                assert retained.operator_recovery_granted
+    finally:
+        main.app.dependency_overrides.clear()
+        main.app.dependency_overrides.update(previous)
+
+
+@pytest.mark.asyncio
+async def test_postgres_recurrence_journey_needs_no_virtual_person(
+    account_free_product,
+    pg_maker,
+):
+    """Retained definition and accepted run read/retry through their real owner."""
+    from api_service.db.models import RecurringWorkflowRunOutcome
+    from datetime import UTC, datetime
+    import asyncio
+    from tools import single_user_journey_checks as journey
+
+    async with pg_maker() as db:
+        definition = RecurringWorkflowDefinition(
+            name="Retained custom schedule",
+            cron="17 * * * *",
+            timezone="UTC",
+            enabled=False,
+            target={"workflowType": "MoonMind.UserWorkflow"},
+        )
+        db.add(definition)
+        await db.flush()
+        run = RecurringWorkflowRun(
+            definition_id=definition.id,
+            scheduled_for=datetime.now(UTC),
+            outcome=RecurringWorkflowRunOutcome.PENDING_DISPATCH,
+        )
+        db.add(run)
+        await db.commit()
+        definition_id, run_id = definition.id, run.id
+
+    client = account_free_product
+    state = {}
+    await asyncio.to_thread(
+        journey.operator_access, journey.Api(str(client.base_url).rstrip("/")), state
+    )
+    assert state["operatorAccess"]["allowed"]
+    listing = await client.get("/api/recurring-workflows")
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["items"][0]["name"] == "Retained custom schedule"
+    detail = await client.get(f"/api/recurring-workflows/{definition_id}")
+    assert detail.status_code == 200, detail.text
+    repeated = await client.post(
+        f"/api/recurring-workflows/{definition_id}/run",
+        headers={"Idempotency-Key": str(run_id)},
+    )
+    assert repeated.status_code == 201, repeated.text
+    assert repeated.json()["id"] == str(run_id)
+    runs = await client.get(f"/api/recurring-workflows/{definition_id}/runs")
+    assert runs.status_code == 200, runs.text
+    assert [item["id"] for item in runs.json()["items"]] == [str(run_id)]
+    denied = await client.get(
+        "/api/recurring-workflows", headers={"Host": "foreign.example"}
+    )
+    assert denied.status_code == 401, denied.text
+    import httpx
+    import api_service.main as main
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app, client=("192.0.2.99", 32000)),
+        base_url="http://localhost:7000",
+    ) as machine:
+        denied = await machine.get(
+            "/api/recurring-workflows",
+            headers={
+                "Authorization": "Bearer synthetic-machine-material",
+                "X-Moonmind-Execution-Fanout": "v1",
+            },
+        )
+        assert denied.status_code == 401, denied.text
+    async with pg_maker() as db:
+        assert (
+            await db.get(RecurringWorkflowDefinition, definition_id)
+        ).owner_user_id is None
+        assert (
+            len((await db.execute(select(RecurringWorkflowRun))).scalars().all()) == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_postgres_submission_retry_needs_no_virtual_person(
+    account_free_product,
+    pg_maker,
+):
+    """The production idempotency owner preserves work admitted before migration."""
+    request_id = uuid.uuid4().hex
+    workflow_id = f"mm:{uuid.uuid4()}"
+    async with pg_maker() as db:
+        db.add(
+            TemporalExecutionCanonicalRecord(
+                workflow_id=workflow_id,
+                run_id=str(uuid.uuid4()),
+                entry="user-workflow",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_type=TemporalExecutionOwnerType.SYSTEM,
+                owner_id="system",
+                create_idempotency_key=request_id,
+                state="executing",
+                parameters={"retainedIntent": "unchanged"},
+            )
+        )
+        await db.commit()
+    body = {
+        "type": "workflow",
+        "payload": {
+            "workflow": {
+                "instructions": "Retain the already admitted request.",
+                "idempotencyKey": request_id,
+            }
+        },
+    }
+    for _ in range(2):
+        result = await account_free_product.post("/api/executions", json=body)
+        assert result.status_code == 201, result.text
+        assert result.json()["workflowId"] == workflow_id
+    async with pg_maker() as db:
+        records = (
+            (await db.execute(select(TemporalExecutionCanonicalRecord))).scalars().all()
+        )
+        assert len(records) == 1
+        assert records[0].parameters == {"retainedIntent": "unchanged"}
+        assert records[0].state.value == "executing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_free_product", ["fresh", "retained"], indirect=True)
+async def test_postgres_artifact_journey_needs_no_virtual_person(
+    account_free_product,
+    pg_maker,
+):
+    """Actual upload, finalization and download; restricted machine bytes stay gated."""
+    from api_service.db.models import TemporalArtifactRedactionLevel
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    client = account_free_product
+    payload = b"Generated output retained in the instance artifact store.\n"
+    created = await client.post("/api/artifacts", json={"content_type": "text/plain"})
+    assert created.status_code == 201, created.text
+    artifact_id = created.json()["artifact_ref"]["artifact_id"]
+    uploaded = await client.put(
+        f"/api/artifacts/{artifact_id}/content",
+        content=payload,
+        headers={"Content-Type": "text/plain"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    download = await client.get(f"/api/artifacts/{artifact_id}/download")
+    assert download.status_code == 200, download.text
+    assert download.content == payload
+    async with pg_maker() as db:
+        artifact = await db.get(TemporalArtifact, artifact_id)
+        assert artifact.created_by_principal == "operator"
+        service = TemporalArtifactService(TemporalArtifactRepository(db))
+        machine_owner = f"workflow:{uuid.uuid4()}"
+        restricted, _ = await service.create(
+            principal=machine_owner,
+            content_type="text/plain",
+            redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+        )
+        await service.write_complete(
+            artifact_id=restricted.artifact_id,
+            principal=machine_owner,
+            payload=b"restricted output",
+            content_type="text/plain",
+        )
+        restricted_id = restricted.artifact_id
+    denied = await client.get(f"/api/artifacts/{restricted_id}/download")
+    assert denied.status_code == 403, denied.text
+    denied = await client.get(
+        f"/api/artifacts/{artifact_id}/download",
+        headers={
+            "Authorization": "Bearer synthetic-machine-material",
+            "X-Moonmind-Execution-Fanout": "v1",
+        },
+    )
+    assert denied.status_code == 401, denied.text
 
 
 @pytest.mark.asyncio

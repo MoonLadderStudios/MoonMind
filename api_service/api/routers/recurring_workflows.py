@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     RecurringWorkflowDefinition,
@@ -34,6 +34,7 @@ from api_service.services.recurring_workflows_service import (
     ScheduleRunExecution,
 )
 from moonmind.schemas.temporal_models import ObjectiveOutcomeValue
+from moonmind.security.operator_admission import OperatorAdmission
 
 router = APIRouter(prefix="/api/recurring-workflows", tags=["recurring-workflows"])
 logger = logging.getLogger(__name__)
@@ -235,7 +236,7 @@ def _action_permissions_for_definition(
     # schedule. Legacy scope/owner values are provenance, never an action
     # gate. Execution-state and approval validation remain at their owning
     # boundaries. The ``user`` argument was removed with its callers;
-    # admission owns access via get_current_user.
+    # admission owns access via get_instance_access.
     return RecurringWorkflowActionPermissionsModel(
         can_edit=True,
         can_run_now=True,
@@ -564,6 +565,7 @@ def _map_error(exc: Exception) -> HTTPException:
         },
     )
 
+
 @router.get("", response_model=RecurringWorkflowDefinitionListResponse)
 async def list_recurring_workflows(
     *,
@@ -593,7 +595,7 @@ async def list_recurring_workflows(
     dispatch: str = Query("", max_length=160),
     updated: str = Query("", max_length=160),
     service: RecurringWorkflowsService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RecurringWorkflowDefinitionListResponse:
     # Single-user (#4351): instance listing. The deprecated ``scope`` value
     # is accepted for frontend compat (?scope=personal) but never forwarded
@@ -700,7 +702,7 @@ async def create_recurring_workflow(
     payload: CreateRecurringWorkflowRequest,
     service: RecurringWorkflowsService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RecurringWorkflowDefinitionModel:
     # Single-user (#4351): admission owns access. Stored scope_type is legacy
     # provenance (frontend compat), never a visibility or action gate.
@@ -803,7 +805,7 @@ async def create_recurring_workflow(
 async def get_recurring_workflow(
     definition_id: UUID,
     service: RecurringWorkflowsService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RecurringWorkflowDefinitionModel:
     # Single-user (#4351): admission owns access; control reads the instance
     # record directly. Legacy owner/scope are provenance.
@@ -825,12 +827,13 @@ async def get_recurring_workflow(
         action_permissions=_action_permissions_for_definition(definition),
     )
 
+
 @router.patch("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
 async def update_recurring_workflow(
     definition_id: UUID,
     payload: UpdateRecurringWorkflowRequest,
     service: RecurringWorkflowsService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RecurringWorkflowDefinitionModel:
     # Single-user (#4351): admission owns access; control reads the instance
     # record directly.
@@ -888,7 +891,7 @@ async def run_recurring_workflow_now(
     definition_id: UUID,
     idempotency_key: Annotated[UUID | None, Header()] = None,
     service: RecurringWorkflowsService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RecurringWorkflowRunModel:
     # Single-user (#4351): admission owns access; control reads the instance
     # record directly.
@@ -925,7 +928,7 @@ async def run_recurring_workflow_now(
 async def delete_recurring_workflow(
     definition_id: UUID,
     service: RecurringWorkflowsService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> Response:
     # Single-user (#4351): admission owns access; control reads the instance
     # record directly.
@@ -957,13 +960,14 @@ async def delete_recurring_workflow(
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
 @router.get("/{definition_id}/runs", response_model=RecurringWorkflowRunListResponse)
 async def list_recurring_workflow_runs(
     definition_id: UUID,
     *,
     limit: int = Query(200, ge=1, le=500),
     service: RecurringWorkflowsService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RecurringWorkflowRunListResponse:
     # Single-user (#4351): admission owns access; control reads the instance
     # record directly.
