@@ -20,9 +20,9 @@
   --mm-accent-warm: 244 114 182;
   --mm-ok: 34 197 94;
   --mm-warn: 245 158 11;
-  --mm-status-waiting: 146 64 14;
-  --mm-status-queued: 124 58 237;
-  --mm-status-setup: 29 78 190;
+  --mm-status-waiting: 162 69 9;
+  --mm-status-queued: 122 19 247;
+  --mm-status-setup: 5 76 242;
   --mm-danger: 244 63 94;
   --mm-action-primary: 21 147 118;
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
@@ -125,10 +125,10 @@
   --mm-focus: 83 27 167;
   --mm-selected-fill: 237 228 252;
   --mm-selected-text: 79 25 145;
-  --mm-status-running: 8 94 112;
-  --mm-status-ok: 20 100 53;
-  --mm-status-danger: 153 27 53;
-  --mm-status-warning: 133 65 10;
+  --mm-status-running: 12 114 136;
+  --mm-status-ok: 12 119 61;
+  --mm-status-danger: 196 15 64;
+  --mm-status-warning: 164 81 10;
 }
 
 .dark {
@@ -146,7 +146,7 @@
   --mm-warn: 251 191 36;
   --mm-status-waiting: 250 204 21;
   --mm-status-queued: 167 139 250;
-  --mm-status-setup: 147 197 253;
+  --mm-status-setup: 118 188 255;
   --mm-danger: 251 113 133;
   --mm-action-primary: 26 153 123;
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
@@ -177,10 +177,10 @@
   --mm-focus: 196 181 253;
   --mm-selected-fill: 58 36 87;
   --mm-selected-text: 221 204 255;
-  --mm-status-running: 125 249 255;
-  --mm-status-ok: 134 239 172;
-  --mm-status-danger: 253 164 175;
-  --mm-status-warning: 253 224 135;
+  --mm-status-running: 38 245 254;
+  --mm-status-ok: 39 254 148;
+  --mm-status-danger: 253 108 134;
+  --mm-status-warning: 253 207 32;
 }
 
 * {
