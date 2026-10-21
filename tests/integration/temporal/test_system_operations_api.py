@@ -68,7 +68,10 @@ def test_worker_pause_route_matches_settings_runtime_contract(
         if dependant is None:
             continue
         for dependency in dependant.dependencies:
-            if getattr(dependency.call, "__name__", "") == "_current_user_fallback":
+            if getattr(dependency.call, "__name__", "") in {
+                "_current_user_fallback",
+                "get_instance_access",
+            }:
                 app.dependency_overrides[dependency.call] = _override_user
     try:
         with TestClient(app) as client:
