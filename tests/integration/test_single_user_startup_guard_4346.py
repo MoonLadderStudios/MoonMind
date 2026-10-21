@@ -6,6 +6,7 @@ account, refused sources keep serving unchanged, and no restart seeds a
 default user or publishes a candidate on stale attribution.
 """
 
+import json
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -16,7 +17,11 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
 from api_service.db.models import Base, ManagedSecret, User, UserProfile
-from api_service.main import startup_event
+from api_service.main import health_check, startup_event
+
+# Registers the conversion ledger on ``Base.metadata`` (Alembic 386 creates it
+# in production); without it a fresh process defers conversion on startup.
+from api_service.services import single_user_conversion  # noqa: F401
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -32,6 +37,13 @@ async def _seed_db(tmp_path, name="guard4346.db"):
         await conn.run_sync(Base.metadata.create_all)
 
 
+async def _reported_conversion():
+    """The disposition the deployment controller reads from ``/healthz``."""
+    response = await health_check()
+    body = response if isinstance(response, dict) else json.loads(response.body)
+    return body.get("singleUserConversion")
+
+
 @pytest.mark.asyncio
 async def test_startup_seeds_no_default_user_on_fresh_database(
     disabled_env_keys, tmp_path
@@ -41,6 +53,12 @@ async def test_startup_seeds_no_default_user_on_fresh_database(
         await startup_event()
     async with db_base.async_session_maker() as session:
         assert (await session.execute(select(User))).scalars().all() == []
+    assert await _reported_conversion() == {
+        "published": True,
+        "disposition": "fresh_init",
+        "reasonCode": "empty_source",
+        "personCount": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -85,6 +103,12 @@ async def test_startup_preserves_refused_multi_person_source(
             .all()
         )
         assert legacy == []
+    # The refusal reaches the deployment result as redacted metadata only.
+    reported = await _reported_conversion()
+    assert reported["published"] is False
+    assert reported["disposition"] == "multi_person_refusal"
+    assert reported["personCount"] == 2
+    assert "op-a@example.com" not in json.dumps(reported)
 
 
 @pytest.mark.asyncio

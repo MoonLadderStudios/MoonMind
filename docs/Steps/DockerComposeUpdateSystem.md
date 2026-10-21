@@ -152,9 +152,11 @@ Through `deployment_release --omnigent-journal-prepare`, the bridge store replac
 
 ### 10.7 Verify desired state
 
-The controller observes installed services and concrete images, required health, ordinary workflow dispatch, and the operator access path. A running container does not prove that work can execute or that the dashboard serves the intended release. Post-apply verification accepts a run-to-completion service (such as `init-db`) that exited 0; any other non-running service fails its check.
+The controller observes installed services and concrete images, required health, ordinary workflow dispatch, and the operator access path; a running container does not prove that work can execute or that the dashboard serves the intended release. A run-to-completion service (such as `init-db`) passes when it exited 0; any other non-running service fails.
 
-An unavailable optional integration is reported separately, and missing mandatory verification is not converted to success. Verification is bounded and uses existing health/functional boundaries.
+The API runs guarded single-user conversion on startup; the controller records that disposition, read through the API container's healthcheck route, as `single-user-conversion`. A refusal keeps the installation, source data, and access protection but leaves the operation `partially_verified`; deferred or unreported results are unavailable.
+
+Unavailable optional integrations are reported separately; mandatory verification is never converted to success.
 
 ### 10.8 Migrate the singular Omnigent release
 

@@ -519,7 +519,24 @@ def test_legacy_probe_ignores_the_always_on_service_container(controller_path):
     )
 
 
-def _verification_runner(engine, ps_state="running", health=""):
+_PUBLISHED_CONVERSION = {
+    "published": True,
+    "disposition": "eligible_conversion",
+    "reasonCode": "single_operator",
+    "personCount": 1,
+}
+
+
+def _conversion_reply(status):
+    return {
+        "exit": 0,
+        "output": "MOONMIND_SINGLE_USER_CONVERSION=" + json.dumps(status),
+    }
+
+
+def _verification_runner(
+    engine, ps_state="running", health="", conversion=_PUBLISHED_CONVERSION
+):
     import json as _json
 
     class _Runner:
@@ -530,6 +547,8 @@ def _verification_runner(engine, ps_state="running", health=""):
             self.commands.append(tuple(args))
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": ""}
+            if "exec" in args:
+                return _conversion_reply(conversion)
             if "ps" in args:
                 return {
                     "exit": 0,
@@ -1138,6 +1157,162 @@ def test_production_apply_verifies_release_before_success(
     assert all(check["status"] == "passed" for check in loaded["verification"])
 
 
+def _conversion_check(store, operation):
+    checks = [
+        check
+        for check in store.load(operation["operationId"])["verification"]
+        if check["name"] == "single-user-conversion"
+    ]
+    assert len(checks) == 1, checks
+    return checks[0]
+
+
+def _api_target(tmp_path):
+    return {
+        "project": "moonmind-test",
+        "projectDir": str(tmp_path),
+        "composeFiles": ["docker-compose.yaml"],
+        "services": ["api"],
+    }
+
+
+def test_update_records_published_conversion_from_the_installed_api(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, _api_target(tmp_path))
+    runner = _verification_runner(
+        server_mod.engine,
+        conversion={"published": True, "disposition": "fresh_init",
+                    "reasonCode": "empty_source", "personCount": 0},
+    )
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: runner)
+
+    result = server_mod.production_apply(store, op)
+
+    assert result["status"] == "succeeded", result
+    check = _conversion_check(store, op)
+    assert check == {**check, "status": "passed", "detail": "fresh_init published"}
+    # The disposition is read inside the API container through the same
+    # route as its Compose healthcheck, not through an operator URL.
+    probes = [command for command in runner.commands if "exec" in command]
+    assert len(probes) == 1
+    assert probes[0][probes[0].index("exec") + 1 :][:2] == ("-T", "api")
+
+
+def test_update_carries_conversion_refusal_into_the_deployment_result(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, _api_target(tmp_path))
+    runner = _verification_runner(
+        server_mod.engine,
+        conversion={"published": False, "disposition": "multi_person_refusal",
+                    "reasonCode": "multi_person", "personCount": 2},
+    )
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: runner)
+
+    result = server_mod.production_apply(store, op)
+
+    loaded = store.load(op["operationId"])
+    # The installation stays confirmed; a refusal is never reported as an
+    # installed account-free product.
+    assert result["status"] == "partially_verified", result
+    assert loaded["installed"]["image"] == op["desired"]["image"]
+    check = _conversion_check(store, op)
+    assert check["status"] == "failed"
+    assert "multi_person_refusal: multi_person" in check["detail"]
+    assert "persons=2" in check["detail"]
+    assert "preserved" in check["detail"]
+
+
+@pytest.mark.parametrize(
+    ("conversion", "expected"),
+    [
+        ({"deferred": True, "reason": "StaleAttributionError"}, "StaleAttributionError"),
+        (None, "did not report"),
+    ],
+)
+def test_update_keeps_unknown_conversion_outcome_explicit(
+    controller_path, tmp_path, monkeypatch, conversion, expected
+):
+    record = load("record")
+    server_mod = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, _api_target(tmp_path))
+    runner = _verification_runner(server_mod.engine, conversion=conversion)
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: runner)
+
+    result = server_mod.production_apply(store, op)
+
+    assert result["status"] == "partially_verified", result
+    check = _conversion_check(store, op)
+    assert check["status"] == "unavailable"
+    assert expected in check["detail"]
+
+
+def test_unhealthy_api_leaves_conversion_unknown_without_blocking_the_controller(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server_mod = load("server")
+    monkeypatch.setattr(server_mod, "SERVICE_READINESS_TIMEOUT_SECONDS", 0)
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, _api_target(tmp_path))
+    runner = _verification_runner(
+        server_mod.engine, ps_state="exited", health="unhealthy"
+    )
+    monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: runner)
+
+    result = server_mod.production_apply(store, op)
+
+    # Repair does not depend on the target API: the operation still reaches a
+    # terminal, inspectable record and nothing execs into the dead API.
+    assert result["status"] == "partially_verified", result
+    assert store.list_open() == []
+    check = _conversion_check(store, op)
+    assert check["status"] == "unavailable"
+    assert "not running" in check["detail"]
+    assert not [command for command in runner.commands if "exec" in command]
+
+
+def test_restart_reattaches_verification_to_the_committed_conversion(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(record, store, _api_target(tmp_path))
+    runner = _verification_runner(server.engine)
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+    verify = server._verify_applied_release
+
+    def controller_lost(*args, **kwargs):
+        raise OSError("controller replaced after apply")
+
+    monkeypatch.setattr(server, "_verify_applied_release", controller_lost)
+    with pytest.raises(OSError):
+        server.production_apply(store, operation)
+    runner.commands.clear()
+    monkeypatch.setattr(server, "_verify_applied_release", verify)
+
+    server.resume_open_operations(
+        store, lambda current: server.production_apply(store, current), runner=runner
+    )
+
+    # The same operation resumes only its unfinished verification phase: it
+    # reads the API's committed conversion result without another pull or
+    # recreation that could repeat startup conversion on a new fleet.
+    final = store.load(operation["operationId"])
+    assert final["status"] == "succeeded"
+    assert _conversion_check(store, operation)["status"] == "passed"
+    assert not any("pull" in command or "up" in command for command in runner.commands)
+
+
 def test_slow_start_waits_after_one_apply_before_routing_cutover(
     controller_path, tmp_path, monkeypatch
 ):
@@ -1275,6 +1450,8 @@ def test_production_apply_accepts_completed_one_shot_services(
         def run(self, args, timeout_seconds):
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": ""}
+            if "exec" in args:
+                return _conversion_reply(_PUBLISHED_CONVERSION)
             if "ps" in args:
                 rows = [{"Service": "api", "State": "running"}]
                 if "--all" in args:  # Compose hides exited containers otherwise.
@@ -1593,6 +1770,8 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert files[0] == str(tmp_path / ".env")
                 assert files[1] == str(release_env)
                 assert files[-1].endswith(f"{op['operationId']}.env")
+            if "exec" in args:
+                return _conversion_reply(_PUBLISHED_CONVERSION)
             if "ps" in args:
                 return {
                     "exit": 0,
