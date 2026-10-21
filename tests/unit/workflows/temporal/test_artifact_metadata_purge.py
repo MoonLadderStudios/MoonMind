@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from botocore.exceptions import ClientError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -21,6 +23,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
+    S3TemporalArtifactStore,
     TemporalArtifactExpiredError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
@@ -265,6 +268,84 @@ async def test_purge_returns_unconfirmed_bytes_to_deletion_reconciliation(
             assert not any([await _exists(service, item) for item in blobs])
 
 
+class _MemoryS3Client:
+    """In-memory boto client; ``head_error`` simulates an unknown object state."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.head_error: Exception | None = None
+
+    def head_bucket(self, *, Bucket: str) -> None:
+        _ = Bucket
+
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes, **_kwargs) -> None:
+        self.objects[Key] = bytes(Body)
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+    def head_object(self, *, Bucket: str, Key: str) -> dict[str, int]:
+        if self.head_error is not None:
+            raise self.head_error
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        return {"ContentLength": len(self.objects[Key])}
+
+    def delete_object(self, *, Bucket: str, Key: str) -> None:
+        self.objects.pop(Key, None)
+
+
+async def test_purge_through_s3_store_waits_for_a_definite_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default backend's head_object errors keep the tombstone, not purge it."""
+
+    client = _MemoryS3Client()
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.boto3.client",
+        lambda service_name, **kwargs: client,
+    )
+    store = S3TemporalArtifactStore(
+        endpoint_url="http://minio.test:9000",
+        bucket="artifacts",
+        access_key_id="access",
+        secret_access_key="secret",
+        region_name="us-east-1",
+        use_ssl=False,
+    )
+    past_horizon = datetime.now(UTC) + HORIZON + timedelta(minutes=5)
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = _service(session, store)
+            (artifact_id,) = await _tombstones(service, 1)
+            assert client.objects == {}
+
+            client.head_error = ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"}}, "HeadObject"
+            )
+            denied = await service.sweep_lifecycle(
+                principal=PRINCIPAL, now=past_horizon
+            )
+
+            assert (denied.purge_error_count, denied.purged_count) == (1, 0)
+            assert await _exists(service, artifact_id)
+            (intent,) = await service._repository.list_pending_deletion_intents()
+            assert intent.artifact_id == artifact_id
+            assert "AccessDenied" in (intent.last_error or "")
+
+            client.head_error = None
+            converged = await service.drain_lifecycle(
+                principal=PRINCIPAL, time_budget=timedelta(minutes=5), now=past_horizon
+            )
+
+            assert converged.drained is True
+            assert converged.purged_count == 1
+            assert not await _exists(service, artifact_id)
+            assert await service._repository.list_pending_deletion_intents() == []
+
+
 async def test_purge_releases_a_shared_blob_reference_without_touching_bytes(
     tmp_path: Path,
 ) -> None:
@@ -355,10 +436,17 @@ async def test_purge_preserves_protected_tombstones(
             await repository.commit()
 
             summary = await service.drain_lifecycle(
-                principal=PRINCIPAL, time_budget=timedelta(minutes=5), now=past_horizon
+                principal=PRINCIPAL,
+                limit=1,
+                time_budget=timedelta(minutes=5),
+                now=past_horizon,
             )
 
             assert summary.purged_count == 1
+            # Withheld tombstones are visible, and a multi-page pass reports
+            # the current number rather than one count per page.
+            assert summary.pages == 2
+            assert summary.purge_protected_count == 1
             assert await _exists(service, protected)
             assert not await _exists(service, unprotected)
 

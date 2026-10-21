@@ -839,8 +839,8 @@ Pins, live use claims, non-terminal journal refs and remediation context refs
 keep the tombstone; candidates are locked with `SKIP LOCKED` and rechecked, so a
 concurrent protection wins. Rows and links go in one transaction; a failed
 commit or crash leaves the tombstone for the next pass. The sweep result counts
-candidates, purged rows and links, protected skips, unconfirmed deletions and
-store errors.
+candidates, purged rows and links, retained protected tombstones, unconfirmed
+deletions and store errors.
 
 Seven days matches the ephemeral class and outlasts Activity retries,
 interrupted-step recovery and the hourly sweep, so recent refs see a truthful

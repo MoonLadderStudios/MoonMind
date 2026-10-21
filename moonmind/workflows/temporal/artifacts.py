@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 import boto3
 from botocore.exceptions import ClientError
-from sqlalchemy import Select, delete, exists, insert, or_, select, update
+from sqlalchemy import Select, delete, exists, func, insert, or_, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 
@@ -195,9 +195,9 @@ class LifecycleSweepSummary:
     # for the next pass.
     drained: bool = True
     # Tombstones past the purge horizon whose metadata was examined, reclaimed,
-    # kept because a protection appeared after selection, or handed back to
-    # deletion reconciliation because the object was still present or the
-    # store could not report it.
+    # withheld by a protection (pin, live claim, active journal or remediation
+    # context), or handed back to deletion reconciliation because the object
+    # was still present or the store could not report it.
     purge_candidate_count: int = 0
     purged_count: int = 0
     purged_link_count: int = 0
@@ -1535,6 +1535,41 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    def _purge_scope(
+        self,
+        *,
+        cutoff: datetime,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+    ) -> list[Any]:
+        artifact = db_models.TemporalArtifact
+        return [
+            artifact.hard_deleted_at.is_not(None),
+            artifact.hard_deleted_at <= cutoff,
+            artifact.storage_backend == storage_backend,
+        ]
+
+    def _purge_protections(self, *, now: datetime) -> list[Any]:
+        """Conditions under which a supported consumer still needs a tombstone."""
+
+        artifact = db_models.TemporalArtifact
+        artifact_id = artifact.artifact_id
+        claim = db_models.TemporalArtifactUseClaim
+
+        def referenced(column: Any, *conditions: Any) -> Any:
+            return (
+                exists().where(column == artifact_id, *conditions).correlate(artifact)
+            )
+
+        return [
+            artifact.retention_class == db_models.TemporalArtifactRetentionClass.PINNED,
+            referenced(db_models.TemporalArtifactPin.artifact_id),
+            referenced(claim.artifact_id, claim.expires_at > now),
+            # The remediation link would lose its context ref (ON DELETE SET
+            # NULL); keep the tombstone as that run's diagnostic context.
+            referenced(db_models.TemporalExecutionRemediationLink.context_artifact_ref),
+            self._active_journal_reference_exists(artifact_id).correlate(artifact),
+        ]
+
     def _purge_eligibility(
         self,
         *,
@@ -1545,29 +1580,16 @@ class TemporalArtifactRepository:
         """Tombstones past the horizon that no supported consumer still needs."""
 
         artifact = db_models.TemporalArtifact
-        artifact_id = artifact.artifact_id
-        claim = db_models.TemporalArtifactUseClaim
-
-        def unreferenced(column: Any, *conditions: Any) -> Any:
-            return (
-                ~exists().where(column == artifact_id, *conditions).correlate(artifact)
-            )
-
         return [
-            artifact.hard_deleted_at.is_not(None),
-            artifact.hard_deleted_at <= cutoff,
-            artifact.storage_backend == storage_backend,
-            artifact.retention_class != db_models.TemporalArtifactRetentionClass.PINNED,
+            *self._purge_scope(cutoff=cutoff, storage_backend=storage_backend),
             # A pending intent means content deletion is not yet confirmed.
-            unreferenced(db_models.TemporalArtifactDeletionIntent.artifact_id),
-            unreferenced(db_models.TemporalArtifactPin.artifact_id),
-            unreferenced(claim.artifact_id, claim.expires_at > now),
-            # The remediation link would lose its context ref (ON DELETE SET
-            # NULL); keep the tombstone as that run's diagnostic context.
-            unreferenced(
-                db_models.TemporalExecutionRemediationLink.context_artifact_ref
-            ),
-            ~self._active_journal_reference_exists(artifact_id).correlate(artifact),
+            ~exists()
+            .where(
+                db_models.TemporalArtifactDeletionIntent.artifact_id
+                == artifact.artifact_id
+            )
+            .correlate(artifact),
+            *(~protection for protection in self._purge_protections(now=now)),
         ]
 
     async def list_purge_candidates(
@@ -1577,15 +1599,16 @@ class TemporalArtifactRepository:
         now: datetime,
         storage_backend: db_models.TemporalArtifactStorageBackend,
         limit: int = 500,
-    ) -> list[tuple[str, str]]:
-        """Lock one page of purgeable tombstones as (artifact_id, storage_key).
+    ) -> list[tuple[str, str, datetime]]:
+        """Lock one page of purgeable tombstones in purge order.
 
-        Rows locked by a concurrent writer, such as a pin, claim or link
-        insert holding its foreign-key lock, are skipped for a later pass.
+        Returns (artifact_id, storage_key, hard_deleted_at). Rows locked by a
+        concurrent writer, such as a pin, claim or link insert holding its
+        foreign-key lock, are skipped for a later pass.
         """
         artifact = db_models.TemporalArtifact
         stmt = (
-            select(artifact.artifact_id, artifact.storage_key)
+            select(artifact.artifact_id, artifact.storage_key, artifact.hard_deleted_at)
             .where(
                 *self._purge_eligibility(
                     cutoff=cutoff, now=now, storage_backend=storage_backend
@@ -1596,7 +1619,29 @@ class TemporalArtifactRepository:
             .with_for_update(skip_locked=True, of=artifact)
         )
         result = await self._session.execute(stmt)
-        return [(str(row[0]), str(row[1])) for row in result.all()]
+        return [(str(row[0]), str(row[1]), row[2]) for row in result.all()]
+
+    async def count_protected_tombstones(
+        self,
+        *,
+        frontier: datetime,
+        now: datetime,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+    ) -> int:
+        """Count tombstones up to ``frontier`` that a protection withholds.
+
+        Candidate selection already walks these rows in hard-delete order, so
+        bounding the count by the page's frontier keeps it to the same scan.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(db_models.TemporalArtifact)
+            .where(
+                *self._purge_scope(cutoff=frontier, storage_backend=storage_backend),
+                or_(*self._purge_protections(now=now)),
+            )
+        )
+        return int(await self._session.scalar(stmt) or 0)
 
     async def filter_purge_eligible(
         self,
@@ -4236,17 +4281,24 @@ class TemporalArtifactService:
             cutoff=cutoff, now=now, storage_backend=backend, limit=limit
         )
         counts = {"candidates": len(candidates), "purged": 0, "links": 0}
-        counts["protected"] = counts["unconfirmed"] = counts["errors"] = 0
-        if not candidates:
-            return counts
+        counts["unconfirmed"] = counts["errors"] = 0
         eligible = await self._repository.filter_purge_eligible(
-            [artifact_id for artifact_id, _key in candidates],
+            [artifact_id for artifact_id, _key, _at in candidates],
             cutoff=cutoff,
             now=now,
             storage_backend=backend,
         )
-        counts["protected"] = len(candidates) - len(eligible)
-        rows = [(item, key) for item, key in candidates if item in eligible]
+        # Selection excludes withheld tombstones, so count those the page
+        # walked past, including any protected since selection; a short page
+        # walked to the cutoff.
+        counts["protected"] = await self._repository.count_protected_tombstones(
+            frontier=candidates[-1][2] if len(candidates) >= limit else cutoff,
+            now=now,
+            storage_backend=backend,
+        )
+        if not candidates:
+            return counts
+        rows = [(item, key) for item, key, _at in candidates if item in eligible]
         shared = await self._repository.storage_keys_with_live_reference(
             storage_backend=backend, storage_keys={key for _item, key in rows}
         )
@@ -4517,7 +4569,8 @@ class TemporalArtifactService:
             purge_candidate_count=sum(p.purge_candidate_count for p in pages),
             purged_count=sum(p.purged_count for p in pages),
             purged_link_count=sum(p.purged_link_count for p in pages),
-            purge_protected_count=sum(p.purge_protected_count for p in pages),
+            # Every page recounts the same withheld rows; the last is current.
+            purge_protected_count=pages[-1].purge_protected_count,
             purge_unconfirmed_count=sum(p.purge_unconfirmed_count for p in pages),
             purge_error_count=sum(p.purge_error_count for p in pages),
         )
