@@ -37,7 +37,8 @@ recreated stack, can verify what an earlier phase saved):
     Read back everything saved: credential metadata without plaintext, the
     setting binding and its redacted usage, the recurring definition and its
     dispatched run, each execution's retained terminal state, the attached
-    artifact bytes, and the saved preset version.
+    artifact bytes, and the saved instance preset's input contract and explicit
+    input expansion.
 ``release``
     Remove the setting override so later work does not use the synthetic
     token.
@@ -502,6 +503,7 @@ def populate(
         "workflowId": dispatched,
     }
 
+    audience = f"operator-selected audience for {label}"
     preset = api.json(
         "POST",
         "/api/presets",
@@ -509,13 +511,29 @@ def populate(
             "slug": f"single-user-journey-{label}-{uuid.uuid4().hex[:8]}",
             "title": f"single-user journey preset {label}",
             "description": "Single-user journey preset read back after restarts.",
-            "steps": [{"instructions": "Single-user journey preset step."}],
+            "scope": "global",
+            "inputs": [
+                {
+                    "name": "audience",
+                    "label": "Audience",
+                    "type": "text",
+                    "required": True,
+                    "default": "default audience",
+                }
+            ],
+            "steps": [{"instructions": "Write a report for {{ inputs.audience }}."}],
         },
         expect=(201,),
     )
     if not preset.get("slug"):
         raise JourneyFailure(f"preset creation returned no slug: {preset}")
+    if preset.get("scope") != "global" or preset.get("scopeRef") is not None:
+        raise JourneyFailure("instance preset was saved with personal scope")
     state["preset"] = preset_identity(preset)
+    state["presetApplication"] = {
+        "inputs": {"audience": audience},
+        "instructions": [f"Write a report for {audience}."],
+    }
     log(f"preset {preset['slug']} saved ({preset.get('presetDigest')})")
     state["executions"] = [
         {
@@ -528,6 +546,7 @@ def populate(
         # dispatched run cannot complete, so it is observed, not canceled.
         {"workflowId": dispatched, "title": name, "cancel": False},
     ]
+    verify_preset(api, state)
 
 
 def preset_identity(preset: dict[str, Any]) -> dict[str, Any]:
@@ -539,6 +558,7 @@ def preset_identity(preset: dict[str, Any]) -> dict[str, Any]:
         "scopeRef": preset.get("scopeRef"),
         "title": preset.get("title"),
         "presetDigest": preset.get("presetDigest"),
+        "inputs": preset.get("inputs") or [],
         "steps": [step.get("instructions") for step in preset.get("steps") or []],
     }
 
@@ -563,7 +583,24 @@ def verify_preset(api: Api, state: dict[str, Any]) -> None:
             f"preset {saved['slug']} changed: saved {saved}, found "
             f"{preset_identity(found)}"
         )
-    log(f"preset {saved['slug']} retained at {saved['presetDigest']}")
+    application = state.get("presetApplication")
+    if not application:
+        raise JourneyFailure("no explicit preset application recorded to verify")
+    expanded = api.json(
+        "POST",
+        f"/api/presets/{quote(saved['slug'])}:expand?{query}",
+        body={"inputs": application["inputs"]},
+    )
+    applied = expanded.get("appliedTemplate") or {}
+    instructions = [step.get("instructions") for step in expanded.get("steps") or []]
+    if (
+        applied.get("slug") != saved["slug"]
+        or applied.get("presetDigest") != saved["presetDigest"]
+        or applied.get("inputs") != application["inputs"]
+        or instructions != application["instructions"]
+    ):
+        raise JourneyFailure(f"preset {saved['slug']} expansion changed")
+    log(f"preset {saved['slug']} retained at {saved['presetDigest']} with explicit inputs")
 
 
 def credential(api: Api, state: dict[str, Any], *, label: str) -> None:
