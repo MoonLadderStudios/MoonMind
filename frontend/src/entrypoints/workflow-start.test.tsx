@@ -14968,6 +14968,34 @@ describe("Task Create submit arrow animation", () => {
     }
   });
 
+  it("launches a glowing ring outside the submit bar when Start is pressed", async () => {
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    try {
+      const createButton = await screen.findByRole("button", {
+        name: "Start Workflow",
+      });
+      expect(document.querySelector(".queue-submit-primary-ripple")).toBeNull();
+
+      fireEvent.pointerDown(createButton, { button: 0 });
+
+      const ripple = await waitFor(() => {
+        const element = document.querySelector<HTMLElement>(
+          ".queue-submit-primary-ripple",
+        );
+        expect(element).not.toBeNull();
+        return element as HTMLElement;
+      });
+      // Portaled to the body so the liquid-glass bar's overflow cannot clip it.
+      expect(createButton.closest(".queue-floating-bar")?.contains(ripple)).toBe(
+        false,
+      );
+      expect(ripple.closest("[aria-hidden='true']")).not.toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
   it("keeps the create arrow exited after submit until navigation", async () => {
     let resolveExecution: (response: Response) => void = () => {};
     let scheduledArrowClear: (() => void) | null = null;
