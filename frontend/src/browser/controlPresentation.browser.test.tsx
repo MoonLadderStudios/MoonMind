@@ -2,7 +2,9 @@ import type {} from '@vitest/browser-playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cdp, page, userEvent } from 'vitest/browser';
 import { cleanup, render } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { Button } from '../components/Button';
+import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { contrast, paint, textContrast } from './colorContrast';
 import '../styles/dashboard.css';
@@ -162,12 +164,53 @@ describe('rendered dashboard control presentation', () => {
     expect(getComputedStyle(container.querySelector('#queue-dependency-list li')!).display).toBe('grid');
   });
 
-  it.skipIf(!navigator.userAgent.includes('Chrome'))('removes control motion when reduced motion is requested', async () => {
+  it.skipIf(!navigator.userAgent.includes('Chrome')).each(['light', 'dark'])('removes control motion when reduced motion is requested (%s)', async (theme) => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
     const protocol = cdp();
     await protocol.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     try {
-      const { getByRole } = render(<Button>Action</Button>);
-      expect(getComputedStyle(getByRole('button')).transitionDuration).toBe('0s');
+      expect(matchMedia('(prefers-reduced-motion: reduce)').matches).toBe(true);
+      const { getByRole } = render(<>
+        <Button>Action</Button>
+        <MemoryRouter initialEntries={['/workflows']}>
+          <DashboardSystemMenu uiInfo={null} availabilityUnknown mobileDrawerOpen={false} />
+        </MemoryRouter>
+        <div className="workflow-list-display-control" role="radiogroup" aria-label="List display">
+          <button className="workflow-list-display-option" role="radio" aria-checked="true">List</button>
+          <button className="workflow-list-display-option" role="radio" aria-checked="false">Table</button>
+        </div>
+      </>);
+      expect(getComputedStyle(getByRole('button', { name: 'Action' })).transitionDuration).toBe('0s');
+
+      const trigger = getByRole('button', { name: 'System' });
+      const checkNoMotion = (element: Element) => {
+        const style = getComputedStyle(element);
+        expect(style.animationName, element.className).toBe('none');
+        expect(style.transitionDuration, element.className).toBe('0s');
+        expect(style.transform, element.className).toBe('none');
+      };
+      checkNoMotion(trigger);
+      await userEvent.hover(trigger);
+      checkNoMotion(trigger);
+      trigger.focus();
+      await userEvent.keyboard('{ArrowDown}');
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      await expect.poll(() => getByRole('menu', { name: 'System' }).contains(document.activeElement)).toBe(true);
+      checkNoMotion(trigger);
+      checkNoMotion(getByRole('menu', { name: 'System' }));
+
+      const display = getByRole('radiogroup', { name: 'List display' });
+      const thumb = () => getComputedStyle(display, '::before');
+      expect(thumb().transitionDuration).toBe('0s');
+      const before = thumb().transform;
+      getByRole('radio', { name: 'List' }).setAttribute('aria-checked', 'false');
+      getByRole('radio', { name: 'Table' }).setAttribute('aria-checked', 'true');
+      expect(thumb().transitionDuration).toBe('0s');
+      expect(thumb().transform).not.toBe(before);
+
+      await userEvent.keyboard('{Escape}');
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+      expect(document.activeElement).toBe(trigger);
     } finally {
       await protocol.send('Emulation.setEmulatedMedia', { features: [] });
     }
