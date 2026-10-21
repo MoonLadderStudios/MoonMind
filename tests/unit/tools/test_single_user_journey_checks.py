@@ -394,14 +394,17 @@ def test_preset_read_back_requires_the_saved_version(api_server, tmp_path):
     api = journey.Api(base)
     state = {
         "preset": journey.preset_identity(saved),
-        "presetApplication": {"inputs": {}, "instructions": ["Say hello."]},
+        "presetApplication": {
+            "inputs": {}, "instructions": ["Say hello."], "stepIds": ["step-1"]
+        },
     }
     execution.preset_expansion = {
-        "steps": [{"instructions": "Say hello."}],
+        "steps": [{"id": "step-1", "instructions": "Say hello."}],
         "appliedTemplate": {
             "slug": saved["slug"],
             "presetDigest": saved["presetDigest"],
             "inputs": {},
+            "stepIds": ["step-1"],
         },
     }
 
@@ -430,11 +433,12 @@ def _preset_with_explicit_input(execution):
         "steps": [{"instructions": "Write for {{ inputs.audience }}."}],
     }
     execution.preset_expansion = {
-        "steps": [{"instructions": "Write for operator choice."}],
+        "steps": [{"id": "step-1", "instructions": "Write for operator choice."}],
         "appliedTemplate": {
             "slug": "instance-journey-preset",
             "presetDigest": "sha256:custom",
             "inputs": {"audience": "operator choice"},
+            "stepIds": ["step-1"],
         },
     }
     return {
@@ -442,6 +446,7 @@ def _preset_with_explicit_input(execution):
         "presetApplication": {
             "inputs": {"audience": "operator choice"},
             "instructions": ["Write for operator choice."],
+            "stepIds": ["step-1"],
         },
     }
 
