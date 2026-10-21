@@ -106,11 +106,6 @@ async def require_operator(request: Request) -> OperatorAdmission:
         raise _http_exception(exc) from exc
 
 
-async def enforce_disabled_mode_ingress(request: Request) -> None:
-    """Apply the same admission to retained UUID consumers before resolution."""
-    await require_operator(request)
-
-
 async def require_operator_optional(request: Request) -> OperatorAdmission | None:
     """Optional counterpart for separately authenticated machine paths.
 

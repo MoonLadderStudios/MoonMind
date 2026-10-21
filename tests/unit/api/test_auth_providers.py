@@ -53,8 +53,7 @@ async def test_disabled_mode_missing_identity_fails_closed_without_stub(monkeypa
 
     mock_session = AsyncMock(spec=AsyncSession)
     mock_session.get.side_effect = ConnectionError("db down")
-    scope = {"type": "http", "method": "GET", "headers": [(b"host", b"localhost")],
-             "client": ("127.0.0.1", 32000), "query_string": b""}
+    scope = {"type": "http", "headers": [], "query_string": b""}
     request = Request(scope)
 
     dependency = get_current_user()
