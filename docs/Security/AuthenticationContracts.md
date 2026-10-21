@@ -433,12 +433,14 @@ Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/api/routers/operator_boundary_4347.py` (test-only demonstration).
 
 Settings, presets, secrets, dashboard, execution, recurrence and artifact routes
-retain their real predecessor principal until guarded conversion publishes;
-pending or refused conversion cannot cut over installed access. Missing accounts
-or an unavailable identity store still fail closed. After publication these routes
-consume permission-only admission with shared peer, Host and Origin enforcement.
-Other UUID consumers retain their compatibility principal. Demonstration routers
-stay unmounted; isolated route evidence does not establish deployed access.
+retain their real predecessor principal until guarded conversion publishes.
+Retained requests require local transport or the existing explicitly approved
+non-loopback ingress, plus configured Host and mutation-origin checks. Pending
+conversion cannot cut over installed access; missing accounts or an unavailable
+identity store still fail closed. Published conversion uses permission-only
+admission. Other UUID consumers retain their compatibility principal.
+Demonstration routers stay unmounted; isolated route evidence does not establish
+deployed access.
 
 The rules below describe that primitive. Admission grants operator-interface
 access without resolving or creating a persisted person. Consumer migration
