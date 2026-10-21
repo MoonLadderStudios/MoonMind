@@ -965,6 +965,7 @@ def build_daemon_git_clone_argv(
     script += (
         git_environment + credential_environment + "git "
         "-c credential.helper= -c credential.useHttpPath=true -c http.extraHeader= "
+        "-c http.followRedirects=false "
         + helper_option
         + "clone "
         '${1:+--branch "$1"} --single-branch -- "$2" "$3"; '
