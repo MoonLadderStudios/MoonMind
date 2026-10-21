@@ -423,6 +423,15 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
                         ]
                     ),
                 }
+            if "exec" in args:
+                # The installed API's reply to the controller's conversion probe.
+                return {
+                    "exit": 0,
+                    "output": "MOONMIND_SINGLE_USER_CONVERSION="
+                    + json.dumps(
+                        {"published": True, "disposition": "eligible_conversion"}
+                    ),
+                }
             return {"exit": 0, "output": "ok"}
 
     def apply(controller, operation):
