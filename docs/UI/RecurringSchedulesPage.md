@@ -288,7 +288,8 @@ Recommended row fields:
 | `lastScheduledFor` | Most recent scheduled run time. |
 | `lastDispatchStatus` | Last dispatch outcome/status. |
 | `lastDispatchError` | Compact error supplement for attention rows. |
-| `scopeType` / `scopeRef` | Authorization/ownership facts. |
+| `scopeType` / `scopeRef` | Legacy provenance, never visibility or action authorization. |
+| `permissions` / `actions` | Backend-owned `canEdit`, `canRunNow`, `canDelete`, and `disabledReasons`. |
 | `target` | Target workflow/job payload and metadata. |
 | `policy` | Overlap, catchup, jitter, and other schedule policy. |
 | `temporalScheduleId` | Advanced Temporal identity when available. |
@@ -502,15 +503,21 @@ Rules:
 
 ## 14. API and runtime config expectations
 
-The page uses MoonMind recurring schedule APIs.
+The page uses MoonMind recurring schedule APIs. The router owns instance-wide
+visibility and action permissions; the dashboard consumes those decisions.
+It still uses the predecessor `get_current_user()` admission dependency. Stored
+`ownerUserId`, `scopeType`, and `scopeRef` are legacy provenance, not human
+ownership gates. The deprecated `scope=personal` and `scope=global` query values
+are accepted but ignored; new requests omit them. The dashboard also removes
+`scope` from retained boot-config URLs.
 
-Expected runtime config:
+Current runtime config from `api_service/api/routers/workflow_console_view_model.py`:
 
 ```json
 {
   "sources": {
     "schedules": {
-      "list": "/api/recurring-workflows?scope=personal",
+      "list": "/api/recurring-workflows",
       "create": "/api/recurring-workflows",
       "detail": "/api/recurring-workflows/{definitionId}",
       "update": "/api/recurring-workflows/{definitionId}",
@@ -526,41 +533,22 @@ Endpoint purposes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/recurring-workflows?scope=personal` | Load authorized recurring schedule list. |
+| `GET` | `/api/recurring-workflows` | Load the instance schedule list after admission. |
 | `GET` | `/api/recurring-workflows/{definitionId}` | Load schedule detail. |
 | `PATCH` | `/api/recurring-workflows/{definitionId}` | Save schedule edits. |
 | `POST` | `/api/recurring-workflows/{definitionId}/run` | Trigger immediate manual run. |
 | `GET` | `/api/recurring-workflows/{definitionId}/runs` | Load schedule-owned run history. |
 | `DELETE` | `/api/recurring-workflows/{definitionId}` | Delete or disable future recurring dispatch. |
 
-Data contract fields:
+Definition fields are listed in [the row model](#9-full-table-row-model-and-columns).
 
-| Field | Purpose |
-| --- | --- |
-| `id` / `definitionId` | Route key and product identity. |
-| `name` | Table link and detail title. |
-| `description` | Detail subtitle and optional table supplement. |
-| `enabled` | Active/paused state. |
-| `scheduleType` | Type/debug classification when available. |
-| `cron` | Cadence configuration. |
-| `timezone` | Cadence timezone. |
-| `nextRunAt` | Table timing, sidebar summary, and detail summary. |
-| `lastScheduledFor` | Recent-run summary and table timing. |
-| `lastDispatchStatus` | Dispatch health and attention state. |
-| `lastDispatchError` | Error supplement. |
-| `scopeType` / `scopeRef` | Ownership and authorization facts. |
-| `target` | Workflow/job target metadata and payload. |
-| `policy` | Overlap, catchup, jitter, and related dispatch policy. |
-| `temporalScheduleId` | Advanced/debug identity. |
-| `updatedAt` | Freshness display and sorting. |
-
-Potential API follow-ups:
-
-1. Align list fallback and runtime config on `/api/recurring-workflows?scope=personal` instead of older `/api/recurring-tasks?scope=personal` naming if the legacy name is no longer intentional.
-2. Add server-side `count`, `activeCount`, `next24hCount`, and `attentionCount` when pagination or filters make frontend-derived metrics misleading.
-3. Add server-authoritative sort/filter parameters for title, state, target/repository, next run, last scheduled, dispatch, and updated.
-4. Include a compact `targetSummary` when extracting target kind, repository, runtime, or model from nested payloads remains brittle in the frontend.
-5. Include authorization/action availability fields and disabled reasons for edit, run now, pause/resume, and delete.
+The router already returns result-level `count`, `activeCount`, `next24hCount`,
+`attentionCount`, and action permissions, with cursor pagination and server-side
+sorting/filtering. The admitted operator can manage every instance schedule; the UI
+must use the returned action fields and disabled reasons rather than infer
+permissions from scope or owner fields. Delete additionally requires the
+runtime-config route. A compact `targetSummary` is a desired display extension;
+the current router supplies nested `target` metadata instead.
 
 ---
 
@@ -748,6 +736,6 @@ Recommended implementation sequence:
 5. Mount recurring detail beside the recurring sidebar by default on desktop.
 6. Preserve existing edit, run now, pause/resume, run history, and delete behaviors inside detail.
 7. Add tests for route/mode resolution, shell/workspace radio semantics, summary metrics, sidebar selection, and one-off exclusion.
-8. Add API follow-ups for server-side counts and sort/filter support if pagination or global sorting is introduced.
+8. Keep server-side counts, sorting, and filtering aligned with the table and sidebar queries.
 
 This rollout should avoid changing the user's mental model all at once: keep the existing `/schedules` route and detail capabilities, then upgrade the page composition, naming, and list display behavior around them.
