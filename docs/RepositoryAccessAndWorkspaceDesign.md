@@ -172,6 +172,8 @@ Server-side readers and PR operations in `GitHubService` (pull-request and targe
 
 Issue collaboration (claims, labels, comments, search) uses the default connection's `issues` operation through `GitHubService.resolve_github_token`; Source Control grants `issues` with the other publishing operations, and a denied operation reports unavailable without substituting another account's token.
 
+Managed clones scope credential-helper responses to the admitted HTTPS repository; profile-bound clones also permit its standard LFS endpoint. Git's HTTP clone transport rejects redirects rather than implicitly admitting a different repository. Git LFS uses its own download transport; Git's redirect setting is not a confinement guarantee for LFS transfers. A moved repository must be selected again through admission. These transport checks do not confine a broad credential against arbitrary agent code.
+
 ### INV-004 Ambient identity cannot override admitted identity
 
 Git and hosting CLIs run with isolated home/configuration and scrubbed token variables, authorization headers, credential helpers, `.netrc`, and login caches unless the admitted adapter supplies them. Workspaces persist only credential-free remotes, and raw material never enters arguments, Docker metadata, durable environments, Temporal payloads, errors, digests, logs, checkpoints, or exports. Delivery objects belong to an attempt with generation-fenced cleanup. Anonymous access creates no token file or materializer. Where a CLI needs authentication for a declared operation, the runtime provides a supported unauthenticated interface or rejects the combination.

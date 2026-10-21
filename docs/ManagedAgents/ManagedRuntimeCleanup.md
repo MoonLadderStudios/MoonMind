@@ -482,8 +482,8 @@ Default schedule:
 The same operational workflow coordinates adjacent storage owners after the
 workspace pass: age-bounded Docker image/build-cache expiry runs at
 the trusted agent-runtime boundary on every hourly pass, and the artifact service's lifecycle
-Activity expires and hard-deletes blobs under its own
-retention policy. These operations do not move their classification or deletion
+Activity expires and hard-deletes blobs, then reclaims tombstone metadata after
+its retention horizon, under its own retention policy. These operations do not move their classification or deletion
 semantics into the workspace janitor. Failure in either adjacent owner is
 reported as degraded maintenance and retried by the next hourly run; it does not
 erase a successful workspace result.

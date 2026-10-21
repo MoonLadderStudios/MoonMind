@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -70,6 +70,86 @@ async def test_preflight_decides_from_its_single_inventory(monkeypatch):
     assert result.inventory is first
     assert result.fingerprint == first.fingerprint()
     assert collect.await_count == 1
+
+
+async def test_repeated_artifact_owners_are_classified_once(tmp_path, monkeypatch):
+    """Retained history size must not multiply identity classification work."""
+    async with database(tmp_path) as maker, maker() as session:
+        owner = uuid4()
+        session.add(User(id=owner, email="retained@example.invalid"))
+        session.add_all(
+            [
+                TemporalArtifact(
+                    artifact_id=f"history-{index}",
+                    storage_key=f"key-{index}",
+                    created_by_principal=str(owner),
+                )
+                for index in range(512)
+            ]
+        )
+        await session.commit()
+        classify = Mock(wraps=conversion._looks_like_uuid)
+        monkeypatch.setattr(conversion, "_looks_like_uuid", classify)
+
+        inventory = await conversion.collect_inventory(session)
+
+        assert inventory.principals["temporal_artifacts.created_by_principal"] == [
+            str(owner)
+        ]
+        assert (
+            inventory.resource_counts["temporal_artifacts.created_by_principal"] == 512
+        )
+        assert classify.call_args_list.count(((str(owner),), {})) == 1
+
+
+async def test_unresolved_principals_refuse_without_hashing_history(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    async with database(tmp_path) as maker, maker() as session:
+        session.add_all(
+            [
+                TemporalArtifact(
+                    artifact_id=f"unresolved-{index}",
+                    storage_key=f"key-{index}",
+                    created_by_principal="unproven-retained-owner",
+                )
+                for index in range(128)
+            ]
+        )
+        await session.commit()
+        digest = AsyncMock(side_effect=AssertionError("refused history was hashed"))
+        monkeypatch.setattr(conversion, "_table_content_digest", digest)
+
+        result = await conversion.run_guarded_upgrade(
+            session,
+            operator_authorized=True,
+        )
+
+        assert not result.published
+        assert result.decision.reason_code == "inventory_unavailable"
+        assert (
+            "principal:temporal_artifacts.created_by_principal"
+            in result.decision.detail
+        )
+        assert (
+            sum(
+                record.message == "single-user conversion inventory unreadable: "
+                "principal:temporal_artifacts.created_by_principal"
+                for record in caplog.records
+            )
+            == 1
+        )
+        digest.assert_not_awaited()
+        assert (
+            await session.execute(select(conversion.SingleUserConversionRun))
+        ).scalars().all() == []
+        assert not any(
+            (await session.execute(select(TemporalArtifact.operator_recovery_granted)))
+            .scalars()
+            .all()
+        )
 
 
 async def test_explicit_preflight_and_apply_each_scan_once(tmp_path, monkeypatch):

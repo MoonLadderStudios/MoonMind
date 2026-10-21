@@ -1138,6 +1138,123 @@ def test_production_apply_verifies_release_before_success(
     assert all(check["status"] == "passed" for check in loaded["verification"])
 
 
+def test_slow_start_waits_after_one_apply_before_routing_cutover(
+    controller_path, tmp_path, monkeypatch
+):
+    import types
+
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(
+        record,
+        store,
+        {
+            "project": "moonmind-test",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api"],
+        },
+    )
+    runner = _verification_runner(server.engine)
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+    elapsed = [0.0]
+    monkeypatch.setattr(
+        server.engine,
+        "time",
+        types.SimpleNamespace(
+            monotonic=lambda: elapsed[0],
+            sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+        ),
+    )
+
+    def observe(*args, **kwargs):
+        ready = elapsed[0] >= 600
+        return {
+            "services": {"api": ready},
+            "health": {"api": "healthy" if ready else "unhealthy"},
+        }
+
+    monkeypatch.setattr(server.engine, "observe_services", observe)
+    cutovers = []
+
+    def cutover(*args, **kwargs):
+        assert elapsed[0] >= 600
+        assert store.load(operation["operationId"])["installed"]
+        cutovers.append(True)
+
+    monkeypatch.setattr(server, "converge_routing_cutover", cutover)
+    result = server.production_apply(store, operation)
+
+    assert result["status"] == "succeeded"
+    assert len([command for command in runner.commands if "up" in command]) == 1
+    assert len([command for command in runner.commands if "pull" in command]) == 1
+    assert cutovers == [True]
+    assert store.load(operation["operationId"])["attempts"] == []
+
+
+def test_readiness_restart_uses_installed_time_without_resetting_budget(
+    controller_path, tmp_path, monkeypatch
+):
+    import types
+
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    operation = _begin_op(
+        record,
+        store,
+        {
+            "project": "moonmind-test",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api"],
+        },
+    )
+    store.confirm_installed(
+        operation["operationId"],
+        image=operation["desired"]["image"],
+        verification_pending=True,
+    )
+    operation = store.load(operation["operationId"])
+    operation["installed"]["confirmedAt"] = "2026-10-19T23:06:00+00:00"
+    store._write(operation)
+    elapsed = [0.0]
+    # 14 minutes of the original 15-minute budget already elapsed before restart.
+    monkeypatch.setattr(
+        server, "time", types.SimpleNamespace(time=lambda: 1792452000 + elapsed[0])
+    )
+    monkeypatch.setattr(
+        server.engine,
+        "time",
+        types.SimpleNamespace(
+            monotonic=lambda: elapsed[0],
+            sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+        ),
+    )
+    runner = _verification_runner(server.engine, health="unhealthy")
+    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
+    monkeypatch.setattr(
+        server,
+        "converge_routing_cutover",
+        lambda *a, **kw: pytest.fail("unready workers cannot cut over"),
+    )
+
+    result = server.production_apply(store, operation)
+
+    assert elapsed[0] == 60
+    assert result["status"] == "partially_verified"
+    assert not any("up" in command or "pull" in command for command in runner.commands)
+    final = store.load(operation["operationId"])
+    assert final["installed"] == operation["installed"]
+    assert any(
+        c["name"] == "service:api"
+        and c["status"] == "failed"
+        and "unhealthy" in c["detail"]
+        for c in final["verification"]
+    )
+
+
 def test_production_apply_accepts_completed_one_shot_services(
     controller_path, tmp_path, monkeypatch
 ):
@@ -1218,6 +1335,7 @@ def test_restart_resumes_installed_verification_without_reapplying(
 ):
     record = load("record")
     server = load("server")
+    monkeypatch.setattr(server, "SERVICE_READINESS_TIMEOUT_SECONDS", 0)
     store = record.OperationStore(tmp_path / "state")
     operation = _begin_op(record, store, {
         "project": "moonmind-test", "projectDir": str(tmp_path),
@@ -1292,6 +1410,7 @@ def test_unavailable_service_observation_never_finishes_as_success(
 ):
     record = load("record")
     server = load("server")
+    monkeypatch.setattr(server, "SERVICE_READINESS_TIMEOUT_SECONDS", 0)
     store = record.OperationStore(tmp_path / "state")
     operation = _begin_op(record, store, {
         "project": "moonmind-test", "projectDir": str(tmp_path),
@@ -1319,6 +1438,7 @@ def test_production_apply_still_fails_a_one_shot_that_exited_non_zero(
 
     record = load("record")
     server_mod = load("server")
+    monkeypatch.setattr(server_mod, "SERVICE_READINESS_TIMEOUT_SECONDS", 0)
     store = record.OperationStore(tmp_path / "state")
     target = {
         "project": "moonmind",

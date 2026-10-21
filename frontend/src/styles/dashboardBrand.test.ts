@@ -38,15 +38,17 @@ describe('dashboard page layout styles', () => {
     const clickedSubmit = cssRuleBlock(
       '.queue-submit-primary--icon.queue-submit-primary--arrow-exit',
     );
+    // The shared .mm-button state rules paint from these, so the outline holds
+    // through hover, press and the disabled in-flight state.
+    expect(clickedSubmit).toContain('--queue-submit-sheen: none;');
     expect(clickedSubmit).toContain(
-      'background-color: rgb(var(--mm-action-primary) / 0.12);',
+      '--mm-button-fill: rgb(var(--mm-action-primary) / 0.12);',
     );
-    expect(clickedSubmit).toContain('background-image: none;');
-    expect(clickedSubmit).toContain('border-color: rgb(var(--mm-action-primary));');
-    expect(clickedSubmit).toContain('color: rgb(var(--mm-action-primary));');
+    expect(clickedSubmit).toContain('--mm-button-stroke: rgb(var(--mm-action-primary));');
+    expect(clickedSubmit).toContain('--mm-button-color: rgb(var(--mm-action-primary));');
   });
 
-  it('morphs the clicked create workflow arrow into a check in the primary color', () => {
+  it('morphs the clicked create workflow arrow into a green check', () => {
     expect(
       cssRuleBlock(
         '.queue-submit-primary--icon.queue-submit-primary--arrow-exit .queue-submit-primary-arrow-glyph[data-submit-icon="arrow"]',
@@ -60,7 +62,7 @@ describe('dashboard page layout styles', () => {
     expect(
       cssRuleBlock('.queue-submit-primary--icon .queue-submit-primary-arrow-glyph--check'),
     ).toContain('opacity: 0;');
-    // The check inherits the button's clicked color, which is the primary action token.
+    // The check inherits the button's clicked color, which is the green action token.
     expect(cssRuleBlock('.queue-submit-primary-arrow svg')).toContain(
       'stroke: currentcolor;',
     );

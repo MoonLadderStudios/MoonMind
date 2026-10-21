@@ -935,7 +935,9 @@ def _group_running(group: int) -> bool:
             continue
         try:
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # Linux may report ESRCH after opening stat when that process exits.
+            # Continue observing the group: its launcher can exit before a plugin.
             continue
         if int(fields[2]) == group and fields[0] not in {"Z", "X"}:
             return True
