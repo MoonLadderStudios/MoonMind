@@ -497,7 +497,7 @@ export function WorkflowRowActionsMenu({
         items={items}
         triggerContent={KEBAB_ICON}
         triggerAriaLabel="More actions"
-        triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+        triggerClassName="td-workflow-actions-trigger td-workflow-actions-trigger-compact"
         menuAriaLabel="More actions"
         emptyMessage={emptyMessage}
         subject={workflowSubject}

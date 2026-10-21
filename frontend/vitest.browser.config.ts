@@ -33,6 +33,35 @@ export default defineConfig({
       enabled: true,
       headless: true,
       provider: playwright(),
+      commands: {
+        pointerButton: async ({ page }, action: 'down' | 'up') => page.mouse[action](),
+        touchTreatment: async ({ context, page }, markup: string, css: string) => {
+          const touchContext = await context.browser()!.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+          try {
+            const touchPage = await touchContext.newPage();
+            await touchPage.setContent(markup);
+            await touchPage.addStyleTag({ content: css });
+            const button = touchPage.locator('button');
+            const sample = () => button.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return [style.backgroundColor, style.backgroundImage, style.transform, style.filter, style.boxShadow];
+            });
+            const before = await sample();
+            await button.tap();
+            // A touch tap may paint a short native press after touchend. Check
+            // the released treatment, including any synthetic hover left behind.
+            await touchPage.waitForFunction((baseline) => {
+              const element = document.querySelector('button')!;
+              const style = getComputedStyle(element);
+              return !element.matches(':active') && [style.backgroundColor, style.backgroundImage, style.transform, style.filter, style.boxShadow].every((value, index) => value === baseline[index]);
+            }, before, { timeout: 2000 });
+            return { before, after: await sample(), hoverNone: await touchPage.evaluate(() => matchMedia('(hover: none)').matches) };
+          } finally {
+            await touchContext.close();
+            await page.bringToFront();
+          }
+        },
+      },
       // Local runs default to both engines. CI assigns one engine per matrix leg.
       instances: engines.map((browser) => ({
         browser,

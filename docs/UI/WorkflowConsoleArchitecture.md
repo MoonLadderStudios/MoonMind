@@ -355,7 +355,7 @@ The README dashboard images (`docs/assets/workflow-list.png`, `docs/assets/workf
 1. Build with `npm run ui:build`.
 2. Serve `api_service/templates/react_dashboard.html` with boot payload `{"page":"dashboard","apiBase":"/api"}` on `/workflows` and `/workflows/{workflowId}`.
 3. Use deterministic synthetic rows over the `/api/executions` list/detail/steps contracts, shaped like `frontend/src/entrypoints/workflow-list.test.tsx`, with only public repository names and no private repositories, prompts, emails, tokens, or signed URLs. Capture detail from the Overview tab (`/workflows/{workflowId}/overview?source=temporal`).
-4. Use a 1600×1000 viewport in dark mode (`localStorage["moonmind.theme"] = "dark"` before loading; confirm `data-theme="dark"` on the root) and wait for rows, detail summary, and fonts.
+4. Use a 1600×1000 viewport and emulate a dark system color scheme before loading; confirm `data-theme="dark"` on the root and wait for rows, detail summary, and fonts. The dashboard follows system theme changes live.
 5. Capture PNGs from the browser, framed without excess empty space (list 1600×500, Overview 1600×880), and check them at README display size without restyling the UI or editing content.
 
 The captures are refreshed when the pictured flow materially changes. They are not checked byte-for-byte and are not a required CI gate.

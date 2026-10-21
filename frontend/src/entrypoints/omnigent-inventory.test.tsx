@@ -300,6 +300,9 @@ describe('OmnigentInventoryPage', () => {
     expect(await screen.findByText('Dependent host profiles: 1')).toBeTruthy();
     expect(screen.getByText('oauth-host-codex')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Disable codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
+    const reasonId = screen.getByRole('button', { name: 'Disable codex-static@2' }).getAttribute('aria-describedby');
+    expect(reasonId).toBeTruthy();
+    expect(document.getElementById(reasonId!)?.textContent).toContain('Switch the policy default before disabling');
     expect((screen.getByRole('button', { name: 'Deprecate codex-static@2' }) as HTMLButtonElement).disabled).toBe(true);
   });
 

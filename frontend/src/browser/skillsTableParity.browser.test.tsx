@@ -4,6 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { navigateTo } from '../lib/navigation';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
+import { composite, textContrast } from './colorContrast';
 
 import '../styles/dashboard.css';
 
@@ -131,6 +132,27 @@ afterEach(async () => {
 });
 
 describe('skills table visual parity (MoonMind#3346)', () => {
+  it('operates the production skill preview tabs with the keyboard', async () => {
+    const create = screen.getByRole('button', { name: 'Create New Skill' });
+    const primary = getComputedStyle(document.documentElement).getPropertyValue('--mm-button-primary');
+    expect(composite(getComputedStyle(create).backgroundColor)).toEqual(composite(`rgb(${primary})`));
+    expect(textContrast(create, 'white')).toBeGreaterThanOrEqual(4.5);
+    navigateTo('/skills/pr-resolver');
+    const rendered = await screen.findByRole('tab', { name: 'Rendered' });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'PR Resolver', level: 1 })));
+    await userEvent.tab();
+    expect(document.activeElement).toBe(rendered);
+    await userEvent.keyboard('{ArrowRight}');
+    const raw = screen.getByRole('tab', { name: 'Raw Markdown' });
+    expect(document.activeElement).toBe(raw);
+    expect(raw.getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe(raw.id);
+    await userEvent.keyboard('{End}');
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: 'Metadata' }));
+    await userEvent.keyboard('{ArrowRight}');
+    expect(document.activeElement).toBe(rendered);
+    expect(document.querySelector('.panel[aria-live]')).toBeNull();
+  });
   it.each(['light', 'dark'] as const)(
     'runs body rows transparent over the page surface in the %s theme with legible text and no faded-table opacity',
     (theme) => {

@@ -821,7 +821,7 @@ describe('Workflows Entrypoint', () => {
     expect(within(idleRow).getByText('Idle').className).toContain('status-neutral');
     expect(within(idleRow).queryByText('Completed')).toBeNull();
     expect(within(screen.getByRole('row', { name: /Verified no-commit work/ })).getByText('No commit')).toBeTruthy();
-    expect(within(screen.getByRole('row', { name: /Live workflow/ })).getByLabelText('Executing')).toBeTruthy();
+    expect(within(screen.getByRole('row', { name: /Live workflow/ })).getByText('Executing')).toBeTruthy();
     expect(within(screen.getByRole('row', { name: /Older objective contract/ })).getByText('Completed')).toBeTruthy();
   });
 
@@ -1387,16 +1387,10 @@ describe('Workflows Entrypoint', () => {
       expect(pill.className).toContain(`is-${label}`);
       expect(pill.className).toContain(`status-${label === 'executing' ? 'running' : label}`);
       expect(pill.dataset.shimmerLabel).toBe(visibleLabel);
-      expect(pill.getAttribute('aria-label')).toBe(visibleLabel);
       expect(pill.textContent).toBe(visibleLabel);
-      expect(pill.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
-      const glyphs = Array.from(pill.querySelectorAll<HTMLElement>('.status-letter-wave__glyph'));
-      expect(glyphs).toHaveLength(visibleLabel.length);
-      expect(glyphs.map((glyph) => glyph.textContent).join('')).toBe(visibleLabel);
-      expect(glyphs.map((glyph) => glyph.style.getPropertyValue('--mm-letter-index'))).toEqual(
-        Array.from({ length: visibleLabel.length }, (_, index) => String(index)),
-      );
-      expect(glyphs.every((glyph) => glyph.style.getPropertyValue('--mm-letter-count') === String(visibleLabel.length))).toBe(true);
+      expect(pill.textContent).toBe(visibleLabel);
+      expect(pill.querySelector('.status-label')?.getAttribute('aria-hidden')).toBeNull();
+      expect(pill.querySelector('.status-label')?.textContent).toBe(visibleLabel);
     }
 
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
@@ -1472,8 +1466,8 @@ describe('Workflows Entrypoint', () => {
     for (const pill of pills) {
       expect(pill.className).toContain('status-running');
       expect(pill.className).toContain('is-executing');
-      expect(pill.getAttribute('aria-label')).toBe('Executing');
-      expect(pill.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Executing');
+      expect(pill.textContent).toBe('Executing');
+      expect(pill.querySelector('.status-label')?.textContent).toBe('Executing');
     }
   });
 

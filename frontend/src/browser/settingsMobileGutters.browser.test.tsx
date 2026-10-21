@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { BrowserRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { ProvidersSecretsSettingsPage } from '../entrypoints/settings';
 import { renderWithClient, screen } from '../utils/test-utils';
+import { contrast } from './colorContrast';
 import '../styles/dashboard.css';
 
 // Real-browser guardrail for the Providers & Secrets phone layout. The
@@ -96,7 +97,7 @@ beforeEach(() => {
         return jsonResponse([savedProfile]);
       }
       if (url.startsWith('/api/v1/secrets')) {
-        return jsonResponse({ items: [] });
+        return jsonResponse({ items: [{ slug: 'github-token', status: 'active', details: {}, createdAt: '2026-10-17T00:00:00Z' }] });
       }
       return jsonResponse({}, 404);
     }),
@@ -116,10 +117,41 @@ afterEach(async () => {
   shell.remove();
   document.body.style.margin = '';
   vi.unstubAllGlobals();
+  document.documentElement.classList.remove('dark');
   await page.viewport(1280, 800);
 });
 
 describe('Providers & Secrets phone gutters', () => {
+  it('keeps removal of an unsaved tier neutral', async () => {
+    await renderProvidersPage();
+    await userEvent.click(screen.getByRole('button', { name: 'Duplicate Tier 1 as new last tier' }));
+    const remove = screen.getByRole('button', { name: 'Remove Tier 2' });
+    expect(getComputedStyle(remove).color).toBe(getComputedStyle(document.body).color);
+    expect(getComputedStyle(remove).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+  });
+  it.each(['light', 'dark'])('keeps actual profile and secret actions readable with focus during hover (%s)', async (theme) => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    await renderProvidersPage();
+    await screen.findByRole('button', { name: 'Copy SecretRef for github-token' });
+    const profileButtons = [...panel.querySelectorAll<HTMLButtonElement>('.provider-profiles table button:not(:disabled)')];
+    const secretButtons = [...panel.querySelectorAll<HTMLButtonElement>('.managed-secrets-actions button:not(:disabled)')];
+    expect(profileButtons.length).toBeGreaterThanOrEqual(3);
+    expect(secretButtons.length).toBeGreaterThanOrEqual(3);
+    const surface = theme === 'dark' ? 'rgb(20, 18, 34)' : 'rgb(255, 255, 255)';
+    for (const button of [...profileButtons, ...secretButtons]) {
+      const background: string[] = [];
+      for (let parent: Element | null = button; parent; parent = parent.parentElement) background.unshift(getComputedStyle(parent).backgroundColor);
+      expect(contrast(getComputedStyle(button).color, surface, ...background), button.textContent ?? '').toBeGreaterThanOrEqual(4.5);
+    }
+    for (const button of [profileButtons[0]!, secretButtons[0]!]) {
+      button.focus();
+      await userEvent.keyboard('{Tab}{Shift>}{Tab}{/Shift}');
+      await userEvent.hover(button);
+      expect(document.activeElement).toBe(button);
+      expect(getComputedStyle(button).outlineStyle).toBe('solid');
+      expect(contrast(getComputedStyle(button).outlineColor, surface)).toBeGreaterThanOrEqual(3);
+    }
+  });
   it.each(PHONE_VIEWPORTS)('uses the dashboard root as the only page gutter at %spx', async (width) => {
     await page.viewport(width, 800);
     await renderProvidersPage();
