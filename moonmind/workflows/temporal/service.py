@@ -117,6 +117,7 @@ from moonmind.statuses.workflow import (
     TERMINAL_WORKFLOW_STATES,
     WORKFLOW_STATE_TO_CLOSE_STATUS,
     coerce_workflow_state,
+    workflow_objective_outcome,
 )
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
@@ -4708,6 +4709,16 @@ class TemporalExecutionService:
         )
         record.finish_outcome_code = str(outcome_code).strip() if outcome_code else None
         record.finish_summary_json = normalized_summary
+        if record.state is MoonMindWorkflowState.COMPLETED:
+            outcome = workflow_objective_outcome(
+                state=record.state,
+                memo=record.memo or {},
+                finish_summary=normalized_summary,
+            )
+            if outcome not in {None, "active"}:
+                # This Activity can precede the final Temporal projection. Its
+                # explicit objective must settle the earlier active memo too.
+                record.memo = {**dict(record.memo or {}), "objectiveOutcome": outcome}
 
     async def mark_execution_planning(
         self,
