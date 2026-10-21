@@ -8,11 +8,13 @@ tokens, and no-op idempotency without touching the record.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -103,7 +105,6 @@ def _opt_in_search_parameters() -> dict[str, object]:
             "instructions": "Search GitHub issues, then implement the match.",
             "taskTemplate": {
                 "slug": "github-issue-search-and-implement",
-                "scope": "global",
             },
             "titleEnrichment": {
                 "enabled": True,
@@ -270,15 +271,31 @@ async def test_set_title_rejects_empty_and_unsafe_titles(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retained_snapshot", [False, True])
 async def test_terminal_rerun_restarts_generated_title_from_base(
-    tmp_path, mock_client_adapter
+    tmp_path, mock_client_adapter, monkeypatch, retained_snapshot
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        parameters = _opt_in_search_parameters()
+        if retained_snapshot:
+            # Historical expanded work retains its original provenance, even
+            # after the live catalog stops accepting scoped authoring inputs.
+            parameters["workflow"]["taskTemplate"]["scope"] = "global"
+            parameters["workflow"]["inputs"] = {"issue_search": "", "enabled": False}
+            parameters["workflow"]["steps"] = [
+                {"id": "retained-step", "instructions": "Recorded custom content"}
+            ]
+            expected_snapshot = deepcopy(parameters["workflow"])
+            expansion = AsyncMock(side_effect=AssertionError("must not re-expand"))
+            monkeypatch.setattr(
+                "moonmind.workflows.temporal.service.expand_preset_for_child_run",
+                expansion,
+            )
         created = await _create(
             service,
             title=None,
-            initial_parameters=_opt_in_search_parameters(),
+            initial_parameters=parameters,
         )
         assert created.memo["title"] == "GitHub Issue Search and Implement"
 
@@ -315,6 +332,10 @@ async def test_terminal_rerun_restarts_generated_title_from_base(
         assert rerun.memo["titleBase"] == "GitHub Issue Search and Implement"
         assert rerun.memo["titleProvenance"] == "generated"
         assert rerun.memo["titleRevision"] == 0
+        if retained_snapshot:
+            expansion.assert_not_awaited()
+            for key in ("taskTemplate", "inputs", "steps"):
+                assert rerun.parameters["workflow"][key] == expected_snapshot[key]
 
 
 @pytest.mark.asyncio
@@ -377,3 +398,37 @@ async def test_set_title_same_text_still_marks_explicit(tmp_path, mock_client_ad
         assert updated.memo["title"] == "GitHub Issue Search and Implement"
         assert updated.memo["titleProvenance"] == "user_explicit"
         assert updated.memo["titleRevision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_rerun_refuses_unexpanded_legacy_preset(tmp_path, mock_client_adapter):
+    from api_service.services.presets.catalog import PresetValidationError
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        parameters = _opt_in_search_parameters()
+        parameters["workflow"]["taskTemplate"]["scope"] = "global"
+        created = await _create(service, initial_parameters=parameters)
+        await service.record_terminal_state(
+            workflow_id=created.workflow_id,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
+        )
+        starts_before = mock_client_adapter.start_workflow.await_count
+        record_count = select(func.count()).select_from(TemporalExecutionCanonicalRecord)
+        records_before = await session.scalar(record_count)
+        with pytest.raises(PresetValidationError, match="reapply the preset"):
+            await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="RequestRerun",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                parameters_patch=None,
+                title=None,
+                idempotency_key="refuse-legacy-rerun-4350",
+            )
+        assert mock_client_adapter.start_workflow.await_count == starts_before
+        assert await session.scalar(record_count) == records_before
+        retained = await service.describe_execution(created.workflow_id)
+        assert retained.parameters["workflow"]["taskTemplate"]["scope"] == "global"
