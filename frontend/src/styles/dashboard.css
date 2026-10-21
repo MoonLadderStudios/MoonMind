@@ -6743,11 +6743,16 @@ textarea {
     background 200ms ease-out;
 }
 
-/* Start keeps its own green launch treatment: a glowing fill at rest, a wider
- * halo on hover, and a flash plus an expanding ring on press. The compound
- * selectors outrank the shared .mm-button state rules, which still supply the
- * focus outline and the flat disabled state. */
-.mm-button.queue-submit-primary--icon {
+/* Saving a draft starts nothing, so it keeps the standard primary color. */
+.queue-submit-primary--icon:not(.queue-submit-primary--launch) {
+  --mm-action-primary: var(--mm-button-primary);
+}
+
+/* Actions that start work keep their own green launch treatment: a glowing
+ * fill at rest, a wider halo on hover, and a flash plus an expanding ring on
+ * press. The compound selectors outrank the shared .mm-button state rules,
+ * which still supply the focus outline and the flat disabled state. */
+.mm-button.queue-submit-primary--launch {
   --queue-submit-sheen: linear-gradient(
     100deg,
     color-mix(in srgb, rgb(var(--mm-action-primary)) 72%, rgb(var(--mm-accent-2))) 0%,
@@ -6769,7 +6774,7 @@ textarea {
 }
 
 @media (hover: hover) {
-  .mm-button.queue-submit-primary--icon:not(:disabled):not([aria-disabled="true"]):hover {
+  .mm-button.queue-submit-primary--launch:not(:disabled):not([aria-disabled="true"]):hover {
     --mm-button-stroke: rgb(var(--mm-action-primary));
     background-image: var(--queue-submit-sheen);
     box-shadow:
@@ -6783,7 +6788,7 @@ textarea {
   }
 }
 
-.mm-button.queue-submit-primary--icon:not(:disabled):not([aria-disabled="true"]):active {
+.mm-button.queue-submit-primary--launch:not(:disabled):not([aria-disabled="true"]):active {
   --mm-button-stroke: rgb(var(--mm-action-primary));
   background-image: var(--queue-submit-sheen);
   box-shadow:

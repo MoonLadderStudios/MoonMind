@@ -14314,7 +14314,12 @@ describe("Task Create MM-641 authoring validation", () => {
     const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
     await waitFor(() => expect(instructions.value).toBe("Draft the summary."));
     fireEvent.change(instructions, { target: { value: "Draft the revised summary." } });
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    const saveButton = screen.getByRole("button", { name: "Save Changes" });
+    // Saving a draft starts nothing, so it keeps the standard primary treatment.
+    expect(saveButton.classList.contains("queue-submit-primary--launch")).toBe(false);
+    fireEvent.pointerDown(saveButton, { button: 0 });
+    expect(document.querySelector(".queue-submit-primary-ripple")).toBeNull();
+    fireEvent.click(saveButton);
 
     const alert = await screen.findByText(rejection);
     expect(updates).toHaveLength(1);
@@ -14975,6 +14980,9 @@ describe("Task Create submit arrow animation", () => {
       const createButton = await screen.findByRole("button", {
         name: "Start Workflow",
       });
+      expect(createButton.classList.contains("queue-submit-primary--launch")).toBe(
+        true,
+      );
       expect(document.querySelector(".queue-submit-primary-ripple")).toBeNull();
 
       fireEvent.pointerDown(createButton, { button: 0 });
@@ -15089,6 +15097,15 @@ describe("Task Create submit arrow animation", () => {
       expect(
         createButton.classList.contains("queue-submit-primary--arrow-exit"),
       ).toBe(true);
+
+      // The in-flight control is aria-disabled, so another press must not
+      // acknowledge a second launch with a fresh ring.
+      const firstRipple = document.querySelector(".queue-submit-primary-ripple");
+      expect(firstRipple).not.toBeNull();
+      fireEvent.pointerDown(createButton, { button: 0 });
+      expect(document.querySelector(".queue-submit-primary-ripple")).toBe(
+        firstRipple,
+      );
 
       resolveExecution(
         new Response(

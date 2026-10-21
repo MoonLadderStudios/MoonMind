@@ -11566,6 +11566,9 @@ function WorkflowStartPageContent({
         ? "Start New Run"
         : "Start Workflow";
   const showPrimaryCtaArrow = true;
+  // Only actions that start work get the green launch treatment; saving a
+  // draft keeps the standard primary button.
+  const isLaunchCta = pageMode.intent !== "edit";
   const primaryCtaTooltip =
     pageMode.intent === "comparison"
       ? "Start a new comparison run from this workflow draft"
@@ -14008,6 +14011,8 @@ function WorkflowStartPageContent({
               className={
                 showPrimaryCtaArrow
                   ? `queue-submit-primary queue-submit-primary--icon${
+                      isLaunchCta ? " queue-submit-primary--launch" : ""
+                    }${
                       isSubmitArrowExiting
                         ? " queue-submit-primary--arrow-exit"
                         : ""
@@ -14027,10 +14032,12 @@ function WorkflowStartPageContent({
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 if (isSubmitBlocked) return;
-                setSubmitRippleRect(
-                  submitButtonRef.current?.getBoundingClientRect() ?? null,
-                );
-                setSubmitRippleKey((value) => value + 1);
+                if (isLaunchCta && !isSubmitting) {
+                  setSubmitRippleRect(
+                    submitButtonRef.current?.getBoundingClientRect() ?? null,
+                  );
+                  setSubmitRippleKey((value) => value + 1);
+                }
                 setIsSubmitArrowExiting(true);
                 scheduleSubmitArrowExitClear();
               }}
@@ -14060,7 +14067,7 @@ function WorkflowStartPageContent({
               )}
             </Button>
             {/* Portaled so the liquid-glass bar's overflow does not clip the ring. */}
-            {showPrimaryCtaArrow && submitRippleKey > 0 && submitRippleRect
+            {showPrimaryCtaArrow && isLaunchCta && submitRippleKey > 0 && submitRippleRect
               ? createPortal(
                   <span
                     key={submitRippleKey}
