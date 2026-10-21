@@ -6600,19 +6600,6 @@ textarea {
   padding-left: 2.35rem;
 }
 
-/* The branch cell keeps the floating row contract (repo, branch, publish,
- * submit) at every breakpoint. */
-.queue-inline-selector--branch {
-  display: flex;
-  gap: 0.4rem;
-  align-items: center;
-}
-
-.queue-inline-selector--branch input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
 .queue-step-authoring-controls {
   display: grid;
   gap: 0.45rem;

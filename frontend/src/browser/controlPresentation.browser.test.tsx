@@ -1,9 +1,10 @@
 import type {} from '@vitest/browser-playwright';
 import { afterEach, describe, expect, it } from 'vitest';
-import { cdp, page, userEvent } from 'vitest/browser';
+import { cdp, commands, page, userEvent } from 'vitest/browser';
 import { cleanup, render } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { Button } from '../components/Button';
+import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import { DashboardSystemMenu } from '../components/DashboardSystemMenu';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { contrast, paint, textContrast } from './colorContrast';
@@ -20,6 +21,36 @@ afterEach(async () => {
 describe('rendered dashboard control presentation', () => {
   for (const theme of ['light', 'dark']) {
     const surface = theme === 'dark' ? 'rgb(20, 18, 34)' : 'rgb(255, 255, 255)';
+    it(`gives workflow action triggers a border, fill and interaction states (${theme})`, async () => {
+      document.documentElement.classList.toggle('dark', theme === 'dark');
+      const { getByRole } = render(<WorkflowActionsMenu
+        items={[{ id: 'rerun', label: 'Rerun' }]}
+        triggerContent="⋯"
+        triggerAriaLabel="More actions"
+        triggerClassName="td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+      />);
+      const trigger = getByRole('button', { name: 'More actions' });
+      trigger.style.transition = 'none';
+      const normal = getComputedStyle(trigger).backgroundColor;
+      expect(normal).not.toBe('rgba(0, 0, 0, 0)');
+      expect(getComputedStyle(trigger).borderTopStyle).toBe('solid');
+      expect(parseFloat(getComputedStyle(trigger).borderTopWidth)).toBeGreaterThanOrEqual(1);
+      expect(trigger.getBoundingClientRect().width).toBe(32);
+      await userEvent.hover(trigger);
+      const hovered = getComputedStyle(trigger).backgroundColor;
+      expect(hovered).not.toBe(normal);
+      await commands.pointerButton('down');
+      try {
+        expect(getComputedStyle(trigger).backgroundColor).not.toBe(hovered);
+        expect(getComputedStyle(trigger).boxShadow).toContain('inset');
+      } finally {
+        await commands.pointerButton('up');
+      }
+      expect(getByRole('menu')).toBeTruthy();
+      await userEvent.keyboard('{Escape}');
+      expect(document.activeElement).toBe(trigger);
+    });
+
     it(`keeps status pills, notices, badges and common text readable (${theme})`, () => {
       document.documentElement.classList.toggle('dark', theme === 'dark');
       const { container } = render(<div style={{ background: surface }}>
@@ -152,8 +183,15 @@ describe('rendered dashboard control presentation', () => {
   });
 
   it('keeps step icon controls within their row and chip removal compact', async () => {
-    const { container, getByRole } = render(<div style={{ width: '20rem' }}><div className="queue-step-controls"><Button variant="icon" className="queue-step-icon-button">Move</Button><Button variant="icon" className="queue-step-icon-button">Remove</Button></div><span className="queue-step-capability-chip"><button className="queue-step-icon-button queue-step-capability-chip-remove" aria-label="Remove capability"><svg /></button></span><ul id="queue-dependency-list"><li><span>A long dependency description that wraps to another line</span><Button variant="icon" className="queue-step-icon-button">Remove dependency</Button></li></ul></div>);
+    const { container, getByRole } = render(<div style={{ width: '20rem' }}><div className="queue-step-controls"><Button variant="icon" className="queue-step-icon-button" disabled disabledReason="This is the first step.">Move up</Button><Button variant="icon" className="queue-step-icon-button" disabled disabledReason="This is the last step.">Move down</Button><Button variant="icon" className="queue-step-icon-button">Remove</Button></div><span className="queue-step-capability-chip"><button className="queue-step-icon-button queue-step-capability-chip-remove" aria-label="Remove capability"><svg /></button></span><ul id="queue-dependency-list"><li><span>A long dependency description that wraps to another line</span><Button variant="icon" className="queue-step-icon-button">Remove dependency</Button></li></ul></div>);
     const edge = container.firstElementChild!.getBoundingClientRect().right;
+    const toolbar = container.querySelector('.queue-step-controls')!;
+    expect(toolbar.getBoundingClientRect().width).toBeLessThan(140);
+    for (const button of toolbar.querySelectorAll('button[aria-describedby]')) {
+      const reason = document.getElementById(button.getAttribute('aria-describedby')!)!;
+      expect(reason.textContent).toMatch(/This is the (first|last) step\./);
+      expect(reason.getBoundingClientRect().width).toBeLessThanOrEqual(1);
+    }
     await userEvent.hover(getByRole('button', { name: /^Remove$/ }));
     expect(getByRole('button', { name: /^Remove$/ }).getBoundingClientRect().right).toBeLessThanOrEqual(edge);
     const chip = getByRole('button', { name: 'Remove capability' });

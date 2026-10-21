@@ -682,7 +682,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
                 <WorkflowActionsMenu
                   items={profileMenuItems(profile)}
                   triggerContent={MORE_ICON}
-                  triggerClassName="secondary td-workflow-actions-trigger-compact"
+                  triggerClassName="td-workflow-actions-trigger-compact"
                   triggerAriaLabel={`More actions for ${profile.displayName}`}
                   menuAriaLabel={`${profile.displayName} actions`}
                   emptyMessage="No actions are available."

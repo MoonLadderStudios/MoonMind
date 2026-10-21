@@ -404,7 +404,7 @@ Collection-sidebar rules:
 
 `components/Button.tsx` supplies primary, secondary, ghost, danger and icon variants, with small, medium and large sizes. Choose the variant for the action; bare buttons receive a neutral reset. Styled links share the `mm-button` classes and keep native link semantics.
 
-Primary actions use purple, secondary actions use the panel surface, and ghost/icon actions use a transparent fill. Danger is reserved for irreversible or high-consequence actions; reversible pause, drain and draft removal stay neutral. A disabled reason can be supplied to `Button`, which displays and associates it with the control.
+Primary actions use purple, secondary actions use the panel surface, and ghost/icon actions use a transparent fill. Danger is reserved for irreversible or high-consequence actions; reversible pause, drain and draft removal stay neutral. `Button` associates disabled reasons with the control, displaying them for text buttons and visually hiding them for compact icon buttons.
 
 Hover uses a subtle tint inside `@media (hover: hover)`. Press is darker or inset, without a flash, scale or white ring. Selected controls use a separate fill and border. A shared focus-visible outline stays visible during hover and on focusable unavailable controls, including in forced colors. Text contrast is at least 4.5:1 and focus contrast at least 3:1 in both themes; real-browser tests cover these states.
 
