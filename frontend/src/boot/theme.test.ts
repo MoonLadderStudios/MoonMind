@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
 
-it('follows system theme changes live without an unused stored override', () => {
-  const template = readFileSync('api_service/templates/react_dashboard.html', 'utf8');
-  const boot = template.match(/<script>([\s\S]*?)<\/script>/)![1]!;
+it.each(['script', 'SCRIPT'])('follows system theme changes live without an unused stored override (%s)', (scriptTag) => {
+  const template = readFileSync('api_service/templates/react_dashboard.html', 'utf8')
+    .replace('<script>', `<${scriptTag}>`)
+    .replace('</script>', `</${scriptTag}>`);
+  const boot = new DOMParser().parseFromString(template, 'text/html').querySelector('script')!.textContent!;
   let change: (() => void) | undefined;
   const media = { matches: false, addEventListener: vi.fn((_event, listener) => { change = listener; }) };
   vi.stubGlobal('matchMedia', vi.fn(() => media));
