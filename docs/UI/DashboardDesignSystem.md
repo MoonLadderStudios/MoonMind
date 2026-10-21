@@ -138,7 +138,7 @@ Tokens must be defined as RGB triplets so alpha composition stays flexible.
 | Warning | `--mm-warn` | `245 158 11` | `251 191 36` | Queue, caution, attention |
 | Danger | `--mm-danger` | `244 63 94` | `251 113 133` | Failure, destructive actions |
 | Primary button | `--mm-button-primary` | `112 48 220` | `112 48 220` | Shared create/apply treatment |
-| Launch action | `--mm-action-primary` | `21 147 118` | `26 153 123` | Create page Start button and its click ring |
+| Launch action | `--mm-action-primary` | `21 147 118` | `26 153 123` | Create page launch button and its click ring |
 | Shadow | `--mm-shadow` | `0 18px 32px -26px rgb(10 8 30 / 0.55)` | `0 24px 52px -34px rgb(0 0 0 / 0.88)` | Base elevation shadow |
 
 ### 5.2 Accent balance
@@ -149,7 +149,7 @@ Accent usage should follow a clear hierarchy:
 - **Cyan** is reserved for live, executing, streaming, or high-energy system states.
 - **Amber / orange** is reserved for warning, queueing, caution, or high-attention utility signals.
 - **Red / rose** is reserved for failure and destructive actions.
-- **Green / teal** identifies healthy or completed states and the Create page's Start launch button. Status and notice text uses separate per-theme foreground tokens for contrast. Status labels stay continuous and static above the moving fill and border, so animation does not brighten the text.
+- **Green / teal** identifies healthy or completed states and the Create page's launch button. Status and notice text uses separate per-theme foreground tokens for contrast. Status labels stay continuous and static above the moving fill and border, so animation does not brighten the text.
 
 ### 5.3 Background atmosphere
 
@@ -407,7 +407,7 @@ Collection-sidebar rules:
 
 Primary actions use purple, secondary actions use the panel surface, and ghost/icon actions use a transparent fill. Danger is reserved for irreversible or high-consequence actions; reversible pause, drain and draft removal stay neutral. `Button` associates disabled reasons with the control, displaying them for text buttons and visually hiding them for compact icon buttons.
 
-Hover uses a subtle tint inside `@media (hover: hover)`. Press is darker or inset, without a flash, scale or white ring. The Create page's Start button is the deliberate exception, so launching work feels distinct: a green glowing fill, a wider halo on hover, and on press a brightness flash, white ring and an expanding green ring portaled outside the clipped submit bar, while its arrow morphs into a check. It keeps the shared focus outline and flat disabled state. Selected controls use a separate fill and border. A shared focus-visible outline stays visible during hover and on focusable unavailable controls, including in forced colors. Text contrast is at least 4.5:1 and focus contrast at least 3:1 in both themes; real-browser tests cover these states.
+Hover uses a subtle tint inside `@media (hover: hover)`. Press is darker or inset, without a flash, scale or white ring. The Create page's launch button (Start, rerun or comparison) is the deliberate exception, so launching work feels distinct: a green glowing fill, a wider halo on hover, and on press a brightness flash, white ring and an expanding green ring portaled outside the clipped submit bar, while its arrow morphs into a check. It keeps the shared focus outline and flat disabled state; Save Changes starts nothing and keeps the standard primary treatment. Selected controls use a separate fill and border. A shared focus-visible outline stays visible during hover and on focusable unavailable controls, including in forced colors. Text contrast is at least 4.5:1 and focus contrast at least 3:1 in both themes; real-browser tests cover these states.
 
 ### 10.3 Inputs, selects, and comboboxes
 
