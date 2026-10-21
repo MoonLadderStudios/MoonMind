@@ -54,11 +54,12 @@ def controller():
 
 
 @pytest.fixture()
-def journey(controller, tmp_path):
+def journey(controller, tmp_path, request):
     """One registry, deployment checkout and controller state per journey."""
     server = controller["server"]
     registry = f"moonmind-test-registry-{uuid4().hex[:8]}"
     docker("run", "-d", "--name", registry, "-p", "127.0.0.1::5000", REGISTRY_IMAGE)
+    request.addfinalizer(lambda: docker("rm", "-f", "-v", registry, check=False))
     host = docker("port", registry, "5000/tcp").stdout.strip().splitlines()[0]
     deadline = time.monotonic() + 30
     while True:
@@ -91,13 +92,13 @@ def journey(controller, tmp_path):
             str(context),
             timeout=300,
         )
-        docker("push", ref, timeout=300)
         built.append(ref)
+        docker("push", ref, timeout=300)
         if not keep_local:
             docker("rmi", ref)
         return ref
 
-    def write_compose(*, init_db_exit=0):
+    def write_compose(*, init_db_exit=0, ready_after=None):
         loop = ["sh", "-c", "while true; do sleep 1; done"]
         config = {
             "services": {
@@ -123,6 +124,20 @@ def journey(controller, tmp_path):
             },
             "volumes": {"app-data": {}},
         }
+        if ready_after is not None:
+            app = config["services"]["app"]
+            if ready_after >= 0:
+                app["command"] = [
+                    "sh",
+                    "-c",
+                    f"sleep {ready_after}; touch /tmp/ready; while true; do sleep 1; done",
+                ]
+            app["healthcheck"] = {
+                "test": ["CMD", "test", "-f", "/tmp/ready"],
+                "interval": "1s",
+                "timeout": "1s",
+                "retries": 1,
+            }
         (repo / "docker-compose.yaml").write_text(json.dumps(config, indent=2))
         # Operator-owned configuration the controller must keep applying.
         (repo / ".env").write_text("HERMETIC_SETTING=from-dotenv\n")
@@ -180,6 +195,12 @@ def journey(controller, tmp_path):
         )
         return answer["status"], json.loads(body)
 
+    def cleanup():
+        compose("down", "--volumes", "--remove-orphans", "--timeout", "1", check=False)
+        for ref in built:
+            docker("rmi", "-f", ref, check=False)
+
+    request.addfinalizer(cleanup)
     publish("app:old", "old", keep_local=True)
     publish("infra:1", "infra", keep_local=True)
     write_compose()
@@ -197,10 +218,6 @@ def journey(controller, tmp_path):
         "marker": marker,
         "submit": submit,
     }
-    compose("down", "--volumes", "--remove-orphans", "--timeout", "1", check=False)
-    docker("rm", "-f", "-v", registry, check=False)
-    for ref in built:
-        docker("rmi", "-f", ref, check=False)
 
 
 def test_repair_with_target_stopped_preserves_unchanged_work(journey):
@@ -360,3 +377,96 @@ def test_failed_init_db_gates_the_apply_with_readable_diagnostics(journey):
     app = container("app")
     assert not app or inspect(app, "{{.State.Running}}") == "false"
     assert inspect(container("infra"), "{{.State.Running}}") == "true"
+
+
+@pytest.mark.parametrize("restart_controller", [False, True])
+def test_unhealthy_startup_recovers_without_repeating_apply(
+    journey, controller, monkeypatch, restart_controller
+):
+    server = controller["server"]
+    store = journey["store"]
+    journey["compose"]("up", "-d", "--wait")
+    journey["write_compose"](ready_after=6)
+    new_ref = journey["publish"]("app:new", "new")
+    monkeypatch.setattr(server, "SERVICE_READINESS_TIMEOUT_SECONDS", 30)
+    monkeypatch.setattr(server.engine, "SERVICE_READINESS_POLL_SECONDS", 0.2)
+    commands = []
+    run = server.engine.run_command
+
+    def track(runner, args, **kwargs):
+        commands.append(tuple(args))
+        return run(runner, args, **kwargs)
+
+    monkeypatch.setattr(server.engine, "run_command", track)
+    wait = server.engine.wait_for_services
+    unhealthy = []
+    observe = server.engine.observe_services
+
+    def track_health(*args, **kwargs):
+        result = observe(*args, **kwargs)
+        if result["health"].get("app") == "unhealthy":
+            unhealthy.append(True)
+        return result
+
+    monkeypatch.setattr(server.engine, "observe_services", track_health)
+    target = server.default_target(
+        STACK, repo=str(journey["repo"]), recorded_project=journey["project"]
+    )
+    operation = store.begin(
+        stack=STACK, desired_image=new_ref, source_revision="", target=target
+    )
+    if restart_controller:
+
+        def interrupted(*args, **kwargs):
+            raise KeyboardInterrupt("controller lost during readiness")
+
+        monkeypatch.setattr(server.engine, "wait_for_services", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            server.production_apply(store, operation)
+        checkpoint = store.load(operation["operationId"])
+        assert checkpoint["installed"]["image"] == new_ref
+        assert checkpoint["status"] == "applying"
+        before = journey["container"]("app")
+        started = journey["inspect"](before, "{{.State.StartedAt}}")
+        monkeypatch.setattr(server.engine, "wait_for_services", wait)
+        server.resume_open_operations(
+            store, lambda current: server.production_apply(store, current)
+        )
+        assert journey["container"]("app") == before
+        assert journey["inspect"](before, "{{.State.StartedAt}}") == started
+    else:
+        server.production_apply(store, operation)
+
+    final = store.load(operation["operationId"])
+    assert final["status"] == "succeeded", final
+    assert unhealthy, "fixture must cross Docker's unhealthy state before recovery"
+    assert final["attempts"] == []
+    assert len([cmd for cmd in commands if "up" in cmd]) == 1
+    assert journey["marker"]("app") == "new"
+
+
+def test_persistent_unhealthy_startup_retains_installation_and_failure(
+    journey, controller, monkeypatch
+):
+    server = controller["server"]
+    journey["compose"]("up", "-d", "--wait")
+    journey["write_compose"](ready_after=-1)
+    new_ref = journey["publish"]("app:new", "new")
+    monkeypatch.setattr(server, "SERVICE_READINESS_TIMEOUT_SECONDS", 3)
+    monkeypatch.setattr(server.engine, "SERVICE_READINESS_POLL_SECONDS", 0.2)
+
+    started = time.monotonic()
+    status, operation = journey["submit"](new_ref)
+
+    assert time.monotonic() - started < 25
+    assert status.startswith("202"), operation
+    assert operation["status"] == "partially_verified", operation
+    assert operation["installed"]["image"] == new_ref
+    assert operation["attempts"] == []
+    assert any(
+        check["name"] == "service:app"
+        and check["status"] == "failed"
+        and "unhealthy" in check["detail"]
+        for check in operation["verification"]
+    )
+    assert journey["marker"]("app") == "new"

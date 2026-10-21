@@ -135,14 +135,16 @@ Normal service replacement uses the equivalent of:
 
 ```bash
 docker compose pull --policy always
-docker compose up -d --pull never --no-build --remove-orphans --wait
+docker compose up -d --pull never --no-build --remove-orphans
 ```
 
 under bounded timeouts, after staging every image the update needs and before any recreation. Services built from the MoonMind image pull with `--policy always`; other reconciled infrastructure services pull with `--policy missing`, so an infrastructure image the release newly pins (for example a MinIO digest change) is staged while present images are not refreshed, and `up --pull never` cannot fail on a missing image. The deployment-owned Compose file set (including `COMPOSE_FILE`) passes through unchanged, and the deployment-owned `.env` layers under the controller-generated image overlay, so operator authentication, bindings, and infrastructure versions are preserved. Privileged-endpoint submissions validate project, paths, services, and image references before persistence. Routine updates do not use `docker compose down`, fleet-wide force-recreate, or pruning.
 
-The updater reaches Docker through `docker-proxy`, so the main pass does not recreate it, `postgres`, or `sandbox-egress-proxy`. The egress gateway is aligned before the workers that attest it. Other excluded substrate is reconciled in a staged pass after the main stack verifies, when its image or installed definition differs from the release. Definition drift compares each container's recorded Compose config hash with the release rendered under the project directory that container recorded, so a different spelling of the same checkout is not drift. The updater does not recreate its own transport: a drifted `docker-proxy` stays running and fails the release as unconverged substrate for the standalone controller to reconcile.
+After detached apply succeeds, the controller records installation and observes service readiness for up to fifteen minutes from that checkpoint. Compose's first `unhealthy` observation does not trigger another pull, journal transition, or recreation. Restart recovery uses the checkpoint's remaining budget. Exhaustion records failed or unavailable checks as `partially_verified`, retaining installation; readiness precedes routing cutover and operator-access verification.
 
-Dependency order and `init-db`/schema migration gating apply before dependent services start. A failed migration preserves the original error and data rather than starting an incompatible application or attempting a destructive downgrade.
+The main pass excludes `docker-proxy` and `sandbox-egress-proxy`. The standalone controller uses its own Docker socket and does not depend on a healthy API or worker.
+
+Dependency order and `init-db`/schema migration gating apply before dependent services start. A failed migration preserves the original error and data. Startup's legacy conversion scan reads distinct principal identities and skips artifact hashing once unreadable evidence requires refusal; it preserves source data and access guards without making retained history size a Python row-processing cost.
 
 **Active Omnigent journal transition.** Supported rollback targets can read only complete JSONL journals, so active journals are compacted after image staging and before service recreation, under the same owner and lock (the controller's `before_compose` step). The owner observes the project's actual `agent_runtime` writers and `artifacts` lifecycle sweepers, including overrides and one-offs, stops them with a bounded Docker stop, and inspects them again, because pausing API submissions or enumerating workflows does not prove quiescence. Durable Activities recover from saved progress, so workflows need not finish first and keep their intent.
 
@@ -252,7 +254,7 @@ A single admitted operator does not mean an unprotected application. Operator ad
 
 ## 14. Audit and artifacts
 
-Local operation files retain the requested target, concrete images, identity, timestamps, progress, errors, attempt bounds, and observed outcome. The host entrypoint and available Operations UI expose summaries and redacted logs. Losing the UI copy does not erase the local record; missing metadata is not reconstructed as success.
+Local operation files retain the target, images, identity, timestamps, progress, full redacted attempt errors, bounds, and outcome. Host and UI summaries keep the final failure cause visible ahead of Compose progress, including for older records. Losing the UI does not erase the local record; missing metadata is not reconstructed as success.
 
 ## 15. Failure and rollback semantics
 

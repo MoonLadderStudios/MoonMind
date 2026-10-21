@@ -3,7 +3,7 @@
 Semantic default, under bounded timeouts::
 
     docker compose pull --policy always [<services>]
-    docker compose up -d --pull never --no-build --remove-orphans --wait [<services>]
+    docker compose up -d --pull never --no-build --remove-orphans [<services>]
 
 All images needed for the requested update are staged before apply, so a
 registry loss after staging does not block the apply and a pull failure
@@ -23,10 +23,12 @@ the applicable service, ordinary-dispatch, and operator-access checks;
 failed or unavailable mandatory checks stay explicit while the controller
 remains usable.
 """
+
 from __future__ import annotations
 
 import os
 import subprocess
+import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
@@ -34,6 +36,7 @@ from redact import redact_text, tail_text
 
 PULL_TIMEOUT_SECONDS = 600
 UP_TIMEOUT_SECONDS = 900
+SERVICE_READINESS_POLL_SECONDS = 5
 MAX_COMMAND_TIMEOUT_SECONDS = 900
 SERVICE_OBSERVATION_FORMAT = (
     '{"Service":{{json .Service}},"State":{{json .State}},'
@@ -49,7 +52,6 @@ UP_FLAGS = (
     "never",
     "--no-build",
     "--remove-orphans",
-    "--wait",
 )
 
 class CommandError(RuntimeError):
@@ -338,6 +340,42 @@ def observe_services(
         for name in targets
     }
     return {"services": observed, "completed": sorted(completed), "health": health}
+
+
+def wait_for_services(
+    runner: Runner,
+    base: Sequence[str],
+    services: Sequence[str],
+    *,
+    timeout_seconds: float,
+) -> dict:
+    """Observe startup without replaying apply when Docker reports unhealthy.
+
+    Compose's ``--wait`` exits as soon as a healthcheck turns unhealthy,
+    even when the process is still starting. The controller owns this bounded
+    wait instead. The caller supplies the *remaining* durable budget on resume.
+    At exhaustion return the final states, or raise the final observation
+    error; neither unknown nor unhealthy evidence becomes success.
+    """
+    deadline = time.monotonic() + max(0, timeout_seconds)
+    while True:
+        remaining = max(0, deadline - time.monotonic())
+        try:
+            observed = observe_services(
+                runner,
+                base,
+                services,
+                timeout_seconds=max(1, min(60, int(remaining))),
+            )
+        except Exception:
+            if time.monotonic() >= deadline:
+                raise
+        else:
+            if all(observed["services"].values()) or time.monotonic() >= deadline:
+                return observed
+        time.sleep(
+            min(SERVICE_READINESS_POLL_SECONDS, max(0, deadline - time.monotonic()))
+        )
 
 
 def _is_one_off(item: Mapping[str, Any]) -> bool:

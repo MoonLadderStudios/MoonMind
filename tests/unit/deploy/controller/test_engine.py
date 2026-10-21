@@ -1,10 +1,11 @@
 """Compose apply semantics owned by the controller (REQ-03).
 
 Semantic default: stage every image with `pull --policy always`, then apply
-with `up -d --pull never --no-build --remove-orphans --wait` under bounded
+with detached `up -d --pull never --no-build --remove-orphans` under bounded
 timeouts. Full `down` and force-recreate are explicit repair operations only,
 never automatic escalation. No volume/image pruning.
 """
+
 import pytest
 from conftest import load
 
@@ -138,10 +139,125 @@ def test_apply_uses_changed_service_semantic_default(controller_path):
     pull = next(cmd for cmd, _ in runner.commands if "pull" in cmd)
     up = next(cmd for cmd, _ in runner.commands if "up" in cmd)
     assert "--policy" in pull and "always" in pull
-    for flag in ("-d", "--pull", "never", "--no-build", "--remove-orphans", "--wait"):
+    for flag in ("-d", "--pull", "never", "--no-build", "--remove-orphans"):
         assert flag in up
+    assert "--wait" not in up
     assert "--build" not in up
     assert "--force-recreate" not in up
+
+
+def test_readiness_observes_recovering_health_without_reapplying(
+    controller_path, monkeypatch
+):
+    engine = load("engine")
+    import types
+
+    elapsed = [0.0]
+    observations = []
+
+    def sleep(seconds):
+        elapsed[0] += seconds
+
+    def observe(runner, base, services, *, timeout_seconds):
+        observations.append((elapsed[0], timeout_seconds))
+        ready = elapsed[0] >= 600
+        return {
+            "services": {"api": ready},
+            "health": {"api": "healthy" if ready else "unhealthy"},
+        }
+
+    monkeypatch.setattr(
+        engine, "time", types.SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep)
+    )
+    monkeypatch.setattr(engine, "observe_services", observe)
+    runner = FakeRunner()
+    result = engine.wait_for_services(
+        runner, ("docker", "compose"), ("api",), timeout_seconds=900
+    )
+
+    assert result["services"] == {"api": True}
+    assert 600 <= elapsed[0] < 900
+    assert len(observations) > 1
+    assert runner.commands == []
+
+
+def test_readiness_deadline_retains_last_service_failure(controller_path, monkeypatch):
+    engine = load("engine")
+    import types
+
+    elapsed = [0.0]
+    monkeypatch.setattr(
+        engine,
+        "time",
+        types.SimpleNamespace(
+            monotonic=lambda: elapsed[0],
+            sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+        ),
+    )
+    observed = {"services": {"api": False}, "health": {"api": "unhealthy"}}
+    monkeypatch.setattr(engine, "observe_services", lambda *a, **kw: observed)
+
+    result = engine.wait_for_services(
+        FakeRunner(), ("docker", "compose"), ("api",), timeout_seconds=23
+    )
+
+    assert elapsed[0] == 23
+    assert result == observed
+
+
+def test_readiness_retries_lost_observation_within_its_budget(
+    controller_path, monkeypatch
+):
+    engine = load("engine")
+    import types
+
+    elapsed = [0.0]
+    monkeypatch.setattr(
+        engine,
+        "time",
+        types.SimpleNamespace(
+            monotonic=lambda: elapsed[0],
+            sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+        ),
+    )
+
+    def observe(*args, **kwargs):
+        if elapsed[0] == 0:
+            raise engine.CommandError("ps", 1, "daemon unavailable")
+        return {"services": {"api": True}}
+
+    monkeypatch.setattr(engine, "observe_services", observe)
+    assert engine.wait_for_services(FakeRunner(), (), ("api",), timeout_seconds=20)[
+        "services"
+    ]["api"]
+    assert 0 < elapsed[0] <= 20
+
+
+def test_readiness_observation_outage_exhausts_budget_with_original_error(
+    controller_path, monkeypatch
+):
+    import types
+
+    engine = load("engine")
+    elapsed = [0.0]
+    monkeypatch.setattr(
+        engine,
+        "time",
+        types.SimpleNamespace(
+            monotonic=lambda: elapsed[0],
+            sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+        ),
+    )
+
+    def unavailable(*args, **kwargs):
+        raise engine.CommandError("ps", 1, "Docker daemon connection refused")
+
+    monkeypatch.setattr(engine, "observe_services", unavailable)
+    with pytest.raises(engine.CommandError) as failure:
+        engine.wait_for_services(FakeRunner(), (), ("api",), timeout_seconds=23)
+
+    assert elapsed[0] == 23
+    assert failure.value.output == "Docker daemon connection refused"
 
 
 def test_commands_run_under_bounded_timeouts(controller_path):
