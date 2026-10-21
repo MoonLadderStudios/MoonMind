@@ -10702,10 +10702,12 @@ export interface components {
             title: string;
             /** Description */
             description: string;
-            /** Scope */
-            scope?: ("personal" | "global") | null;
-            /** Scoperef */
-            scopeRef?: string | null;
+            /**
+             * Releasestatus
+             * @default draft
+             * @enum {string}
+             */
+            releaseStatus: "draft" | "active" | "inactive";
             /** Tags */
             tags?: string[];
             /** Inputs */
@@ -10776,15 +10778,7 @@ export interface components {
          * PresetFavoriteRequestSchema
          * @description Favorite toggle payload.
          */
-        PresetFavoriteRequestSchema: {
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "global" | "personal";
-            /** Scoperef */
-            scopeRef?: string | null;
-        };
+        PresetFavoriteRequestSchema: Record<string, never>;
         /**
          * PresetInputSchema
          * @description Input definition used by presets.
@@ -10826,13 +10820,6 @@ export interface components {
         PresetResponseSchema: {
             /** Slug */
             slug: string;
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "global" | "personal";
-            /** Scoperef */
-            scopeRef?: string | null;
             /** Title */
             title: string;
             /** Description */
@@ -10903,10 +10890,12 @@ export interface components {
          * @description Request model for creating presets from draft workflow steps.
          */
         PresetSaveFromWorkflowRequestSchema: {
-            /** Scope */
-            scope?: ("personal" | "global") | null;
-            /** Scoperef */
-            scopeRef?: string | null;
+            /**
+             * Releasestatus
+             * @default draft
+             * @enum {string}
+             */
+            releaseStatus: "draft" | "active" | "inactive";
             /** Slug */
             slug?: string | null;
             /** Title */
@@ -10939,8 +10928,6 @@ export interface components {
             instructions?: string | null;
             /** Alias */
             alias?: string | null;
-            /** Scope */
-            scope?: ("global" | "personal") | null;
             /** Inputmapping */
             inputMapping?: {
                 [key: string]: unknown;
@@ -11026,13 +11013,6 @@ export interface components {
         PresetSummarySchema: {
             /** Slug */
             slug: string;
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "global" | "personal";
-            /** Scoperef */
-            scopeRef?: string | null;
             /** Title */
             title: string;
             /** Description */
@@ -24314,8 +24294,6 @@ export interface operations {
     list_templates_api_presets_get: {
         parameters: {
             query?: {
-                scope?: string | null;
-                scopeRef?: string | null;
                 tag?: string | null;
                 search?: string | null;
                 favoritesOnly?: boolean;
@@ -24415,10 +24393,7 @@ export interface operations {
     };
     expand_template_api_presets__slug__expand_post: {
         parameters: {
-            query?: {
-                scope?: string | null;
-                scopeRef?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 slug: string;
@@ -24453,10 +24428,7 @@ export interface operations {
     };
     get_template_api_presets__slug__get: {
         parameters: {
-            query?: {
-                scope?: string | null;
-                scopeRef?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 slug: string;
@@ -24487,10 +24459,7 @@ export interface operations {
     };
     delete_template_api_presets__slug__delete: {
         parameters: {
-            query?: {
-                scope?: string | null;
-                scopeRef?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 slug: string;
@@ -24519,10 +24488,7 @@ export interface operations {
     };
     review_template_api_presets__slug__review_put: {
         parameters: {
-            query?: {
-                scope?: string | null;
-                scopeRef?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 slug: string;

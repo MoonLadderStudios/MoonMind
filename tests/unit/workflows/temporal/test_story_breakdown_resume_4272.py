@@ -409,8 +409,6 @@ async def test_breakdown_presets_expand_through_existing_components(
     async with _catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug=slug,
-            scope="global",
-            scope_ref=None,
             inputs=dict(case["inputs"]),
             context=dict(case["context"]),
         )
@@ -459,8 +457,6 @@ async def test_jira_breakdown_keeps_trusted_brief_and_dependency_mode(tmp_path) 
     async with _catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug="jira-breakdown-implement",
-            scope="global",
-            scope_ref=None,
             inputs=dict(_BREAKDOWN_CASES["jira-breakdown-implement"]["inputs"]),
             context={"repository": "MoonLadderStudios/MoonMind", "targetRuntime": "codex"},
         )
@@ -484,8 +480,6 @@ async def test_github_breakdown_source_issue_key_stays_traceability_only(
     async with _catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug="github-issue-breakdown-implement",
-            scope="global",
-            scope_ref=None,
             inputs=dict(
                 _BREAKDOWN_CASES["github-issue-breakdown-implement"]["inputs"]
             ),

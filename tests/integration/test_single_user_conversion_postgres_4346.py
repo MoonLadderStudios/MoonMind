@@ -416,8 +416,9 @@ async def test_postgres_guarded_upgrade_refuses_multi_without_mutation(pg_maker)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preset_scope", [PresetScopeType.GLOBAL, PresetScopeType.PERSONAL])
 async def test_postgres_populated_instance_resources_publish_and_remain_usable(
-    pg_maker, tmp_path,
+    pg_maker, tmp_path, preset_scope,
 ) -> None:
     """Already instance-scoped resources need preservation, not no-op plugins."""
     from api_service.services import single_user_conversion as suc
@@ -439,7 +440,8 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
                                  status=SecretStatus.ACTIVE))
         source.add(SettingsOverride(scope="workspace", key="integrations.github.token_ref",
                                     value_json="db://retained-binding"))
-        preset = Preset(slug="retained-custom", scope_type=PresetScopeType.GLOBAL,
+        preset = Preset(slug="retained-custom", scope_type=preset_scope,
+            scope_ref=str(owner_id) if preset_scope == PresetScopeType.PERSONAL else None,
             title="Retained custom preset", description="Keep explicit inputs",
             created_by=owner_id,
             inputs_schema=[{"name": "audience", "label": "Audience", "type": "text",
@@ -460,7 +462,14 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
         await source.commit()
         schedule_id = schedule.id
         catalog = PresetCatalogService(source)
-        before_preset = await catalog.get_template(slug=preset.slug, scope="global", scope_ref=None)
+        before_preset = {
+            "title": preset.title, "description": preset.description,
+            "inputs": preset.inputs_schema, "steps": preset.steps,
+        }
+        preset_id = preset.id
+        from api_service.services.presets.catalog import PresetNotFoundError
+        with pytest.raises(PresetNotFoundError):
+            await catalog.get_template(slug=preset.slug)
         artifacts = TemporalArtifactService(TemporalArtifactRepository(source), store=store)
         artifact, _ = await artifacts.create(principal=str(owner_id), content_type="text/plain")
         await artifacts.write_complete(artifact_id=artifact.artifact_id, principal=str(owner_id),
@@ -483,9 +492,13 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
         assert value.value == "db://retained-binding"
         assert await SecretsService.get_secret(restarted, "retained-binding") == "synthetic-credential"
         catalog = PresetCatalogService(restarted)
-        assert await catalog.get_template(slug="retained-custom", scope="global", scope_ref=None) == before_preset
-        expanded = await catalog.expand_template(slug="retained-custom", scope="global",
-            scope_ref=None, inputs={"audience": "explicit operator input"})
+        found = await catalog.get_template(slug="retained-custom")
+        assert {key: found[key] for key in before_preset} == before_preset
+        retained_preset = await restarted.get(Preset, preset_id)
+        assert retained_preset.created_by == owner_id
+        assert retained_preset.scope_type is None and retained_preset.scope_ref is None
+        expanded = await catalog.expand_template(slug="retained-custom",
+            inputs={"audience": "explicit operator input"})
         assert expanded["steps"][0]["instructions"] == "Write for explicit operator input."
         schedules = await RecurringWorkflowsService(restarted).list_definitions()
         retained = next(row for row in schedules if row.id == schedule_id)
@@ -504,7 +517,7 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_surface", ["personal_setting", "context_setting", "personal_preset"])
+@pytest.mark.parametrize("legacy_surface", ["personal_setting", "context_setting"])
 async def test_postgres_default_still_refuses_unsupported_personal_data(
     pg_maker, legacy_surface,
 ) -> None:
@@ -512,16 +525,10 @@ async def test_postgres_default_still_refuses_unsupported_personal_data(
 
     async with pg_maker() as source:
         owner = await _mk_user(source)
-        if legacy_surface == "personal_preset":
-            source.add(Preset(slug="retained-personal", scope_type=PresetScopeType.PERSONAL,
-                scope_ref=str(owner.id), created_by=owner.id, title="Keep me",
-                description="Do not publish invisible personal data",
-                steps=[{"instructions": "Preserve this exact content"}]))
-        else:
-            source.add(SettingsOverride(scope="user" if legacy_surface == "personal_setting" else "workspace",
-                workspace_id=uuid.uuid4() if legacy_surface == "context_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
-                user_id=owner.id if legacy_surface == "personal_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
-                key="integrations.github.token_ref", value_json="db://retained-personal"))
+        source.add(SettingsOverride(scope="user" if legacy_surface == "personal_setting" else "workspace",
+            workspace_id=uuid.uuid4() if legacy_surface == "context_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
+            user_id=owner.id if legacy_surface == "personal_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
+            key="integrations.github.token_ref", value_json="db://retained-personal"))
         await source.commit()
         tables = (User.__table__, SettingsOverride.__table__, Preset.__table__)
         before = [(await source.execute(select(table))).all() for table in tables]
@@ -1110,7 +1117,7 @@ async def test_postgres_product_routes_enforce_remote_operator_ingress(pg_maker,
             assert (await db.execute(select(User))).scalars().all() == []
         headers = {"X-Moonmind-User": "trusted-ingress-assertion"}
         body = {"title": "Preserved custom input", "slug": "served-instance-preset",
-                "description": "Actual product route write", "scope": "global",
+                "description": "Actual product route write",
                 "inputs": [{"name": "audience", "label": "Audience", "type": "text",
                             "required": True, "default": "default audience"}],
                 "steps": [{"instructions": "Write for {{ inputs.audience }}."}]}
@@ -1257,14 +1264,14 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
                 "steps": [{"instructions": "Write for {{ inputs.audience }}."}]})
             assert created.status_code == 201, created.text
             saved = created.json()
-            assert saved["scope"] == "global" and saved["scopeRef"] is None
+            assert "scope" not in saved and "scopeRef" not in saved
             from_workflow = await client.post("/api/presets/save-from-workflow", json={
                 "title": "Saved instance draft", "description": "Dashboard draft",
                 "steps": [{"instructions": "Keep this custom step."}]})
             assert from_workflow.status_code == 201, from_workflow.text
-            assert from_workflow.json()["scope"] == "global"
+            assert "scope" not in from_workflow.json()
             favorite = await client.post("/api/presets/instance-authored:favorite",
-                                         json={"scope": "global"})
+                                         json={})
             assert favorite.status_code == 204, favorite.text
         # Replay the production conversion owner and read via new API/DB sessions.
         async with pg_maker() as db:
@@ -1296,6 +1303,10 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
         async with pg_maker() as db:
             assert (await db.execute(select(User))).scalars().all() == []
             assert all(p.created_by is None for p in (await db.execute(select(Preset))).scalars())
+            favorites = (await db.execute(select(PresetFavorite))).scalars().all()
+            recents = (await db.execute(select(PresetRecent))).scalars().all()
+            assert len(favorites) == 2 and all(row.user_id is None for row in favorites)
+            assert len(recents) == 2 and all(row.user_id is None for row in recents)
             assert all(e.actor_user_id is None for e in
                        (await db.execute(select(SettingsAuditEvent))).scalars())
     finally:

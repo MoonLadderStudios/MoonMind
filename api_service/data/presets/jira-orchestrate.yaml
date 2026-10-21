@@ -1,7 +1,6 @@
 slug: jira-orchestrate
 title: Jira Orchestrate
 description: Move a Jira issue through implementation by using its preset brief as the MoonSpec orchestration input, creating a PR, and advancing the issue to Review.
-scope: global
 tags:
   - jira
   - moonspec

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
-from api_service.db.models import Base, Preset, PresetScopeType
+from api_service.db.models import Base, Preset
 from api_service.main import startup_event
 from api_service.services.presets.catalog import PresetCatalogService
 
@@ -33,10 +33,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "moonspec-orchestrate",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         template = result.scalar_one_or_none()
         assert template is not None
@@ -91,10 +91,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "jira-breakdown",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         jira_template = result.scalar_one_or_none()
         assert jira_template is not None
@@ -118,10 +118,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "jira-orchestrate",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         jira_orchestrate_template = result.scalar_one_or_none()
         assert jira_orchestrate_template is not None
@@ -247,8 +247,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             session
         ).expand_template(
             slug="jira-orchestrate",
-            scope="global",
-            scope_ref=None,
             inputs={
                 "jira_issue": {"key": "MM-999"},
                 "constraints": "",
@@ -284,10 +282,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "jira-implement",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         jira_implement_template = result.scalar_one_or_none()
         assert jira_implement_template is not None
@@ -326,8 +324,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
 
         expanded_implement = await PresetCatalogService(session).expand_template(
             slug="jira-implement",
-            scope="global",
-            scope_ref=None,
             inputs={"jira_issue": {"key": "MM-999"}, "constraints": ""},
             context={"repository": "MoonLadderStudios/MoonMind"},
         )
@@ -506,8 +502,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
 
         expanded_without_verify = await PresetCatalogService(session).expand_template(
             slug="jira-implement",
-            scope="global",
-            scope_ref=None,
             inputs={
                 "jira_issue": {"key": "MM-999"},
                 "constraints": "",
@@ -548,10 +542,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "jira-breakdown-orchestrate",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         composite_template = result.scalar_one_or_none()
         assert composite_template is not None
@@ -595,10 +589,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "jira-breakdown-implement",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         implement_composite_template = result.scalar_one_or_none()
         assert implement_composite_template is not None
@@ -656,7 +650,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 select(Preset)
                 .where(
                     Preset.slug == slug,
-                    Preset.scope_type == PresetScopeType.GLOBAL,
+                    Preset.scope_type.is_(None),
                     Preset.scope_ref.is_(None),
                 )
             )
@@ -723,8 +717,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             session
         ).expand_template(
             slug="github-issue-breakdown-implement",
-            scope="global",
-            scope_ref=None,
             inputs={
                 "feature_request": "Implement the requested GitHub issue.",
                 "github_repository": "MoonLadderStudios/MoonMind",
@@ -745,7 +737,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "github-issue-orchestrate",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
         )
@@ -764,10 +756,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "document-update-orchestrate",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         doc_template = result.scalar_one_or_none()
         assert doc_template is not None
@@ -794,7 +786,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "document-author",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
 
@@ -812,10 +804,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             select(Preset)
             .where(
                 Preset.slug == "batch-workflows",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
-            
+
         )
         batch_template = result.scalar_one_or_none()
         assert batch_template is not None
@@ -906,7 +898,7 @@ async def test_startup_deactivates_only_deployment_owned_legacy_presets(
     async with db_base.async_session_maker() as session:
         legacy_template = Preset(
             slug="speckit-orchestrate",
-            scope_type=PresetScopeType.GLOBAL,
+            scope_type=None,
             scope_ref=None,
             title="SpecKit Orchestrate",
             description="Legacy preset",
@@ -934,7 +926,7 @@ async def test_startup_deactivates_only_deployment_owned_legacy_presets(
         result = await session.execute(
             select(Preset).where(
                 Preset.slug == "speckit-orchestrate",
-                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_type.is_(None),
                 Preset.scope_ref.is_(None),
             )
         )

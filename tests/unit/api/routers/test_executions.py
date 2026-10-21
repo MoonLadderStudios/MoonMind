@@ -1345,7 +1345,7 @@ async def test_explicit_template_preserves_branch_and_checkpoint_overrides(
         FakePresetCatalogService,
     )
     task_payload = {
-        "taskTemplate": {"slug": "branch-aware", "scope": "global"},
+        "taskTemplate": {"slug": "branch-aware"},
         "git": {"branch": "release/next"},
         "checkpointBranching": {"enabled": False},
     }

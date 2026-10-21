@@ -1,7 +1,6 @@
 slug: jira-breakdown-orchestrate
 title: Breakdown and Jira Orchestrate
 description: Break a preferred source input into stories, create Jira issues, then create dependent Jira Orchestrate workflow executions for each generated issue.
-scope: global
 tags:
   - jira
   - moonspec

@@ -2,7 +2,6 @@ slug: issue-implement-work-pr
 title: Issue Implement Work and Pull Request
 description: Complete remaining issue implementation work, verify it, and publish
   a pull request using provider-neutral issue inputs.
-scope: global
 tags:
 - implementation
 - verification

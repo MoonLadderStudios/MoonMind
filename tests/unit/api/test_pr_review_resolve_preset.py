@@ -55,8 +55,6 @@ async def _expand(tmp_path, inputs: dict[str, Any], context: dict[str, Any] | No
             await session.commit()
             return await service.expand_template(
                 slug=_SLUG,
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context=context or {"repository": "MoonLadderStudios/MoonMind"},
                 options=ExpandOptions(should_enforce_step_limit=True),
@@ -70,7 +68,7 @@ async def _template(tmp_path) -> dict[str, Any]:
             await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
             await session.commit()
             return await service.get_template(
-                slug=_SLUG, scope="global", scope_ref=None
+                slug=_SLUG,
             )
 
 
@@ -379,8 +377,6 @@ async def test_nested_review_only_rejects_disabled_provider(tmp_path) -> None:
                 slug="parent-review",
                 title="Parent review",
                 description="Includes an existing pull request review.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -388,7 +384,6 @@ async def test_nested_review_only_rejects_disabled_provider(tmp_path) -> None:
                         "kind": "include",
                         "slug": _SLUG,
                         "alias": "review",
-                        "scope": "global",
                         "inputMapping": {
                             "pull_request": "350",
                             "review_only": True,
@@ -400,8 +395,6 @@ async def test_nested_review_only_rejects_disabled_provider(tmp_path) -> None:
             with pytest.raises(PresetValidationError, match="fresh automated reviewer"):
                 await service.expand_template(
                     slug="parent-review",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={"repository": "MoonLadderStudios/MoonMind"},
                 )

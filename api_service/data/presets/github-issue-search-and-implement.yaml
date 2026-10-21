@@ -8,7 +8,6 @@ description: Search GitHub issues for the best eligible match created by the aut
   eligible unblocked self-authored issue when the search is blank, then implement
   it following the GitHub Issue Implement workflow, adopting any safely recoverable
   partial PR and updating the issue.
-scope: global
 tags:
 - github
 - implementation
@@ -192,7 +191,6 @@ steps:
 - kind: include
   slug: issue-implement-assessment
   alias: assess
-  scope: global
   inputMapping:
     issue_provider: github
     issue_ref: '{{ context.get(''issueRef'', context.get(''issue_ref'', '''')) }}'
@@ -250,7 +248,6 @@ steps:
 - kind: include
   slug: issue-implement-work-pr
   alias: work-pr
-  scope: global
   inputMapping:
     issue_provider: github
     issue_ref: '{{ context.get(''issueRef'', context.get(''issue_ref'', '''')) }}'

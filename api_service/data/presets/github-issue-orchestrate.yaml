@@ -2,7 +2,6 @@ slug: github-issue-orchestrate
 title: GitHub Issue Orchestrate
 description: Move a GitHub issue through the full MoonSpec lifecycle by using its trusted
   issue brief as orchestration input, creating a PR, and updating GitHub issue status.
-scope: global
 tags:
 - github
 - moonspec
@@ -144,7 +143,6 @@ steps:
 - kind: include
   slug: issue-implement-assessment
   alias: assess
-  scope: global
   inputMapping:
     issue_provider: github
     issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'

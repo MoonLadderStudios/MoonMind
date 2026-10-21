@@ -2,7 +2,6 @@ slug: issue-implement-assessment
 title: Issue Implement Assessment
 description: Assess whether an issue brief is already implemented before provider-specific
   lifecycle updates run.
-scope: global
 tags:
 - implementation
 - assessment

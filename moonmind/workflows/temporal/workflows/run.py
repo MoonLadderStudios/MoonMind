@@ -95,8 +95,10 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.executions.preset_readiness import (
         GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH,
+        INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
         github_issue_search_scope_refresh_needed,
+        legacy_saved_preset_capability_check,
         saved_preset_capability_check,
     )
     from moonmind.workflows.executions.prepared_context import (
@@ -12752,8 +12754,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and not getattr(workflow.info(), "continued_run_id", None)
         ):
             try:
-                check = saved_preset_capability_check(
-                    parameters, principal=self._owner_id or ""
+                instance_catalog = workflow.patched(
+                    INSTANCE_PRESET_CAPABILITY_READINESS_PATCH
+                )
+                check = (
+                    saved_preset_capability_check(parameters)
+                    if instance_catalog
+                    else legacy_saved_preset_capability_check(
+                        parameters, principal=self._owner_id or ""
+                    )
                 )
             except (ValueError, TypeError, AttributeError):
                 raise exceptions.ApplicationError(
@@ -12768,7 +12777,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 readiness = await workflow.execute_activity(
                     "plan.check_preset_capabilities",
-                    check.model_dump(),
+                    check.model_dump(exclude_none=instance_catalog),
                     **self._execute_kwargs_for_route(route),
                 )
                 if (

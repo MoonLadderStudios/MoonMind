@@ -32,7 +32,7 @@ The system preserves these properties:
 
 Presets do not replace Skills, require per-preset React forms, grant execution rights, or create a second publishing engine. Their expanded steps pass the normal policy, runtime, repository, and publication boundaries.
 
-Workflow-scoped expansion does not require a human account. Machine execution principals are execution authority and are not written into UUID catalog attribution. Recent-choice attribution records only an explicit catalog selection, so goal-selected submissions expand without recording usage under the execution owner.
+Presets and server-held favorites/recents belong to the instance. Operator routes use the existing admission boundary without loading a person. Machine execution principals remain execution authority, not catalog owners. Successful expansion records instance recency; concurrent favorite and recent writes use the existing transactional upserts.
 
 Trusted issue loaders persist the complete GitHub or Jira brief as a linked JSON artifact before returning to the workflow. The artifact carries portable assessment fields (`issue_provider`, `issue_ref`, `issue_url`, `title`, `description`, `acceptance_criteria`, `labels`, `preset_brief`, `constraints`, `source_resolution`, `trusted_source`, `truncated`, `truncated_fields`) alongside provider and claim handoff fields. Native text is retained exactly, including whitespace, and Jira's structured description is kept in `jiraIssue.description` beside its text rendering. `source_resolution` records missing mandatory source fields; absent optional enrichment does not make the source incomplete. Completeness and truncation describe the native read before prompt compaction.
 
@@ -47,12 +47,12 @@ scoped Docker Backend Service to execute tests.
 | Concept | Meaning |
 | --- | --- |
 | Preset | Catalog entry with identity, metadata, task inputs, context bindings, publication-role/default metadata, and an expansion plan |
-| Preset step | Authored `type: preset` selection with `preset_slug`, scope, and task-specific inputs |
+| Preset step | Authored `type: preset` selection with `preset_slug` and task-specific inputs |
 | Input schema | JSON Schema-compatible contract for value shape and required inputs |
 | Context binding | Authoritative projection from workflow context, not an editable copied default |
 | UI schema | Optional safe presentation hints, not semantic or authorization authority |
 | Expansion | Backend transformation of a selected definition and validated context into concrete steps |
-| Provenance | Preset slug/scope, definition digest, ancestry, authored inputs, bound-source evidence, and compiler derivation |
+| Provenance | Preset identity, definition digest, ancestry, authored inputs, bound-source evidence, and compiler derivation |
 
 ## Preset Catalog Contract
 
@@ -93,7 +93,9 @@ expansion:
         jira_issue_url: "{{ inputs.jira_issue.url }}"
 ```
 
-Presets expose stable identity, descriptions, input contracts, deterministic expansion and provenance. Identity is slug plus scope; the content digest identifies the resolved definition. Instance routes omit person scope and store global definitions without scopeRef or creator. Favorites and recents use an instance storage partition, never admission authority. Unconverted accounts retain protected partitions; scope-free listing combines global definitions with only their own presets.
+Presets expose stable identity, descriptions, input contracts, deterministic expansion and provenance. Within the instance, a slug selects one stable preset ID, not a personal/global partition or semantic version selector. Content digests identify the resolved definition. Favorites and recents are instance preferences, never admission authority.
+
+New presets declare releaseStatus explicitly (draft by default); publication is not inferred from human scope. The guarded single-user conversion preserves IDs, provenance, retained versions and snapshots, resolves only actual slug collisions, and merges eligible preferences by preset identity using latest recency. Unconverted legacy rows are not exposed by the instance catalog. An unresolved old scoped reference requires explicit refresh rather than substitution.
 
 Startup synchronization refreshes only deployment-owned rows with recorded seed provenance and no creator. A colliding operator preset or an unmarked retained row is preserved; changing the seed directory does not prevent refresh. Existing review status and soft deletion remain operator choices. Legacy-seed cleanup uses the same ownership boundary, and catalog refresh does not rewrite already-expanded execution snapshots.
 
@@ -246,7 +248,7 @@ Context and policy derivation are retained in existing snapshot/plan evidence se
 One shared backend path owns expansion:
 
 ```text
-expandPreset(preset_slug, scope, inputs, context) -> expanded_steps
+expandPreset(preset_slug, inputs, context) -> expanded_steps
 ```
 
 It serves Apply, Reapply, unexpanded Submit, API/MCP, edit/rerun, scheduled authoring, and goal-selected presets.
@@ -376,7 +378,7 @@ Start Workflow validates non-preset fields, resolves and validates preset inputs
 
 A goal-only request without authored steps, plan, tool/Skill, or explicit preset may be mapped conservatively to a seeded preset. Jira-key goals select the relevant Jira implementation/orchestration shape, breakdown goals select breakdown orchestration, and general implementation goals select MoonSpec Orchestrate under the existing goal selector. This does not authorize a model to choose a more permissive publication mode.
 
-`presetSchedule` records goal source, selected slug/scope, content digest, and reason. The ordinary compiler then resolves inputs, context, and publishing. Explicit execution shape takes precedence over goal inference.
+`presetSchedule` records goal source, selected instance slug, content digest, and reason. The ordinary compiler then resolves inputs, context, and publishing. Explicit execution shape takes precedence over goal inference.
 
 ## Apply and Reapply
 

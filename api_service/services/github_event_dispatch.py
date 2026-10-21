@@ -131,7 +131,7 @@ class TemporalEventExecutionDispatcher:
         publication_intent: str = "none",
     ) -> str:
         task_payload = {
-            "taskTemplate": {"slug": preset_slug, "scope": "global"},
+            "taskTemplate": {"slug": preset_slug},
             "inputs": {
                 "repository": repository,
                 "issueNumber": issue_number,
@@ -149,7 +149,6 @@ class TemporalEventExecutionDispatcher:
             session=self._session,
             initial_parameters=initial_parameters,
             allow_goal_schedule=False,
-            user_id=None,
         )
         expanded = apply_event_execution_limits(expanded, execution_limits)
         expanded = enforce_event_publication_intent(expanded, publication_intent)

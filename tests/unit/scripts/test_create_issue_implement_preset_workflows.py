@@ -51,7 +51,6 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
     }
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "scope": "global",
     }
     assert task["presetSchedule"] == {
         "source": "batch",

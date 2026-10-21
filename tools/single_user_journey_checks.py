@@ -208,7 +208,7 @@ def direct_backend_access(api: Api, state: dict[str, Any], *, operator_host: str
         for method, path, body in (
             ("GET", "/api/v1/settings/catalog", None),
             ("POST", "/api/presets", {"slug": "denied-backend-probe", "title": "Denied probe",
-                                     "description": "Must not be persisted", "scope": "global",
+                                     "description": "Must not be persisted",
                                      "steps": [{"instructions": "Must not run."}]}),
         ):
             result = api.json(method, path, headers=headers, body=body, expect=(401,))
@@ -556,7 +556,6 @@ def populate(
             "slug": f"single-user-journey-{label}-{uuid.uuid4().hex[:8]}",
             "title": f"single-user journey preset {label}",
             "description": "Single-user journey preset read back after restarts.",
-            "scope": "global",
             "inputs": [
                 {
                     "name": "audience",
@@ -572,8 +571,8 @@ def populate(
     )
     if not preset.get("slug"):
         raise JourneyFailure(f"preset creation returned no slug: {preset}")
-    if preset.get("scope") != "global" or preset.get("scopeRef") is not None:
-        raise JourneyFailure("instance preset was saved with personal scope")
+    if any(key in preset for key in ("scope", "scopeRef", "scope_ref")):
+        raise JourneyFailure("instance preset exposes retired human scope")
     state["preset"] = preset_identity(preset)
     state["presetApplication"] = {
         "inputs": {"audience": audience},
@@ -599,8 +598,6 @@ def preset_identity(preset: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "slug": preset.get("slug"),
-        "scope": preset.get("scope"),
-        "scopeRef": preset.get("scopeRef"),
         "title": preset.get("title"),
         "presetDigest": preset.get("presetDigest"),
         "inputs": preset.get("inputs") or [],
@@ -612,17 +609,7 @@ def verify_preset(api: Api, state: dict[str, Any]) -> None:
     saved = state.get("preset")
     if not saved:
         raise JourneyFailure("no preset recorded to verify")
-    query = urllib.parse.urlencode(
-        {
-            key: value
-            for key, value in (
-                ("scope", saved["scope"]),
-                ("scopeRef", saved["scopeRef"]),
-            )
-            if value
-        }
-    )
-    found = api.json("GET", f"/api/presets/{quote(saved['slug'])}?{query}")
+    found = api.json("GET", f"/api/presets/{quote(saved['slug'])}")
     if preset_identity(found) != saved:
         raise JourneyFailure(
             f"preset {saved['slug']} changed: saved {saved}, found "
@@ -633,7 +620,7 @@ def verify_preset(api: Api, state: dict[str, Any]) -> None:
         raise JourneyFailure("no explicit preset application recorded to verify")
     expanded = api.json(
         "POST",
-        f"/api/presets/{quote(saved['slug'])}:expand?{query}",
+        f"/api/presets/{quote(saved['slug'])}:expand",
         body={"inputs": application["inputs"]},
     )
     applied = expanded.get("appliedTemplate") or {}

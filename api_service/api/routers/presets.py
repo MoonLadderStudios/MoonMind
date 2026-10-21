@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.dependencies import (
     ensure_preset_catalog_enabled,
-    resolve_template_scope_for_user,
 )
 from api_service.api.schemas import (
     PresetCreateRequestSchema,
@@ -22,13 +20,11 @@ from api_service.api.schemas import (
     PresetReviewRequestSchema,
     PresetSaveFromWorkflowRequestSchema,
 )
-from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import PresetReleaseStatus, User
-from moonmind.security.operator_admission import OperatorAdmission
+from api_service.db.models import PresetReleaseStatus
+from api_service.operator_admission import require_operator
 from api_service.services.presets.catalog import (
     ExpandOptions,
-    INSTANCE_PREFERENCE_KEY,
     PresetCatalogService,
     PresetConflictError,
     PresetNotFoundError,
@@ -36,14 +32,25 @@ from api_service.services.presets.catalog import (
 )
 from api_service.services.presets.save import PresetSaveService
 
-router = APIRouter(prefix="/api/presets", tags=["presets"])
+
+async def _reject_legacy_scope(request: Request) -> None:
+    if any(key in request.query_params for key in ("scope", "scopeRef", "scope_ref")):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "legacy_preset_requires_refresh",
+                "message": "Preset scope was removed. Refresh and select an instance preset.",
+            },
+        )
+
+
+router = APIRouter(
+    prefix="/api/presets",
+    tags=["presets"],
+    dependencies=[Depends(require_operator), Depends(_reject_legacy_scope)],
+)
 logger = logging.getLogger(__name__)
 
-
-def _preference_key(access: User | OperatorAdmission) -> UUID | None:
-    if isinstance(access, OperatorAdmission):
-        return INSTANCE_PREFERENCE_KEY
-    return getattr(access, "id", None)
 
 def _map_service_error(exc: Exception) -> HTTPException:
     if isinstance(exc, PresetNotFoundError):
@@ -79,50 +86,41 @@ def _map_service_error(exc: Exception) -> HTTPException:
         },
     )
 
+
 async def _get_catalog_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> PresetCatalogService:
     return PresetCatalogService(session)
+
 
 async def _get_save_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> PresetSaveService:
     return PresetSaveService(session)
 
+
 @router.get("", response_model=PresetListResponseSchema)
 async def list_templates(
     *,
-    scope: str | None = Query(None),
-    scope_ref: str | None = Query(None, alias="scopeRef"),
     tag: str | None = Query(None),
     search: str | None = Query(None),
     favorites_only: bool = Query(False, alias="favoritesOnly"),
     include_inactive: bool = Query(False, alias="includeInactive"),
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> PresetListResponseSchema:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=scope,
-        scope_ref=scope_ref,
-        write=False,
-    )
     try:
         items = await service.list_templates(
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
             tag=tag,
             search=search,
             favorites_only=favorites_only,
-            user_id=_preference_key(user),
             include_inactive=include_inactive,
-            include_global=scope is None,
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return PresetListResponseSchema(items=items)
+
 
 @router.post(
     "",
@@ -132,38 +130,25 @@ async def list_templates(
 async def create_template(
     payload: PresetCreateRequestSchema,
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> PresetResponseSchema:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=payload.scope,
-        scope_ref=payload.scope_ref,
-        write=True,
-    )
     try:
         created = await service.create_template(
             slug=payload.slug or payload.title,
             title=payload.title,
             description=payload.description,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
             tags=payload.tags,
             inputs_schema=[item.model_dump(by_alias=True) for item in payload.inputs],
             steps=[item.model_dump(by_alias=True) for item in payload.steps],
             annotations=payload.annotations,
             required_capabilities=payload.required_capabilities,
-            created_by=getattr(user, "id", None),
-            release_status=(
-                PresetReleaseStatus.ACTIVE
-                if resolved_scope == "global"
-                else PresetReleaseStatus.DRAFT
-            ),
+            release_status=PresetReleaseStatus(payload.release_status),
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return PresetResponseSchema.model_validate(created)
+
 
 @router.post(
     "/save-from-workflow",
@@ -173,20 +158,11 @@ async def create_template(
 async def save_from_workflow(
     payload: PresetSaveFromWorkflowRequestSchema,
     service: PresetSaveService = Depends(_get_save_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> PresetResponseSchema:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=payload.scope,
-        scope_ref=payload.scope_ref,
-        write=True,
-    )
     try:
         created = await service.save_from_workflow(
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
             slug=payload.slug,
             title=payload.title,
             description=payload.description,
@@ -195,196 +171,117 @@ async def save_from_workflow(
                 item.model_dump(by_alias=True) for item in payload.suggested_inputs
             ],
             tags=payload.tags,
-            created_by=getattr(user, "id", None),
-            preference_key=_preference_key(user),
+            release_status=PresetReleaseStatus(payload.release_status),
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return PresetResponseSchema.model_validate(created)
 
+
 @router.post("/{slug}:expand", response_model=PresetExpandResponseSchema)
 async def expand_template(
     slug: str,
     payload: PresetExpandRequestSchema,
-    scope: str | None = Query(None),
-    scope_ref: str | None = Query(None, alias="scopeRef"),
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> PresetExpandResponseSchema:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=scope,
-        scope_ref=scope_ref,
-        write=False,
-    )
     try:
         expanded = await service.expand_template(
             slug=slug,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
             inputs=payload.inputs,
             context=payload.context,
             options=ExpandOptions(
                 should_enforce_step_limit=payload.options.enforce_step_limit
             ),
-            user_id=_preference_key(user),
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return PresetExpandResponseSchema.model_validate(expanded)
 
+
 @router.get("/{slug}", response_model=PresetResponseSchema)
 async def get_template(
     slug: str,
-    scope: str | None = Query(None),
-    scope_ref: str | None = Query(None, alias="scopeRef"),
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> PresetResponseSchema:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=scope,
-        scope_ref=scope_ref,
-        write=False,
-    )
     try:
         item = await service.get_template(
             slug=slug,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
-            user_id=_preference_key(user),
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return PresetResponseSchema.model_validate(item)
 
+
 @router.put("/{slug}/review", response_model=PresetResponseSchema)
 async def review_template(
     slug: str,
     payload: PresetReviewRequestSchema,
-    scope: str | None = Query(None),
-    scope_ref: str | None = Query(None, alias="scopeRef"),
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> PresetResponseSchema:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=scope,
-        scope_ref=scope_ref,
-        write=True,
-    )
     try:
         result = await service.set_release_status(
             slug=slug,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
             release_status=PresetReleaseStatus(payload.release_status),
-            reviewer_id=getattr(user, "id", None),
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return PresetResponseSchema.model_validate(result)
+
 
 @router.post("/{slug}:favorite", status_code=status.HTTP_204_NO_CONTENT)
 async def favorite_template(
     slug: str,
     payload: PresetFavoriteRequestSchema,
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> Response:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=payload.scope,
-        scope_ref=payload.scope_ref,
-        write=False,
-    )
-    user_id = _preference_key(user)
-    if not isinstance(user_id, UUID):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "user_id_required",
-                "message": "A persisted user id is required for favorites.",
-            },
-        )
     try:
         await service.set_favorite(
-            user_id=user_id,
             slug=slug,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 @router.delete("/{slug}:favorite", status_code=status.HTTP_204_NO_CONTENT)
 async def unfavorite_template(
     slug: str,
     payload: PresetFavoriteRequestSchema,
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> Response:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=payload.scope,
-        scope_ref=payload.scope_ref,
-        write=False,
-    )
-    user_id = _preference_key(user)
-    if not isinstance(user_id, UUID):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "user_id_required",
-                "message": "A persisted user id is required for favorites.",
-            },
-        )
     try:
         await service.clear_favorite(
-            user_id=user_id,
             slug=slug,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_template(
     slug: str,
-    scope: str | None = Query(None),
-    scope_ref: str | None = Query(None, alias="scopeRef"),
     service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> Response:
     ensure_preset_catalog_enabled()
 
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=scope,
-        scope_ref=scope_ref,
-        write=True,
-    )
     try:
         await service.soft_delete_template(
             slug=slug,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 __all__ = ["router"]

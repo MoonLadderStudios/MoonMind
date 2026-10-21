@@ -1,7 +1,6 @@
 slug: github-issue-breakdown-orchestrate
 title: Breakdown and GitHub Issue Orchestrate
 description: Break a preferred source input into stories, create GitHub issues, then create dependent GitHub Issue Orchestrate workflow executions for each generated issue.
-scope: global
 tags:
   - github
   - moonspec
