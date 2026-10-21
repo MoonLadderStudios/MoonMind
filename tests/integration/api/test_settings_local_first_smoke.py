@@ -29,7 +29,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -46,7 +46,7 @@ pytestmark = [
     pytest.mark.integration_ci,
 ]
 
-SETTINGS_USER_DEP = get_current_user()
+SETTINGS_USER_DEP = get_instance_access
 
 # The SecretRef that the local-first operator creates. The plaintext that
 # we POST never appears in any later response or persisted row.

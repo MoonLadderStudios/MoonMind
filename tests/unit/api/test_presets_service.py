@@ -2248,6 +2248,28 @@ async def test_list_templates_with_favorites_and_recents(tmp_path):
     assert "steps" not in listed[0]
     assert "annotations" not in listed[0]
 
+
+async def test_unified_account_catalog_keeps_global_and_own_data_only(tmp_path):
+    owner, other = uuid4(), uuid4()
+    async with template_db(tmp_path) as maker:
+        async with maker() as session:
+            catalog = PresetCatalogService(session)
+            for slug, scope, scope_ref in (
+                ("global-custom", "global", None),
+                ("own-custom", "personal", str(owner)),
+                ("other-custom", "personal", str(other)),
+            ):
+                await catalog.create_template(
+                    slug=slug, title=slug, description="Retained definition",
+                    scope=scope, scope_ref=scope_ref, tags=[], inputs_schema=[],
+                    steps=[{"instructions": "Keep custom instructions."}],
+                )
+        async with maker() as restarted:
+            items = await PresetCatalogService(restarted).list_templates(
+                scope="personal", scope_ref=str(owner), include_global=True,
+            )
+    assert {item["slug"] for item in items} == {"global-custom", "own-custom"}
+
 async def test_list_templates_exposes_declared_workflow_publish(tmp_path):
     """Create reads a preset's declared publication before expansion."""
 

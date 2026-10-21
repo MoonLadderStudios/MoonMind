@@ -16,6 +16,7 @@ from moonmind.security.auth_modes_4120 import (
     get_request_production_mode,
     is_disabled_local_mode,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,9 @@ def _transient_disabled_operator() -> User:
     )
 
 
-async def _load_disabled_user(session: AsyncSession) -> User:
+async def _load_disabled_user(
+    session: AsyncSession, *, allow_transient: bool = True
+) -> User:
     """Resolve the persisted local-mode principal, failing closed.
 
     A present default row keeps serving exactly as before (existing
@@ -205,7 +208,7 @@ async def _load_disabled_user(session: AsyncSession) -> User:
         )
         raise HTTPException(status_code=503, detail="unavailable")
     if user_obj is None:
-        if await _disabled_account_free_allowed(session):
+        if allow_transient and await _disabled_account_free_allowed(session):
             logger.info(
                 "auth_event mode=disabled reason=local_operator code=account_free",
             )
@@ -328,6 +331,28 @@ async def _strict_current_user(
     user = await _resolve_session_principal(request, session, optional=False)
     assert user is not None
     return user
+
+
+async def get_instance_access(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+) -> User | OperatorAdmission:
+    """Instance consumers receive admission, never an account-free User.
+
+    The published conversion ledger protects retained data. Predecessor account
+    deployments retain their existing session authority and persisted principal
+    until their owning conversion completes; no virtual person is made here.
+    """
+    if is_disabled_local_mode():
+        from api_service.operator_admission import require_operator
+
+        admission = await require_operator(request)
+        if await _disabled_account_free_allowed(session):
+            request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
+            return admission
+        # Unconverted installations can still serve their retained real account.
+        return await _load_disabled_user(session, allow_transient=False)
+    return await get_current_user()(request, session)
 
 
 async def _optional_current_user(

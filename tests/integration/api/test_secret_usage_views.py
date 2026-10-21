@@ -8,14 +8,14 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
 from api_service.db.models import Base, ManagedSecret, SecretStatus, SettingsOverride
 from api_service.main import app
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-SETTINGS_USER_DEP = get_current_user()
+SETTINGS_USER_DEP = get_instance_access
 
 
 @pytest_asyncio.fixture

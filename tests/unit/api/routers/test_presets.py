@@ -30,7 +30,7 @@ def _override_user_dependencies(app: FastAPI) -> None:
         for route in router.routes
         if route.dependant is not None
         for dep in route.dependant.dependencies
-        if dep.call.__name__ in {"_current_user_fallback", "_strict_current_user", "_optional_current_user"}
+        if dep.call.__name__ in {"_current_user_fallback", "_strict_current_user", "_optional_current_user", "get_instance_access"}
     }
     if not dependencies:
         dependencies = {get_current_user(), get_current_user_optional()}

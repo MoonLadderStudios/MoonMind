@@ -25,6 +25,10 @@ recreated stack, can verify what an earlier phase saved):
 ``generated_verify``
     Download again after the worker's owned-workspace cleanup receipt. This
     checks persistence independently of the execution host and local workspace.
+``access`` / ``access_denied``
+    Use real settings/preset routes through the published operator path, reject
+    hostile Host/Origin, and reject direct-backend requests from an existing
+    workload container even when it presents a loopback Host or machine material.
 ``canceled``
     Confirm the dashboard cancellation: each execution marked for
     cancellation must have been canceled through the dashboard before its
@@ -170,6 +174,49 @@ class Api:
 
 def log(message: str) -> None:
     print(f"single-user-journey: {message}", flush=True)
+
+
+def operator_access(api: Api, state: dict[str, Any]) -> None:
+    """Probe the same production routes the operator actually consumes."""
+    if not api.json("GET", "/api/v1/settings/catalog"):
+        raise JourneyFailure("operator settings catalog is empty")
+    before = api.json("GET", "/api/presets")
+    host_status, _ = api.request("GET", "/api/v1/settings/catalog",
+        headers={"Host": "foreign.invalid"}, expect=(401, 403))
+    origin_status, _ = api.request("PATCH", "/api/v1/settings/workspace",
+        headers={"Origin": "http://foreign.invalid"}, body={"changes": {}}, expect=(403,))
+    if api.json("GET", "/api/presets") != before:
+        raise JourneyFailure("denied access probes changed the preset catalog")
+    state["operatorAccess"] = {"allowed": True, "foreignHostStatus": host_status,
+                               "foreignOriginStatus": origin_status}
+    log(f"served operator reads allowed; foreign Host {host_status}, Origin {origin_status}")
+
+
+def direct_backend_access(api: Api, state: dict[str, Any], *, operator_host: str) -> None:
+    """Run inside the journey's workload container, using its actual TCP peer."""
+    probes = (
+        {},
+        {"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1",
+         "X-Moonmind-User": "forged-operator"},
+        {"Authorization": "Bearer synthetic-machine-material",
+         "X-Moonmind-Execution-Fanout": "v1"},
+    )
+    statuses = []
+    for headers in probes:
+        # A correct loopback Host must not turn a workload peer into an operator.
+        headers = {**headers, "Host": operator_host}
+        for method, path, body in (
+            ("GET", "/api/v1/settings/catalog", None),
+            ("POST", "/api/presets", {"slug": "denied-backend-probe", "title": "Denied probe",
+                                     "description": "Must not be persisted", "scope": "global",
+                                     "steps": [{"instructions": "Must not run."}]}),
+        ):
+            result = api.json(method, path, headers=headers, body=body, expect=(401,))
+            if (result.get("detail") or {}).get("code") not in {"auth_required", "auth_invalid"}:
+                raise JourneyFailure(f"{method} {path} did not return an admission denial")
+            statuses.append(401)
+    state["directBackendAccess"] = {"denied": True, "statuses": statuses}
+    log("direct backend, forged forwarding and machine-only operator requests denied")
 
 
 def quote(value: str) -> str:
@@ -1378,6 +1425,8 @@ def main(argv: list[str] | None = None) -> int:
             "populate",
             "generate",
             "generated_verify",
+            "access",
+            "access_denied",
             "canceled",
             "credential",
             "verify",
@@ -1396,6 +1445,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--defer-seconds", type=float, default=150.0)
     parser.add_argument("--api-log", type=Path)
     parser.add_argument("--cleanup-receipt", type=Path)
+    parser.add_argument("--operator-host", help="published Host for direct-backend probes")
     parser.add_argument(
         "--pre-upgrade-release",
         action="store_true",
@@ -1406,7 +1456,7 @@ def main(argv: list[str] | None = None) -> int:
     api = Api(args.api_base)
     state: dict[str, Any] = {}
     # These phases start a journey's state; every later phase reads it.
-    if args.phase not in {"populate", "controller_absent"}:
+    if args.phase not in {"populate", "controller_absent", "access_denied"}:
         state = json.loads(args.state_file.read_text())
     try:
         if args.phase == "populate":
@@ -1420,6 +1470,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.phase == "generate":
             generate_output(api, state, label=args.label, timeout=args.timeout)
+        elif args.phase == "access":
+            operator_access(api, state)
+        elif args.phase == "access_denied":
+            if not args.operator_host:
+                raise JourneyFailure("access_denied requires --operator-host")
+            direct_backend_access(api, state, operator_host=args.operator_host)
         elif args.phase == "generated_verify":
             if args.cleanup_receipt is None:
                 raise JourneyFailure("generated_verify requires --cleanup-receipt")

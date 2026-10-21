@@ -44,11 +44,12 @@ from api_service.api.routers.workflow_console_view_model import (
     resolve_dashboard_runtime_config,
     resolve_repository_branch_async,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.models import AgentSkillDefinition, TemporalArtifact, User
 from api_service.dashboard_static import DASHBOARD_HTML_CACHE_CONTROL
 from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.capabilities.input_contracts import (
     contract_from_artifact_metadata,
     content_digest_for_text,
@@ -601,7 +602,7 @@ def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
 
 
 def _is_execution_admin(user: User | None) -> bool:
-    return bool(user and getattr(user, "is_superuser", False))
+    return isinstance(user, OperatorAdmission) or bool(user and getattr(user, "is_superuser", False))
 
 
 def _is_allowed_path(path: str) -> bool:
@@ -999,12 +1000,13 @@ def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
                 continue
             if call.__name__ in {
                 "_strict_current_user",
+                "get_instance_access",
                 "_optional_current_user",
             } or call.__name__.startswith("current_"):
                 dependencies.append(call)
 
     if not dependencies:
-        dependencies.append(get_current_user())
+        dependencies.append(get_instance_access)
     return dependencies
 
 
@@ -1385,7 +1387,7 @@ async def _import_skill_zip(
 @router.get("/secrets")
 async def secrets_route(
     request: Request,
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RedirectResponse:
     """Redirect the legacy secrets page to its canonical Settings route."""
     return RedirectResponse(
@@ -1398,7 +1400,7 @@ async def secrets_route(
 async def workflow_console_root(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the React-powered workflow list page."""
     destination = _dashboard_destination("workflows")
@@ -1416,7 +1418,7 @@ async def workflow_console_root(
 async def schedules_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the React-powered schedules page."""
     destination = _dashboard_destination("recurring")
@@ -1435,7 +1437,7 @@ async def schedule_detail_route(
     request: Request,
     schedule_id: str,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the schedules shell for schedule deep links."""
     if not _is_safe_detail_segment(schedule_id) or schedule_id.lower() == "new":
@@ -1455,7 +1457,7 @@ async def schedule_detail_route(
 async def remediations_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the capability-gated remediation inventory shell."""
     destination = _dashboard_destination("remediation")
@@ -1474,7 +1476,7 @@ async def remediations_route(
 async def artifact_collection_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the capability-gated artifact and observability collection shell."""
     destination = _dashboard_destination("artifacts")
@@ -1492,7 +1494,7 @@ async def artifact_collection_route(
 @router.get("/workers")
 async def task_workers_route(
     request: Request,
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> RedirectResponse:
     """Redirect the legacy workers page to its canonical Settings route."""
     return RedirectResponse(
@@ -1505,7 +1507,7 @@ async def task_workers_route(
 async def task_settings_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
     destination = _dashboard_destination("settings-providers-secrets")
@@ -1524,7 +1526,7 @@ async def settings_spa_fallback_route(
     request: Request,
     dashboard_path: str,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> Response:
     """Serve the settings SPA shell for extensionless settings sub-routes.
 
@@ -1552,7 +1554,7 @@ async def oauth_terminal_route(
     request: Request,
     session_id: str = Query("", alias="session_id"),
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the OAuth terminal shell launched from Settings."""
     current_path = "/oauth-terminal"
@@ -1572,7 +1574,7 @@ async def oauth_terminal_route(
 async def omnigent_inventory_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve reloadable capability-gated Omnigent inventory routes."""
     destination = _dashboard_destination(
@@ -1594,7 +1596,7 @@ async def omnigent_inventory_route(
 async def task_create_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the React-powered workflow start page."""
     destination = _dashboard_destination("create")
@@ -1612,7 +1614,7 @@ async def task_create_route(
 async def skills_route(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the React-powered skills page."""
     destination = _dashboard_destination("skills")
@@ -1631,7 +1633,7 @@ async def skills_spa_fallback_route(
     request: Request,
     dashboard_path: str,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve the skills SPA shell for extensionless skills sub-routes."""
     if not _is_extensionless_dashboard_path(dashboard_path):
@@ -1652,7 +1654,7 @@ async def workflow_console_route(
     request: Request,
     workflow_path: str,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve dashboard sub-routes from one HTML shell."""
 
@@ -1680,7 +1682,7 @@ async def collection_spa_fallback_route(
     request: Request,
     dashboard_path: str,
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> HTMLResponse:
     """Serve recognized extensionless collection deep links from the SPA shell."""
     if not _is_extensionless_collection_route(
@@ -1706,7 +1708,7 @@ async def collection_spa_fallback_route(
 @router.get("/api/ui/info", response_model=DashboardUiInfoResponse)
 async def get_dashboard_ui_info(
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> DashboardUiInfoResponse:
     """Expose compact shell capabilities and endpoint discovery for the SPA."""
     dashboard_config = await resolve_dashboard_runtime_config(
@@ -1780,7 +1782,7 @@ async def get_dashboard_ui_info(
 async def list_dashboard_skills(
     include_content: bool = Query(False, alias="includeContent"),
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> DashboardSkillListResponse:
     """List currently available skills for workflow submission forms."""
 
@@ -1822,7 +1824,7 @@ async def get_dashboard_skill_input_contract(
     skill_id: str,
     digest: str | None = Query(None),
     session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> DashboardSkillInputContractResponse:
     """Return a Skill catalog item with the full input contract inlined."""
 
@@ -1914,7 +1916,7 @@ async def get_dashboard_skill_input_contract(
 async def resolve_dashboard_github_branch(
     repository: str = Query(..., min_length=1),
     branch: str = Query(..., min_length=1),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> DashboardBranchResolveResponse:
     """Resolve one exact branch name without scanning suggestion pages."""
 
@@ -1927,7 +1929,7 @@ async def resolve_dashboard_github_branch(
 )
 async def get_dashboard_github_branch_metadata(
     repository: str = Query(..., min_length=1),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> DashboardBranchMetadataResponse:
     """Resolve only default-branch metadata so form init never enumerates branches."""
 
@@ -1940,7 +1942,7 @@ async def list_dashboard_github_branches(
     repository: str = Query(..., min_length=1),
     q: str = Query(""),
     limit: int = Query(20, ge=1, le=50),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> DashboardBranchListResponse:
     """List one bounded page of GitHub branches through MoonMind."""
 
@@ -1956,7 +1958,7 @@ async def list_dashboard_github_branches(
 def list_dashboard_github_issues(
     repository: str = Query(..., min_length=1),
     q: str = Query(""),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> DashboardIssueListResponse:
     """List GitHub issues through MoonMind so browsers never call GitHub directly."""
 
@@ -1970,7 +1972,7 @@ def list_dashboard_github_issues(
 )
 async def create_dashboard_skill(
     request: CreateSkillRequest,
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> dict[str, str]:
     """Create a new local skill from the dashboard."""
 
@@ -2003,7 +2005,7 @@ async def create_dashboard_skill(
 async def create_skill_import(
     file: UploadFile = File(...),
     collision_policy: Literal["reject", "new_version"] = Form("reject"),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> SkillImportResponse:
     """Create a new local skill from an uploaded zip bundle."""
 
@@ -2016,7 +2018,7 @@ async def create_skill_import(
 )
 async def upload_dashboard_skill_zip(
     file: UploadFile = File(...),
-    _user: User = Depends(get_current_user()),
+    _user: User | OperatorAdmission = Depends(get_instance_access),
 ) -> dict[str, str]:
     """Create a new local skill from an uploaded zip bundle."""
 

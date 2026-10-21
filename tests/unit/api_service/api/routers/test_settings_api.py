@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.api.routers import settings as settings_router
 from api_service.db import base as db_base
 from api_service.db.models import (
@@ -30,7 +30,7 @@ from api_service.services.settings_catalog import (
 )
 
 
-SETTINGS_USER_DEP = get_current_user()
+SETTINGS_USER_DEP = get_instance_access
 
 
 def _install_settings_migration_rules(monkeypatch, rules):
