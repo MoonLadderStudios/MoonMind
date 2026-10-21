@@ -124,9 +124,8 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
     Returns True only when the guarded conversion ledger records a
     completed, published fresh-init or eligible conversion: migration
     state proves the source needed no account (or converted cleanly), so
-    ordinary disabled-mode routes may serve a transient local-operator
-    principal without minting a synthetic User row. Fresh installations
-    initialize without a person and successful restarts no longer require
+    ordinary disabled-mode routes may serve operator admission without resolving
+    a person. Fresh installations and successful restarts no longer require
     live account tables. Any error -- including a missing ledger table on
     pre-386 schemas -- fails closed to False. A later subsystem conversion
     must not revoke already-established admission; its new access authority
@@ -353,6 +352,23 @@ async def get_instance_access(
         # Unconverted installations can still serve their retained real account.
         return await _load_disabled_user(session, allow_transient=False)
     return await get_current_user()(request, session)
+
+
+async def get_instance_access_optional(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+) -> User | OperatorAdmission | None:
+    """Instance admission with the existing separately verified fan-out path.
+
+    A fan-out marker only defers authentication to its owning route. Artifact
+    consumers reject the missing admission; execution consumers must verify the
+    capability and its parent. No marker can mint operator recovery authority.
+    """
+    if request.headers.get("x-moonmind-execution-fanout", "").strip() == "v1":
+        return None
+    if is_disabled_local_mode():
+        return await get_instance_access(request, session)
+    return await _optional_current_user(request, session)
 
 
 async def _optional_current_user(

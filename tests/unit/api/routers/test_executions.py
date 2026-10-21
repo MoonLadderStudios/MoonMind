@@ -1549,6 +1549,8 @@ def _override_user_dependencies(
             "_current_user_fallback",
             "_strict_current_user",
             "_optional_current_user",
+            "get_instance_access",
+            "get_instance_access_optional",
         }
     }
     if not user_dependencies:
@@ -9553,6 +9555,8 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
             "_current_user_fallback",
             "_strict_current_user",
             "_optional_current_user",
+            "get_instance_access",
+            "get_instance_access_optional",
         }:
             test_client.app.dependency_overrides[dependency] = lambda: None
     service.create_execution.return_value = _build_execution_record(
@@ -9623,6 +9627,8 @@ def test_execution_fanout_cannot_author_recovery_or_profile_snapshots(
             "_current_user_fallback",
             "_strict_current_user",
             "_optional_current_user",
+            "get_instance_access",
+            "get_instance_access_optional",
         }:
             test_client.app.dependency_overrides[dependency] = lambda: None
     service.create_execution.return_value = _build_execution_record(owner_id=str(user.id))
@@ -9682,6 +9688,8 @@ def test_execution_fanout_inherits_exact_omnigent_agent_profile(
             "_current_user_fallback",
             "_strict_current_user",
             "_optional_current_user",
+            "get_instance_access",
+            "get_instance_access_optional",
         }:
             test_client.app.dependency_overrides[dependency] = lambda: None
     service.create_execution.return_value = _build_execution_record(owner_id=str(user.id))
@@ -21664,9 +21672,11 @@ def test_mm3935_cli_retry_reconciles_before_mutable_admission(
     service.create_execution.assert_not_awaited()
 
 
+@pytest.mark.parametrize("account_free", [False, True])
 def test_mm3935_journey_submission_reaches_the_plan_owner(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
+    account_free: bool,
 ) -> None:
     """The Compose journey's deferred task is admitted by the plan owner.
 
@@ -21681,6 +21691,17 @@ def test_mm3935_journey_submission_reaches_the_plan_owner(
 
     scheduled_for = datetime.now(UTC) + timedelta(hours=1)
     test_client, service, _user = client
+    if account_free:
+        from api_service.auth_providers import get_instance_access_optional
+        from moonmind.security.operator_admission import resolve_operator_admission
+
+        admission = resolve_operator_admission(
+            client_host="127.0.0.1", host_header="localhost", environ={}
+        )
+        test_client.app.dependency_overrides[get_instance_access_optional] = (
+            lambda: admission
+        )
+        service.find_create_execution.return_value = None
     response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
         test_client,
         service,
