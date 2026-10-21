@@ -56,11 +56,9 @@ recreated stack, can verify what an earlier phase saved):
     adds only the retirement-boundary proof.
 ``conversion``
     After an upgrade from an account-era release, read the API startup log
-    (``--api-log``) and require the guarded single-user conversion to have
-    classified the retained data as one eligible operator. It either
-    published, or it refused only because subsystem transforms are not yet
-    registered. That refusal is recorded and printed as not published. Any
-    other refusal, a deferral, or no observed outcome fails.
+    (``--api-log``) and require a published eligible single-operator conversion.
+    Refusal is preserved in the state for diagnostics and fails this eligible
+    upgrade lane; protected refusal has separate PostgreSQL coverage.
 ``controller_absent``
     MoonLadderStudios/MoonMind#4502, before a deployment controller is
     installed: Settings Operations reports it not installed, and one update
@@ -704,7 +702,7 @@ def conversion(state: dict[str, Any], *, api_log: Path) -> None:
         "reason": reason,
         "pendingSubsystems": names,
     }
-    log(
+    raise JourneyFailure(
         "guarded conversion NOT published: the source is one eligible operator, "
         f"but subsystems {','.join(names)} have no registered transform; "
         "source data and operator access are preserved"

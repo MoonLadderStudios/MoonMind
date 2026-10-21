@@ -430,12 +430,11 @@ Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/operator_admission.py` (FastAPI adapter),
 `api_service/api/routers/operator_boundary_4347.py` (test-only demonstration).
 
-The shared primitive is implemented, but `api_service/main.py` intentionally
-does not mount the demonstration routers. Real workflow, artifact, stream, and
-chat routes retain their predecessor authentication until their consumers
-migrate through this boundary with scoped machine authority preserved. A merged
-helper or its tests do not establish production-route conversion or deployed
-access.
+Disabled-mode product routes enforce configured remote ingress and local Origin
+checks. They still resolve `User` for legacy UUID consumers; local Compose still
+relies on its validated publish binding. The permission-only handoff remains
+incomplete. Demonstration routers stay unmounted. Hermetic route evidence does
+not establish deployed access.
 
 The rules below describe that primitive. Admission grants operator-interface
 access without resolving or creating a persisted person. Consumer migration
