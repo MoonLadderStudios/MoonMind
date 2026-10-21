@@ -43,7 +43,10 @@ def test_migration_chains_off_current_head() -> None:
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
     script = ScriptDirectory.from_config(config)
-    assert tuple(script.get_heads()) == ("396_artifact_operator_recovery",)
+    assert tuple(script.get_heads()) == ("397_instance_preset_catalog",)
+    assert script.get_revision("397_instance_preset_catalog").down_revision == (
+        "396_artifact_operator_recovery"
+    )
     assert script.get_revision("393_default_conn_merge_grant").down_revision == (
         migration.revision
     )
