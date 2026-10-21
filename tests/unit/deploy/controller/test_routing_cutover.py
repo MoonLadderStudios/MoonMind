@@ -57,6 +57,12 @@ class Runner:
                     for name in SERVICES
                 ),
             }
+        if "exec" in args:
+            return {
+                "exit": 0,
+                "output": "MOONMIND_SINGLE_USER_CONVERSION="
+                + json.dumps({"published": True, "disposition": "fresh_init"}),
+            }
         return {"exit": 0, "output": "ok"}
 
     def applied(self):

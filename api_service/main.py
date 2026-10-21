@@ -330,6 +330,29 @@ async def _run_guarded_single_user_upgrade() -> dict:
         return {"deferred": True, "reason": type(exc).__name__}
 
 
+def _single_user_conversion_status(summary: Any) -> dict | None:
+    """Compact, redacted startup conversion disposition for ``/healthz``.
+
+    The deployment controller records this as the update's conversion
+    result, so a refusal reaches the deployment record without a database
+    read. Only metadata leaves the process: the sanitized detail (subsystem
+    and settings-key names) stays in the API startup log.
+    """
+    if not isinstance(summary, dict):
+        return None
+    if summary.get("deferred"):
+        return {"deferred": True, "reason": str(summary.get("reason") or "")}
+    decision = summary.get("decision")
+    if not isinstance(decision, dict):
+        return None
+    return {
+        "published": bool(summary.get("published")),
+        "disposition": str(decision.get("disposition") or ""),
+        "reasonCode": str(decision.get("reason_code") or ""),
+        "personCount": int(decision.get("person_count") or 0),
+    }
+
+
 async def _sync_omnigent_bootstrap_agent_profile() -> bool:
     """Synchronize observed inventory before activating the bootstrap profile."""
 
@@ -1394,6 +1417,11 @@ async def health_check():
     }
     if code_freshness:
         body["workerCodeFreshness"] = code_freshness
+    conversion = _single_user_conversion_status(
+        getattr(app.state, "single_user_conversion", None)
+    )
+    if conversion is not None:
+        body["singleUserConversion"] = conversion
     if not db_reachable or migration_required:
         return JSONResponse(status_code=503, content=body)
     return body
@@ -3201,7 +3229,7 @@ async def startup_event():
     # created_by=None, and evaluating the guard first keeps those
     # deployment-owned rows from ever gating the cutover; the unowned
     # probe additionally excludes seed-stamped rows on later restarts.
-    await _run_guarded_single_user_upgrade()
+    app.state.single_user_conversion = await _run_guarded_single_user_upgrade()
     await _sync_preset_seed_catalog()
     # Provider defaults are input authority for the Omnigent bootstrap. Seed
     # them before the first reconciliation pass so a fresh restart can validate

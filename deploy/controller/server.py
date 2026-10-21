@@ -1070,6 +1070,90 @@ def check_operator_url(url: str, *, timeout_seconds: int = OPERATOR_URL_TIMEOUT_
     return "ok"
 
 
+CONVERSION_SERVICE = "api"
+CONVERSION_RESULT_PREFIX = "MOONMIND_SINGLE_USER_CONVERSION="
+CONVERSION_PROBE_TIMEOUT_SECONDS = 60
+# The Compose healthcheck's in-container route: it needs no operator URL and
+# reaches the API that ran the conversion on its own startup.
+CONVERSION_PROBE_SCRIPT = (
+    "import json, urllib.error, urllib.request\n"
+    "try:\n"
+    "    body = urllib.request.urlopen('http://localhost:8000/healthz', timeout=30).read()\n"
+    "except urllib.error.HTTPError as exc:\n"
+    "    body = exc.read()\n"
+    "status = json.loads(body).get('singleUserConversion')\n"
+    f"print({CONVERSION_RESULT_PREFIX!r} + json.dumps(status))\n"
+)
+
+
+def single_user_conversion_check(runner, base, *, api_running: bool) -> dict:
+    """Record the installed API's guarded conversion disposition.
+
+    The API owns conversion and runs it on startup; the controller only
+    carries the outcome into the deployment result. A refusal keeps source
+    data, the serving release, and access protection, but the update has not
+    installed the account-free product, so it is not reported as success.
+    """
+    name = "single-user-conversion"
+    if not api_running:
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": "the API is not running after apply; conversion disposition unknown",
+        }
+    try:
+        result = engine.run_command(
+            runner,
+            (*base, "exec", "-T", CONVERSION_SERVICE, "python", "-c", CONVERSION_PROBE_SCRIPT),
+            timeout_seconds=CONVERSION_PROBE_TIMEOUT_SECONDS,
+        )
+        status = None
+        reported = False
+        for line in engine.command_stdout(result).splitlines():
+            if line.startswith(CONVERSION_RESULT_PREFIX):
+                status = json.loads(line[len(CONVERSION_RESULT_PREFIX):])
+                reported = True
+        if int(result.get("exit", 0)) != 0 or not reported:
+            raise RuntimeError(
+                f"exit {result.get('exit', 0)}: "
+                + redact_text(str(result.get("output", "")))[-300:]
+            )
+    except Exception as exc:
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": redact_text(f"could not read the API conversion status: {exc}"),
+        }
+    if not isinstance(status, dict):
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": "the installed API did not report a single-user conversion disposition",
+        }
+    if status.get("deferred"):
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": (
+                f"conversion deferred ({status.get('reason') or 'unknown'}); "
+                "the API retries on its next start"
+            ),
+        }
+    disposition = str(status.get("disposition") or "unknown")
+    if status.get("published"):
+        return {"name": name, "status": "passed", "detail": f"{disposition} published"}
+    return {
+        "name": name,
+        "status": "failed",
+        "detail": (
+            f"conversion refused ({disposition}: {status.get('reasonCode') or 'unknown'}, "
+            f"persons={int(status.get('personCount') or 0)}); source data, serving "
+            "release and access protection preserved; account-free access stays "
+            "closed until resolved (detail in the API startup log)"
+        ),
+    }
+
+
 def read_env_file(path: str) -> dict:
     """Parse a dotenv file into a mapping without interpolation."""
     values: dict[str, str] = {}
@@ -1811,6 +1895,7 @@ def _verify_applied_release(
     completed_services: list = []
     service_health: dict = {}
     recorded: list = []
+    base = None
     try:
         base = engine.compose_base(
             project=project,
@@ -1855,6 +1940,12 @@ def _verify_applied_release(
         )
         if routing_cutover:
             recorded.append(routing_cutover)
+    if CONVERSION_SERVICE in services and base is not None:
+        recorded.append(
+            single_user_conversion_check(
+                runner, base, api_running=bool(services_running.get(CONVERSION_SERVICE))
+            )
+        )
     operator_access: dict[str, str] = {}
     for url in target.get("operatorUrls", ()) or ():
         try:
