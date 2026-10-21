@@ -1346,6 +1346,52 @@ async def test_run_executions_report_recorded_lifecycle_and_outcome(
     assert waiting.objective_outcome is None
 
 
+@pytest.mark.parametrize(
+    ("state", "memo", "final_outcome", "expected"),
+    [
+        ("completed", {"objectiveOutcome": "active"}, "failed", "failed"),
+        ("completed", {}, "idle", "idle"),
+        (
+            "completed",
+            {"objectiveOutcome": "invalid"},
+            "verification_blocked",
+            "verification_blocked",
+        ),
+        ("completed", {"objectiveOutcome": "succeeded"}, "failed", "succeeded"),
+        ("executing", {"objectiveOutcome": "active"}, "failed", "active"),
+        ("completed", {"objectiveOutcome": "active"}, "active", "active"),
+    ],
+)
+async def test_run_executions_recover_stale_terminal_outcome(
+    tmp_path: Path,
+    state: str,
+    memo: dict,
+    final_outcome: str,
+    expected: str,
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        record = TemporalExecutionRecord(
+            workflow_id="wf-terminal-summary",
+            run_id="wf-terminal-summary-run",
+            namespace="default",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            state=MoonMindWorkflowState(state),
+            entry="user_workflow",
+            memo=memo,
+            finish_summary_json={"publishContext": {"objectiveOutcome": final_outcome}},
+        )
+        session.add(record)
+        await session.commit()
+
+        executions = await RecurringWorkflowsService(
+            session
+        ).run_executions_by_workflow_id([record.workflow_id])
+
+        assert executions[record.workflow_id].state == state
+        assert executions[record.workflow_id].objective_outcome == expected
+        assert record.memo == memo
+
+
 async def test_create_definition_normalizes_snake_case_target_aliases(
     tmp_path: Path, mock_temporal_adapter
 ) -> None:
