@@ -26,6 +26,7 @@ from typing import Any, Mapping
 
 MAX_AUTO_ATTEMPTS = 3
 MAX_ATTEMPT_GROUPS = 5
+MAX_ATTEMPT_SUMMARY_CHARS = 600
 
 OPEN_STATUSES = ("pending", "staged", "applying")
 TERMINAL_STATUSES = ("succeeded", "partially_verified", "failed", "superseded")
@@ -84,10 +85,35 @@ def error_summary(attempts: list) -> str:
         return ""
     first = attempts[0]
     last = attempts[-1]
-    summary = f"attempt {first.get('attempt')}: {first.get('error')}"
+    summary = f"attempt {first.get('attempt')}: {_error_cause(first.get('error'))}"
     if len(attempts) > 1:
-        summary += f" (latest attempt {last.get('attempt')}: {last.get('error')})"
+        summary += f" (latest attempt {last.get('attempt')}: {_error_cause(last.get('error'))})"
     return summary
+
+
+def _error_cause(error: Any) -> str:
+    """Keep the final diagnostic ahead of verbose Compose progress."""
+    lines = [line.strip() for line in str(error or "").splitlines() if line.strip()]
+    cause = " ".join((lines[-1] if lines else "unknown failure").split())
+    # Release helpers already lead with the final cause plus phase/exit context.
+    # Keep that useful context when it fits, without retaining progress output.
+    if len(lines) > 1:
+        lead = " ".join(lines[0].split())
+        if cause in lead and len(lead) <= MAX_ATTEMPT_SUMMARY_CHARS:
+            return lead
+    if len(cause) > MAX_ATTEMPT_SUMMARY_CHARS:
+        return "..." + cause[-(MAX_ATTEMPT_SUMMARY_CHARS - 3) :]
+    return cause
+
+
+def _read_operation(path: Path) -> dict:
+    operation = json.loads(path.read_text(encoding="utf-8"))
+    # Older controllers persisted entire command tails as summaries. Derive
+    # the projection on read so their causes become visible without rewriting
+    # the original record or discarding any attempt diagnostics.
+    if operation.get("attempts"):
+        operation["errorSummary"] = error_summary(operation["attempts"])
+    return operation
 
 
 class OperationStore:
@@ -193,7 +219,7 @@ class OperationStore:
         )
 
     def load(self, operation_id: str) -> dict:
-        return json.loads(self._locate(operation_id).read_text(encoding="utf-8"))
+        return _read_operation(self._locate(operation_id))
 
     def list_open(self, *, stack: str | None = None) -> list:
         operations = []
@@ -201,7 +227,7 @@ class OperationStore:
             return operations
         for path in sorted(self.operations_dir.glob("*.json")):
             try:
-                operation = json.loads(path.read_text(encoding="utf-8"))
+                operation = _read_operation(path)
             except (OSError, ValueError):
                 continue
             if stack is not None and operation.get("stack") != stack:
@@ -217,7 +243,7 @@ class OperationStore:
             return operations
         for path in sorted(self.operations_dir.glob("*.json")):
             try:
-                operation = json.loads(path.read_text(encoding="utf-8"))
+                operation = _read_operation(path)
             except (OSError, ValueError):
                 continue
             if stack is not None and operation.get("stack") != stack:

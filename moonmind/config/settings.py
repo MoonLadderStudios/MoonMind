@@ -526,6 +526,17 @@ class WorkflowSettings(BaseSettings):
         ),
         ge=0,
     )
+    temporal_artifact_lifecycle_purge_after_seconds: int = Field(
+        7 * 24 * 60 * 60,
+        validation_alias=AliasChoices(
+            "TEMPORAL_ARTIFACT_LIFECYCLE_PURGE_AFTER_SECONDS"
+        ),
+        description=(
+            "How long a tombstone keeps its metadata and links after confirmed "
+            "content deletion before the lifecycle sweep reclaims the row."
+        ),
+        ge=0,
+    )
     agent_job_artifact_max_bytes: int = Field(
         50 * 1024 * 1024,
         alias="AGENT_JOB_ARTIFACT_MAX_BYTES",

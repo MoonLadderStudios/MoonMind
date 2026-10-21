@@ -137,6 +137,77 @@ def test_first_error_survives_later_noise(controller_path, tmp_path):
     assert "original: init-db failed" in summary
 
 
+def test_error_summary_keeps_first_and_latest_causes_ahead_of_compose_progress(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    operation = store.begin(stack="moonmind", desired_image="image", source_revision="")
+    progress = " Container moonmind-worker-1 Waiting\n" * 150
+    first = f"apply failed: up failed (exit 1)\n{progress}container moonmind-api-1 is unhealthy"
+    latest = f"apply failed: up failed (exit 1)\n{progress}container moonmind-api-1 exited (1)"
+
+    store.record_attempt_error(operation["operationId"], error=first)
+    store.record_attempt_error(operation["operationId"], error=latest)
+
+    saved = store.load(operation["operationId"])
+    summary = saved["errorSummary"]
+    assert len(summary) < 2000  # The Operations projection bounds summaries here.
+    assert "attempt 1: container moonmind-api-1 is unhealthy" in summary
+    assert "latest attempt 2: container moonmind-api-1 exited (1)" in summary
+    assert "Waiting" not in summary
+    assert [attempt["error"] for attempt in saved["attempts"]] == [first, latest]
+
+
+def test_old_records_expose_compact_summaries_without_rewriting_diagnostics(
+    controller_path, tmp_path
+):
+    record = _record_module(controller_path)
+    store = record.OperationStore(tmp_path)
+    operation = store.begin(stack="moonmind", desired_image="image", source_revision="")
+    operation["status"] = "failed"
+    operation["attempts"] = [
+        {"attempt": 1, "error": "progress\ncontainer api is unhealthy"}
+    ]
+    operation["errorSummary"] = "attempt 1: progress\n" * 300
+    path = tmp_path / "operations" / f"{operation['operationId']}.json"
+    path.write_text(json.dumps(operation))
+
+    for observed in (store.load(operation["operationId"]), store.list_terminal()[0]):
+        assert observed["errorSummary"] == "attempt 1: container api is unhealthy"
+        assert observed["attempts"] == operation["attempts"]
+    assert json.loads(path.read_text())["errorSummary"] == operation["errorSummary"]
+
+
+def test_error_summary_bounds_a_long_cause_without_losing_its_ending(controller_path):
+    record = _record_module(controller_path)
+    cause = "progress " * 600 + "container api is unhealthy"
+    summary = record.error_summary(
+        [
+            {"attempt": 1, "error": cause},
+            {"attempt": 3, "error": cause},
+        ]
+    )
+    assert len(summary) < 2000
+    assert summary.count("container api is unhealthy") == 2
+
+
+def test_error_summary_preserves_context_that_already_leads_with_the_cause(
+    controller_path,
+):
+    record = _record_module(controller_path)
+    cause = "RuntimeError: Refusing Omnigent select: required capability unavailable"
+    lead = f"Omnigent selection failed: omnigent-select failed (exit 1) {cause}"
+
+    summary = record.error_summary(
+        [
+            {"attempt": 1, "error": f"{lead}\npull progress\nTraceback:\n{cause}"},
+        ]
+    )
+
+    assert summary == f"attempt 1: {lead}"
+
+
 def test_writes_are_atomic_across_interruption(controller_path, tmp_path):
     record = _record_module(controller_path)
     store = record.OperationStore(tmp_path)

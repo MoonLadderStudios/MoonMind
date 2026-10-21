@@ -14315,7 +14315,12 @@ describe("Task Create MM-641 authoring validation", () => {
     const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
     await waitFor(() => expect(instructions.value).toBe("Draft the summary."));
     fireEvent.change(instructions, { target: { value: "Draft the revised summary." } });
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    const saveButton = screen.getByRole("button", { name: "Save Changes" });
+    // Saving a draft starts nothing, so it keeps the standard primary treatment.
+    expect(saveButton.classList.contains("queue-submit-primary--launch")).toBe(false);
+    fireEvent.pointerDown(saveButton, { button: 0 });
+    expect(document.querySelector(".queue-submit-primary-ripple")).toBeNull();
+    fireEvent.click(saveButton);
 
     const alert = await screen.findByText(rejection);
     expect(updates).toHaveLength(1);
@@ -14969,6 +14974,37 @@ describe("Task Create submit arrow animation", () => {
     }
   });
 
+  it("launches a glowing ring outside the submit bar when Start is pressed", async () => {
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    try {
+      const createButton = await screen.findByRole("button", {
+        name: "Start Workflow",
+      });
+      expect(createButton.classList.contains("queue-submit-primary--launch")).toBe(
+        true,
+      );
+      expect(document.querySelector(".queue-submit-primary-ripple")).toBeNull();
+
+      fireEvent.pointerDown(createButton, { button: 0 });
+
+      const ripple = await waitFor(() => {
+        const element = document.querySelector<HTMLElement>(
+          ".queue-submit-primary-ripple",
+        );
+        expect(element).not.toBeNull();
+        return element as HTMLElement;
+      });
+      // Portaled to the body so the liquid-glass bar's overflow cannot clip it.
+      expect(createButton.closest(".queue-floating-bar")?.contains(ripple)).toBe(
+        false,
+      );
+      expect(ripple.closest("[aria-hidden='true']")).not.toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
   it("keeps the create arrow exited after submit until navigation", async () => {
     let resolveExecution: (response: Response) => void = () => {};
     let scheduledArrowClear: (() => void) | null = null;
@@ -15062,6 +15098,15 @@ describe("Task Create submit arrow animation", () => {
       expect(
         createButton.classList.contains("queue-submit-primary--arrow-exit"),
       ).toBe(true);
+
+      // The in-flight control is aria-disabled, so another press must not
+      // acknowledge a second launch with a fresh ring.
+      const firstRipple = document.querySelector(".queue-submit-primary-ripple");
+      expect(firstRipple).not.toBeNull();
+      fireEvent.pointerDown(createButton, { button: 0 });
+      expect(document.querySelector(".queue-submit-primary-ripple")).toBe(
+        firstRipple,
+      );
 
       resolveExecution(
         new Response(

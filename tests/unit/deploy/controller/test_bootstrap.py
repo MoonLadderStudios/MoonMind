@@ -1920,6 +1920,59 @@ def test_cold_controller_start_does_not_apply_handoff_budget_to_image_download(
     assert any("up" in command for command in calls)
 
 
+@pytest.mark.parametrize("disappearance", [FileNotFoundError, ProcessLookupError])
+@pytest.mark.parametrize("peer_state", ["S", "Z", None])
+def test_linux_group_probe_reconciles_disappearing_processes_without_hiding_children(
+    controller_path, tmp_path, monkeypatch, disappearance, peer_state
+):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    bootstrap = load("bootstrap")
+    proc = tmp_path / "proc"
+    vanished = proc / "123" / "stat"
+    vanished.parent.mkdir(parents=True)
+    entries = [vanished.parent]
+    if peer_state:
+        peer = proc / "124" / "stat"
+        peer.parent.mkdir()
+        peer.write_text(f"124 (compose plugin) {peer_state} 1 123 123 0")
+        entries.append(peer.parent)
+    read_text = Path.read_text
+
+    def read_stat(path, *args, **kwargs):
+        if path == vanished:
+            raise disappearance("process exited during stat read")
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(bootstrap.sys, "platform", "linux")
+    monkeypatch.setattr(
+        bootstrap, "Path", lambda path: SimpleNamespace(iterdir=lambda: entries)
+    )
+    monkeypatch.setattr(Path, "read_text", read_stat)
+
+    assert bootstrap._group_running(123) is (peer_state == "S")
+
+
+def test_linux_group_probe_does_not_treat_unreadable_process_as_gone(
+    controller_path, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    bootstrap = load("bootstrap")
+    (tmp_path / "123").mkdir()
+
+    def denied(*args, **kwargs):
+        raise PermissionError("process state unavailable")
+
+    monkeypatch.setattr(bootstrap.sys, "platform", "linux")
+    monkeypatch.setattr(bootstrap, "Path", lambda path: tmp_path)
+    monkeypatch.setattr(Path, "read_text", denied)
+
+    with pytest.raises(PermissionError, match="process state unavailable"):
+        bootstrap._group_running(123)
+
+
 @pytest.mark.skipif(__import__("sys").platform != "linux", reason="Linux lifecycle helper")
 @pytest.mark.parametrize("command", [("rm", "--force"), ("up", "--pull", "never")])
 @pytest.mark.parametrize("reconcile_fails", [False, True])
