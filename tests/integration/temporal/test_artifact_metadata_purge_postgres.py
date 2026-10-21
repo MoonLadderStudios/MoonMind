@@ -19,12 +19,14 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    OmnigentBridgeSession,
     TemporalArtifact,
     TemporalArtifactLink,
     TemporalArtifactPin,
     TemporalArtifactStatus,
     TemporalArtifactStorageBackend,
 )
+from moonmind.omnigent.bridge_store import SEALED_JOURNAL_CHUNKS_KEY
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -107,8 +109,35 @@ async def test_backlog_of_journal_tombstones_drains_in_bounded_pages(
     pg_maker, tmp_path: Path
 ) -> None:
     now = datetime.now(UTC)
+    # Withheld tombstones sort first, so every page walks past them.
+    protected = await _seed_journal_tombstones(
+        pg_maker, 3, deleted_at=now - HORIZON * 3
+    )
     await _seed_journal_tombstones(pg_maker, 120, deleted_at=now - HORIZON * 2)
     recent = await _seed_journal_tombstones(pg_maker, 5, deleted_at=now)
+    async with pg_maker() as session:
+        session.add_all(
+            TemporalArtifactPin(
+                id=uuid4(), artifact_id=artifact_id, pinned_by_principal="operator"
+            )
+            for artifact_id in protected[:2]
+        )
+        # A sealed chunk of a live journal is still recovery data.
+        session.add(
+            OmnigentBridgeSession(
+                bridge_session_id="bridge-active",
+                provider="codex",
+                compatibility_profile="default",
+                moonmind_workflow_id="wf-journal",
+                moonmind_agent_run_id="agent-run-1",
+                idempotency_key="idem-active",
+                omnigent_endpoint_ref="endpoint",
+                host_type="proxy",
+                status="active",
+                metadata_={SEALED_JOURNAL_CHUNKS_KEY: [{"rawEventsRef": protected[2]}]},
+            )
+        )
+        await session.commit()
 
     async with pg_maker() as session:
         pages = []
@@ -120,10 +149,13 @@ async def test_backlog_of_journal_tombstones_drains_in_bounded_pages(
         )
 
         assert [page.purged_count for page in pages] == [50, 50, 20]
+        assert [page.purge_protected_count for page in pages] == [3, 3, 3]
+        assert summary.purge_protected_count == 3
         assert summary.purged_link_count == 120
         assert summary.drained is True
-        assert await _count(session, TemporalArtifact) == len(recent)
-        assert await _count(session, TemporalArtifactLink) == len(recent)
+        retained = len(protected) + len(recent)
+        assert await _count(session, TemporalArtifact) == retained
+        assert await _count(session, TemporalArtifactLink) == retained
 
 
 async def test_tombstone_with_an_in_flight_pin_is_skipped_and_retained(

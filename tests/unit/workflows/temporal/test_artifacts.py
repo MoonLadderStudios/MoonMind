@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -296,6 +296,58 @@ async def test_s3_store_raises_when_bucket_stays_unreachable(
             region_name="us-east-1",
             use_ssl=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("head_error", "expected"),
+    [
+        (None, True),
+        (ClientError({"Error": {"Code": "404"}}, "HeadObject"), False),
+        (ClientError({"Error": {"Code": "NoSuchKey"}}, "HeadObject"), False),
+        (ClientError({"Error": {"Code": "NotFound"}}, "HeadObject"), False),
+        (ClientError({"Error": {"Code": "403"}}, "HeadObject"), ClientError),
+        (ClientError({"Error": {"Code": "AccessDenied"}}, "HeadObject"), ClientError),
+        (ClientError({"Error": {"Code": "InternalError"}}, "HeadObject"), ClientError),
+        (ClientError({"Error": {"Code": "SlowDown"}}, "HeadObject"), ClientError),
+        (
+            EndpointConnectionError(endpoint_url="http://example.test:9000"),
+            EndpointConnectionError,
+        ),
+    ],
+)
+async def test_s3_store_object_exists_reports_absence_only_for_missing_keys(
+    monkeypatch: pytest.MonkeyPatch, head_error: Exception | None, expected: object
+) -> None:
+    """Purge treats False as confirmed deletion, so unknown state must raise."""
+
+    class _HeadS3Client:
+        def head_bucket(self, *, Bucket: str) -> None:
+            _ = Bucket
+
+        def head_object(self, *, Bucket: str, Key: str) -> dict[str, int]:
+            assert (Bucket, Key) == ("bucket-1", "artifacts/key-1")
+            if head_error is not None:
+                raise head_error
+            return {"ContentLength": 3}
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.boto3.client",
+        lambda service_name, **kwargs: _HeadS3Client(),
+    )
+    store = S3TemporalArtifactStore(
+        endpoint_url="http://example.test:9000",
+        bucket="bucket-1",
+        access_key_id="access",
+        secret_access_key="secret",
+        region_name="us-east-1",
+        use_ssl=False,
+    )
+
+    if isinstance(expected, bool):
+        assert store.object_exists("artifacts/key-1") is expected
+    else:
+        with pytest.raises(expected):
+            store.object_exists("artifacts/key-1")
 
 
 async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
