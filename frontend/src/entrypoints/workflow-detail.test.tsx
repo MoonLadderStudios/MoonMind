@@ -1131,9 +1131,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(pill?.dataset.state).toBe('executing');
     expect(pill?.className).toContain('status-running');
     expect(pill?.className).toContain('is-executing');
-    expect(pill?.getAttribute('aria-label')).toBe('Executing');
-    expect(pill?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Executing');
-    expect(pill?.querySelector('.status-letter-wave')?.getAttribute('aria-hidden')).toBe('true');
+    expect(pill?.textContent).toBe('Executing');
+    expect(pill?.querySelector('.status-label')?.textContent).toBe('Executing');
+    expect(pill?.querySelector('.status-label')?.getAttribute('aria-hidden')).toBeNull();
   });
 
   it('canonicalizes a raw running header status to the executing shimmer treatment', async () => {
@@ -1166,7 +1166,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     const pill = document.querySelector<HTMLElement>('.toolbar-identity-row [data-effect="shimmer-sweep"]');
     expect(pill?.dataset.state).toBe('executing');
-    expect(pill?.getAttribute('aria-label')).toBe('Executing');
+    expect(pill?.textContent).toBe('Executing');
   });
 
   it('MM-1133 keeps the workspace sidebar list cache isolated from the workflow table cache', async () => {
@@ -2415,7 +2415,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await screen.findByText(displayedSummary);
     const header = document.querySelector('.toolbar-identity-row') as HTMLElement;
-    expect(label === 'Executing' ? within(header).getByLabelText(label) : within(header).getByText(label)).toBeTruthy();
+    expect(within(header).getByText(label)).toBeTruthy();
     if (state === 'completed' && objectiveOutcome !== 'succeeded') {
       expect(screen.queryByText(recordedSummary)).toBeNull();
     }
@@ -2801,7 +2801,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(screen.getByRole('button', { name: /Show details for Apply patch/ }));
     expect(screen.queryByText('Depends on: plan')).toBeNull();
     expect(screen.getAllByText((_, element) => element?.textContent === 'Prior step evidence: plan').length).toBeGreaterThan(0);
   });
@@ -3325,8 +3325,11 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
     });
     expect(screen.queryByLabelText('Step Execution history')).toBeNull();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+    const toggle = await screen.findByRole('button', { name: /Show details for Apply patch/ });
+    const status = toggle.querySelector('.step-tl-right .sr-only')?.textContent;
+    expect(status).toBeTruthy();
+    expect(screen.getByRole('button', { name: new RegExp(`Show details for Apply patch.*${status}`) })).toBe(toggle);
+    fireEvent.click(toggle);
 
     // The expanded surface consumes the step-executions LIST endpoint.
     await waitFor(() => {
@@ -3619,7 +3622,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('button', { name: 'Show step duration timeline' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Hide step duration timeline' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show details for Gather context' }));
+    fireEvent.click(screen.getByRole('button', { name: /Show details for Gather context/ }));
     const timingHeading = screen.getByRole('heading', { name: 'Timing' });
     const logsHeading = screen.getByRole('heading', { name: 'Logs & Diagnostics' });
     expect(timingHeading.compareDocumentPosition(logsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -3835,7 +3838,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByText('Depends on: plan')).toBeNull();
     expect(screen.getAllByText((_, element) => element?.textContent === 'Prior step evidence: plan').length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(screen.getByRole('button', { name: /Show details for Apply patch/ }));
     expect(screen.queryByText('Depends on: plan')).toBeNull();
     expect(screen.getAllByText((_, element) => element?.textContent === 'Prior step evidence: plan').length).toBeGreaterThan(0);
 
@@ -4480,8 +4483,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(toolbarStatus?.className).toContain('is-planning');
     expect(toolbarStatus?.className).not.toContain('status-running');
     expect(toolbarStatus?.dataset.shimmerLabel).toBe('Planning');
-    expect(toolbarStatus?.getAttribute('aria-label')).toBe('Planning');
-    expect(toolbarStatus?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe('Planning');
+    expect(toolbarStatus?.textContent).toBe('Planning');
+    expect(toolbarStatus?.querySelector('.status-label')?.textContent).toBe('Planning');
     expect(toolbarStatus?.textContent).toBe('Planning');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-489');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
@@ -4613,7 +4616,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Run Unreal tests' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show details for Run Unreal tests/ }));
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workload' })).toBeTruthy();
@@ -4781,7 +4784,7 @@ describe('Workflow Detail Entrypoint', () => {
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show details for Apply patch/ }));
 
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Summary' }).length).toBeGreaterThan(0);
@@ -4793,7 +4796,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('art-step-summary')).toBeTruthy();
       expect(screen.getByText('child-wf-1')).toBeTruthy();
       expect(screen.getByText('step scoped log line')).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Hide details for Apply patch' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Hide details for Apply patch/ })).toBeTruthy();
     });
     expect(screen.getAllByText('approval policy: Passed')[0]?.className).toContain('check-passed');
 
@@ -4891,7 +4894,7 @@ describe('Workflow Detail Entrypoint', () => {
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(false);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show details for Apply patch/ }));
 
     await waitFor(() => {
       expect(screen.getByText('attached after refresh')).toBeTruthy();
@@ -4963,7 +4966,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show details for Apply patch/ }));
 
     await waitFor(() => {
       expect(screen.getByText('Retry count: 2')).toBeTruthy();
@@ -4977,8 +4980,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(activeCheckBadge?.dataset.state).toBe('executing');
       expect(activeCheckBadge?.className).toContain('is-executing');
       expect(activeCheckBadge?.className).toContain('check-pending');
-      expect(activeCheckBadge?.getAttribute('aria-label')).toBe('approval policy: Pending');
-      expect(activeCheckBadge?.querySelector('.status-letter-wave')?.getAttribute('data-label')).toBe(
+      expect(activeCheckBadge?.textContent).toBe('approval policy: Pending');
+      expect(activeCheckBadge?.querySelector('.status-label')?.textContent).toBe(
         'approval policy: Pending',
       );
     });
@@ -5049,7 +5052,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show details for Apply patch/ }));
 
     await waitFor(() => {
       expect(
@@ -5193,7 +5196,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Show details for Apply patch/ }));
 
     await waitFor(() => {
       expect(screen.getByText(/live log streaming is disabled in the server dashboard config/i)).toBeTruthy();

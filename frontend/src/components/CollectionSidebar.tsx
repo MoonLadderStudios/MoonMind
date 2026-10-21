@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 
 import { WorkflowColumnFilterButton, WorkflowColumnHeader } from './WorkflowColumnHeader';
@@ -112,22 +113,21 @@ export function CollectionColumnFilter({
             />
           </label>
           <div className="workflow-list-filter-actions">
-            <button
+            <Button variant="ghost"
               type="button"
-              className="secondary"
               onClick={() => setFilterText('')}
               disabled={!active}
               aria-label={copy.resetLabel}
             >
               Reset
-            </button>
-            <button
+            </Button>
+            <Button variant="secondary"
               type="button"
               onClick={closeAndRestoreFocus}
               aria-label={copy.applyLabel}
             >
               Apply
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -290,7 +290,7 @@ export function CollectionSidebar({
         {error ? (
           <SidebarState role="status">
             <p>{errorCopy}</p>
-            {onRetry ? <button type="button" className="secondary" onClick={onRetry}>Retry</button> : null}
+            {onRetry ? <Button variant="secondary" type="button" onClick={onRetry}>Retry</Button> : null}
           </SidebarState>
         ) : null}
         {!isLoading && visiblePinnedRow ? (

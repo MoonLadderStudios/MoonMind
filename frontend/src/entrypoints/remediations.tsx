@@ -1,3 +1,4 @@
+import { Button } from '../components/Button';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -167,7 +168,7 @@ export default function Remediations({ payload }: { payload: BootPayload }) {
       title="Remediation"
       description="Scan remediation workflows and their source Workflow provenance."
       headingProps={{ id: 'remediations-title' }}
-      actions={<button type="button" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</button>}
+      actions={<Button variant="ghost" type="button" disabled={endpointConfig.status !== 'enabled'} onClick={() => void query.refetch()}>Refresh</Button>}
     />
     {unavailableCount > 0 ? <div className="notice error" role="status">
       <p>{unavailableCount === 1 ? '1 remediation could not be loaded.' : `${unavailableCount} remediations could not be loaded.`}</p>

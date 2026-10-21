@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -997,9 +998,9 @@ export function OperationsSettingsSection({
             </a>
           ) : null}
           {action.retryAllowed && action.operationId ? (
-            <button
+            <Button variant="secondary"
               type="button"
-              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
+              className="text-sm text-sky-700 hover:text-sky-600 dark:text-sky-400"
               disabled={
                 !canInvokeOperations ||
                 retryMutation.isPending ||
@@ -1008,7 +1009,7 @@ export function OperationsSettingsSection({
               onClick={() => retryMutation.mutate(String(action.operationId))}
             >
               Retry operation
-            </button>
+            </Button>
           ) : null}
           {(action.owner !== 'workflow' || !legacyRollbackNote) &&
           action.rollbackEligibility &&
@@ -1240,7 +1241,7 @@ export function OperationsSettingsSection({
                 </p>
               ) : null}
 
-              <button
+              <Button variant="secondary"
                 type="submit"
                 disabled={
                   deploymentMutation.isPending ||
@@ -1248,10 +1249,10 @@ export function OperationsSettingsSection({
                   controllerUnavailable ||
                   controllerNotInstalled
                 }
-                className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+                className="inline-flex items-center justify-center text-sm disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Update MoonMind
-              </button>
+              </Button>
 
               {renderDeploymentNotice(updateNotice)}
             </form>
@@ -1602,12 +1603,9 @@ export function OperationsSettingsSection({
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
               <section
-                className="rounded-3xl border border-rose-200 bg-rose-50/40 p-5 dark:border-rose-900/50 dark:bg-rose-900/10"
-                aria-label="Worker controls danger zone"
+                className="rounded-3xl border border-slate-200 p-5 dark:border-slate-800"
+                aria-label="Worker controls"
               >
-                <span className="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
-                  Danger zone
-                </span>
                 <h4 className="mt-2 text-base font-semibold text-slate-900 dark:text-white">Worker controls</h4>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   Both modes block new submissions. Drain allows active work to finish.
@@ -1641,12 +1639,12 @@ export function OperationsSettingsSection({
                         required
                       />
                     </label>
-                    <button
+                    <Button variant="primary"
                       type="submit"
-                      className="inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                      className="inline-flex items-center justify-center text-sm"
                     >
                       Pause workers
-                    </button>
+                    </Button>
                   </fieldset>
                 </form>
 
@@ -1668,12 +1666,12 @@ export function OperationsSettingsSection({
                         required
                       />
                     </label>
-                    <button
+                    <Button variant="secondary"
                       type="submit"
-                      className="inline-flex items-center justify-center rounded-full bg-emerald-600 dark:bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white dark:text-white transition hover:bg-emerald-500 dark:hover:bg-emerald-400"
+                      className="inline-flex items-center justify-center text-sm"
                     >
                       Resume workers
-                    </button>
+                    </Button>
                   </fieldset>
                 </form>
               </section>

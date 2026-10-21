@@ -1,3 +1,4 @@
+import { Button } from '../../components/Button';
 /**
  * Workflow-scoped terminal Chat actions (MoonLadderStudios/MoonMind#3632,
  * child #3641).
@@ -254,24 +255,22 @@ export function WorkflowTerminalChatActions({
   return (
     <div className="stack td-native-chat-terminal-actions">
       <div className="td-native-chat-actions">
-        <button
+        <Button variant="ghost"
           type="button"
-          className="button secondary"
           aria-expanded={evidenceOpen}
           onClick={() => setEvidenceOpen((open) => !open)}
           data-testid="workflow-native-chat-evidence-toggle"
         >
           View captured evidence
-        </button>
-        <button
+        </Button>
+        <Button variant="secondary"
           type="button"
-          className="button secondary"
           aria-expanded={formOpen}
           onClick={() => setFormOpen((open) => !open)}
           data-testid="workflow-native-chat-continue"
         >
           Continue in a new workflow
-        </button>
+        </Button>
       </div>
       {formOpen ? (
         <form
@@ -300,14 +299,13 @@ export function WorkflowTerminalChatActions({
               data-testid="workflow-native-chat-continue-instructions"
             />
           </label>
-          <button
+          <Button variant="primary"
             type="submit"
-            className="button"
             disabled={!canSubmit}
             data-testid="workflow-native-chat-continue-submit"
           >
             {continueState === 'pending' ? 'Continuing…' : 'Start continuation'}
-          </button>
+          </Button>
         </form>
       ) : null}
       {continueState === 'error' ? (

@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -663,14 +664,14 @@ export function GeneratedSettingsSection({
                 </p>
               ) : null}
             </div>
-            <button
+            <Button variant="ghost"
               type="button"
-              className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+              className="text-sm"
               onClick={() => setSelectedAuditKey(null)}
               aria-label={`Close audit history for ${selectedAuditDescriptor.title}`}
             >
               Close
-            </button>
+            </Button>
           </div>
 
           {auditQuery.isLoading ? (
@@ -772,21 +773,21 @@ export function GeneratedSettingsSection({
               <p className="text-sm text-amber-800 dark:text-amber-200">Review changed keys before saving.</p>
             </div>
             <div className="flex gap-2">
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="rounded-xl border border-amber-300 bg-transparent px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:text-amber-100 dark:hover:bg-amber-900/40"
+                className="text-sm text-amber-900 dark:text-amber-100"
                 onClick={() => setPending({})}
               >
                 Discard changes
-              </button>
-              <button
+              </Button>
+              <Button variant="secondary"
                 type="button"
-                className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900"
+                className="text-sm disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={hasInvalidChange}
                 onClick={saveChanges}
               >
                 Save changes
-              </button>
+              </Button>
             </div>
           </div>
           <div className="mt-4 grid gap-3">
@@ -918,26 +919,26 @@ export function GeneratedSettingsSection({
                     <div className="flex flex-wrap items-center justify-end gap-3">
                       <div className="flex flex-wrap justify-end gap-2">
                         {canReadAudit ? (
-                          <button
+                          <Button variant="ghost"
                             type="button"
-                            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                            className="text-sm"
                             onClick={() => setSelectedAuditKey(descriptor.key)}
                             aria-controls="settings-audit-panel"
                             aria-expanded={selectedAuditKey === descriptor.key}
                             aria-label={`View audit for ${descriptor.title}`}
                           >
                             View audit
-                          </button>
+                          </Button>
                         ) : null}
                         {canReset(descriptor, scope) ? (
-                          <button
+                          <Button variant="ghost"
                             type="button"
-                            className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-950 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                            className="text-sm"
                             onClick={() => resetOverride(descriptor)}
                             aria-label={`Reset ${descriptor.title}`}
                           >
                             Reset
-                          </button>
+                          </Button>
                         ) : null}
                       </div>
                     </div>

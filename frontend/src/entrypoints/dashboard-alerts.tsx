@@ -39,7 +39,7 @@ export function DashboardAlerts() {
         <div style={{ marginTop: "12px" }}>
           <a
             href="/settings/providers-secrets"
-            className="btn btn-sm btn-outline"
+            className="mm-button mm-button--secondary mm-button--sm"
           >
             Open Settings
           </a>
@@ -68,7 +68,7 @@ export function DashboardAlerts() {
       <div style={{ marginTop: "12px" }}>
         <a
           href="/settings/providers-secrets"
-          className="btn btn-sm btn-outline"
+          className="mm-button mm-button--secondary mm-button--sm"
         >
           Open Settings
         </a>

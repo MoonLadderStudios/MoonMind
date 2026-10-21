@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import {
   useEffect,
   useId,
@@ -54,7 +55,7 @@ export function WorkflowActionsMenu({
   items,
   triggerContent = 'Workflow actions',
   triggerAriaLabel,
-  triggerClassName = 'secondary td-workflow-actions-trigger',
+  triggerClassName = 'td-workflow-actions-trigger',
   menuAriaLabel = 'Workflow actions',
   emptyMessage = 'No workflow actions are currently available.',
   subject = 'Workflow',
@@ -265,14 +266,14 @@ export function WorkflowActionsMenu({
       );
     }
     return (
-      <button
+      <Button variant={item.danger ? 'danger' : 'ghost'}
         key={item.id}
         {...commonProps}
         type="button"
         onClick={() => selectItem(item)}
       >
         {content}
-      </button>
+      </Button>
     );
   };
 
@@ -354,7 +355,7 @@ export function WorkflowActionsMenu({
         }
       }}
     >
-      <button
+      <Button variant="secondary"
         type="button"
         ref={triggerRef}
         className={triggerClassName}
@@ -368,7 +369,7 @@ export function WorkflowActionsMenu({
         onKeyDown={onTriggerKeyDown}
       >
         {triggerContent}
-      </button>
+      </Button>
       {open ? (
         <div
           ref={menuRef}

@@ -1463,12 +1463,22 @@ async def test_real_docker_two_workers_race_final_slot(tmp_path: Path) -> None:
         # Map the winning job back through ``requests`` (completion order in
         # ``outcomes`` does not match ``names`` order).
         winner_name = names[[r.job_id for r in requests].index(winner)]
-        subprocess.run(
+        stopped = subprocess.run(
             ["docker", "stop", winner_name],
             capture_output=True,
+            text=True,
             timeout=120,
         )
+        assert stopped.returncode == 0, stopped.stderr
         parent = _real_backend(tmp_path, lock_root, _real_docker_run)
+        # After a SIGKILL stop the daemon can still list the container as
+        # running for a moment; admission waits on the same observation.
+        for _ in range(120):
+            if winner_name not in await parent._slot_holders():
+                break
+            await asyncio.sleep(0.25)
+        else:
+            pytest.fail("a stopped container frees its slot")
         retry = await parent.start_container(
             next(r for r in requests if r.job_id == loser)
         )

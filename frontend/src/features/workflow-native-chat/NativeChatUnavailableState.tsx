@@ -1,3 +1,4 @@
+import { Button } from '../../components/Button';
 // Explicit, actionable state panel for every non-mounted native chat status
 // (MoonLadderStudios/MoonMind#3639). It never renders a composer or falls back
 // to the legacy custom chat implementation — it states the stable reason and
@@ -70,18 +71,18 @@ export function NativeChatUnavailableState({
       <p className="small wf-native-chat__state-desc">{copy.description}</p>
       <div className="wf-native-chat__state-actions">
         {copy.canRetry && onRetry ? (
-          <button type="button" className="button secondary small" onClick={onRetry}>
+          <Button variant="secondary" size="sm" type="button" onClick={onRetry}>
             Retry
-          </button>
+          </Button>
         ) : null}
         {fullPageHref ? (
-          <a className="button secondary small" href={fullPageHref}>
+          <a className="mm-button mm-button--secondary mm-button--sm" href={fullPageHref}>
             Open in Omnigent
           </a>
         ) : null}
         {evidenceHref ? (
           <a
-            className="button secondary small"
+            className="mm-button mm-button--secondary mm-button--sm"
             href={evidenceHref}
             onClick={handleInternal(evidenceHref)}
           >
@@ -90,7 +91,7 @@ export function NativeChatUnavailableState({
         ) : null}
         {diagnosticsHref ? (
           <a
-            className="button secondary small"
+            className="mm-button mm-button--secondary mm-button--sm"
             href={diagnosticsHref}
             onClick={handleInternal(diagnosticsHref)}
           >

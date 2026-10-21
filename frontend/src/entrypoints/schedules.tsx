@@ -1,3 +1,4 @@
+import { Button } from '../components/Button';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LoadingPlaceholder } from '../components/dashboard/LoadingPlaceholder';
@@ -1209,17 +1210,15 @@ function ScheduleDetailPage({
           <span className={`schedules-state schedules-state--${scheduleState(schedule)}`}>
             {stateLabel(schedule)}
           </span>
-          <button
+          <Button variant="secondary"
             type="button"
-            className="secondary"
             onClick={() => void refreshDetail()}
             disabled={detailQuery.isFetching || runsQuery.isFetching}
           >
             {detailQuery.isFetching || runsQuery.isFetching ? 'Refreshing' : 'Refresh'}
-          </button>
-          <button
+          </Button>
+          <Button variant="secondary"
             type="button"
-            className="secondary"
             onClick={() => {
               setEditForm(editFormFromSchedule(schedule));
               setSubmitErrors({});
@@ -1233,29 +1232,26 @@ function ScheduleDetailPage({
             title={!actions?.canEdit ? actions?.editReason : undefined}
           >
             {isEditing ? 'Cancel edit' : 'Edit schedule'}
-          </button>
-          <button
+          </Button>
+          <Button variant="secondary"
             type="button"
-            className="button"
             onClick={() => runNowMutation.mutate()}
             disabled={runNowMutation.isPending || !actions?.canRun}
             title={!actions?.canRun ? actions?.runReason : undefined}
           >
             {runNowMutation.isPending ? 'Requesting' : 'Run now'}
-          </button>
+          </Button>
           {actions?.canDelete ? (
-            <button
+            <Button variant="secondary"
               type="button"
-              className="secondary"
               onClick={() => setDeleteDialogOpen(true)}
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? 'Deleting' : 'Delete schedule'}
-            </button>
+            </Button>
           ) : null}
-          <button
+          <Button variant="secondary"
             type="button"
-            className="secondary"
             onClick={() => pauseResumeMutation.mutate({
               enabled: !schedule.enabled,
               version: schedule.version,
@@ -1266,7 +1262,7 @@ function ScheduleDetailPage({
             {pauseResumeMutation.isPending
               ? (schedule.enabled ? 'Pausing' : 'Resuming')
               : (schedule.enabled ? 'Pause schedule' : 'Resume schedule')}
-          </button>
+          </Button>
         </>
         )}
       />
@@ -1482,12 +1478,11 @@ function ScheduleDetailPage({
                 <span>Enabled</span>
               </label>
               <div className="toolbar-controls">
-                <button type="submit" className="button" disabled={updateMutation.isPending}>
+                <Button variant="primary" type="submit" disabled={updateMutation.isPending}>
                   {updateMutation.isPending ? 'Saving' : 'Save schedule'}
-                </button>
-                <button
+                </Button>
+                <Button variant="ghost"
                   type="button"
-                  className="secondary"
                   onClick={() => {
                     setEditForm(editFormFromSchedule(schedule));
                     setSubmitErrors({});
@@ -1496,7 +1491,7 @@ function ScheduleDetailPage({
                   }}
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </form>
           ) : (
@@ -1825,9 +1820,8 @@ function ScheduleRowActions({
   return (
     <div className="schedules-row-actions">
       {currentRun && <RunNowResult run={currentRun} />}
-      <button
+      <Button variant="secondary"
         type="button"
-        className="secondary"
         onClick={() => runNowMutation.mutate()}
         disabled={busy || !availability.canRun}
         {...(runNowMutation.isError
@@ -1838,10 +1832,9 @@ function ScheduleRowActions({
         aria-label={`Run ${schedule.name} now`}
       >
         {runNowMutation.isPending ? 'Requesting' : 'Run now'}
-      </button>
-      <button
+      </Button>
+      <Button variant="secondary"
         type="button"
-        className="secondary"
         onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
         disabled={busy || !availability.canEdit}
         {...(pauseResumeMutation.isError
@@ -1857,7 +1850,7 @@ function ScheduleRowActions({
         aria-label={`${pauseLabel} ${schedule.name}`}
       >
         {pauseResumeMutation.isPending ? 'Updating' : pauseLabel}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -2113,12 +2106,12 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
         headingProps={{ tabIndex: -1, 'data-recurring-table-title': '' }}
         actions={(
         <>
-          <button type="button" className="secondary" onClick={() => void refetch()} disabled={isFetching}>
+          <Button variant="secondary" type="button" onClick={() => void refetch()} disabled={isFetching}>
             {isFetching ? 'Refreshing' : 'Refresh'}
-          </button>
+          </Button>
           <a
             href="/workflows/new?scheduleMode=recurring"
-            className="button queue-step-icon-button"
+            className="mm-button mm-button--primary queue-step-icon-button"
             aria-label="Create recurring schedule"
           >
             +
@@ -2157,14 +2150,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
 
       <section className="schedules-table-panel" aria-label="Recurring schedule list">
         <div className="workflow-list-filter-toolbar">
-          <button
+          <Button variant="secondary"
             type="button"
-            className="secondary"
             onClick={() => setMobileFiltersOpen(true)}
             aria-label="Filters"
           >
             Filters
-          </button>
+          </Button>
         </div>
         {activeFilters.length > 0 ? (
           <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
@@ -2198,15 +2190,14 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             <div className="workflow-list-advanced-filter-drawer" role="dialog" aria-modal="true" aria-label="Recurring filters">
               <div className="section-heading-row">
                 <h3>Filters</h3>
-                <button type="button" className="secondary" onClick={() => setMobileFiltersOpen(false)} aria-label="Close filters">
+                <Button variant="ghost" type="button" onClick={() => setMobileFiltersOpen(false)} aria-label="Close filters">
                   Close
-                </button>
+                </Button>
               </div>
               <RecurringFilterForm filters={filters} onChange={setFilter} />
               <div className="workflow-list-filter-actions">
-                <button
+                <Button variant="ghost"
                   type="button"
-                  className="secondary"
                   onClick={() => {
                     setFilters(EMPTY_RECURRING_FILTERS);
                     setCursor('');
@@ -2214,10 +2205,10 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
                   }}
                 >
                   Reset filters
-                </button>
-                <button type="button" className="button" onClick={() => setMobileFiltersOpen(false)}>
+                </Button>
+                <Button variant="secondary" type="button" onClick={() => setMobileFiltersOpen(false)}>
                   Apply filters
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2324,11 +2315,13 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
               {
                 key: 'nextRunAt',
                 header: sortableHeader('nextRunAt', 'Next Run'),
+                ariaSort: sort === 'nextRunAt' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none',
                 render: (item) => formatWhen(item.nextRunAt),
               },
               {
                 key: 'lastScheduledFor',
                 header: sortableHeader('lastScheduledFor', 'Last Scheduled'),
+                ariaSort: sort === 'lastScheduledFor' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none',
                 render: (item) => formatWhen(item.lastScheduledFor),
               },
               {
@@ -2357,6 +2350,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
               {
                 key: 'updatedAt',
                 header: sortableHeader('updatedAt', 'Updated'),
+                ariaSort: sort === 'updatedAt' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none',
                 render: (item) => formatWhen(item.updatedAt),
               },
             ]}
@@ -2376,9 +2370,9 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
           <span className="workflow-list-footer-page-summary">
             Page {pageIndex + 1} · {schedules.length} shown{typeof data?.count === 'number' ? ` · ${totalCount} total` : ''}
           </span>
-          <button
+          <Button variant="secondary"
             type="button"
-            className="secondary queue-pagination-button"
+            className="queue-pagination-button"
             disabled={cursorStack.length === 0 || isLoading || isFetching}
             onClick={() => {
               const previousStack = cursorStack.slice(0, -1);
@@ -2387,10 +2381,10 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             }}
           >
             Previous
-          </button>
-          <button
+          </Button>
+          <Button variant="secondary"
             type="button"
-            className="secondary queue-pagination-button"
+            className="queue-pagination-button"
             disabled={!nextCursor || isLoading || isFetching}
             onClick={() => {
               setCursorStack((current) => [...current, cursor]);
@@ -2398,7 +2392,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             }}
           >
             Next
-          </button>
+          </Button>
         </div>
       </section>
     </div>

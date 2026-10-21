@@ -12,6 +12,8 @@ export interface Column<T> {
   width?: string;
   /** Enable click-to-sort on this column's header. */
   sortable?: boolean;
+  /** Sort state supplied by a server-backed header; leaves sorting to its owner. */
+  ariaSort?: React.AriaAttributes['aria-sort'];
   /**
    * Value used for built-in sorting. Defaults to `item[key]` when omitted.
    * Provide this when the rendered cell differs from the sortable value.
@@ -139,13 +141,13 @@ export function DataTable<T>({
     const sortLabel = column.sortLabel ?? (
       typeof column.header === 'string' ? column.header : key
     );
-    const ariaSort: React.AriaAttributes['aria-sort'] = column.sortable
+    const ariaSort: React.AriaAttributes['aria-sort'] = column.ariaSort ?? (column.sortable
       ? isSorted
         ? sort?.direction === 'asc'
           ? 'ascending'
           : 'descending'
         : 'none'
-      : undefined;
+      : undefined);
     const style: React.CSSProperties = {};
     if (column.width) style.width = column.width;
     return (

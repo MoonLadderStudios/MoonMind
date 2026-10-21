@@ -865,7 +865,10 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     expect(await screen.findByText("Daily repository sweep")).not.toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Next Run. Server sorted not active." }));
+    const nextRun = screen.getByRole("button", { name: "Next Run. Server sorted not active." });
+    expect(nextRun.closest('th')?.getAttribute('aria-sort')).toBe('none');
+    fireEvent.click(nextRun);
+    expect(nextRun.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
 
     await waitFor(() => {
       const latest = String(fetchSpy.mock.calls.at(-1)?.[0]);

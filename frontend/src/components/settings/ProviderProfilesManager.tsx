@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, useMutation, useQuery } from '@tanstack/react-query';
 
@@ -4280,16 +4281,16 @@ export function ProviderProfilesManager({
       <div className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-800 pb-4 md:flex-row md:items-end md:justify-between">
         <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Profiles</h3>
         {canWriteProviderProfiles && !profileFormVisible ? (
-          <button
+          <Button variant="secondary"
             type="button"
-            className="self-start rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+            className="self-start text-sm"
             onClick={() => {
               setCreateFormOpen(true);
               setEditorFocusRequest((current) => current + 1);
             }}
           >
             Add profile
-          </button>
+          </Button>
         ) : null}
       </div>
 
@@ -4718,22 +4719,22 @@ export function ProviderProfilesManager({
                   >
                     <div className="provider-profile-actions flex flex-wrap gap-2">
                       {canWriteProviderProfiles && canStartOAuth ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
-                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          className="text-xs"
                           onClick={() => startOAuthMutation.mutate(profile)}
                           disabled={startOAuthMutation.isPending}
                           aria-label={`OAuth ${profile.profile_id}`}
                         >
                           OAuth
-                        </button>
+                        </Button>
                       ) : null}
                       {canWriteProviderProfiles && authModel.kind === 'claude_credentials'
                         ? authModel.actions.map((action) => (
-                            <button
+                            <Button variant="secondary" size="sm"
                               key={action.id}
                               type="button"
-                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              className="text-xs"
                               onClick={() => {
                                 if (action.id === 'connect_oauth') {
                                   startOAuthMutation.mutate(profile);
@@ -4754,15 +4755,15 @@ export function ProviderProfilesManager({
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
-                            </button>
+                            </Button>
                           ))
                         : null}
                       {canWriteProviderProfiles && authModel.kind === 'opencode_credentials'
                         ? authModel.actions.map((action) => (
-                            <button
+                            <Button variant="secondary" size="sm"
                               key={action.id}
                               type="button"
-                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              className="text-xs"
                               onClick={() => {
                                 if (action.id === 'use_api_key') {
                                   openOpencodeEnrollment(profile);
@@ -4773,24 +4774,24 @@ export function ProviderProfilesManager({
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
-                            </button>
+                            </Button>
                           ))
                         : null}
                       {canWriteProviderProfiles && canUseGenericApiKey ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
-                          className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                          className="text-xs"
                           onClick={() => openOpencodeEnrollment(profile)}
                           disabled={opencodeEnrollmentMutation.isPending}
                           aria-label={`Use ${apiKeyEnrollmentCopy(profile).credentialLabel} ${profile.profile_id}`}
                         >
                           Use {apiKeyEnrollmentCopy(profile).credentialLabel}
-                        </button>
+                        </Button>
                       ) : null}
                       {canWriteProviderProfiles && oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
-                        <button
+                        <Button variant="ghost" size="sm"
                           type="button"
-                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="text-xs"
                           onClick={() =>
                             cancelOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4801,12 +4802,12 @@ export function ProviderProfilesManager({
                           aria-label={`Cancel OAuth ${profile.profile_id}`}
                         >
                           Cancel OAuth
-                        </button>
+                        </Button>
                       ) : null}
                       {canWriteProviderProfiles && oauthSession && canFinalizeOAuthStatus(oauthSession.status) ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
-                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="text-xs"
                           onClick={() =>
                             finalizeOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4817,12 +4818,12 @@ export function ProviderProfilesManager({
                           aria-label={`Finalize ${profile.profile_id}`}
                         >
                           Finalize
-                        </button>
+                        </Button>
                       ) : null}
                       {canWriteProviderProfiles && oauthSession && canRetryOAuthStatus(oauthSession.status) ? (
-                        <button
+                        <Button variant="secondary" size="sm"
                           type="button"
-                          className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                          className="text-xs"
                           onClick={() =>
                             retryOAuthMutation.mutate({
                               profileId: profile.profile_id,
@@ -4833,20 +4834,20 @@ export function ProviderProfilesManager({
                           aria-label={`Retry ${profile.profile_id}`}
                         >
                           Retry
-                        </button>
+                        </Button>
                       ) : null}
                       {canWriteProviderProfiles ? (
                         <>
-                          <button
+                          <Button variant="ghost" size="sm"
                             type="button"
-                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="text-xs"
                             onClick={() => handleEditProfile(profile)}
                           >
                             Edit
-                          </button>
-                          <button
+                          </Button>
+                          <Button variant="secondary" size="sm"
                             type="button"
-                            className="rounded-full border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+                            className="text-xs"
                             onClick={() =>
                               toggleMutation.mutate({
                                 profileId: profile.profile_id,
@@ -4854,6 +4855,7 @@ export function ProviderProfilesManager({
                               })
                             }
                             disabled={!profile.enabled && !enableAllowed}
+                            disabledReason="Complete credential setup before enabling this profile."
                             title={
                               !profile.enabled && !enableAllowed
                                 ? 'Complete credential setup before enabling this profile.'
@@ -4861,10 +4863,10 @@ export function ProviderProfilesManager({
                             }
                           >
                             {profile.enabled ? 'Disable' : 'Enable'}
-                          </button>
-                          <button
+                          </Button>
+                          <Button variant="danger" size="sm"
                             type="button"
-                            className="queue-action queue-action-danger px-3 py-1.5 text-xs font-medium transition"
+                            className="px-3 py-1.5 text-xs font-medium transition"
                             onClick={() => {
                               if (
                                 window.confirm(
@@ -4876,7 +4878,7 @@ export function ProviderProfilesManager({
                             }}
                           >
                             Delete
-                          </button>
+                          </Button>
                         </>
                       ) : null}
                     </div>
@@ -4916,13 +4918,13 @@ export function ProviderProfilesManager({
                   Complete provider login in the Tmate terminal, then finalize this OAuth session.
                 </p>
               </div>
-              <button
+              <Button variant="ghost" size="sm"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-400 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500"
+                className="inline-flex items-center justify-center text-xs"
                 onClick={() => setTmateOAuthSession(null)}
               >
                 Close
-              </button>
+              </Button>
             </div>
             <dl className="mt-4 space-y-3 text-sm">
               <div>
@@ -4960,9 +4962,9 @@ export function ProviderProfilesManager({
                 </a>
               ) : null}
               {canFinalizeOAuthStatus(tmateOAuthSession.status) ? (
-                <button
+                <Button variant="secondary"
                   type="button"
-                  className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-500"
+                  className="inline-flex items-center justify-center text-sm"
                   onClick={() => {
                     finalizeOAuthMutation.mutate({
                       profileId: tmateOAuthSession.profileId,
@@ -4972,7 +4974,7 @@ export function ProviderProfilesManager({
                   disabled={finalizeOAuthMutation.isPending}
                 >
                   Finalize
-                </button>
+                </Button>
               ) : null}
             </div>
           </div>
@@ -5008,13 +5010,13 @@ export function ProviderProfilesManager({
                 Use an Anthropic API key for Claude Code launches. Paste the key here, then validate and save it as a managed provider credential.
               </p>
             </div>
-            <button
+            <Button variant="ghost" size="sm"
               type="button"
-              className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+              className="inline-flex items-center justify-center text-xs"
               onClick={closeClaudeEnrollment}
             >
               Cancel API key enrollment
-            </button>
+            </Button>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2" aria-label="Claude enrollment lifecycle states">
@@ -5037,13 +5039,13 @@ export function ProviderProfilesManager({
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-300">
                 Continue when you are ready to paste the Anthropic API key. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
               </div>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                className="inline-flex items-center justify-center text-sm"
                 onClick={continueClaudeEnrollment}
               >
                 Continue to API key paste
-              </button>
+              </Button>
             </div>
           ) : null}
 
@@ -5059,13 +5061,13 @@ export function ProviderProfilesManager({
                   autoComplete="off"
                 />
               </label>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                className="inline-flex items-center justify-center text-sm"
                 onClick={() => void submitClaudeEnrollment()}
               >
                 Validate and save Anthropic API key
-              </button>
+              </Button>
             </div>
           ) : null}
 
@@ -5074,13 +5076,13 @@ export function ProviderProfilesManager({
               <div>
                 Processing Anthropic API key enrollment: {formatStatusLabel(claudeEnrollment.step)}
               </div>
-              <button
+              <Button variant="ghost" size="sm"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg border border-sky-300 dark:border-sky-700 px-3 py-1.5 text-xs font-semibold text-sky-800 dark:text-sky-200 transition hover:border-sky-400 dark:hover:border-sky-500"
+                className="inline-flex items-center justify-center text-xs text-sky-800 dark:text-sky-200"
                 onClick={cancelClaudeValidation}
               >
                 Cancel validation
-              </button>
+              </Button>
             </div>
           ) : null}
 
@@ -5095,13 +5097,13 @@ export function ProviderProfilesManager({
               <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 p-4 text-sm font-medium text-rose-700 dark:text-rose-300">
                 {claudeEnrollment.failureReason ?? 'Anthropic API key validation failed.'}
               </div>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+                className="inline-flex items-center justify-center text-sm"
                 onClick={continueClaudeEnrollment}
               >
                 Return to API key paste
-              </button>
+              </Button>
             </div>
           ) : null}
           </div>
@@ -5137,13 +5139,13 @@ export function ProviderProfilesManager({
                 {apiKeyEnrollmentCopy(opencodeEnrollment.profile).description}
               </p>
             </div>
-            <button
+            <Button variant="ghost" size="sm"
               type="button"
-              className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+              className="inline-flex items-center justify-center text-xs"
               onClick={closeOpencodeEnrollment}
             >
               Cancel API key enrollment
-            </button>
+            </Button>
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2" aria-label={`${apiKeyEnrollmentCopy(opencodeEnrollment.profile).providerName} enrollment lifecycle states`}>
@@ -5166,13 +5168,13 @@ export function ProviderProfilesManager({
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-300">
                 Continue when you are ready to paste the {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel}. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
               </div>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                className="inline-flex items-center justify-center text-sm"
                 onClick={continueOpencodeEnrollment}
               >
                 Continue to API key paste
-              </button>
+              </Button>
             </div>
           ) : null}
 
@@ -5188,13 +5190,13 @@ export function ProviderProfilesManager({
                   autoComplete="off"
                 />
               </label>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                className="inline-flex items-center justify-center text-sm"
                 onClick={() => void submitOpencodeEnrollment()}
               >
                 Validate and save {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel}
-              </button>
+              </Button>
             </div>
           ) : null}
 
@@ -5204,13 +5206,13 @@ export function ProviderProfilesManager({
                 Processing {apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel} enrollment: {formatStatusLabel(opencodeEnrollment.step)}
               </div>
               <div>{opencodeValidationProgressText(opencodeEnrollment)}</div>
-              <button
+              <Button variant="ghost" size="sm"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg border border-sky-300 dark:border-sky-700 px-3 py-1.5 text-xs font-semibold text-sky-800 dark:text-sky-200 transition hover:border-sky-400 dark:hover:border-sky-500"
+                className="inline-flex items-center justify-center text-xs text-sky-800 dark:text-sky-200"
                 onClick={cancelOpencodeValidation}
               >
                 Cancel validation
-              </button>
+              </Button>
             </div>
           ) : null}
 
@@ -5225,13 +5227,13 @@ export function ProviderProfilesManager({
               <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 p-4 text-sm font-medium text-rose-700 dark:text-rose-300">
                 {opencodeEnrollment.failureReason ?? `${apiKeyEnrollmentCopy(opencodeEnrollment.profile).credentialLabel} validation failed.`}
               </div>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+                className="inline-flex items-center justify-center text-sm"
                 onClick={continueOpencodeEnrollment}
               >
                 Return to API key paste
-              </button>
+              </Button>
             </div>
           ) : null}
           </div>
@@ -5287,16 +5289,16 @@ export function ProviderProfilesManager({
                     : 'Suggested from Harness, Provider, and account label. Review it before creating; it cannot be renamed later.'}
                 </p>
                 {!isEditing && !profileIdSuggestionManaged && suggestedProfileId ? (
-                  <button
+                  <Button variant="secondary" size="sm"
                     type="button"
-                    className="self-start rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300"
+                    className="self-start text-xs"
                     onClick={() => {
                       setProfileIdSuggestionManaged(true);
                       setForm((current) => ({ ...current, profileId: suggestedProfileId }));
                     }}
                   >
                     Use suggested ID
-                  </button>
+                  </Button>
                 ) : null}
               </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -5398,13 +5400,13 @@ export function ProviderProfilesManager({
               {creationChoicesQuery.isError ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-amber-800 dark:text-amber-300">
                   <p>{`Harness and Provider choices could not be loaded. ${creationChoicesQuery.error.message} Your draft is kept.`}</p>
-                  <button
+                  <Button variant="secondary" size="sm"
                     type="button"
-                    className="rounded-lg border border-amber-400 dark:border-amber-700 px-3 py-1 text-xs font-semibold"
+                    className="text-xs"
                     onClick={() => void creationChoicesQuery.refetch()}
                   >
                     Retry loading choices
-                  </button>
+                  </Button>
                 </div>
               ) : harnessChoices === null ? (
                 <p>Loading Harness and Provider choices…</p>
@@ -5511,13 +5513,13 @@ export function ProviderProfilesManager({
             {isTierRepair ? (
               <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-800 dark:text-amber-300">
                 <p>This profile has no model tiers and cannot be saved in this state.</p>
-                {canWriteProviderProfiles ? <button type="button" className="mt-3 inline-flex items-center justify-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white" onClick={handleCreateRepairTier}>Create runtime-default Tier 1</button> : <p className="mt-2 text-xs">Read-only: complete policy not available.</p>}
+                {canWriteProviderProfiles ? <Button variant="primary" type="button" className="mt-3 inline-flex items-center justify-center text-sm" onClick={handleCreateRepairTier}>Create runtime-default Tier 1</Button> : <p className="mt-2 text-xs">Read-only: complete policy not available.</p>}
               </div>
             ) : null}
             {tierUndo ? (
               <div className="flex items-center gap-3 rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 p-3 text-sm text-sky-800 dark:text-sky-300">
                 <span>Tier removed. </span>
-                <button type="button" className="underline" onClick={handleUndoLastRemove}>Undo</button>
+                <Button variant="secondary" type="button" className="underline" onClick={handleUndoLastRemove}>Undo</Button>
               </div>
             ) : null}
             {tierCapabilitiesLoading ? (
@@ -5562,8 +5564,8 @@ export function ProviderProfilesManager({
                               {isDefault ? 'Default tier' : `Use Tier ${tierNumber} as default`}
                             </label>
                             <div className="tier-card__actions flex flex-wrap items-center gap-2" aria-label={`Tier ${tierNumber} actions`}>
-                              <button type="button" className="min-h-11 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:underline max-w-full" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate tier</button>
-                              <button type="button" className={`min-h-11 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-2 text-xs font-medium max-w-full ${isOnlyTier ? 'text-slate-400 cursor-not-allowed' : 'text-rose-600 dark:text-rose-400 hover:underline'}`} disabled={isOnlyTier} onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</button>
+                              <Button variant="secondary" size="sm" type="button" className="min-h-11 text-xs hover:underline max-w-full" onClick={() => handleDuplicateTier(tier)} aria-label={`Duplicate Tier ${tierNumber} as new last tier`}>Duplicate tier</Button>
+                              <Button variant="ghost" size="sm" type="button" className="min-h-11 max-w-full" disabled={isOnlyTier} disabledReason="At least one tier is required." onClick={() => requestRemoveTier(index)} aria-label={`Remove Tier ${tierNumber}`}>Remove tier</Button>
                             </div>
                           </div>
                           <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -5700,9 +5702,9 @@ export function ProviderProfilesManager({
               })}
             </ol>
             {!isTierRepair ? (
-              <button type="button" className="w-full rounded-xl border border-dashed border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800" onClick={handleAddTier}>
+              <Button variant="secondary" type="button" className="w-full text-sm" onClick={handleAddTier}>
                 <span aria-hidden="true">+ </span>Add tier
-              </button>
+              </Button>
             ) : null}
             {tierRemoveDialog ? (
               <div role="dialog" aria-modal="true" aria-labelledby="tier-remove-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setTierRemoveDialog(null); }} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setTierRemoveDialog(null); } else { trapTabWithin(tierRemovePanelRef.current, e); } }}>
@@ -5736,8 +5738,8 @@ export function ProviderProfilesManager({
                     </div>
                   ) : null}
                   <div className="mt-5 flex justify-end gap-3">
-                    <button type="button" className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm" onClick={() => setTierRemoveDialog(null)}>Cancel</button>
-                    <button type="button" className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white" onClick={confirmRemoveTier}>Remove and renumber</button>
+                    <Button variant="ghost" type="button" className="text-sm" onClick={() => setTierRemoveDialog(null)}>Cancel</Button>
+                    <Button variant="secondary" type="button" className="text-sm" onClick={confirmRemoveTier}>Remove and renumber</Button>
                   </div>
                 </div>
               </div>
@@ -5986,16 +5988,16 @@ export function ProviderProfilesManager({
                 </p>
                 {selectedAuthenticationCapability?.imported_volume.supported ? (
                   <div className="space-y-3">
-                    <button
+                    <Button variant="secondary"
                       type="button"
-                      className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                      className="text-sm"
                       onClick={() => {
                         setShowImportedVolume((current) => !current);
                         invalidateImportedVolume();
                       }}
                     >
                       Use an existing credential volume
-                    </button>
+                    </Button>
                     {showImportedVolume ? (
                       <div className="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-3">
                         <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -6012,9 +6014,9 @@ export function ProviderProfilesManager({
                         <p className="text-xs text-slate-500 dark:text-slate-400">
                           Derived mount path: {selectedAuthenticationCapability.imported_volume.mount_path}
                         </p>
-                        <button
+                        <Button variant="secondary"
                           type="button"
-                          className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
+                          className="text-sm"
                           disabled={importedVolumeMutation.isPending}
                           onClick={() =>
                             importedVolumeMutation.mutate({
@@ -6027,7 +6029,7 @@ export function ProviderProfilesManager({
                           }
                         >
                           Validate imported volume
-                        </button>
+                        </Button>
                         {importedVolumeValidated ? (
                           <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Validated imported volume</p>
                         ) : null}
@@ -6142,9 +6144,9 @@ export function ProviderProfilesManager({
                         recommended values cannot be previewed. Discarding unsaved
                         advanced edits restores the last saved values instead.
                       </p>
-                      <button
+                      <Button variant="secondary"
                         type="button"
-                        className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                        className="text-sm"
                         onClick={() => {
                           setForm(formBaseline);
                           setTierDrafts(tierBaseline ? cloneTierDrafts(tierBaseline) : [runtimeDefaultTierDraft()]);
@@ -6153,19 +6155,19 @@ export function ProviderProfilesManager({
                         }}
                       >
                         Discard unsaved advanced edits
-                      </button>
+                      </Button>
                     </>
                   )
                 ) : (
                   <>
                     {!showResetPreview ? (
-                      <button
+                      <Button variant="ghost"
                         type="button"
-                        className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
+                        className="text-sm"
                         onClick={() => setShowResetPreview(true)}
                       >
                         Reset advanced options to recommended
-                      </button>
+                      </Button>
                     ) : (
                       <div className="space-y-3">
                         <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-800 dark:text-amber-300">
@@ -6193,9 +6195,9 @@ export function ProviderProfilesManager({
                           <p className="mt-2 text-xs">Fields changed from explicit override to inherited/omitted will be normalized by the server. Generated security fields will be recalculated.</p>
                         </div>
                         <div className="flex gap-3">
-                          <button
+                          <Button variant="secondary"
                             type="button"
-                            className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
+                            className="text-sm"
                             onClick={() => {
                               if (creationPreset) {
                                 setForm((cur) => {
@@ -6217,14 +6219,14 @@ export function ProviderProfilesManager({
                             }}
                           >
                             Apply reset
-                          </button>
-                          <button
+                          </Button>
+                          <Button variant="ghost"
                             type="button"
-                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm"
+                            className="text-sm"
                             onClick={() => setShowResetPreview(false)}
                           >
                             Cancel
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     )}
@@ -6236,24 +6238,25 @@ export function ProviderProfilesManager({
           ) : null}
 
           <div className="flex flex-wrap items-center gap-3">
-            <button
+            <Button variant="primary"
               type="submit"
-              className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+              className="inline-flex items-center justify-center text-sm"
               disabled={creationAction.disabled}
+              aria-describedby={creationAction.reason && !saveMutation.isPending ? 'provider-profile-creation-reason' : undefined}
               title={creationAction.reason ?? undefined}
             >
               {creationAction.label}
-            </button>
+            </Button>
             {creationAction.reason && !saveMutation.isPending ? (
-              <p className="text-xs text-slate-500 dark:text-slate-400">{creationAction.reason}</p>
+              <p id="provider-profile-creation-reason" className="text-xs text-slate-500 dark:text-slate-400">{creationAction.reason}</p>
             ) : null}
-            <button
+            <Button variant="secondary"
               type="button"
-              className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
+              className="inline-flex items-center justify-center text-sm"
               onClick={resetForm}
             >
               {isEditing ? 'Cancel edit' : profiles.length === 0 ? 'Reset form' : 'Cancel'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

@@ -1,3 +1,4 @@
+import { Button } from '../components/Button';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
@@ -138,7 +139,7 @@ function SavedWorkParts({
             {part.expired ? ' · expired' : ''}{' '}
             {source && part.present && !part.expired && canDownloadSavedResultRaw(source) ? (
               <a
-                className="button secondary"
+                className="mm-button mm-button--secondary"
                 href={buildSavedResultDownloadHref(apiBase, source)}
                 title={`Download ${part.role}`}
               >
@@ -486,27 +487,27 @@ export function SavedResultsSection({
             {error ? ` ${error.message}` : ''}
           </div>
           <div className="actions">
-            <button type="button" className="secondary" onClick={onRefresh}>
+            <Button variant="ghost" type="button" onClick={onRefresh}>
               Refresh
-            </button>
+            </Button>
           </div>
         </div>
       ) : projection.state === 'pending' ? (
         <div className="stack">
           <p className="small">Saved result evidence is pending.</p>
           <div className="actions">
-            <button type="button" className="secondary" onClick={onRefresh}>
+            <Button variant="ghost" type="button" onClick={onRefresh}>
               Refresh
-            </button>
+            </Button>
           </div>
         </div>
       ) : projection.state === 'stale' ? (
         <div className="stack">
           <div className="notice">Saved result evidence is stale.</div>
           <div className="actions">
-            <button type="button" className="secondary" onClick={onRefresh}>
+            <Button variant="ghost" type="button" onClick={onRefresh}>
               Refresh
-            </button>
+            </Button>
           </div>
         </div>
       ) : projection.entries.length === 0 ? (
@@ -584,7 +585,7 @@ export function SavedResultsSection({
                         <div className="actions">
                           {source && !entry.expired ? (
                             <a
-                              className="button secondary"
+                              className="mm-button mm-button--secondary"
                               href={buildSavedResultPreviewHref(apiBase, source)}
                               title="Open safe preview"
                             >
@@ -595,7 +596,7 @@ export function SavedResultsSection({
                             <span className="small">Expired</span>
                           ) : source && rawAllowed ? (
                             <a
-                              className="button secondary"
+                              className="mm-button mm-button--secondary"
                               href={buildSavedResultDownloadHref(apiBase, source)}
                               title="Download saved output"
                             >
@@ -605,9 +606,8 @@ export function SavedResultsSection({
                             <span className="small">Raw unavailable</span>
                           )}
                           {entry.savedWork ? (
-                            <button
+                            <Button variant="secondary"
                               type="button"
-                              className="secondary"
                               disabled={!actionsEnabled || !publishable || !publication.available}
                               title={
                                 !actionsEnabled
@@ -620,7 +620,7 @@ export function SavedResultsSection({
                               onClick={() => openPublish(entry.artifactId)}
                             >
                               Publish saved work
-                            </button>
+                            </Button>
                           ) : null}
                         </div>
                       </td>
@@ -735,13 +735,12 @@ export function SavedResultsSection({
                 <p className="small">
                   Base branch <code>{draft.baseBranch.trim()}</code> ·{' '}
                   {STRATEGY_LABELS[draft.strategy]}.{' '}
-                  <button
+                  <Button variant="secondary"
                     type="button"
-                    className="secondary"
                     onClick={() => setAdvancedRequested(true)}
                   >
                     Change base or how saved work is applied
-                  </button>
+                  </Button>
                 </p>
               )}
               {draft.objective !== 'branch' ? (
@@ -756,7 +755,7 @@ export function SavedResultsSection({
                 </label>
               ) : null}
               <div className="actions">
-                <button
+                <Button variant="primary"
                   type="submit"
                   disabled={
                     publishPending ||
@@ -767,14 +766,13 @@ export function SavedResultsSection({
                   title={publicationUnavailable ?? undefined}
                 >
                   {publishPending ? 'Publishing...' : 'Publish to this destination'}
-                </button>
-                <button
+                </Button>
+                <Button variant="ghost"
                   type="button"
-                  className="secondary"
                   onClick={() => setPublishTarget(null)}
                 >
                   Close
-                </button>
+                </Button>
               </div>
               {destinationChanged ? (
                 <p className="small">
@@ -785,16 +783,15 @@ export function SavedResultsSection({
             </form>
           ) : null}
           <div className="actions">
-            <button
+            <Button variant="secondary"
               type="button"
-              className="secondary"
               disabled={Boolean(continueDisabledReason)}
               title={continueDisabledReason ?? undefined}
               aria-expanded={continueOpen}
               onClick={() => setContinueOpen((open) => !open)}
             >
               Continue working
-            </button>
+            </Button>
           </div>
           {continueOpen ? (
             <form
@@ -827,12 +824,12 @@ export function SavedResultsSection({
                 />
               </label>
               <div className="actions">
-                <button
+                <Button variant="primary"
                   type="submit"
                   disabled={continuePending || Boolean(continueDisabledReason) || !continueInstructions.trim()}
                 >
                   {continuePending ? 'Starting continuation...' : 'Start continuation'}
-                </button>
+                </Button>
               </div>
             </form>
           ) : null}

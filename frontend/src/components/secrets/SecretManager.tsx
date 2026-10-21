@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { FormEvent, useState } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
@@ -326,14 +327,13 @@ export function SecretManager({
 
     if (!usageLoaded) {
       return (
-        <button
+        <Button variant="secondary" size="sm"
           type="button"
           onClick={() => loadUsage(secret.slug)}
           disabled={usageLoadingSlug === secret.slug}
-          className="btn btn-sm btn-outline"
         >
           {usageLoadingSlug === secret.slug ? 'Loading...' : 'View usage'}
-        </button>
+        </Button>
       );
     }
 
@@ -422,34 +422,31 @@ export function SecretManager({
                       </td>
                       <td data-label="Actions" className="px-2 py-4">
                         <div className="managed-secrets-actions flex flex-wrap gap-2">
-                          <button
+                          <Button variant="ghost" size="sm"
                             type="button"
                             onClick={() => copySecretRef(secret.secretRef ?? `db://${secret.slug}`)}
-                            className="btn btn-sm btn-outline"
                             aria-label={`Copy SecretRef for ${secret.slug}`}
                           >
                             Copy
-                          </button>
-                          <button
+                          </Button>
+                          <Button variant="ghost" size="sm"
                             type="button"
                             onClick={() => editSecret(secret.slug)}
-                            className="btn btn-sm btn-outline"
                           >
                             Edit
-                          </button>
-                          <button
+                          </Button>
+                          <Button variant="secondary" size="sm"
                             type="button"
                             onClick={() => {
                               setRotatePromptSlug(secret.slug);
                               setRotatePromptVal('');
                               setRotatePromptOpen(true);
                             }}
-                            className="btn btn-sm btn-outline"
                           >
                             Rotate
-                          </button>
+                          </Button>
                           {secret.status === 'disabled' && canChangeStatus ? (
-                            <button
+                            <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() =>
                                 setStatusOp.mutate({
@@ -458,13 +455,12 @@ export function SecretManager({
                                 })
                               }
                               disabled={setStatusOp.isPending}
-                              className="btn btn-sm btn-outline"
                               aria-label={`Re-enable ${secret.slug}`}
                             >
                               Re-enable
-                            </button>
+                            </Button>
                           ) : null}
-                          <button
+                          <Button variant="danger" size="sm"
                             type="button"
                             onClick={() => {
                               if (
@@ -475,10 +471,10 @@ export function SecretManager({
                                 deleteOp.mutate(secret.slug);
                               }
                             }}
-                            className="queue-action queue-action-danger px-3 py-1.5 text-xs font-medium transition"
+                            className="px-3 py-1.5 text-xs font-medium transition"
                           >
                             Delete
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -528,18 +524,17 @@ export function SecretManager({
               </div>
 
               <div className="flex flex-wrap gap-2 mt-6">
-                <button
+                <Button variant="primary"
                   type="submit"
-                  className="settings-submit-btn inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                  className="inline-flex items-center justify-center text-sm"
                   disabled={createOp.isPending || updateOp.isPending}
                 >
                   {isEditing ? 'Save new value' : 'Encrypt and store secret'}
-                </button>
+                </Button>
 
                 {isEditing ? (
-                  <button
+                  <Button variant="ghost"
                     type="button"
-                    className="btn btn-outline"
                     onClick={() => {
                       setIsEditing(false);
                       setSlug('');
@@ -547,7 +542,7 @@ export function SecretManager({
                     }}
                   >
                     Cancel
-                  </button>
+                  </Button>
                 ) : null}
               </div>
             </form>
@@ -583,9 +578,8 @@ export function SecretManager({
                 />
               </div>
               <div className="flex flex-wrap justify-end gap-3 mt-8">
-                <button
+                <Button variant="ghost"
                   type="button"
-                  className="btn btn-outline"
                   onClick={() => {
                     setRotatePromptOpen(false);
                     setRotatePromptSlug('');
@@ -593,10 +587,10 @@ export function SecretManager({
                   }}
                 >
                   Cancel
-                </button>
-                <button type="submit" className="settings-submit-btn inline-flex items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200">
+                </Button>
+                <Button variant="primary" type="submit" className="inline-flex items-center justify-center text-sm">
                   Rotate now
-                </button>
+                </Button>
               </div>
             </form>
           </div>

@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 function formatStaleTime(updatedAt: number): string {
   const date = new Date(updatedAt);
   return date.toDateString() === new Date().toDateString()
@@ -40,9 +41,9 @@ export function StaleDataNotice({
         {message ? ` — refresh failed: ${message}` : ' — refresh failed.'}
       </span>{' '}
       {onRetry ? (
-        <button type="button" className="secondary" onClick={onRetry} disabled={retrying}>
+        <Button variant="secondary" type="button" onClick={onRetry} disabled={retrying}>
           {retrying ? 'Retrying…' : 'Retry'}
-        </button>
+        </Button>
       ) : null}
     </div>
   );

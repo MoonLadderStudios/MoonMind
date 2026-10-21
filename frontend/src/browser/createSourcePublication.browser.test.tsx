@@ -183,6 +183,14 @@ describe('Create workspace source and publication intent', () => {
       const publish = screen.getByLabelText('Publish Mode') as HTMLSelectElement;
       const start = screen.getByRole('button', { name: 'Start Workflow' });
 
+      for (const control of [repository, branch, publish]) {
+        const label = control.closest('label')!;
+        const caption = within(label).getByText(control.getAttribute('aria-label')!);
+        const fieldRect = control.getBoundingClientRect();
+        const captionRect = caption.getBoundingClientRect();
+        expect(captionRect.bottom).toBeLessThanOrEqual(fieldRect.top + 1);
+        expect(fieldRect.width).toBeGreaterThanOrEqual(label.getBoundingClientRect().width - 2);
+      }
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 2);
       for (const control of [repository, branch, publish, start]) {
         const rectangle = control.getBoundingClientRect();

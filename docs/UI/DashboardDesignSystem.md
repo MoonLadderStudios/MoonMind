@@ -44,9 +44,9 @@ Each page should have a single primary spectacle or premium-effect surface. Exam
 
 The rest of the page should support that focal effect rather than compete with it.
 
-### 3.4 Brighten on hover, do not darken
+### 3.4 Make control states distinct
 
-Interactive elements should feel more alive on hover. Hover states should generally increase brightness, border light, or glow rather than collapsing into darker states.
+Controls use a small hover tint on devices that support hover. Press is darker or inset; keyboard focus has its own visible outline. Disabled controls keep their resting treatment.
 
 ### 3.5 Motion should be restrained and intentional
 
@@ -137,7 +137,7 @@ Tokens must be defined as RGB triplets so alpha composition stays flexible.
 | Success | `--mm-ok` | `34 197 94` | `74 222 128` | Completed / healthy states |
 | Warning | `--mm-warn` | `245 158 11` | `251 191 36` | Queue, caution, attention |
 | Danger | `--mm-danger` | `244 63 94` | `251 113 133` | Failure, destructive actions |
-| Commit action | `--mm-action-primary` | `21 147 118` | `26 153 123` | Real-action create/apply/launch pathways |
+| Primary button | `--mm-button-primary` | `112 48 220` | `112 48 220` | Shared create/apply/launch treatment; `--mm-action-primary` aliases this token |
 | Shadow | `--mm-shadow` | `0 18px 32px -26px rgb(10 8 30 / 0.55)` | `0 24px 52px -34px rgb(0 0 0 / 0.88)` | Base elevation shadow |
 
 ### 5.2 Accent balance
@@ -148,7 +148,7 @@ Accent usage should follow a clear hierarchy:
 - **Cyan** is reserved for live, executing, streaming, or high-energy system states.
 - **Amber / orange** is reserved for warning, queueing, caution, or high-attention utility signals.
 - **Red / rose** is reserved for failure and destructive actions.
-- **Green / teal** is reserved for create, commit, promote, apply, or complete states.
+- **Green / teal** identifies healthy or completed states. Status and notice text uses separate per-theme foreground tokens for contrast. Status labels stay continuous and static above the moving fill and border, so animation does not brighten the text.
 
 ### 5.3 Background atmosphere
 
@@ -326,12 +326,7 @@ Preferred transition ranges:
 
 ### 9.2 Motion model
 
-Use small scale changes and glow changes. Prefer:
-
-- hover: `scale(1.02-1.03)`
-- active press: `scale(0.98-0.99)`
-
-Avoid `translateY` lift behavior on core buttons and nav pills. The dashboard should feel precise, not floaty.
+Routine buttons stay in place. Hover changes the fill slightly; pressing darkens it or adds an inset shadow. Selection and expanded states remain distinct from the keyboard focus outline.
 
 ### 9.3 Live-state motion
 
@@ -353,7 +348,7 @@ The reduced-motion path covers every non-essential dashboard effect, not only th
 - step type / settings control shimmer and scan border
 - executing sweep effects and status-pill shimmer/glint
 - the masked conic border beam
-- submit ripple / arrow animation
+- submit arrow animation
 - LiquidGL hero surface transition and animation durations
 - hover scan / glint effects
 - general button transform/glow motion
@@ -371,8 +366,8 @@ Effects that are cheap on desktop can be expensive on mobile and touch/low-power
 
 Run this checklist when changing dashboard motion, glass/LiquidGL surfaces, or atmosphere. Verify each combination on a representative route (e.g. the workflows home and a workflow details page):
 
-- **Normal motion (default):** panel enter animation plays once; executing sweeps, shimmer/glint, border beam, submit ripple, hover scans, and LiquidGL hero motion are present and low-amplitude.
-- **Reduced motion (`prefers-reduced-motion: reduce`):** no panel enter animation; sweeps, shimmer/glint, border beam, segmented-control shimmer/scan, submit ripple/arrow, and LiquidGL hero motion are stopped or softened; nothing pulses or drifts.
+- **Normal motion (default):** panel enter animation plays once; executing sweeps, shimmer/glint, border beam, hover scans, and LiquidGL hero motion are present and low-amplitude.
+- **Reduced motion (`prefers-reduced-motion: reduce`):** no panel enter animation; sweeps, shimmer/glint, border beam, segmented-control shimmer/scan, submit arrow, and LiquidGL hero motion are stopped or softened; nothing pulses or drifts.
 - **Dark mode:** atmosphere, glass surfaces, and text contrast read correctly; no readable text relies on blur/refraction.
 - **Light mode:** same verification as dark mode through the light token swap.
 - **Narrow viewport (mobile width) and touch/low-power devices:** background atmosphere uses scroll attachment (no fixed-attachment scroll jank); layout and motion remain comfortable; LiquidGL falls back cleanly where unsupported.
@@ -388,7 +383,7 @@ Top-level destinations render in the masthead. Collection sidebars are contextua
 Application-rail rules:
 
 - active destinations must be unmistakable;
-- hover, focus, and active states brighten rather than darken;
+- hover, focus, and active states remain distinguishable in both themes;
 - icon and label spacing uses shared metrics;
 - an active destination may use controlled bloom and a slightly stronger shell;
 - the rail uses a refined edge-light or horizon separator at its content boundary;
@@ -407,24 +402,11 @@ Collection-sidebar rules:
 
 ### 10.2 Buttons
 
-The dashboard uses one consistent **glow + grow** interaction system.
+`components/Button.tsx` supplies primary, secondary, ghost, danger and icon variants, with small, medium and large sizes. Choose the variant for the action; bare buttons receive a neutral reset. Styled links share the `mm-button` classes and keep native link semantics.
 
-Rules:
+Primary actions use purple, secondary actions use the panel surface, and ghost/icon actions use a transparent fill. Danger is reserved for irreversible or high-consequence actions; reversible pause, drain and draft removal stay neutral. `Button` associates disabled reasons with the control, displaying them for text buttons and visually hiding them for compact icon buttons.
 
-- buttons are slightly translucent, never fully dead/flat by default
-- hover gets brighter and slightly larger
-- press state uses subtle scale-down, not translate
-- focus-visible must remain crisp and high contrast
-- disabled buttons lose glow and motion emphasis
-
-Variants:
-
-- **Default / brand**: purple
-- **Secondary / safe**: glass or satin surface
-- **Commit / create / apply**: `--mm-action-primary`
-- **Danger**: `--mm-danger`
-
-A thin outline and faint edge-light are required so buttons do not disappear into glass backgrounds.
+Hover uses a subtle tint inside `@media (hover: hover)`. Press is darker or inset, without a flash, scale or white ring. Selected controls use a separate fill and border. A shared focus-visible outline stays visible during hover and on focusable unavailable controls, including in forced colors. Text contrast is at least 4.5:1 and focus contrast at least 3:1 in both themes; real-browser tests cover these states.
 
 ### 10.3 Inputs, selects, and comboboxes
 

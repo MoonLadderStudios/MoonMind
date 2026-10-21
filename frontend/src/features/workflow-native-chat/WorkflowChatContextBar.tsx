@@ -64,21 +64,21 @@ export function WorkflowChatContextBar({
       </div>
       <nav className="wf-native-chat__actions" aria-label="Workflow chat actions">
         <a
-          className="button secondary small"
+          className="mm-button mm-button--secondary mm-button--sm"
           href={overviewHref}
           onClick={handleInternal(overviewHref)}
         >
           Back to Overview
         </a>
         <a
-          className="button secondary small"
+          className="mm-button mm-button--secondary mm-button--sm"
           href={evidenceHref}
           onClick={handleInternal(evidenceHref)}
         >
           View captured evidence
         </a>
         {fullPageHref ? (
-          <a className="button secondary small" href={fullPageHref}>
+          <a className="mm-button mm-button--secondary mm-button--sm" href={fullPageHref}>
             Open in Omnigent
           </a>
         ) : null}
