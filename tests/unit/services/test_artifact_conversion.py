@@ -353,7 +353,10 @@ async def test_quarantine_short_circuits_linked_execution_raw_fallback(tmp_path,
             linked.assert_not_awaited()
 
 
-async def test_live_machine_temporal_parent_requires_owned_transform(tmp_path):
+async def test_live_machine_temporal_parent_is_preserved_by_conversion(tmp_path):
+    # Execution owners treat historical owner fields as provenance, so accepted
+    # work needs no rewrite; legacy workflow parents still refuse (see
+    # test_old_admission_survives_unsupported_mixed_history_without_raw_grant).
     from api_service.db.models import TemporalExecutionRecord, TemporalExecutionOwnerType, TemporalWorkflowType
     from moonmind.statuses.workflow import MoonMindWorkflowState
     async with database(tmp_path) as maker:
@@ -367,10 +370,13 @@ async def test_live_machine_temporal_parent_requires_owned_transform(tmp_path):
             ))
             await session.commit()
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
-            assert not result.published
-            assert result.decision.reason_code == "missing_transform_coverage"
-            assert "temporal" in result.decision.detail
-            assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
+            assert result.published
+            assert (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
+            retained = await session.get(TemporalExecutionRecord, "retained-workflow")
+            assert retained.run_id == "retained-run"
+            assert retained.owner_id is None
+            assert retained.owner_type == TemporalExecutionOwnerType.SYSTEM
+            assert retained.state == MoonMindWorkflowState.EXECUTING
 
 
 async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):

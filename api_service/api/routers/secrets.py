@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.api.schemas import (
     SecretCreateRequest,
     SecretListResponse,
@@ -91,7 +91,7 @@ def _uuid_attr(value: Any) -> UUID | None:
 async def create_secret(
     request: SecretCreateRequest,
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> SecretMetadataResponse:
     # Check if exists first? Or rely on DB constraints?
     # Usually slug is unique, let's just try to get it.
@@ -118,7 +118,7 @@ async def create_secret(
 )
 async def list_secrets(
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> SecretListResponse:
     metadata = await SecretsService.list_metadata(db)
     items = [await _metadata_response(m) for m in metadata]
@@ -134,7 +134,7 @@ async def update_secret(
     slug: str,
     request: SecretUpdateRequest,
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> SecretMetadataResponse:
     secret = await _run_mutation(
         SecretsService.update_secret,
@@ -161,7 +161,7 @@ async def rotate_secret(
     slug: str,
     request: SecretUpdateRequest,
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> SecretMetadataResponse:
     secret = await _run_mutation(
         SecretsService.rotate_secret,
@@ -189,7 +189,7 @@ async def update_secret_status(
     slug: str,
     request: SecretStatusUpdateRequest,
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> SecretMetadataResponse:
     permissions = settings_permissions_for_user(user)
     if not permissions & _STATUS_CHANGE_PERMISSIONS:
@@ -225,7 +225,7 @@ async def update_secret_status(
 async def delete_secret(
     slug: str,
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> None:
     try:
         deleted = await SecretsService.delete_secret(db, slug, strict=True)
@@ -245,7 +245,7 @@ async def delete_secret(
 async def get_secret_usage(
     slug: str,
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> SecretUsageResponse:
     result = await SecretsService.list_secret_usage(
         db,
@@ -263,7 +263,7 @@ async def get_secret_usage(
 async def validate_secret(
     slug: str,
     db: AsyncSession = Depends(get_async_session),
-    user: Any = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     result = await SecretsService.validate_secret_ref(db, slug)
     return redact_sensitive_payload(result)

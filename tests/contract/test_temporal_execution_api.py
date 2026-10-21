@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.executions import get_temporal_client
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import (
+    get_current_user,
+    get_current_user_optional,
+    get_instance_access,
+    get_instance_access_optional,
+)
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -46,6 +51,8 @@ def _override_current_user(user) -> None:
     """Install an explicit principal on both shared boundaries (#4125)."""
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: user
     app.dependency_overrides[CURRENT_USER_OPTIONAL_DEP] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
+    app.dependency_overrides[get_instance_access_optional] = lambda: user
 BANNED_EXECUTION_SCHEMA_FIELDS = {
     "attempt",
     "attempts",

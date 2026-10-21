@@ -1460,8 +1460,8 @@ app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 # in moonmind.security.operator_admission with its FastAPI adapter in
 # api_service.operator_admission. Demonstration routers are test-only (see
 # tests/unit/api/test_operator_boundary_mount_4347.py) and are not mounted
-# here, so no parallel /operator/* production API is introduced before real
-# workflow, artifact, stream, and chat consumers migrate (not yet done).
+# here. Remote disabled-mode product routes consume the shared ingress checks;
+# the permission-only handoff and local Compose transport migration remain open.
 # Advanced identity sources (#4124): generic OIDC + trusted-proxy journeys
 # through the shared auth boundary. Endpoints fail closed when the classified
 # production mode does not select them.

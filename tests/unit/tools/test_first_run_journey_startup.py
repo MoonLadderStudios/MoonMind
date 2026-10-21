@@ -409,7 +409,9 @@ def test_successful_startup_preserves_complete_fresh_journey_and_cleanup(
     calls = [json.loads(line)[0] for line in journey.api_calls.read_text().splitlines()]
     assert calls == [
         "populate",
+        "access",
         "vector_free",
+        "access",
         "canceled",
         "credential",
         "verify",

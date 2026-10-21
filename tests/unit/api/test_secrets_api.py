@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 from api_service.api.routers.secrets import router
 from api_service.db.base import get_async_session
 from api_service.db.models import Base, SecretStatus
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.services.secrets import SecretsService
 
 app = FastAPI()
@@ -21,8 +21,8 @@ mock_db_session = AsyncMock()
 
 # Resolve the cached current-user dependency once so overrides target the same
 # callable that FastAPI sees when the router was imported with
-# Depends(get_current_user()).
-_CURRENT_USER_DEP = get_current_user()
+# Depends(get_instance_access).
+_CURRENT_USER_DEP = get_instance_access
 
 
 def _superuser():

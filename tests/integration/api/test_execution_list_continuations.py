@@ -80,6 +80,8 @@ async def test_list_filters_and_counts_follow_current_run_after_continuation(tmp
                         "_current_user_fallback",
                         "_strict_current_user",
                         "_optional_current_user",
+                        "get_instance_access",
+                        "get_instance_access_optional",
                     }:
                         app.dependency_overrides[dependency.call] = lambda: user
 

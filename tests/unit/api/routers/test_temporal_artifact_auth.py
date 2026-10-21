@@ -16,7 +16,12 @@ from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     router,
 )
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import (
+    get_current_user,
+    get_current_user_optional,
+    get_instance_access,
+    get_instance_access_optional,
+)
 from moonmind.config.settings import settings
 
 @pytest.fixture
@@ -39,7 +44,12 @@ def _override_user_dependencies(app: FastAPI) -> None:
         if dep.call.__name__ in {"_current_user_fallback", "_optional_current_user"}
     }
     if not user_dependencies:
-        user_dependencies = {get_current_user(), get_current_user_optional()}
+        user_dependencies = {
+            get_current_user(),
+            get_current_user_optional(),
+            get_instance_access,
+            get_instance_access_optional,
+        }
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
 

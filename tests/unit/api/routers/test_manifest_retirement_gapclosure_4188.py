@@ -109,7 +109,12 @@ async def _insert_historical_manifest_record(session, *, state=None) -> object:
 
 
 def _override_user(app: FastAPI, *, is_superuser: bool = True) -> SimpleNamespace:
-    from api_service.auth_providers import get_current_user, get_current_user_optional
+    from api_service.auth_providers import (
+        get_current_user,
+        get_current_user_optional,
+        get_instance_access,
+        get_instance_access_optional,
+    )
 
     user = SimpleNamespace(
         id=uuid4(),
@@ -118,8 +123,10 @@ def _override_user(app: FastAPI, *, is_superuser: bool = True) -> SimpleNamespac
         is_superuser=is_superuser,
         roles=[],
     )
-    app.dependency_overrides[get_current_user] = lambda: user
-    app.dependency_overrides[get_current_user_optional] = lambda: user
+    app.dependency_overrides[get_current_user()] = lambda: user
+    app.dependency_overrides[get_current_user_optional()] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
+    app.dependency_overrides[get_instance_access_optional] = lambda: user
     return user
 
 

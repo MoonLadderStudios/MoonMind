@@ -11,7 +11,12 @@ from sqlalchemy.orm import sessionmaker
 from api_service.api.routers import (
     execution_integrations as execution_integrations_router,
 )
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import (
+    get_current_user,
+    get_current_user_optional,
+    get_instance_access,
+    get_instance_access_optional,
+)
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
@@ -148,6 +153,8 @@ def _shared_client(shared_user_id):
     # strict boundary covers the rest. Override both explicitly (#4125).
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: user
     app.dependency_overrides[CURRENT_USER_OPTIONAL_DEP] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
+    app.dependency_overrides[get_instance_access_optional] = lambda: user
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
 # ---------------------------------------------------------------------------

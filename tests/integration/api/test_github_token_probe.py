@@ -9,7 +9,6 @@ import pytest
 from httpx import ASGITransport
 
 from api_service.api.routers import settings as settings_router
-from api_service.auth_providers import get_current_user
 from api_service.main import app
 from api_service.services.repository_connections import (
     RepositoryConnectionService,
@@ -24,7 +23,7 @@ from moonmind.workflows.executions.repository_contract import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
-SETTINGS_USER_DEP = get_current_user()
+SETTINGS_USER_DEP = settings_router.SETTINGS_CURRENT_USER_DEP
 
 
 @pytest.fixture

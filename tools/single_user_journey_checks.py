@@ -25,6 +25,10 @@ recreated stack, can verify what an earlier phase saved):
 ``generated_verify``
     Download again after the worker's owned-workspace cleanup receipt. This
     checks persistence independently of the execution host and local workspace.
+``access`` / ``access_denied``
+    Use real settings/preset routes through the published operator path, reject
+    hostile Host/Origin, and reject direct-backend requests from an existing
+    workload container even when it presents a loopback Host or machine material.
 ``canceled``
     Confirm the dashboard cancellation: each execution marked for
     cancellation must have been canceled through the dashboard before its
@@ -37,7 +41,8 @@ recreated stack, can verify what an earlier phase saved):
     Read back everything saved: credential metadata without plaintext, the
     setting binding and its redacted usage, the recurring definition and its
     dispatched run, each execution's retained terminal state, the attached
-    artifact bytes, and the saved preset version.
+    artifact bytes, and the saved instance preset's input contract and explicit
+    input expansion.
 ``release``
     Remove the setting override so later work does not use the synthetic
     token.
@@ -55,11 +60,9 @@ recreated stack, can verify what an earlier phase saved):
     adds only the retirement-boundary proof.
 ``conversion``
     After an upgrade from an account-era release, read the API startup log
-    (``--api-log``) and require the guarded single-user conversion to have
-    classified the retained data as one eligible operator. It either
-    published, or it refused only because subsystem transforms are not yet
-    registered. That refusal is recorded and printed as not published. Any
-    other refusal, a deferral, or no observed outcome fails.
+    (``--api-log``) and require a published eligible single-operator conversion.
+    Refusal is preserved in the state for diagnostics and fails this eligible
+    upgrade lane; protected refusal has separate PostgreSQL coverage.
 ``controller_absent``
     MoonLadderStudios/MoonMind#4502, before a deployment controller is
     installed: Settings Operations reports it not installed, and one update
@@ -171,6 +174,49 @@ class Api:
 
 def log(message: str) -> None:
     print(f"single-user-journey: {message}", flush=True)
+
+
+def operator_access(api: Api, state: dict[str, Any]) -> None:
+    """Probe the same production routes the operator actually consumes."""
+    if not api.json("GET", "/api/v1/settings/catalog"):
+        raise JourneyFailure("operator settings catalog is empty")
+    before = api.json("GET", "/api/presets")
+    host_status, _ = api.request("GET", "/api/v1/settings/catalog",
+        headers={"Host": "foreign.invalid"}, expect=(401, 403))
+    origin_status, _ = api.request("PATCH", "/api/v1/settings/workspace",
+        headers={"Origin": "http://foreign.invalid"}, body={"changes": {}}, expect=(403,))
+    if api.json("GET", "/api/presets") != before:
+        raise JourneyFailure("denied access probes changed the preset catalog")
+    state["operatorAccess"] = {"allowed": True, "foreignHostStatus": host_status,
+                               "foreignOriginStatus": origin_status}
+    log(f"served operator reads allowed; foreign Host {host_status}, Origin {origin_status}")
+
+
+def direct_backend_access(api: Api, state: dict[str, Any], *, operator_host: str) -> None:
+    """Run inside the journey's workload container, using its actual TCP peer."""
+    probes = (
+        {},
+        {"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1",
+         "X-Moonmind-User": "forged-operator"},
+        {"Authorization": "Bearer synthetic-machine-material",
+         "X-Moonmind-Execution-Fanout": "v1"},
+    )
+    statuses = []
+    for headers in probes:
+        # A correct loopback Host must not turn a workload peer into an operator.
+        headers = {**headers, "Host": operator_host}
+        for method, path, body in (
+            ("GET", "/api/v1/settings/catalog", None),
+            ("POST", "/api/presets", {"slug": "denied-backend-probe", "title": "Denied probe",
+                                     "description": "Must not be persisted", "scope": "global",
+                                     "steps": [{"instructions": "Must not run."}]}),
+        ):
+            result = api.json(method, path, headers=headers, body=body, expect=(401,))
+            if (result.get("detail") or {}).get("code") not in {"auth_required", "auth_invalid"}:
+                raise JourneyFailure(f"{method} {path} did not return an admission denial")
+            statuses.append(401)
+    state["directBackendAccess"] = {"denied": True, "statuses": statuses}
+    log("direct backend, forged forwarding and machine-only operator requests denied")
 
 
 def quote(value: str) -> str:
@@ -502,6 +548,7 @@ def populate(
         "workflowId": dispatched,
     }
 
+    audience = f"operator-selected audience for {label}"
     preset = api.json(
         "POST",
         "/api/presets",
@@ -509,13 +556,29 @@ def populate(
             "slug": f"single-user-journey-{label}-{uuid.uuid4().hex[:8]}",
             "title": f"single-user journey preset {label}",
             "description": "Single-user journey preset read back after restarts.",
-            "steps": [{"instructions": "Single-user journey preset step."}],
+            "scope": "global",
+            "inputs": [
+                {
+                    "name": "audience",
+                    "label": "Audience",
+                    "type": "text",
+                    "required": True,
+                    "default": "default audience",
+                }
+            ],
+            "steps": [{"instructions": "Write a report for {{ inputs.audience }}."}],
         },
         expect=(201,),
     )
     if not preset.get("slug"):
         raise JourneyFailure(f"preset creation returned no slug: {preset}")
+    if preset.get("scope") != "global" or preset.get("scopeRef") is not None:
+        raise JourneyFailure("instance preset was saved with personal scope")
     state["preset"] = preset_identity(preset)
+    state["presetApplication"] = {
+        "inputs": {"audience": audience},
+        "instructions": [f"Write a report for {audience}."],
+    }
     log(f"preset {preset['slug']} saved ({preset.get('presetDigest')})")
     state["executions"] = [
         {
@@ -528,6 +591,7 @@ def populate(
         # dispatched run cannot complete, so it is observed, not canceled.
         {"workflowId": dispatched, "title": name, "cancel": False},
     ]
+    verify_preset(api, state)
 
 
 def preset_identity(preset: dict[str, Any]) -> dict[str, Any]:
@@ -539,6 +603,7 @@ def preset_identity(preset: dict[str, Any]) -> dict[str, Any]:
         "scopeRef": preset.get("scopeRef"),
         "title": preset.get("title"),
         "presetDigest": preset.get("presetDigest"),
+        "inputs": preset.get("inputs") or [],
         "steps": [step.get("instructions") for step in preset.get("steps") or []],
     }
 
@@ -563,7 +628,24 @@ def verify_preset(api: Api, state: dict[str, Any]) -> None:
             f"preset {saved['slug']} changed: saved {saved}, found "
             f"{preset_identity(found)}"
         )
-    log(f"preset {saved['slug']} retained at {saved['presetDigest']}")
+    application = state.get("presetApplication")
+    if not application:
+        raise JourneyFailure("no explicit preset application recorded to verify")
+    expanded = api.json(
+        "POST",
+        f"/api/presets/{quote(saved['slug'])}:expand?{query}",
+        body={"inputs": application["inputs"]},
+    )
+    applied = expanded.get("appliedTemplate") or {}
+    instructions = [step.get("instructions") for step in expanded.get("steps") or []]
+    if (
+        applied.get("slug") != saved["slug"]
+        or applied.get("presetDigest") != saved["presetDigest"]
+        or applied.get("inputs") != application["inputs"]
+        or instructions != application["instructions"]
+    ):
+        raise JourneyFailure(f"preset {saved['slug']} expansion changed")
+    log(f"preset {saved['slug']} retained at {saved['presetDigest']} with explicit inputs")
 
 
 def credential(api: Api, state: dict[str, Any], *, label: str) -> None:
@@ -667,7 +749,7 @@ def conversion(state: dict[str, Any], *, api_log: Path) -> None:
         "reason": reason,
         "pendingSubsystems": names,
     }
-    log(
+    raise JourneyFailure(
         "guarded conversion NOT published: the source is one eligible operator, "
         f"but subsystems {','.join(names)} have no registered transform; "
         "source data and operator access are preserved"
@@ -1343,6 +1425,8 @@ def main(argv: list[str] | None = None) -> int:
             "populate",
             "generate",
             "generated_verify",
+            "access",
+            "access_denied",
             "canceled",
             "credential",
             "verify",
@@ -1361,6 +1445,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--defer-seconds", type=float, default=150.0)
     parser.add_argument("--api-log", type=Path)
     parser.add_argument("--cleanup-receipt", type=Path)
+    parser.add_argument("--operator-host", help="published Host for direct-backend probes")
     parser.add_argument(
         "--pre-upgrade-release",
         action="store_true",
@@ -1371,7 +1456,7 @@ def main(argv: list[str] | None = None) -> int:
     api = Api(args.api_base)
     state: dict[str, Any] = {}
     # These phases start a journey's state; every later phase reads it.
-    if args.phase not in {"populate", "controller_absent"}:
+    if args.phase not in {"populate", "controller_absent", "access_denied"}:
         state = json.loads(args.state_file.read_text())
     try:
         if args.phase == "populate":
@@ -1385,6 +1470,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.phase == "generate":
             generate_output(api, state, label=args.label, timeout=args.timeout)
+        elif args.phase == "access":
+            operator_access(api, state)
+        elif args.phase == "access_denied":
+            if not args.operator_host:
+                raise JourneyFailure("access_denied requires --operator-host")
+            direct_backend_access(api, state, operator_host=args.operator_host)
         elif args.phase == "generated_verify":
             if args.cleanup_receipt is None:
                 raise JourneyFailure("generated_verify requires --cleanup-receipt")

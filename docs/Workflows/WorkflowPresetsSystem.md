@@ -93,7 +93,7 @@ expansion:
         jira_issue_url: "{{ inputs.jira_issue.url }}"
 ```
 
-Examples illustrate the contract rather than asserting a particular seed is implemented that way. Stable identity, description, category/tags, definition evidence, schema, optional UI hints, deterministic expansion, and provenance are required concepts. Internal preset identity is slug plus scope, not a semantic version selector. Content digests identify the resolved definition.
+Presets expose stable identity, descriptions, input contracts, deterministic expansion and provenance. Identity is slug plus scope; the content digest identifies the resolved definition. Instance routes omit person scope and store global definitions without scopeRef or creator. Favorites and recents use an instance storage partition, never admission authority. Unconverted accounts retain protected partitions; scope-free listing combines global definitions with only their own presets.
 
 Startup synchronization refreshes only deployment-owned rows with recorded seed provenance and no creator. A colliding operator preset or an unmarked retained row is preserved; changing the seed directory does not prevent refresh. Existing review status and soft deletion remain operator choices. Legacy-seed cleanup uses the same ownership boundary, and catalog refresh does not rewrite already-expanded execution snapshots.
 

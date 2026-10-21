@@ -4,7 +4,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from api_service.api.routers import settings as settings_router
-from api_service.auth_providers import get_current_user
 from api_service.main import app
 from api_service.services.settings_catalog import (
     SettingRegistryEntry,
@@ -31,7 +30,7 @@ def _explicit_settings_test_principal(monkeypatch):
         is_superuser=True,
     )
     monkeypatch.setitem(
-        app.dependency_overrides, get_current_user(), lambda: user
+        app.dependency_overrides, settings_router.SETTINGS_CURRENT_USER_DEP, lambda: user
     )
 
 

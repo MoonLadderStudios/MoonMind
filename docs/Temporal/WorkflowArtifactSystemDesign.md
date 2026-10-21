@@ -552,9 +552,9 @@ writers are excluded while the guarded inventory is checked and transformed;
 interruption rolls both back. Historical ledger completion preserves established
 operator admission but grants no new artifact recovery authority. Missing or
 malformed creators refuse conversion, including null creators with only
-deployment-ownership attestation. Retained live execution or
-workflow parents require their own registered transforms and refuse before any
-artifact mutation when those transforms are absent. Historical links without a
+deployment-ownership attestation. Instance execution records retain their
+original owners and admitted work. Legacy workflow parents still refuse before
+artifact mutation until their owning conversion is available. Historical links without a
 live execution remain intact and do not invalidate independently proven creator
 attribution. Schema installation itself grants no recovery access. Once recovery grants
 exist, schema downgrade refuses rather than silently losing them; repair forward.
