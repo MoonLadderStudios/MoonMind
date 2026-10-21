@@ -146,7 +146,7 @@
   --mm-warn: 251 191 36;
   --mm-status-waiting: 250 204 21;
   --mm-status-queued: 167 139 250;
-  --mm-status-setup: 70 160 252;
+  --mm-status-setup: 118 188 255;
   --mm-danger: 251 113 133;
   --mm-action-primary: var(--mm-button-primary);
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
