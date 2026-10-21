@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Button } from './Button';
+import '../styles/dashboard.css';
 
 afterEach(cleanup);
 
@@ -31,4 +32,13 @@ it('shows and associates a disabled reason without relying on title', () => {
   const button = screen.getByRole('button', { name: 'Start' });
   const reason = document.getElementById(button.getAttribute('aria-describedby') ?? '');
   expect(reason?.textContent).toBe('Connect a provider first');
+});
+
+it('keeps icon button reasons accessible without taking space in the toolbar', () => {
+  render(<Button variant="icon" disabled disabledReason="This is the first step." aria-label="Move step up">↑</Button>);
+  const button = screen.getByRole('button', { name: 'Move step up' });
+  const reason = document.getElementById(button.getAttribute('aria-describedby') ?? '');
+  expect(reason?.textContent).toBe('This is the first step.');
+  expect(getComputedStyle(reason!).position).toBe('absolute');
+  expect(getComputedStyle(reason!).width).toBe('1px');
 });

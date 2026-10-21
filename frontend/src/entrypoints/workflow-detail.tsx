@@ -2128,7 +2128,7 @@ function IconMenuButton({
       items={items}
       triggerContent={KEBAB_ICON}
       triggerAriaLabel={ariaLabel}
-      triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+      triggerClassName="td-workflow-actions-trigger td-workflow-actions-trigger-compact"
       subject={subject}
       subjectId={subjectId}
     />

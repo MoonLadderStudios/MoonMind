@@ -11,6 +11,7 @@ import {
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { renderWithClient } from "../utils/test-utils";
+import '../styles/dashboard.css';
 import {
   BRANCH_TEXT_FIRST_LIMITS,
   WorkflowStartPage,
@@ -164,7 +165,11 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
   it("opens the form with metadata only and never enumerates branches", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    await screen.findByLabelText("Branch", { selector: "input" });
+    const branch = await screen.findByLabelText("Branch", { selector: "input" });
+    const repository = screen.getByLabelText("Repository", { selector: "input" });
+    expect(getComputedStyle(branch.closest('label')!).display).toBe(
+      getComputedStyle(repository.closest('label')!).display,
+    );
     await waitFor(
       () => {
         expect(metadataRequestUrls.length).toBeGreaterThan(0);

@@ -25,5 +25,5 @@ export function Button({ variant = 'secondary', size = 'md', disabledReason, cla
       }
       onClick?.(event);
     }}
-  />{reason ? <span className="mm-button-reason" id={reasonId}>{reason}</span> : null}</>;
+  />{reason ? <span className={`mm-button-reason${variant === 'icon' ? ' sr-only' : ''}`} id={reasonId}>{reason}</span> : null}</>;
 }
