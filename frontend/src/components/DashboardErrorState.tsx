@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import type { ReactNode } from 'react';
 
 import { apiErrorKind, type ApiErrorKind } from '../lib/api/client';
@@ -41,9 +42,9 @@ export function DashboardErrorState({
         ) : null}
         {onRetry ? (
           <div className="mt-4">
-            <button type="button" onClick={onRetry}>
+            <Button variant="secondary" type="button" onClick={onRetry}>
               {retryLabel}
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>

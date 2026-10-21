@@ -11,6 +11,12 @@ import {
 } from './ExecutionStatusPill';
 
 describe('ExecutionStatusPill', () => {
+  it('exposes Executing as continuous readable text alongside its decorative animation', () => {
+    const { container } = render(<ExecutionStatusPill status="executing" />);
+    const label = screen.getByText('Executing');
+    expect(label.closest('[aria-hidden="true"]')).toBeNull();
+    expect(container.textContent).toBe('Executing');
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });

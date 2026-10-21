@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { page, userEvent } from 'vitest/browser';
+import { page, userEvent, commands } from 'vitest/browser';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
@@ -112,6 +112,39 @@ afterEach(async () => {
 });
 
 describe('Create validation feedback', () => {
+  it('labels the bottom bar and presses Start without a bright flash or expanding ring', async () => {
+    const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+    cleanupRender = unmount;
+    await screen.findByLabelText('Instructions');
+    const start = screen.getByRole('button', { name: 'Start Workflow' }) as HTMLButtonElement;
+    await waitFor(() => expect(start.disabled).toBe(false));
+    const bar = screen.getByRole('group', { name: 'Workflow submission controls' });
+    for (const label of ['Repository', 'Branch', 'Publish Mode']) {
+      expect(within(bar).getByText(label, { selector: '.queue-inline-selector-label' })).toBeTruthy();
+      expect(within(bar).getByLabelText(label).closest('label')?.textContent).toContain(label);
+    }
+    const harness = screen.getByLabelText('Harness');
+    expect(harness.closest('label')?.querySelectorAll('input, select, textarea, button').length).toBe(1);
+    expect(screen.getByRole('button', { name: 'Add Step' }).getBoundingClientRect().height).toBeLessThanOrEqual(64);
+    await userEvent.hover(start);
+    const arrow = start.querySelector('.queue-submit-primary-arrow svg')!;
+    await expect.poll(async () => {
+      // The panel's entry animation can move the fixed bar after initial data
+      // arrives; aim at the settled button before sampling its hover state.
+      await userEvent.hover(start);
+      return getComputedStyle(arrow).animationName;
+    }).toBe('queue-submit-primary-arrow-cycle');
+    await commands.pointerButton('down');
+    expect(getComputedStyle(start).filter).toBe('none');
+    expect(getComputedStyle(start).backgroundImage).toBe('none');
+    expect(getComputedStyle(start).boxShadow).toContain('inset');
+    expect(document.querySelector('.queue-submit-primary-ripple')).toBeNull();
+    expect(getComputedStyle(start.querySelector('[data-submit-icon="check"]')!).animationName).toBe('queue-submit-primary-check-pop');
+    // Release away from the button: inspect press without submitting a workflow.
+    await userEvent.hover(screen.getByLabelText('Instructions'));
+    await commands.pointerButton('up');
+    expect(createRequests).toBe(0);
+  });
   it('shows an off-screen step error in the submit bar and focuses the field', async () => {
     await page.viewport(VIEWPORT.width, VIEWPORT.height);
     const { unmount } = renderWithClient(<DashboardApp payload={payload} />);

@@ -1,3 +1,4 @@
+import { Button } from './Button';
 /**
  * GitHub issue recovery-status projection for Workflow Detail (#4183).
  *
@@ -399,17 +400,16 @@ export function IssueLifecyclePanel({
               const needsStopProof = entry.action === 'continue_work' || entry.action === 'authorize_retry';
               const blockedByMissingProof = needsStopProof && entry.enabled && !writerStoppedConfirmed;
               return (
-                <button
+                <Button variant="secondary"
                   key={entry.action}
                   type="button"
-                  className="secondary"
                   disabled={!entry.enabled || blockedByMissingProof || submitting !== null}
                   title={blockedByMissingProof ? 'Confirm prior writer stop proof first' : entry.enabled ? undefined : entry.disabled_reason || 'Unavailable'}
                   onClick={() => void submitAction(entry.action)}
                   aria-label={ACTION_LABELS[entry.action] ?? entry.action}
                 >
                   {submitting === entry.action ? 'Submitting…' : (ACTION_LABELS[entry.action] ?? entry.action)}
-                </button>
+                </Button>
               );
             })}
           </div>

@@ -1,3 +1,4 @@
+import { Button } from './Button';
 import {
   useEffect,
   useId,
@@ -265,14 +266,14 @@ export function WorkflowActionsMenu({
       );
     }
     return (
-      <button
+      <Button variant={item.danger ? 'danger' : 'ghost'}
         key={item.id}
         {...commonProps}
         type="button"
         onClick={() => selectItem(item)}
       >
         {content}
-      </button>
+      </Button>
     );
   };
 

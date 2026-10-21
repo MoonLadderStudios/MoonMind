@@ -1,3 +1,4 @@
+import { Button } from '../components/Button';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -1191,7 +1192,7 @@ function FacetMoreValues({ apiBase, facet, label, filterParams, selected, disabl
     return (
       <button
         type="button"
-        className="secondary workflow-list-facet-more"
+        className="workflow-list-facet-more"
         disabled={disabled}
         onClick={() => setOpen(true)}
       >
@@ -1225,28 +1226,26 @@ function FacetMoreValues({ apiBase, facet, label, filterParams, selected, disabl
         <ul className="workflow-list-facet-more-list" aria-label={`More ${label} values`}>
           {values.map((value) => (
             <li key={value}>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="secondary"
                 disabled={disabled}
                 aria-label={`Add ${value}`}
                 onClick={() => onSelect(value)}
               >
                 {value}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
       )}
       {query.hasNextPage ? (
-        <button
+        <Button variant="secondary"
           type="button"
-          className="secondary"
           disabled={disabled || query.isFetchingNextPage}
           onClick={() => void query.fetchNextPage({ cancelRefetch: false })}
         >
           Load more values
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -2095,24 +2094,24 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           {totalEntriesSummary ? <span className="small">{totalEntriesSummary}</span> : null}
         </div>
         <nav aria-label="Pagination" style={{ display: 'inline-flex', gap: '0.45rem' }}>
-          <button
+          <Button variant="secondary"
             type="button"
-            className="secondary queue-pagination-button"
+            className="queue-pagination-button"
             disabled={!listEnabled || cursorStack.length === 0}
             onClick={goPrev}
             aria-label="Previous page"
           >
             <span aria-hidden="true">&larr;</span>
-          </button>
-          <button
+          </Button>
+          <Button variant="secondary"
             type="button"
-            className="secondary queue-pagination-button"
+            className="queue-pagination-button"
             disabled={!listEnabled || !data?.nextPageToken}
             onClick={goNext}
             aria-label="Next page"
           >
             <span aria-hidden="true">&rarr;</span>
-          </button>
+          </Button>
         </nav>
       </div>
     </div>
@@ -2569,9 +2568,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           <p className="small">Include and exclude selections apply together. Switch modes to edit each selection.</p>
           {renderFacetNotice('providerProfile')}
           {providerProfileFacetQuery.hasNextPage ? (
-            <button
+            <Button variant="secondary"
               type="button"
-              className="secondary"
               disabled={!listEnabled || providerProfileFacetQuery.isFetching}
               onClick={() => {
                 if (!providerProfileFacetQuery.isFetching) {
@@ -2582,7 +2580,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               {providerProfileFacetQuery.isFetchNextPageError
                 ? 'Retry loading Provider Profiles'
                 : 'Load more Provider Profiles'}
-            </button>
+            </Button>
           ) : null}
         </div>
       );
@@ -2598,16 +2596,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <strong>{summarizeValues(draftFilters.targetRuntime, formatRuntimeLabel, { maxVisibleValues: 3 })}</strong>.
             Runtime is not a Provider Profile; remove this constraint to filter by Provider Profile.
           </p>
-          <button
+          <Button variant="secondary"
             type="button"
-            className="secondary"
             disabled={!listEnabled}
             onClick={() =>
               setDraftFilters((current) => ({ ...current, targetRuntime: emptyValueFilter() }))
             }
           >
             Remove legacy runtime constraint
-          </button>
+          </Button>
         </div>
       );
     }
@@ -2704,12 +2701,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       className={`workflow-list-view-options${variant === 'icon' ? ' workflow-list-view-options--icon' : ''}`}
       ref={prefsMenuRef}
     >
-      <button
+      <Button variant="secondary"
         type="button"
         className={
           variant === 'icon'
             ? 'workflow-list-view-options-trigger workflow-list-view-options-trigger--icon'
-            : 'secondary workflow-list-view-options-trigger'
+            : ' workflow-list-view-options-trigger'
         }
         aria-haspopup="dialog"
         aria-expanded={prefsMenuOpen}
@@ -2736,7 +2733,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         ) : (
           'View options'
         )}
-      </button>
+      </Button>
       {prefsMenuOpen ? (
         <div
           className="workflow-list-view-options-popover"
@@ -2802,14 +2799,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             </label>
           </fieldset>
           <div className="workflow-list-view-options-actions">
-            <button
+            <Button variant="ghost"
               type="button"
-              className="secondary"
               onClick={handleResetPreferences}
               aria-label="Reset dashboard preferences to defaults"
             >
               Reset to defaults
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -2932,13 +2928,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           {workspaceCursorResetNotice ? (
             <div className="notice" role="status">
               Saved pagination was no longer available. Showing the first page.
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="secondary"
                 onClick={() => setWorkspaceCursorResetNotice(false)}
               >
                 Dismiss
-              </button>
+              </Button>
             </div>
           ) : null}
         </section>
@@ -3014,7 +3009,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
               <button
                 type="button"
-                className="secondary workflow-list-filter-drawer-close"
+                className="workflow-list-filter-drawer-close"
                 onClick={() => closeDrawer()}
                 aria-label="Close filters"
               >
@@ -3060,31 +3055,29 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               })}
             </div>
             <footer className="workflow-list-filter-drawer-actions workflow-list-filter-actions">
-              <button
+              <Button variant="ghost"
                 type="button"
-                className="secondary"
                 onClick={resetDraftFilters}
                 disabled={!listEnabled || !hasActiveFilters}
                 aria-label="Reset filters"
               >
                 Reset
-              </button>
-              <button
+              </Button>
+              <Button variant="ghost"
                 type="button"
-                className="secondary"
                 onClick={() => closeDrawer()}
                 aria-label="Cancel filters"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant="secondary"
                 type="button"
                 onClick={applyDraftFilters}
                 disabled={!listEnabled}
                 aria-label="Apply filters"
               >
                 Apply
-              </button>
+              </Button>
             </footer>
           </div>
         </div>
@@ -3255,31 +3248,29 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                       <div className="workflow-list-column-filter-title">{label} filter</div>
                                       {renderFilterControl(filterField)}
                                       <div className="workflow-list-filter-actions">
-                                        <button
+                                        <Button variant="ghost"
                                           type="button"
-                                          className="secondary"
                                           onClick={() => removeActiveFilter(filterField)}
                                           disabled={!listEnabled || !filterValue}
                                           aria-label={`Reset ${label} filter`}
                                         >
                                           Reset
-                                        </button>
-                                        <button
+                                        </Button>
+                                        <Button variant="ghost"
                                           type="button"
-                                          className="secondary"
                                           onClick={closeDesktopFilter}
                                           aria-label={`Cancel ${label} filter`}
                                         >
                                           Cancel
-                                        </button>
-                                        <button
+                                        </Button>
+                                        <Button variant="secondary"
                                           type="button"
                                           onClick={applyDraftFilters}
                                           disabled={!listEnabled}
                                           aria-label={`Apply ${label} filter`}
                                         >
                                           Apply
-                                        </button>
+                                        </Button>
                                       </div>
                                     </div>
                                   ) : null}

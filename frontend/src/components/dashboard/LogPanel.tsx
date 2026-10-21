@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { useState, type ReactNode } from 'react';
 import { copyTextToClipboard } from '../../utils/clipboard';
 
@@ -62,17 +63,16 @@ function LogPanelControls({
         />
         <span className="small">Wrap lines</span>
       </label>
-      <button
+      <Button variant="secondary" size="sm"
         type="button"
-        className="secondary small"
         onClick={onCopy}
         disabled={!canCopy}
       >
         {copied ? 'Copied' : 'Copy'}
-      </button>
+      </Button>
       {downloadUrl ? (
         <a
-          className="button secondary small"
+          className="mm-button mm-button--secondary mm-button--sm"
           href={downloadUrl}
           download={downloadFileName}
           target="_blank"

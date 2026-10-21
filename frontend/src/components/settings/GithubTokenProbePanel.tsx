@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
 import type { components } from '../../generated/openapi';
@@ -282,15 +283,15 @@ export function GithubTokenProbePanel({
           />
         </label>
         <div className="flex items-end">
-          <button
+          <Button variant="primary"
             type="submit"
             disabled={
               !canRunProbe || isRunning || repo.trim().length === 0 || connection.lifecycle !== 'active'
             }
-            className="inline-flex w-full items-center justify-center rounded-xl bg-mm-accent px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-mm-accent/90 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
+            className="inline-flex w-full items-center justify-center text-sm disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
           >
             {isRunning ? 'Testing…' : 'Test connection'}
-          </button>
+          </Button>
         </div>
       </form>
 

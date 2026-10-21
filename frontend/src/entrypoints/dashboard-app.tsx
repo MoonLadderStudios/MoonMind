@@ -1,3 +1,4 @@
+import { Button } from '../components/Button';
 import {
   Suspense,
   lazy,
@@ -678,7 +679,7 @@ function DashboardNavigation({
             mobileDrawerOpen={open}
           />
           {isSkillsRoute && uiInfo?.features?.skills === true ? (
-            <button
+            <Button variant="primary"
               type="button"
               className="skills-create-nav-button"
               data-skills-create-trigger
@@ -687,7 +688,7 @@ function DashboardNavigation({
               title="Create New Skill"
             >
               <Plus size={18} aria-hidden="true" />
-            </button>
+            </Button>
           ) : null}
         </nav>
       </div>
@@ -850,7 +851,7 @@ function AppShell({
           <div
             className={`dashboard-state-strip__inner${dataWidePanel ? ' dashboard-state-strip__inner--data-wide' : ''}`}
           >
-            <div className="dashboard-alerts-region">
+            <div className="dashboard-alerts-region" aria-live="polite">
               <DashboardAlerts />
             </div>
           </div>
@@ -858,7 +859,6 @@ function AppShell({
         <section
           ref={panelRef}
           className={`panel${dataWidePanel ? ' panel--data-wide' : ''}`}
-          aria-live="polite"
         >
           {children}
         </section>

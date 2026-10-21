@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import {
   createContext,
   useCallback,
@@ -292,22 +293,22 @@ export function SettingsDraftGuardProvider({ children }: { children: ReactNode }
               {pendingDeparture.description}
             </p>
             <div className="mt-6 flex justify-end gap-3">
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                className="text-sm"
                 onClick={stay}
                 ref={stayButtonRef}
               >
                 Stay
-              </button>
-              <button
+              </Button>
+              <Button variant="secondary"
                 type="button"
-                className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500"
+                className="text-sm"
                 onClick={discardAndContinue}
                 ref={discardButtonRef}
               >
                 {pendingDeparture.draftIds === null ? 'Discard and leave' : 'Discard and continue'}
-              </button>
+              </Button>
             </div>
           </section>
         </div>

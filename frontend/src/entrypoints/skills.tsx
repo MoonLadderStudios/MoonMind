@@ -1,7 +1,9 @@
+import { Button } from '../components/Button';
 import {
   Fragment,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -528,9 +530,9 @@ function SkillsCatalogTable({
       errorMessage={(
         <>
           <span>Failed to load skills.</span>{' '}
-          <button type="button" className="secondary" onClick={() => void skillsQuery.refetch()}>
+          <Button variant="secondary" type="button" onClick={() => void skillsQuery.refetch()}>
             Retry
-          </button>
+          </Button>
         </>
       )}
       emptyMessage={filterText.trim() ? 'No skills match your filter.' : 'No skills available yet.'}
@@ -565,6 +567,7 @@ function SkillDetail({
   detailHeadingRef: React.RefObject<HTMLHeadingElement | null>;
 }) {
   useDocumentTitle(selectedSkill ? selectedSkill.label ?? selectedSkill.id : 'Skills');
+  const previewId = useId();
   return (
     <section className="min-w-0 rounded-2xl border border-mm-border/80 bg-transparent p-4 shadow-sm sm:p-6">
       {selectedSkill ? null : <PageHeader title="Skills" />}
@@ -592,20 +595,33 @@ function SkillDetail({
                 ['metadata', 'Metadata'],
               ] as Array<[PreviewTab, string]>
             ).map(([tab, label]) => (
-              <button
+              <Button variant="secondary"
                 key={tab}
                 type="button"
                 role="tab"
+                id={`${previewId}-${tab}`}
+                aria-controls={`${previewId}-panel`}
                 aria-selected={previewTab === tab}
                 tabIndex={previewTab === tab ? 0 : -1}
-                className={previewTab === tab ? 'queue-submit-primary' : 'secondary'}
                 onClick={() => setPreviewTab(tab)}
+                onKeyDown={(event) => {
+                  const tabs: PreviewTab[] = ['rendered', 'raw', 'metadata'];
+                  const index = tabs.indexOf(tab);
+                  const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+                    : event.key === 'ArrowRight' ? (index + 1) % tabs.length
+                      : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : null;
+                  if (next === null) return;
+                  event.preventDefault();
+                  setPreviewTab(tabs[next]!);
+                  document.getElementById(`${previewId}-${tabs[next]}`)?.focus();
+                }}
               >
                 {label}
-              </button>
+              </Button>
             ))}
           </div>
 
+          <div role="tabpanel" id={`${previewId}-panel`} aria-labelledby={`${previewId}-${previewTab}`} tabIndex={0}>
           {previewTab === 'rendered' ? (
             <div
               className="min-w-0 break-words text-sm leading-7 text-slate-700 dark:text-slate-300 [&_a]:break-words [&_a]:text-mm-accent [&_a]:underline [&_:not(pre)_>_code]:break-words [&_:not(pre)_>_code]:rounded [&_:not(pre)_>_code]:bg-slate-100 [&_:not(pre)_>_code]:px-1.5 [&_:not(pre)_>_code]:py-0.5 [&_:not(pre)_>_code]:font-mono [&_:not(pre)_>_code]:text-xs [&_:not(pre)_>_code]:text-slate-900 dark:[&_:not(pre)_>_code]:bg-slate-900 dark:[&_:not(pre)_>_code]:text-slate-100"
@@ -653,6 +669,7 @@ function SkillDetail({
               </div>
             </dl>
           )}
+          </div>
         </div>
       ) : skillsQuery.isLoading ? (
         <LoadingPlaceholder
@@ -942,14 +959,13 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
       >
         <header className="flex items-center justify-between gap-3">
           <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Create Skill</h3>
-          <button
+          <Button variant="secondary"
             type="button"
-            className="secondary"
             onClick={closeDrawer}
             aria-label="Close create skill"
           >
             <span aria-hidden="true">×</span>
-          </button>
+          </Button>
         </header>
 
         <form
@@ -976,19 +992,18 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
             />
           </label>
           <div className="actions">
-            <button type="submit" className="queue-submit-primary" disabled={createMutation.isPending}>
+            <Button variant="primary" type="submit" className="queue-submit-primary" disabled={createMutation.isPending}>
               {createMutation.isPending ? 'Saving...' : 'Save Skill'}
-            </button>
-            <button
+            </Button>
+            <Button variant="secondary"
               type="button"
-              className="secondary"
               onClick={() => setShowCreatePreview((value) => !value)}
             >
               {showCreatePreview ? 'Hide Preview' : 'Show Preview'}
-            </button>
-            <button type="button" className="secondary" onClick={closeDrawer}>
+            </Button>
+            <Button variant="ghost" type="button" onClick={closeDrawer}>
               Cancel
-            </button>
+            </Button>
           </div>
           {showCreatePreview ? (
             <div className="mt-4 rounded-lg border border-mm-border/80 p-3">
@@ -1039,14 +1054,13 @@ export function SkillsPage({ payload }: { payload: BootPayload }) {
             {COLLISION_POLICIES.find((policy) => policy.value === collisionPolicy)?.description}
           </p>
           <div className="actions">
-            <button
+            <Button variant="secondary"
               type="button"
-              className="secondary"
               disabled={uploadMutation.isPending}
               onClick={() => uploadMutation.mutate()}
             >
               {uploadMutation.isPending ? 'Uploading...' : 'Upload Zip'}
-            </button>
+            </Button>
           </div>
         </details>
 

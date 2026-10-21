@@ -6,7 +6,6 @@
 /* Keep the dashboard's own base styles: intentionally do not import Preflight. */
 /* Utilities stay unlayered alongside the existing dashboard rules so specific
  * utility classes continue to override generic element defaults. */
-@custom-variant hover (&:hover);
 
 :root {
   color-scheme: light;
@@ -23,9 +22,9 @@
   --mm-warn: 245 158 11;
   --mm-status-waiting: 146 64 14;
   --mm-status-queued: 124 58 237;
-  --mm-status-setup: 37 99 235;
+  --mm-status-setup: 29 78 190;
   --mm-danger: 244 63 94;
-  --mm-action-primary: 21 147 118;
+  --mm-action-primary: var(--mm-button-primary);
   --mm-shadow: 0 18px 32px -26px rgb(10 8 30 / 0.55);
   /* Highlight-edge treatment, liquid-glass style. The edge light is a masked
    * gradient ring (--mm-highlight-edge-ring, applied via pseudo-element):
@@ -66,10 +65,9 @@
     inset 0 -1px 0 rgb(255 255 255 / 0.08),
     0 24px 70px -28px rgb(0 0 0 / 0.58),
     0 0 0 1px rgb(0 0 0 / 0.18);
-  --mm-control-hover-scale: 1.018;
-  --mm-control-press-scale: 0.988;
-  --mm-control-transition: transform 150ms cubic-bezier(.2,.8,.2,1), box-shadow 150ms ease, border-color 150ms ease, background 150ms ease, filter 150ms ease;
-  --mm-control-focus-ring: 0 0 0 2px rgb(var(--mm-accent-2) / 0.82), 0 0 0 4px rgb(var(--mm-accent-2) / 0.18);
+  --mm-control-hover-scale: 1;
+  --mm-control-press-scale: 1;
+  --mm-control-transition: background-color 120ms ease, border-color 120ms ease;
   --mm-control-disabled-opacity: 0.48;
   --mm-control-shell: rgb(var(--mm-panel) / 0.78);
   --mm-control-shell-hover: rgb(var(--mm-accent) / 0.12);
@@ -108,10 +106,6 @@
   --mm-executing-border-glint-outset: 1px;
   --mm-executing-border-glint-width: 3px;
   --mm-executing-border-glint-opacity: 0.95;
-  --mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration);
-  --mm-executing-letter-sweep-start-ratio: 0.2;
-  --mm-executing-letter-sweep-travel-ratio: 0.18;
-  --mm-executing-letter-sweep-direction: 1;
   --workflow-list-header-row-height: 2.75rem;
   --workflow-list-body-row-height: 4rem;
   --workflow-list-compact-body-row-height: 3rem;
@@ -126,6 +120,15 @@
   --mm-collection-workspace-block-size: 100dvh;
   --mm-font-headline: var(--mm-font-sans);
   --mm-font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --mm-button-primary: 112 48 220;
+  --mm-button-danger: 166 23 48;
+  --mm-focus: 83 27 167;
+  --mm-selected-fill: 237 228 252;
+  --mm-selected-text: 79 25 145;
+  --mm-status-running: 8 94 112;
+  --mm-status-ok: 20 100 53;
+  --mm-status-danger: 153 27 53;
+  --mm-status-warning: 133 65 10;
 }
 
 .dark {
@@ -143,9 +146,9 @@
   --mm-warn: 251 191 36;
   --mm-status-waiting: 250 204 21;
   --mm-status-queued: 167 139 250;
-  --mm-status-setup: 96 165 250;
+  --mm-status-setup: 147 197 253;
   --mm-danger: 251 113 133;
-  --mm-action-primary: 26 153 123;
+  --mm-action-primary: var(--mm-button-primary);
   --mm-shadow: 0 24px 52px -34px rgb(0 0 0 / 0.88);
   --mm-atmosphere-violet: radial-gradient(circle at 12% -6%, rgb(var(--mm-accent) / 0.36), transparent 46%);
   --mm-atmosphere-cyan: radial-gradient(circle at 95% -8%, rgb(var(--mm-accent-2) / 0.22), transparent 44%);
@@ -171,6 +174,13 @@
   --mm-mobile-nav-active-start: rgb(var(--mm-accent) / 0.34);
   --mm-mobile-nav-active-end: rgb(var(--mm-accent) / 0.12);
   --mm-mobile-nav-active-edge: rgb(var(--mm-accent) / 0.95);
+  --mm-focus: 196 181 253;
+  --mm-selected-fill: 58 36 87;
+  --mm-selected-text: 221 204 255;
+  --mm-status-running: 125 249 255;
+  --mm-status-ok: 134 239 172;
+  --mm-status-danger: 253 164 175;
+  --mm-status-warning: 253 224 135;
 }
 
 * {
@@ -210,7 +220,7 @@ samp {
    the default scroll attachment there; the atmosphere stays visually intact. */
 @media (max-width: 767px), (hover: none) and (pointer: coarse) {
   body,
-  .dark body {
+.dark body {
     background-attachment: scroll;
   }
 }
@@ -330,7 +340,14 @@ samp {
   text-decoration: none;
 }
 
-.masthead-brand:hover,
+@media (hover: hover){
+
+.masthead-brand:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  color: rgb(var(--mm-ink));
+  text-decoration: none;
+}
+}
+
 .masthead-brand:focus-visible {
   color: rgb(var(--mm-ink));
   text-decoration: none;
@@ -353,7 +370,7 @@ samp {
 }
 
 .masthead-brand-moon {
-  color: rgb(255 255 255);
+  color: rgb(var(--mm-ink));
 }
 
 .masthead-brand-mind {
@@ -438,7 +455,17 @@ samp {
   filter: none;
 }
 
-.workflow-list-display-option:hover,
+@media (hover: hover){
+
+.workflow-list-display-option:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border-color: rgb(var(--mm-accent-2) / 0.72);
+  background: rgb(var(--mm-accent-2) / 0.1);
+  color: rgb(var(--mm-ink));
+  transform: none;
+  filter: none;
+}
+}
+
 .workflow-list-display-option:focus-visible {
   border-color: rgb(var(--mm-accent-2) / 0.72);
   background: rgb(var(--mm-accent-2) / 0.1);
@@ -449,7 +476,6 @@ samp {
 
 .workflow-list-display-option:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 /* The sliding thumb on the control's ::before carries the selected fill and
@@ -459,10 +485,13 @@ samp {
   color: rgb(var(--mm-accent));
 }
 
-.workflow-list-display-option--selected:hover,
-.workflow-list-display-option[aria-checked="true"]:hover {
+@media (hover: hover){
+
+.workflow-list-display-option--selected:hover:where(:not(:disabled, [aria-disabled="true"])),
+.workflow-list-display-option[aria-checked="true"]:hover:where(:not(:disabled, [aria-disabled="true"])) {
   border-color: rgb(var(--mm-accent-2) / 0.72);
   background: rgb(var(--mm-accent-2) / 0.1);
+}
 }
 
 .workflow-list-display-option svg {
@@ -659,7 +688,14 @@ h1 {
   display: none;
 }
 
-.nav-hamburger:hover,
+@media (hover: hover){
+
+.nav-hamburger:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border-color: rgb(var(--mm-accent));
+  background: rgb(var(--mm-accent) / 0.14);
+}
+}
+
 .nav-hamburger[aria-expanded="true"] {
   border-color: rgb(var(--mm-accent));
   background: rgb(var(--mm-accent) / 0.14);
@@ -720,12 +756,14 @@ h1 {
   transition: var(--mm-control-transition), color 130ms ease;
 }
 
-/* Hovered nav buttons brighten, grow slightly, and swap the purple under-glow
+/* Hovered nav buttons brighten and swap the purple under-glow
  * for light blue — matching the System trigger's hover feel. */
-.route-nav-primary a:hover {
+@media (hover: hover){
+.route-nav-primary a:hover:where(:not(:disabled, [aria-disabled="true"])) {
   box-shadow: var(--mm-shadow-highlight-edge-hover);
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
+}
 }
 
 /* Diagonal liquid-glass edge: a 1px gradient ring drawn on a pseudo-element
@@ -768,9 +806,12 @@ h1 {
   transition: background 130ms ease;
 }
 
-.route-nav a:hover {
+@media (hover: hover){
+
+.route-nav a:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
+}
 }
 
 .route-nav a.active {
@@ -782,13 +823,15 @@ h1 {
   background: rgb(var(--mm-accent));
 }
 
-.route-nav a.active:hover {
+@media (hover: hover){
+
+.route-nav a.active:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgb(var(--mm-ink) / 0.06);
+}
 }
 
 .route-nav a:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .dashboard-system-menu {
@@ -816,10 +859,14 @@ h1 {
   cursor: pointer;
 }
 
-/* The open and hover states share the highlighted surface and cyan under-glow.
- * Stating box-shadow here also keeps the global button:hover rule (ring + wide
- * purple glow, for filled CTAs) from leaking onto the trigger. */
-.dashboard-system-trigger:hover,
+/* The System popover keeps a lit surface while open; keyboard focus uses the shared outline. */
+@media (hover: hover){
+.dashboard-system-trigger:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(var(--mm-ink) / 0.06);
+  color: rgb(var(--mm-ink));
+  box-shadow: var(--mm-shadow-highlight-edge-hover);
+}
+}
 .dashboard-system-trigger[aria-expanded="true"] {
   background: rgb(var(--mm-ink) / 0.06);
   color: rgb(var(--mm-ink));
@@ -827,9 +874,11 @@ h1 {
 }
 
 /* Keep hover-only motion and brightening out of the persistent open state. */
-.dashboard-system-trigger:hover {
+@media (hover: hover){
+.dashboard-system-trigger:hover:where(:not(:disabled, [aria-disabled="true"])) {
   transform: scale(var(--mm-control-hover-scale));
   filter: brightness(1.08) saturate(1.04);
+}
 }
 
 .dashboard-system-trigger.active {
@@ -850,7 +899,6 @@ h1 {
 .dashboard-system-trigger:focus-visible,
 .dashboard-system-popover a:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .dashboard-system-popover {
@@ -933,7 +981,7 @@ h1 {
  * users without a distinct focus indicator. Combine both here so the focused
  * active row keeps its selected-row accent and regains the focus ring. */
 .dashboard-system-popover a.active:focus-visible {
-  box-shadow: var(--mm-control-focus-ring), inset 3px 0 0 rgb(var(--mm-accent));
+  box-shadow: inset 3px 0 0 rgb(var(--mm-accent));
 }
 
 .dashboard-system-inline {
@@ -1075,7 +1123,8 @@ h1 {
 .evidence-collection__filter { display: grid; gap: 0.35rem; max-width: 28rem; }
 .evidence-collection__table-wrap { overflow-x: auto; }
 .evidence-collection table { border-collapse: collapse; width: 100%; }
-.evidence-collection th, .evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.evidence-collection th,
+.evidence-collection td { border-bottom: 1px solid rgb(var(--mm-border) / 0.65); padding: 0.7rem; text-align: left; vertical-align: top; overflow-wrap: break-word; }
 .evidence-collection th { white-space: nowrap; }
 .evidence-collection td small { display: block; margin-top: 0.25rem; }
 .evidence-collection td a + a { margin-left: 0.75rem; }
@@ -1183,7 +1232,9 @@ h1 {
   box-shadow: none;
 }
 
-.table-sort-button:hover {
+@media (hover: hover){
+
+.table-sort-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -1191,10 +1242,10 @@ h1 {
   transform: none;
   filter: none;
 }
+}
 
 .table-sort-button:focus-visible,
-.table-sort-button:active,
-.table-sort-button.is-clicked {
+.table-sort-button:active {
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -1202,7 +1253,6 @@ h1 {
   transform: none;
   filter: none;
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .workflow-list-header-cell {
@@ -1363,7 +1413,16 @@ h1 {
   transform: none;
 }
 
-.workflow-list-filter-section .workflow-list-filter-control:hover,
+@media (hover: hover){
+
+.workflow-list-filter-section .workflow-list-filter-control:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+}
+
 .workflow-list-filter-section .workflow-list-filter-control:focus-within {
   border: 0;
   background: transparent;
@@ -1455,17 +1514,17 @@ h1 {
   cursor: pointer;
 }
 
-.workflow-list-column-filter-button:hover,
-.workflow-list-column-filter-button:focus-visible,
-.workflow-list-column-filter-button[aria-expanded="true"],
-.workflow-list-column-filter-button.is-active {
+.workflow-list-column-filter-button[aria-expanded="true"] {
   border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
+  background: rgb(var(--mm-accent) / 0.10);
+  color: rgb(var(--mm-ink));
   transform: none;
   filter: none;
 }
+
+@media (hover: hover) {.workflow-list-column-filter-button:hover:where(:not([aria-expanded="true"], .is-active)) { background: rgb(var(--mm-ink) / 0.05); }}
+
+.workflow-list-column-filter-button.is-active { border-color: rgb(var(--mm-selected-text)); background: rgb(var(--mm-selected-fill)); color: rgb(var(--mm-selected-text)); }
 
 .workflow-list-column-filter-icon {
   display: block;
@@ -1507,8 +1566,20 @@ h1 {
  * dropdown edges, so reset it to a flat container — matching the drawer's
  * `.workflow-list-filter-section .workflow-list-filter-control` treatment.
  */
+@media (hover: hover){
+.workflow-list-column-filter-popover .workflow-list-filter-control:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  display: grid;
+  gap: 0.65rem;
+  align-items: stretch;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+}
 .workflow-list-column-filter-popover .workflow-list-filter-control,
-.workflow-list-column-filter-popover .workflow-list-filter-control:hover,
 .workflow-list-column-filter-popover .workflow-list-filter-control:focus-within {
   display: grid;
   gap: 0.65rem;
@@ -1593,7 +1664,13 @@ h1 {
   line-height: 1;
 }
 
-.workflow-list-pill-remove:hover:not(:disabled),
+@media (hover: hover){
+
+.workflow-list-pill-remove:hover:where(:not(:disabled, [aria-disabled="true"])):not(:disabled) {
+  background: rgb(var(--mm-accent) / 0.35);
+}
+}
+
 .workflow-list-pill-remove:focus-visible {
   background: rgb(var(--mm-accent) / 0.35);
 }
@@ -1707,11 +1784,11 @@ h1 {
 
 @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
   .surface--glass-control,
-  .panel--controls,
-  .panel--floating,
-  .panel--utility,
-  .surface--liquidgl-hero,
-  .queue-floating-bar {
+.panel--controls,
+.panel--floating,
+.panel--utility,
+.surface--liquidgl-hero,
+.queue-floating-bar {
     background: rgb(var(--mm-panel) / 0.94);
     border-color: rgb(var(--mm-border) / 0.84);
   }
@@ -1991,7 +2068,14 @@ h1 {
   border-bottom: 2px solid transparent;
 }
 
-.entity-detail-frame__tabs a:hover,
+@media (hover: hover){
+
+.entity-detail-frame__tabs a:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  color: rgb(var(--mm-ink));
+  border-bottom-color: currentColor;
+}
+}
+
 .entity-detail-frame__tabs a:focus-visible {
   color: rgb(var(--mm-ink));
   border-bottom-color: currentColor;
@@ -2084,8 +2168,11 @@ h1 {
   text-decoration: none;
 }
 
-.schedules-detail-page .page-meta a:hover {
+@media (hover: hover){
+
+.schedules-detail-page .page-meta a:hover:where(:not(:disabled, [aria-disabled="true"])) {
   text-decoration: underline;
+}
 }
 
 .schedules-detail-grid {
@@ -2241,9 +2328,12 @@ h1 {
   text-decoration: none;
 }
 
-.schedules-primary-cell a:hover {
+@media (hover: hover){
+
+.schedules-primary-cell a:hover:where(:not(:disabled, [aria-disabled="true"])) {
   color: rgb(var(--mm-accent));
   text-decoration: underline;
+}
 }
 
 .schedules-primary-cell span,
@@ -2268,7 +2358,8 @@ h1 {
   justify-content: flex-end;
 }
 
-.schedules-row-actions .secondary {
+.schedules-row-actions .mm-button,
+.schedules-row-actions .td-workflow-actions-trigger {
   padding: 0.2rem 0.55rem;
   font-size: 0.78rem;
   white-space: nowrap;
@@ -2333,8 +2424,11 @@ h1 {
   text-decoration: none;
 }
 
-.schedules-detail-title a:hover {
+@media (hover: hover){
+
+.schedules-detail-title a:hover:where(:not(:disabled, [aria-disabled="true"])) {
   text-decoration: underline;
+}
 }
 
 .schedules-detail-grid {
@@ -2472,18 +2566,18 @@ h1 {
   box-shadow: inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.workflow-list-filter-trigger:hover,
-.workflow-list-filter-trigger:focus-visible,
-.workflow-list-filter-trigger[aria-expanded="true"],
-.workflow-list-filter-trigger.is-active {
-  background: var(--mm-control-shell-hover);
+.workflow-list-filter-trigger[aria-expanded="true"] {
+  background: rgb(var(--mm-accent) / 0.10);
   background-image: none;
   border-color: rgb(var(--mm-accent) / 0.7);
   color: rgb(var(--mm-ink));
-  box-shadow: var(--mm-control-focus-ring);
   transform: none;
   filter: none;
 }
+
+@media (hover: hover) {.workflow-list-filter-trigger:hover:where(:not([aria-expanded="true"], .is-active)) { background: rgb(var(--mm-ink) / 0.05); }}
+
+.workflow-list-filter-trigger.is-active { border-color: rgb(var(--mm-selected-text)); background: rgb(var(--mm-selected-fill)); color: rgb(var(--mm-selected-text)); }
 
 .workflow-list-filter-trigger-icon {
   display: block;
@@ -2563,9 +2657,22 @@ h1 {
   font-weight: 700;
 }
 
-.workflow-list-filter-chip:has(.workflow-list-filter-chip-open:hover),
+@media (hover: hover){
+
+.workflow-list-filter-chip:has(.workflow-list-filter-chip-open:hover:where(:not(:disabled, [aria-disabled="true"]))),
+.workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"]))) {
+  border-color: rgb(var(--mm-accent) / 0.7);
+  background: rgb(var(--mm-accent) / 0.08);
+  color: rgb(var(--mm-ink));
+  transform: translateY(-1px);
+  filter: none;
+  box-shadow:
+    0 0 0 2px rgb(var(--mm-accent) / 0.16),
+    inset 0 1px 0 var(--mm-glass-edge);
+}
+}
+
 .workflow-list-filter-chip:has(.workflow-list-filter-chip-open:focus-visible),
-.workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:hover),
 .workflow-list-filter-chip:has(.workflow-list-filter-chip-remove:focus-visible) {
   border-color: rgb(var(--mm-accent) / 0.7);
   background: rgb(var(--mm-accent) / 0.08);
@@ -2577,7 +2684,15 @@ h1 {
     inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.workflow-list-filter-chip-remove:hover,
+@media (hover: hover){
+
+.workflow-list-filter-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(var(--mm-accent) / 0.14);
+  color: rgb(var(--mm-accent));
+  outline: none;
+}
+}
+
 .workflow-list-filter-chip-remove:focus-visible {
   background: rgb(var(--mm-accent) / 0.14);
   color: rgb(var(--mm-accent));
@@ -2620,8 +2735,11 @@ tbody tr:nth-child(2n) {
   background: rgb(var(--mm-panel) / 0.76);
 }
 
-tbody tr:hover {
+@media (hover: hover){
+
+tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgb(var(--mm-accent) / 0.08);
+}
 }
 
 .dark table {
@@ -2638,8 +2756,11 @@ tbody tr:hover {
   background: rgb(var(--mm-panel) / 0.76);
 }
 
-.dark tbody tr:hover {
+@media (hover: hover){
+
+.dark tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgb(var(--mm-accent) / 0.18);
+}
 }
 
 .dark .workflow-list-data-slab tbody tr:nth-child(2n):not(:hover),
@@ -3005,16 +3126,15 @@ tbody tr:hover {
   cursor: pointer;
 }
 
-.workflow-list-view-options-trigger--icon:hover,
-.workflow-list-view-options-trigger--icon:focus-visible,
 .workflow-list-view-options-trigger--icon[aria-expanded="true"] {
   border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
+  background: rgb(var(--mm-accent) / 0.10);
+  color: rgb(var(--mm-ink));
   transform: none;
   filter: none;
 }
+
+@media (hover: hover) {.workflow-list-view-options-trigger--icon:hover:where(:not([aria-expanded="true"], .is-active)) { background: rgb(var(--mm-ink) / 0.05); }}
 
 .workflow-list-view-options-icon {
   display: block;
@@ -3046,17 +3166,17 @@ tbody tr:hover {
   cursor: pointer;
 }
 
-.workflow-list-advanced-filters-trigger:hover,
-.workflow-list-advanced-filters-trigger:focus-visible,
-.workflow-list-advanced-filters-trigger[aria-expanded="true"],
-.workflow-list-advanced-filters-trigger.is-active {
+.workflow-list-advanced-filters-trigger[aria-expanded="true"] {
   border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
+  background: rgb(var(--mm-accent) / 0.10);
+  color: rgb(var(--mm-ink));
   transform: none;
   filter: none;
 }
+
+@media (hover: hover) {.workflow-list-advanced-filters-trigger:hover:where(:not([aria-expanded="true"], .is-active)) { background: rgb(var(--mm-ink) / 0.05); }}
+
+.workflow-list-advanced-filters-trigger.is-active { border-color: rgb(var(--mm-selected-text)); background: rgb(var(--mm-selected-fill)); color: rgb(var(--mm-selected-text)); }
 
 .workflow-list-advanced-filters-icon {
   display: block;
@@ -3131,8 +3251,11 @@ tbody tr:hover {
   -webkit-line-clamp: 2;
 }
 
-.workflow-list-row-title:hover {
+@media (hover: hover){
+
+.workflow-list-row-title:hover:where(:not(:disabled, [aria-disabled="true"])) {
   text-decoration: underline;
+}
 }
 
 .workflow-list-status-supplement {
@@ -3298,8 +3421,14 @@ tbody tr:hover {
     overflow: hidden;
   }
 
-  .stacked-records tbody tr:nth-child(2n),
-  .stacked-records tbody tr:hover {
+  @media (hover: hover){
+
+  .stacked-records tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: rgb(var(--mm-panel) / 0.78);
+  }
+  }
+
+  .stacked-records tbody tr:nth-child(2n) {
     background: rgb(var(--mm-panel) / 0.78);
   }
 
@@ -3346,7 +3475,7 @@ tbody tr:hover {
   }
 
   .stacked-records td .flex.flex-wrap,
-  .stacked-records td [class*="flex"] {
+.stacked-records td [class*="flex"] {
     flex-wrap: wrap;
     min-width: 0;
     max-width: 100%;
@@ -3422,8 +3551,11 @@ tbody tr:hover {
   overflow-wrap: break-word;
 }
 
-.queue-card-title:hover {
+@media (hover: hover){
+
+.queue-card-title:hover:where(:not(:disabled, [aria-disabled="true"])) {
   text-decoration: underline;
+}
 }
 
 .queue-card-meta {
@@ -3485,7 +3617,7 @@ tbody tr:hover {
   flex-wrap: wrap;
 }
 
-.queue-card-actions .button {
+.queue-card-actions .mm-button {
   flex: 0 0 auto;
   text-align: center;
 }
@@ -3532,7 +3664,7 @@ tbody tr:hover {
   }
 
   .queue-results-toolbar,
-  .queue-pagination {
+.queue-pagination {
     align-items: stretch;
     margin-left: 0;
     width: 100%;
@@ -3661,7 +3793,7 @@ tbody tr:hover {
 
 .status-running,
 .status-running.is-executing {
-  color: rgb(var(--mm-accent-2));
+  color: rgb(var(--mm-status-running));
   background: rgb(var(--mm-accent-2) / 0.14);
   border-color: rgb(var(--mm-accent-2) / 0.55);
 }
@@ -3696,13 +3828,13 @@ tbody tr:hover {
 
 .status-succeeded,
 .status-completed {
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-status-ok));
   background: rgb(var(--mm-ok) / 0.14);
   border-color: rgb(var(--mm-ok) / 0.55);
 }
 
 .status-failed {
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-status-danger));
   background: rgb(var(--mm-danger) / 0.14);
   border-color: rgb(var(--mm-danger) / 0.55);
 }
@@ -3726,10 +3858,6 @@ tbody tr:hover {
      Change only with an operator-reviewed visual baseline update. */
   --mm-status-shimmer-halo: rgb(var(--mm-accent) / var(--mm-executing-sweep-halo-opacity));
   --mm-status-shimmer-core: rgb(var(--mm-accent-2) / var(--mm-executing-sweep-core-opacity));
-  --mm-status-shimmer-letter-halo: color-mix(in srgb, currentColor 32%, transparent);
-  --mm-status-shimmer-letter-bright: color-mix(in srgb, currentColor 68%, white 32%);
-  --mm-executing-letter-halo: var(--mm-status-shimmer-letter-halo);
-  --mm-executing-letter-bright: var(--mm-status-shimmer-letter-bright);
   /* The gradient must be declared where its shimmer color inputs are defined:
      a custom property that references vars only defined on descendants resolves
      to the guaranteed-invalid value at computed-value time, so consuming layers
@@ -3780,7 +3908,7 @@ tbody tr:hover {
 .status[data-effect="shimmer-sweep"]::before,
 .status-running.is-executing::before {
   z-index: 1;
-  opacity: 0.62;
+  opacity: 0.3;
 }
 
 .status[data-effect="shimmer-sweep"]::after,
@@ -3802,9 +3930,9 @@ tbody tr:hover {
 
 @supports not (mix-blend-mode: plus-lighter) {
   .status[data-effect="shimmer-sweep"]::before,
-  .status-running.is-executing::before,
-  .status[data-effect="shimmer-sweep"]::after,
-  .status-running.is-executing::after {
+.status-running.is-executing::before,
+.status[data-effect="shimmer-sweep"]::after,
+.status-running.is-executing::after {
     mix-blend-mode: screen;
   }
 }
@@ -3829,7 +3957,7 @@ tbody tr:hover {
   }
 }
 
-.status-letter-wave {
+.status-label {
   position: relative;
   z-index: 3;
   display: inline-flex;
@@ -3838,105 +3966,16 @@ tbody tr:hover {
   white-space: pre;
 }
 
-.status[data-effect="shimmer-sweep"] .status-letter-wave,
-.status-running.is-executing .status-letter-wave {
+.status[data-effect="shimmer-sweep"] .status-label,
+.status-running.is-executing .status-label {
   color: inherit;
-}
-
-.status[data-effect="shimmer-sweep"] .status-letter-wave::after,
-.status-running.is-executing .status-letter-wave::after {
-  content: attr(data-label);
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: var(--mm-status-moving-light-gradient);
-  background-repeat: no-repeat;
-  background-size:
-    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-halo-width-multiplier)) var(--mm-executing-sweep-band-height),
-    calc(var(--mm-executing-sweep-band-width) * var(--mm-executing-sweep-core-width-multiplier)) var(--mm-executing-sweep-band-height);
-  background-position:
-    var(--mm-executing-sweep-start-x) var(--mm-executing-sweep-start-y),
-    calc(var(--mm-executing-sweep-start-x) + var(--mm-executing-sweep-layer-offset-x)) calc(var(--mm-executing-sweep-start-y) + var(--mm-executing-sweep-layer-offset-y));
-  animation: mm-status-pill-shimmer var(--mm-executing-sweep-cycle-duration) linear infinite;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  filter: brightness(1.35);
-  mix-blend-mode: plus-lighter;
-}
-
-@supports not ((background-clip: text) or (-webkit-background-clip: text)) {
-  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after {
-    content: none;
-  }
-
-  .status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
-  .status-running.is-executing .status-letter-wave__glyph {
-    animation-name: mm-executing-letter-brighten;
-    animation-duration: var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms));
-    animation-timing-function: linear;
-    animation-iteration-count: infinite;
-    animation-delay: calc(
-      var(--mm-executing-letter-cycle-duration, var(--mm-executing-sweep-cycle-duration, 2200ms)) *
-      (var(--mm-letter-phase) - 0.22)
-    );
-  }
-}
-
-.status-letter-wave__glyph {
-  --mm-letter-phase: calc(
-    var(--mm-executing-letter-sweep-start-ratio) +
-    (
-      (
-        (
-          var(--mm-letter-index) * var(--mm-executing-letter-sweep-direction)
-        ) +
-        (
-          (var(--mm-letter-count) - 1 - var(--mm-letter-index)) *
-          (1 - var(--mm-executing-letter-sweep-direction))
-        )
-      ) /
-      max(var(--mm-letter-count) - 1, 1)
-    ) *
-    var(--mm-executing-letter-sweep-travel-ratio)
-  );
-  display: inline-block;
-  color: inherit;
-}
-
-.status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
-.status-running.is-executing .status-letter-wave__glyph {
-  animation: none;
-}
-
-@keyframes mm-executing-letter-brighten {
-  0%,
-  18%,
-  45%,
-  100% {
-    color: inherit;
-    text-shadow: none;
-    filter: brightness(1);
-  }
-
-  22% {
-    color: var(--mm-executing-letter-bright);
-    text-shadow: 0 0 10px var(--mm-executing-letter-halo);
-    filter: brightness(1.18);
-  }
-
-  27% {
-    color: color-mix(in srgb, var(--mm-executing-letter-bright) 72%, currentColor 28%);
-    text-shadow: 0 0 6px var(--mm-executing-letter-halo);
-    filter: brightness(1.08);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status[data-effect="shimmer-sweep"],
-  .status-running.is-executing {
+  .status[data-effect="shimmer-sweep"]::before,
+.status-running.is-executing::before,
+.status[data-effect="shimmer-sweep"]::after,
+.status-running.is-executing::after {
     background-image: var(--mm-status-moving-light-gradient);
     background-repeat: no-repeat;
     background-position:
@@ -3946,51 +3985,31 @@ tbody tr:hover {
   }
 
   .status[data-effect="shimmer-sweep"]::before,
-  .status-running.is-executing::before,
-  .status[data-effect="shimmer-sweep"]::after,
-  .status-running.is-executing::after,
-  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after {
+.status-running.is-executing::before,
+.status[data-effect="shimmer-sweep"]::after,
+.status-running.is-executing::after {
     animation: none;
   }
 
-  .status-letter-wave__glyph {
-    animation: none !important;
-    text-shadow: none !important;
-    filter: none !important;
-  }
-
-  .status[data-effect="shimmer-sweep"] .status-letter-wave,
-  .status-running.is-executing .status-letter-wave {
+  .status[data-effect="shimmer-sweep"] .status-label,
+.status-running.is-executing .status-label {
     text-shadow: none;
-  }
-
-  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after {
-    content: none;
   }
 }
 
 @media (forced-colors: active) {
-  .status[data-effect="shimmer-sweep"] .status-letter-wave,
-  .status-running.is-executing .status-letter-wave {
+  .status[data-effect="shimmer-sweep"] .status-label,
+.status-running.is-executing .status-label {
     color: ButtonText;
     background-image: none;
   }
 
   .status[data-effect="shimmer-sweep"]::before,
-  .status-running.is-executing::before,
-  .status[data-effect="shimmer-sweep"]::after,
-  .status-running.is-executing::after,
-  .status[data-effect="shimmer-sweep"] .status-letter-wave::after,
-  .status-running.is-executing .status-letter-wave::after {
+.status-running.is-executing::before,
+.status[data-effect="shimmer-sweep"]::after,
+.status-running.is-executing::after {
     animation: none;
     content: none;
-  }
-
-  .status[data-effect="shimmer-sweep"] .status-letter-wave__glyph,
-  .status-running.is-executing .status-letter-wave__glyph {
-    animation: none;
   }
 }
 
@@ -4007,12 +4026,12 @@ tbody tr:hover {
 .notice.error {
   border-color: rgb(var(--mm-danger) / 0.5);
   background: rgb(var(--mm-danger) / 0.08);
-  color: rgb(var(--mm-danger));
+  color: rgb(var(--mm-status-danger));
 }
 
 @media (max-width: 1180px) {
   .schedules-table-panel .data-table [data-column-key="policy"],
-  .schedules-table-panel .data-table [data-column-key="updatedAt"] {
+.schedules-table-panel .data-table [data-column-key="updatedAt"] {
     display: none;
   }
 }
@@ -4065,7 +4084,14 @@ tbody tr:hover {
     text-decoration: none;
   }
 
-  .schedules-mobile-card-link:hover,
+  @media (hover: hover){
+
+  .schedules-mobile-card-link:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    color: rgb(var(--mm-accent));
+    text-decoration: underline;
+  }
+  }
+
   .schedules-mobile-card-link:focus-visible {
     color: rgb(var(--mm-accent));
     text-decoration: underline;
@@ -4116,13 +4142,13 @@ tbody tr:hover {
 .notice.ok {
   border-color: rgb(var(--mm-ok) / 0.5);
   background: rgb(var(--mm-ok) / 0.08);
-  color: rgb(var(--mm-ok));
+  color: rgb(var(--mm-status-ok));
 }
 
 .notice.pending {
   border-color: rgb(var(--mm-warn) / 0.5);
   background: rgb(var(--mm-warn) / 0.1);
-  color: rgb(var(--mm-warn));
+  color: rgb(var(--mm-status-warning));
 }
 
 .dashboard-dialog-backdrop {
@@ -4243,10 +4269,6 @@ tbody tr:hover {
   gap: 0.55rem;
 }
 
-.dashboard-dialog-danger {
-  background: rgb(var(--mm-danger));
-}
-
 .schedule-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4269,7 +4291,15 @@ tbody tr:hover {
   box-shadow: 0 18px 44px -34px rgb(var(--mm-ink) / 0.5);
 }
 
-.schedule-summary-tile:hover,
+@media (hover: hover){
+
+.schedule-summary-tile:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border-color: rgb(var(--mm-accent) / 0.58);
+  background: rgb(var(--mm-accent) / 0.08);
+  transform: none;
+}
+}
+
 .schedule-summary-tile:focus-visible,
 .schedule-summary-tile.active {
   border-color: rgb(var(--mm-accent) / 0.58);
@@ -4406,7 +4436,6 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
   border-color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
   outline: none;
 }
 
@@ -4427,13 +4456,12 @@ textarea::placeholder {
 .dark input:focus-visible,
 .dark select:focus-visible,
 .dark textarea:focus-visible {
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 @media (forced-colors: active) {
   input:focus,
-  select:focus,
-  textarea:focus {
+select:focus,
+textarea:focus {
     outline: 2px solid ButtonText;
     outline-offset: 2px;
   }
@@ -4442,206 +4470,6 @@ textarea::placeholder {
 textarea {
   min-height: 160px;
   resize: vertical;
-}
-
-button {
-  width: fit-content;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0.52rem 0.9rem;
-  font-weight: 700;
-  background: rgb(var(--mm-accent));
-  color: #fff;
-  cursor: pointer;
-  transition: var(--mm-control-transition);
-}
-
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)) {
-  border-color: rgb(255 255 255 / 0.52);
-  color: #fff;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
-}
-
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 0.82);
-  /* Filled CTAs keep their own hover shadow (ring + wide glow): the shared
-   * highlight-edge token is side-open by design, but a hovered solid button
-   * still wants its full outline pop. */
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26), 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-button:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)).is-clicked {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.4),
-    0 0 0 2px rgb(255 255 255 / 0.84),
-    0 0 16px 1px rgb(var(--mm-accent) / 0.82);
-  border-color: rgb(255 255 255 / 1);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.22) saturate(1.14);
-}
-
-button.secondary {
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-border));
-}
-
-button.secondary:hover {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
-  transform: scale(var(--mm-control-hover-scale));
-}
-
-button.workflow-list-filter-chip-open,
-button.workflow-list-filter-chip-remove,
-button.workflow-list-column-filter-button,
-button.workflow-list-view-options-trigger--icon,
-button.workflow-list-advanced-filters-trigger {
-  background-image: none;
-  transform: none;
-  filter: none;
-}
-
-button.workflow-list-column-filter-button {
-  width: 1.65rem;
-  border-color: transparent;
-  background: transparent;
-  color: rgb(var(--mm-muted));
-  box-shadow: none;
-}
-
-button.workflow-list-column-filter-button:hover,
-button.workflow-list-column-filter-button:focus-visible,
-button.workflow-list-column-filter-button[aria-expanded="true"],
-button.workflow-list-column-filter-button.is-active {
-  border-color: rgb(var(--mm-accent) / 0.55);
-  background: rgb(var(--mm-accent) / 0.1);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
-}
-
-.button {
-  display: inline-block;
-  text-decoration: none;
-  width: fit-content;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0.52rem 0.9rem;
-  font-weight: 700;
-  background: rgb(var(--mm-accent));
-  color: #fff;
-  cursor: pointer;
-  transition: var(--mm-control-transition);
-}
-
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)) {
-  border-color: rgb(255 255 255 / 0.52);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 12px 24px -16px rgb(var(--mm-accent) / 0.82);
-}
-
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):hover {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 0.82);
-  /* Filled CTAs keep their own hover shadow (ring + wide glow): the shared
-   * highlight-edge token is side-open by design, but a hovered solid button
-   * still wants its full outline pop. */
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.26), 0 0 0 1px rgb(255 255 255 / 0.34), 0 18px 32px -16px rgb(var(--mm-accent) / 0.94);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-.button:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):active,
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)).is-clicked {
-  background-image: linear-gradient(
-    160deg,
-    rgb(var(--mm-accent) / 1) 0%,
-    rgb(var(--mm-accent) / 0.98) 100%
-  );
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.4),
-    0 0 0 2px rgb(255 255 255 / 0.84),
-    0 0 16px 1px rgb(var(--mm-accent) / 0.82);
-  border-color: rgb(255 255 255 / 1);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.22) saturate(1.14);
-}
-
-.button.secondary {
-  background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-border));
-}
-
-.button.secondary:hover {
-  background: rgb(var(--mm-accent) / 0.08);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: 0 0 0 1px rgb(var(--mm-accent) / 0.22), 0 12px 24px -18px rgb(var(--mm-accent) / 0.55);
-  transform: scale(var(--mm-control-hover-scale));
-}
-
-button:disabled,
-button:disabled:hover,
-button.secondary:disabled,
-button.secondary:disabled:hover,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled,
-button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close)):disabled:hover,
-.button[aria-disabled="true"],
-.button[aria-disabled="true"]:hover,
-.button.secondary[aria-disabled="true"],
-.button.secondary[aria-disabled="true"]:hover,
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"],
-.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle, .skill-combobox-toggle, .attachment-thumbnail, .attachment-lightbox-close))[aria-disabled="true"]:hover {
-  cursor: not-allowed;
-  opacity: var(--mm-control-disabled-opacity);
-  transform: none;
-  filter: none;
-  box-shadow: none;
-}
-
-.queue-action,
-.queue-submit-primary {
-  --queue-action-color: var(--mm-action-primary);
-  background-color: rgb(var(--queue-action-color));
-  background-image: linear-gradient(
-    100deg,
-    color-mix(in srgb, rgb(var(--queue-action-color)) 72%, rgb(var(--mm-accent-2))) 0%,
-    rgb(var(--queue-action-color)) 58%,
-    color-mix(in srgb, rgb(var(--queue-action-color)) 88%, white) 100%
-  );
-  color: #fff;
-  font-weight: 400;
-  border: 1px solid rgb(255 255 255 / 0.58);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 12px 24px -14px rgb(var(--queue-action-color) / 0.84);
 }
 
 .queue-submit-primary--with-arrow {
@@ -4670,50 +4498,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.queue-action:hover,
-.queue-submit-primary:hover {
-  background-image: linear-gradient(
-    150deg,
-    rgb(var(--queue-action-color) / 1) 0%,
-    rgb(var(--queue-action-color) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 0.86);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.28),
-    0 0 0 1px rgb(255 255 255 / 0.36),
-    0 18px 34px -16px rgb(var(--queue-action-color) / 0.95);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-.queue-action:focus-visible,
-.queue-submit-primary:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
-}
-
-.queue-action:active,
-.queue-submit-primary:active,
-.queue-action.is-clicked,
-.queue-submit-primary.is-clicked {
-  background-image: linear-gradient(
-    150deg,
-    rgb(var(--queue-action-color) / 1) 0%,
-    rgb(var(--queue-action-color) / 0.98) 100%
-  );
-  border-color: rgb(255 255 255 / 1);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 0 0 2px rgb(255 255 255 / 0.84),
-    0 0 16px 1px rgb(var(--queue-action-color) / 0.82);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.22) saturate(1.14);
-}
-
-.queue-action-danger {
-  --queue-action-color: var(--mm-danger);
 }
 
 /* ── Step timeline ─────────────────────────────────────── */
@@ -4798,7 +4582,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 @keyframes step-pulse {
-  0%, 100% { opacity: 1; }
+  0%,
+100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
 
@@ -4832,12 +4617,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: background 0.15s;
 }
 
-.step-tl-toggle:hover,
+@media (hover: hover){
+
+.step-tl-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(var(--mm-ink) / 0.045);
+}
+}
+
 .step-tl-toggle:focus-visible {
   background: rgb(var(--mm-ink) / 0.045);
 }
 
-.dark .step-tl-toggle:hover,
+@media (hover: hover){
+
+.dark .step-tl-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(var(--mm-ink) / 0.07);
+}
+}
+
 .dark .step-tl-toggle:focus-visible {
   background: rgb(var(--mm-ink) / 0.07);
 }
@@ -5725,10 +5522,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .live-logs-artifact-link:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
-.live-logs-artifact-link:hover,
+@media (hover: hover){
+
+.live-logs-artifact-link:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(255 255 255 / 0.12);
+  border-color: rgb(255 255 255 / 0.28);
+}
+}
+
 .live-logs-artifact-link:focus-visible {
   background: rgb(255 255 255 / 0.12);
   border-color: rgb(255 255 255 / 0.28);
@@ -5838,7 +5641,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-context-menu-title {
   margin: 0.1rem 0.4rem 0.2rem;
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   font-size: 0.88rem;
   font-weight: 750;
 }
@@ -5867,12 +5670,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: none;
   border-radius: 7px;
   background: transparent;
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   font-size: 0.88rem;
   text-align: left;
 }
 
-.queue-step-context-menu-item:hover:not(:disabled),
+@media (hover: hover){
+
+.queue-step-context-menu-item:hover:where(:not(:disabled, [aria-disabled="true"])):not(:disabled) {
+  background: rgb(var(--mm-accent) / 0.12);
+}
+}
+
 .queue-step-context-menu-item:focus-visible:not(:disabled) {
   background: rgb(var(--mm-accent) / 0.12);
 }
@@ -5887,7 +5696,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-context-menu-capability-token {
   color: rgb(var(--mm-muted));
-  font-family: var(--mm-mono, ui-monospace, monospace);
+  font-family: var(--mm-font-mono, ui-monospace, monospace);
   font-size: 0.78rem;
 }
 
@@ -5935,9 +5744,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   cursor: pointer;
 }
 
-.queue-step-capability-chip-lock:hover,
+@media (hover: hover){
+
+.queue-step-capability-chip-lock:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  color: rgb(var(--mm-ink));
+  outline: none;
+}
+}
+
 .queue-step-capability-chip-lock:focus-visible {
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   outline: none;
 }
 
@@ -5951,7 +5767,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border));
   border-radius: 8px;
   background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.16);
   font-size: 0.78rem;
   line-height: 1.35;
@@ -5966,7 +5782,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border));
   border-radius: 8px;
   background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   font-size: 1.25rem;
   font-weight: 700;
   line-height: 1;
@@ -5975,10 +5791,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-attachment-add-button:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
-.queue-step-attachment-add-button:hover,
+@media (hover: hover){
+
+.queue-step-attachment-add-button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border-color: rgb(var(--mm-accent));
+  background: rgb(var(--mm-accent) / 0.12);
+}
+}
+
 .queue-step-attachment-add-button:focus-visible {
   border-color: rgb(var(--mm-accent));
   background: rgb(var(--mm-accent) / 0.12);
@@ -6034,7 +5856,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   cursor: pointer;
 }
 
-.queue-step-context-chip-action:hover,
+@media (hover: hover){
+
+.queue-step-context-chip-action:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  text-decoration: underline;
+}
+}
+
 .queue-step-context-chip-action:focus-visible {
   text-decoration: underline;
 }
@@ -6190,8 +6018,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 0;
 }
 
-.attachment-thumbnail:hover {
+@media (hover: hover){
+
+.attachment-thumbnail:hover:where(:not(:disabled, [aria-disabled="true"])) {
   border-color: rgb(var(--mm-accent));
+}
 }
 
 .attachment-thumbnail-image {
@@ -6253,7 +6084,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   text-decoration: none;
 }
 
-.attachment-lightbox-download:hover,
+@media (hover: hover){
+
+.attachment-lightbox-download:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  text-decoration: underline;
+}
+}
+
 .attachment-lightbox-download:focus-visible {
   text-decoration: underline;
 }
@@ -6277,8 +6114,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 1;
 }
 
-.attachment-lightbox-close:hover {
+@media (hover: hover){
+
+.attachment-lightbox-close:hover:where(:not(:disabled, [aria-disabled="true"])) {
   border-color: rgb(var(--mm-accent));
+}
 }
 
 /* MM-1138 Q3: one canonical segmented-control system with two intensity tiers.
@@ -6458,7 +6298,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: var(--mm-control-transition);
 }
 
-.segmented-control[data-intensity="quiet"] .segmented-control-item:hover,
+@media (hover: hover){
+
+.segmented-control[data-intensity="quiet"] .segmented-control-item:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  color: rgb(var(--mm-ink));
+}
+}
+
 .segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible,
 .segmented-control[data-intensity="quiet"] .segmented-control-item[aria-current="page"] {
   color: rgb(var(--mm-ink));
@@ -6466,11 +6312,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .segmented-control[data-intensity="quiet"] .segmented-control-item:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
-.segmented-control[data-intensity="loud"] .segmented-control-item:hover:not(:has(input:checked)) {
+@media (hover: hover){
+
+.segmented-control[data-intensity="loud"] .segmented-control-item:hover:where(:not(:disabled, [aria-disabled="true"])):not(:has(input:checked)) {
   color: rgb(var(--mm-accent));
+}
 }
 
 .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:checked) {
@@ -6480,7 +6328,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .segmented-control[data-intensity="loud"] .segmented-control-item:has(input:focus-visible) {
-  box-shadow: var(--mm-control-focus-ring);
   border-radius: 9px;
   z-index: 4;
 }
@@ -6602,11 +6449,21 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   -webkit-tap-highlight-color: transparent;
 }
 
-.skill-combobox-toggle:hover,
+@media (hover: hover){
+
+.skill-combobox-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: rgb(var(--mm-muted));
+  transform: none;
+  filter: none;
+}
+}
+
 .skill-combobox-toggle:focus,
 .skill-combobox-toggle:focus-visible,
-.skill-combobox-toggle:active,
-.skill-combobox-toggle.is-clicked {
+.skill-combobox-toggle:active {
   background: none;
   border-color: transparent;
   box-shadow: none;
@@ -6660,8 +6517,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   align-items: center;
 }
 
-.skill-combobox-option[data-highlighted="true"],
-.skill-combobox-option:hover {
+@media (hover: hover){
+
+.skill-combobox-option:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(var(--mm-accent) / 0.18);
+}
+}
+
+.skill-combobox-option[data-highlighted="true"] {
   background: rgb(var(--mm-accent) / 0.18);
 }
 
@@ -6695,28 +6558,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-height: 3rem;
   transition: var(--mm-control-transition);
   width: 100%;
-}
-
-.queue-step-extension-button:hover {
-  background-image: linear-gradient(
-    180deg,
-    rgb(var(--mm-panel) / 0.9) 0%,
-    rgb(var(--mm-accent) / 0.1) 100%
-  );
-  border-color: rgb(var(--mm-accent) / 0.72);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 10px 24px -20px rgb(var(--mm-accent) / 0.86);
-  color: rgb(var(--mm-ink));
-  transform: scale(var(--mm-control-hover-scale));
-}
-
-.queue-step-extension-button:active,
-.queue-step-extension-button.is-clicked {
-  background: rgb(var(--mm-accent) / 0.12);
-  border-color: rgb(var(--mm-accent));
-  box-shadow: inset 0 1px 2px rgb(var(--mm-ink) / 0.12);
-  transform: scale(var(--mm-control-press-scale));
 }
 
 .queue-step-extension-plus {
@@ -6907,12 +6748,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   flex: 0 0 auto;
   white-space: nowrap;
   border: 2px solid rgb(var(--mm-action-primary) / 0.85);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.22),
-    0 0 0 1px rgb(255 255 255 / 0.38),
-    0 0 12px 2px rgb(var(--mm-accent-2) / 0.26),
-    0 0 34px -4px rgb(var(--mm-accent-2) / 0.36),
-    0 12px 26px -16px rgb(var(--mm-action-primary) / 0.78);
   transition:
     box-shadow 240ms ease-out,
     border-color 240ms ease-out,
@@ -6957,35 +6792,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transform: scale(0.6);
 }
 
-.queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover
+@media (hover: hover){
+
+.queue-submit-primary--icon:not(.queue-submit-primary--arrow-exit):not(:disabled):not([aria-disabled="true"]):hover:where(:not(:disabled, [aria-disabled="true"]))
   .queue-submit-primary-arrow
   svg {
   animation: queue-submit-primary-arrow-cycle 460ms cubic-bezier(0.33, 0, 0.2, 1) both;
 }
-
-.queue-submit-primary--icon:hover {
-  border-color: rgb(var(--mm-action-primary));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.3),
-    0 0 0 1px rgb(255 255 255 / 0.5),
-    0 0 32px 2px rgb(var(--mm-accent-2) / 0.36),
-    0 0 62px -2px rgb(var(--mm-accent-2) / 0.24),
-    0 18px 40px -16px rgb(var(--mm-action-primary) / 0.88);
-}
-
-.queue-submit-primary--icon:focus-visible {
-  border-color: rgb(var(--mm-action-primary));
-}
-
-.queue-submit-primary--icon:active,
-.queue-submit-primary--icon.is-clicked {
-  border-color: rgb(var(--mm-action-primary));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.34),
-    0 0 0 1px rgb(255 255 255 / 0.54),
-    0 0 38px 3px rgb(var(--mm-accent-2) / 0.42),
-    0 0 72px -2px rgb(var(--mm-accent-2) / 0.28),
-    0 0 16px 1px rgb(var(--mm-action-primary) / 0.68);
 }
 
 .queue-submit-primary--icon.queue-submit-primary--arrow-exit
@@ -7046,53 +6859,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 }
 
-.queue-submit-primary-ripple {
-  position: absolute;
-  inset: -1.35rem;
-  border-radius: inherit;
-  pointer-events: none;
-  border: 2px solid rgb(var(--mm-action-primary) / 0.92);
-  background:
-    radial-gradient(
-      circle at center,
-      rgb(var(--mm-action-primary) / 0) 62%,
-      rgb(var(--mm-action-primary) / 0.44) 62%,
-      rgb(var(--mm-action-primary) / 0.76) 72%,
-      rgb(var(--mm-action-primary) / 0.92) 77%,
-      rgb(var(--mm-action-primary) / 0) 77%
-    ),
-    radial-gradient(
-      circle at center,
-      rgb(255 255 255 / 0.22) 0%,
-      rgb(var(--mm-action-primary) / 0.08) 28%,
-      rgb(var(--mm-action-primary) / 0.5) 41%,
-      rgb(var(--mm-action-primary) / 0.28) 54%,
-      rgb(var(--mm-action-primary) / 0.16) 68%,
-      rgb(var(--mm-action-primary) / 0) 100%
-    );
-  box-shadow:
-    0 0 0 1px rgb(var(--mm-action-primary) / 0.64),
-    0 0 22px 3px rgb(var(--mm-action-primary) / 0.52),
-    0 0 38px 8px rgb(var(--mm-action-primary) / 0.28);
-  filter: none;
-  transform-origin: center;
-  animation: queue-submit-primary-ripple 620ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
-}
-
-@keyframes queue-submit-primary-ripple {
-  0% {
-    opacity: 0.92;
-    transform: scale(0.72);
-  }
-  60% {
-    opacity: 0.42;
-  }
-  100% {
-    opacity: 0;
-    transform: scale(2.65);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .queue-submit-primary--icon .queue-submit-primary-arrow svg {
     animation: none !important;
@@ -7113,11 +6879,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     .queue-submit-primary-arrow-glyph[data-submit-icon="check"] {
     opacity: 1;
     transform: scale(1);
-  }
-
-  .queue-submit-primary-ripple {
-    animation: none !important;
-    opacity: 0;
   }
 }
 
@@ -7203,7 +6964,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .oauth-terminal-status {
-  border: 1px solid var(--mm-border, #cbd5e1);
+  border: 1px solid rgb(var(--mm-border));
   border-radius: 8px;
   padding: 6px 10px;
 }
@@ -7322,8 +7083,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .oauth-terminal-header,
-  .oauth-terminal-paste-box,
-  .oauth-terminal-session-panel {
+.oauth-terminal-paste-box,
+.oauth-terminal-session-panel {
     padding-inline: 12px;
   }
 
@@ -7373,7 +7134,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: transparent;
   border: 0;
   border-radius: 6px;
-  color: rgb(var(--mm-text, 15 23 42));
+  color: rgb(var(--mm-ink, 15 23 42));
   cursor: pointer;
   display: block;
   font: inherit;
@@ -7382,9 +7143,16 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   width: 100%;
 }
 
-.oauth-terminal-context-menu button:hover,
+@media (hover: hover){
+
+.oauth-terminal-context-menu button:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(var(--mm-ink) / 0.07);
+  outline: none;
+}
+}
+
 .oauth-terminal-context-menu button:focus-visible {
-  background: rgb(var(--mm-hover, 241 245 249));
+  background: rgb(var(--mm-ink) / 0.07);
   outline: none;
 }
 
@@ -7426,19 +7194,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-left: auto;
 }
 
-/*
- * MM-937: The step header controls are right-aligned (margin-left: auto), so the
- * trailing control sits flush against the steps container's edge. Their hover and
- * press scale (var(--mm-control-hover-scale) / var(--mm-control-press-scale))
- * scales from the center by default, which grows the trailing control outward and
- * lets a step spill past the edge of its container when hovered. Anchor only the
- * trailing control's scale to its right edge so it grows inward and stays
- * contained, without clipping overflow (the step context-menu popover relies on
- * visible overflow). The leading controls keep their natural center scaling.
- */
-.queue-step-controls .queue-step-icon-button:last-child {
-  transform-origin: right center;
-}
 
 .queue-step-icon-button {
   width: 2.35rem;
@@ -7466,52 +7221,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-linejoin: round;
 }
 
-.queue-step-icon-button:hover {
-  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.35), rgb(var(--mm-accent-2) / 0.25));
-  color: rgb(var(--mm-ink));
-  border-color: rgb(var(--mm-accent));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-accent) / 0.78);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-.queue-step-icon-button:active,
-.queue-step-icon-button.is-clicked {
-  background-image: linear-gradient(145deg, rgb(var(--mm-accent) / 0.5), rgb(var(--mm-accent-2) / 0.4));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 0 0 1px rgb(255 255 255 / 0.56),
-    0 0 14px 1px rgb(var(--mm-accent) / 0.76);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.2) saturate(1.12);
-}
-
-.queue-step-icon-button.destructive {
-  color: rgb(var(--mm-danger));
-  border-color: rgb(var(--mm-danger) / 0.7);
-}
-
-.queue-step-icon-button.destructive:hover {
-  background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.25), rgb(var(--mm-accent-warm) / 0.2));
-  border-color: rgb(var(--mm-danger));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 12px 24px -14px rgb(var(--mm-danger) / 0.75);
-  transform: scale(var(--mm-control-hover-scale));
-  filter: brightness(1.08) saturate(1.04);
-}
-
-.queue-step-icon-button.destructive:active,
-.queue-step-icon-button.destructive.is-clicked {
-  background: linear-gradient(145deg, rgb(var(--mm-danger) / 0.4), rgb(var(--mm-accent-warm) / 0.35));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.42),
-    0 0 0 1px rgb(255 255 255 / 0.56),
-    0 0 14px 1px rgb(var(--mm-danger) / 0.76);
-  transform: scale(var(--mm-control-press-scale));
-  filter: brightness(1.2) saturate(1.12);
-}
-
-.queue-step-icon-button:disabled,
-.queue-step-icon-button:disabled:hover {
+.queue-step-icon-button:disabled {
   opacity: var(--mm-control-disabled-opacity);
   cursor: not-allowed;
   background: rgb(var(--mm-panel) / 0.4);
@@ -7542,12 +7252,21 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-width: 2;
 }
 
-.queue-step-capability-chip .queue-step-capability-chip-remove:hover,
+@media (hover: hover){
+
+.queue-step-capability-chip .queue-step-capability-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"])),
+.queue-step-attachment-chip .queue-step-attachment-chip-remove:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+}
+
 .queue-step-capability-chip .queue-step-capability-chip-remove:active,
-.queue-step-capability-chip .queue-step-capability-chip-remove.is-clicked,
-.queue-step-attachment-chip .queue-step-attachment-chip-remove:hover,
-.queue-step-attachment-chip .queue-step-attachment-chip-remove:active,
-.queue-step-attachment-chip .queue-step-attachment-chip-remove.is-clicked {
+.queue-step-attachment-chip .queue-step-attachment-chip-remove:active {
   background: transparent;
   background-image: none;
   border: none;
@@ -7679,9 +7398,20 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   stroke-width: 2;
 }
 
-.queue-info-toggle:hover,
-.queue-info-toggle:active,
-.queue-info-toggle.is-clicked {
+@media (hover: hover){
+
+.queue-info-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border: none;
+  background: none;
+  background-image: none;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+  color: rgb(var(--mm-ink));
+}
+}
+
+.queue-info-toggle:active {
   border: none;
   background: none;
   background-image: none;
@@ -7709,7 +7439,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border, 220 220 220));
   border-radius: 0.5rem;
   background: rgb(var(--mm-panel));
-  color: rgb(var(--mm-text));
+  color: rgb(var(--mm-ink));
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.12);
   opacity: 0;
   visibility: hidden;
@@ -7721,7 +7451,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.4rem;
 }
 
-.queue-info-tooltip:hover .queue-info-tooltip-panel,
+@media (hover: hover){
+
+.queue-info-tooltip:hover:where(:not(:disabled, [aria-disabled="true"])) .queue-info-tooltip-panel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+}
+
 .queue-info-tooltip:focus-within .queue-info-tooltip-panel,
 .queue-info-tooltip--visible .queue-info-tooltip-panel {
   opacity: 1;
@@ -7866,16 +7604,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   transition: var(--mm-control-transition);
 }
 
-.queue-inline-filter:hover {
+@media (hover: hover){
+
+.queue-inline-filter:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--mm-control-shell-hover);
   border-color: rgb(var(--mm-accent) / 0.72);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.24), 0 10px 24px -20px rgb(var(--mm-accent) / 0.7);
   transform: scale(var(--mm-control-hover-scale));
 }
+}
 
 .queue-inline-filter:focus-within {
   border-color: rgb(var(--mm-accent-2) / 0.9);
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .queue-inline-filter:has(select:disabled) {
@@ -7939,13 +7679,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @media (prefers-reduced-motion: reduce) {
   .step-tl-icon.status-running,
-  .step-tl-icon.status-awaiting-external {
+.step-tl-icon.status-awaiting-external {
     animation: none !important;
     opacity: 1;
   }
 
   .surface--liquidgl-hero,
-  .queue-floating-bar--liquid-glass {
+.queue-floating-bar--liquid-glass {
     transition-duration: 0s !important;
     animation-duration: 0s !important;
   }
@@ -7953,14 +7693,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @media (prefers-reduced-motion: reduce) {
   button,
-  .button,
-  .queue-action,
-  .queue-submit-primary,
-  .queue-step-icon-button,
-  .queue-step-extension-button,
-  .queue-inline-toggle,
-  .queue-inline-filter,
-  .queue-page-size-selector {
+.mm-button,
+.queue-submit-primary,
+.queue-step-icon-button,
+.queue-step-extension-button,
+.queue-inline-toggle,
+.queue-inline-filter,
+.queue-page-size-selector {
     transition-duration: 0s !important;
     animation-duration: 0s !important;
     transform: none !important;
@@ -7969,11 +7708,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @media (forced-colors: active) {
   button:focus-visible,
-  .button:focus-visible,
-  .route-nav a:focus-visible,
-  .live-logs-artifact-link:focus-visible,
-  .queue-action:focus-visible,
-  .queue-submit-primary:focus-visible {
+.mm-button:focus-visible,
+.route-nav a:focus-visible,
+.live-logs-artifact-link:focus-visible,
+.queue-submit-primary:focus-visible {
     outline: 2px solid ButtonText;
     outline-offset: 2px;
   }
@@ -8082,7 +7820,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     border-radius: 1rem;
     font-weight: 600;
     text-align: left;
-    color: var(--mm-mobile-nav-text);
+    color: rgb(var(--mm-ink));
     background: transparent;
     box-shadow: none;
     backdrop-filter: none;
@@ -8105,22 +7843,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
     content: none;
   }
 
-  .route-nav a:hover {
-    color: white;
+  @media (hover: hover){
+
+  .route-nav a:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    color: rgb(var(--mm-ink));
     background: var(--mm-mobile-nav-hover);
     box-shadow: none;
     transform: none;
   }
+  }
 
   .route-nav a:focus-visible {
-    color: white;
+    color: rgb(var(--mm-ink));
     background: var(--mm-mobile-nav-hover);
-    box-shadow: var(--mm-control-focus-ring);
     transform: none;
   }
 
   .route-nav a.active {
-    color: white;
+    color: rgb(var(--mm-ink));
     background: linear-gradient(
       90deg,
       var(--mm-mobile-nav-active-start),
@@ -8132,7 +7872,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   .route-nav a::after,
-  .route-nav a.active::after {
+.route-nav a.active::after {
     content: none;
   }
 }
@@ -8147,7 +7887,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   }
 
   th,
-  td {
+td {
     font-size: 0.84rem;
   }
 }
@@ -8171,15 +7911,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 @media (prefers-reduced-motion: reduce) {
   .route-nav,
-  .dashboard-nav-backdrop {
+.dashboard-nav-backdrop {
     animation: none !important;
     transition: none !important;
     transform: none !important;
   }
 
   .route-nav-primary a,
-  .dashboard-system-trigger,
-  .dashboard-system-popover {
+.dashboard-system-trigger,
+.dashboard-system-popover {
     animation: none !important;
     transition: none !important;
     transform: none !important;
@@ -8246,7 +7986,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .collection-workspace {
   --mm-collection-sidebar-width: var(--workflow-list-column-workflow-width);
-  --mm-workspace-divider: var(--mm-border, rgba(148, 163, 184, 0.24));
+  --mm-workspace-divider: rgb(var(--mm-border) / 0.24);
   width: 100%;
   max-width: none;
   min-width: 0;
@@ -8389,12 +8129,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-bottom-color: var(--workflow-list-divider-color);
 }
 
-.skills-catalog-page .data-table tbody tr:hover {
+@media (hover: hover){
+
+.skills-catalog-page .data-table tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgb(var(--mm-accent) / 0.08);
 }
+}
 
-.dark .skills-catalog-page .data-table tbody tr:hover {
+@media (hover: hover){
+
+.dark .skills-catalog-page .data-table tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgb(var(--mm-accent) / 0.18);
+}
 }
 
 /* Re-inset the bled edges so header labels and cell text stay aligned with the
@@ -8437,8 +8183,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   text-decoration: none;
 }
 
-.skills-catalog-title-link:hover .skills-catalog-title {
+@media (hover: hover){
+
+.skills-catalog-title-link:hover:where(:not(:disabled, [aria-disabled="true"])) .skills-catalog-title {
   text-decoration: underline;
+}
 }
 
 .skills-catalog-title {
@@ -8452,12 +8201,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   overflow-wrap: anywhere;
 }
 
-/* Green "+" affordance that lives in the masthead nav (to the right of the
- * System dropdown) and opens the create-skill drawer on the Skills pages. The
- * accessible name and native tooltip both read "Create New Skill". It uses the
- * same inset glass-border technique as the nav buttons, tinted with the success
- * green, and stays a touch shorter than the nav links so it never drives the
- * masthead height. */
+/* The Skills action stays compact beside navigation. Colors and interaction
+ * states come from the primary Button variant. */
 .skills-create-nav-button {
   display: inline-flex;
   align-items: center;
@@ -8465,25 +8210,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding: 0.45rem 0.55rem;
   border: 0;
   border-radius: 0.5rem;
-  background: rgb(var(--mm-ok) / 0.16);
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--mm-ok) / 0.55),
-    inset 0 1px 0 var(--mm-glass-edge);
-  color: rgb(var(--mm-ok));
   cursor: pointer;
   transition: background 130ms ease, color 130ms ease, box-shadow 130ms ease;
-}
-
-.skills-create-nav-button:hover {
-  background: rgb(var(--mm-ok) / 0.24);
-  box-shadow:
-    inset 0 0 0 1px rgb(var(--mm-ok) / 0.8),
-    inset 0 1px 0 var(--mm-glass-edge);
-}
-
-.skills-create-nav-button:focus-visible {
-  outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .skills-create-nav-button svg {
@@ -8635,8 +8363,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 /* Defensive reset: sidebar rows are flat table slices. If a future
  * implementation renders a row as a <button>, the global primary-button
  * styling (pill radius, shadow, hover/press scale) must never leak in. */
+@media (hover: hover){
+button.workflow-workspace-sidebar-row:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
+}
+}
 button.workflow-workspace-sidebar-row,
-button.workflow-workspace-sidebar-row:hover,
 button.workflow-workspace-sidebar-row:active {
   border-radius: 0;
   box-shadow: none;
@@ -8673,7 +8407,13 @@ button.workflow-workspace-sidebar-row:active {
   -webkit-line-clamp: 1;
 }
 
-.workflow-workspace-sidebar-row:hover,
+@media (hover: hover){
+
+.workflow-workspace-sidebar-row:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  background: rgb(var(--mm-ink) / 0.06);
+}
+}
+
 .workflow-workspace-sidebar-row:focus-visible {
   background: rgb(var(--mm-ink) / 0.06);
 }
@@ -8777,28 +8517,28 @@ button.workflow-workspace-sidebar-row:active {
 
 @media (max-width: 114rem) and (min-width: 768px) {
   .workflow-workspace-shell,
-  .collection-workspace--edge-rail {
+.collection-workspace--edge-rail {
     grid-template-columns: var(--mm-rail-width) minmax(0, 1fr);
   }
 
   .workflow-workspace-sidebar,
-  .workflow-workspace-sidebar-slot {
+.workflow-workspace-sidebar-slot {
     grid-column: 1;
   }
 
   .workflow-start-primary,
-  .workflow-workspace-detail {
+.workflow-workspace-detail {
     grid-column: 2;
   }
 
   .workflow-workspace-shell[data-sidebar-collapsed="true"],
-  .collection-workspace--edge-rail[data-sidebar-collapsed="true"] {
+.collection-workspace--edge-rail[data-sidebar-collapsed="true"] {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .workflow-workspace-shell[data-sidebar-collapsed="true"] .workflow-workspace-detail,
-  .collection-workspace--edge-rail[data-sidebar-collapsed="true"] .workflow-workspace-detail,
-  .workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary {
+.collection-workspace--edge-rail[data-sidebar-collapsed="true"] .workflow-workspace-detail,
+.workflow-start-workspace[data-sidebar-collapsed="true"] .workflow-start-primary {
     grid-column: 1 / -1;
   }
 
@@ -8810,9 +8550,9 @@ button.workflow-workspace-sidebar-row:active {
 
 @media (prefers-reduced-motion: reduce) {
   .workflow-workspace-sidebar-row,
-  .workflow-workspace-sidebar,
-  .workflow-workspace-sidebar-table,
-  .workflow-list-data-slab .queue-table-wrapper {
+.workflow-workspace-sidebar,
+.workflow-workspace-sidebar-table,
+.workflow-list-data-slab .queue-table-wrapper {
     transition-duration: 1ms !important;
     transform: none !important;
   }
@@ -8820,7 +8560,7 @@ button.workflow-workspace-sidebar-row:active {
 
 @media (prefers-reduced-motion: reduce) {
   .workflow-workspace-sidebar,
-  .workflow-workspace-detail {
+.workflow-workspace-detail {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
@@ -8830,7 +8570,7 @@ button.workflow-workspace-sidebar-row:active {
 
 @media (max-width: 767px) {
   .workflow-workspace-shell,
-  .collection-workspace--edge-rail {
+.collection-workspace--edge-rail {
     --mm-rail-bleed: 0rem;
     --workflow-list-slab-bleed-inline: 0rem;
     display: block;
@@ -8843,7 +8583,7 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .workflow-workspace-sidebar,
-  .workflow-workspace-sidebar-slot {
+.workflow-workspace-sidebar-slot {
     width: 100%;
   }
 
@@ -8864,8 +8604,8 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .workflow-detail-page .toolbar > *,
-  .workflow-detail-page .toolbar-identity-row,
-  .workflow-detail-page .toolbar-controls {
+.workflow-detail-page .toolbar-identity-row,
+.workflow-detail-page .toolbar-controls {
     min-width: 0;
     max-width: 100%;
   }
@@ -8876,8 +8616,8 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .workflow-detail-page .toolbar-controls > *,
-  .workflow-detail-page .td-workflow-actions-menu,
-  .workflow-detail-page .td-workflow-actions-trigger {
+.workflow-detail-page .td-workflow-actions-menu,
+.workflow-detail-page .td-workflow-actions-trigger {
     width: 100%;
     min-width: 0;
   }
@@ -8924,10 +8664,10 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .workflow-detail-page .card,
-  .workflow-detail-page .td-actions-region,
-  .workflow-detail-page .td-evidence-slab,
-  .workflow-detail-page .td-instructions-panel,
-  .workflow-detail-page .live-logs-panel {
+.workflow-detail-page .td-actions-region,
+.workflow-detail-page .td-evidence-slab,
+.workflow-detail-page .td-instructions-panel,
+.workflow-detail-page .live-logs-panel {
     min-width: 0;
     max-width: 100%;
   }
@@ -8944,7 +8684,7 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .workflow-detail-page code,
-  .workflow-detail-page pre {
+.workflow-detail-page pre {
     max-width: 100%;
     overflow-wrap: anywhere;
     word-break: break-word;
@@ -8957,8 +8697,8 @@ button.workflow-workspace-sidebar-row:active {
 
 @media (prefers-reduced-motion: reduce) {
   .workflow-workspace-shell,
-  .workflow-workspace-sidebar,
-  .workflow-workspace-detail {
+.workflow-workspace-sidebar,
+.workflow-workspace-detail {
     transition: none !important;
     animation: none !important;
     transform: none !important;
@@ -9004,8 +8744,8 @@ button.workflow-workspace-sidebar-row:active {
   min-height: 640px;
   height: 70vh;
   border: 0;
-  border-radius: var(--mm-radius, 8px);
-  background: var(--mm-surface, #fff);
+  border-radius: 8px;
+  background: rgb(var(--mm-panel));
 }
 
 .td-native-chat-unavailable {
@@ -9015,9 +8755,9 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .td-native-chat-evidence {
-  border: 1px solid var(--mm-border, #e2e8f0);
-  border-radius: var(--mm-radius, 8px);
-  background: var(--mm-surface-muted, #f8fafc);
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-bg));
   padding: 0.5rem 0.75rem;
 }
 
@@ -9030,7 +8770,7 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .td-native-chat-continue-error {
-  color: var(--mm-danger, #b91c1c);
+  color: rgb(var(--mm-status-danger));
   text-align: right;
 }
 
@@ -9039,9 +8779,9 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 .td-native-chat-continue-form {
-  border: 1px solid var(--mm-border, #e2e8f0);
-  border-radius: var(--mm-radius, 8px);
-  background: var(--mm-surface-muted, #f8fafc);
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-bg));
   padding: 0.75rem;
   gap: 0.5rem;
 }
@@ -9223,13 +8963,7 @@ button.workflow-workspace-sidebar-row:active {
   line-height: 1.2;
   text-align: left;
   text-decoration: none;
-  /*
-   * These options are <button>/<a> elements, so without this they inherit the
-   * global control treatment — a resting purple drop-shadow, plus a hover
-   * scale/glow and an active press ring. In a tight menu that reads as a stack
-   * of primary buttons casting glow bands between rows. Flatten it: the popover
-   * is the elevated surface, the rows are not.
-   */
+  /* The popover owns elevation; menu rows remain flat. */
   box-shadow: none;
   transform: none;
   filter: none;
@@ -9237,7 +8971,16 @@ button.workflow-workspace-sidebar-row:active {
 }
 
 /* Pointer hover / active and programmatic focus: one calm filled-row cue. */
-.td-workflow-actions-item:hover,
+@media (hover: hover){
+.td-workflow-actions-item:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border-color: rgb(var(--mm-accent) / 0.45);
+  background: var(--mm-control-shell-hover);
+  box-shadow: none;
+  transform: none;
+  filter: none;
+  outline: none;
+}
+}
 .td-workflow-actions-item:focus,
 .td-workflow-actions-item:active {
   border-color: rgb(var(--mm-accent) / 0.45);
@@ -9248,10 +8991,9 @@ button.workflow-workspace-sidebar-row:active {
   outline: none;
 }
 
-/* Keyboard focus: the standard single accent ring, no competing border. */
+/* The shared outline owns keyboard focus; selection keeps its own border. */
 .td-workflow-actions-item:focus-visible {
   border-color: transparent;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .td-workflow-actions-item-danger {
@@ -9263,7 +9005,17 @@ button.workflow-workspace-sidebar-row:active {
   color: rgb(var(--mm-muted));
 }
 
-.td-workflow-actions-item-disabled:hover,
+@media (hover: hover){
+
+.td-workflow-actions-item-disabled:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  border-color: rgb(var(--mm-border) / 0.6);
+  background: rgb(var(--mm-border) / 0.14);
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+}
+
 .td-workflow-actions-item-disabled:focus,
 .td-workflow-actions-item-disabled:focus-visible,
 .td-workflow-actions-item-disabled:active {
@@ -9424,13 +9176,15 @@ button.workflow-workspace-sidebar-row:active {
   transition: background 120ms ease, color 120ms ease;
 }
 
-.td-instructions-toggle:hover {
+@media (hover: hover){
+
+.td-instructions-toggle:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: rgb(var(--mm-accent) / 0.1);
+}
 }
 
 .td-instructions-toggle:focus-visible {
   outline: none;
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .td-hero .meta-inline {
@@ -9569,8 +9323,11 @@ button.workflow-workspace-sidebar-row:active {
   text-decoration: none;
 }
 
-.td-repository-value a:hover {
+@media (hover: hover){
+
+.td-repository-value a:hover:where(:not(:disabled, [aria-disabled="true"])) {
   color: rgb(var(--mm-accent));
+}
 }
 
 .td-repository-icon {
@@ -9824,7 +9581,13 @@ button.workflow-workspace-sidebar-row:active {
   text-decoration: none;
 }
 
-.dashboard-toast__action:hover,
+@media (hover: hover){
+
+.dashboard-toast__action:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  text-decoration: underline;
+}
+}
+
 .dashboard-toast__action:focus-visible {
   text-decoration: underline;
 }
@@ -9852,7 +9615,19 @@ button.workflow-workspace-sidebar-row:active {
   stroke-width: 2;
 }
 
-.dashboard-toast__close:hover,
+@media (hover: hover){
+
+.dashboard-toast__close:hover:where(:not(:disabled, [aria-disabled="true"])) {
+  transform: none;
+  filter: none;
+  box-shadow: none;
+  background-image: none;
+  border-color: rgb(var(--mm-border) / 0.82);
+  background: rgb(var(--mm-ink) / 0.06);
+  color: rgb(var(--mm-ink));
+}
+}
+
 .dashboard-toast__close:focus-visible,
 .dashboard-toast__close:active {
   transform: none;
@@ -10267,7 +10042,7 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .loading-placeholder[data-variant="metric-strip"] .loading-placeholder__row,
-  .loading-placeholder[data-variant="detail"] .loading-placeholder__row:first-child {
+.loading-placeholder[data-variant="detail"] .loading-placeholder__row:first-child {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -10400,8 +10175,8 @@ button.workflow-workspace-sidebar-row:active {
   .omnigent-policy-editor textarea { max-width: 100%; }
   .omnigent-inventory__toolbar { align-items: stretch; flex-direction: column; }
   .dashboard-content input,
-  .dashboard-content select,
-  .dashboard-content textarea {
+.dashboard-content select,
+.dashboard-content textarea {
     font-size: 16px;
   }
 }
@@ -10431,7 +10206,7 @@ button.workflow-workspace-sidebar-row:active {
   /* The tier card carries the tier inset; its inner fieldset stays an
    * unstyled grouping rather than a hidden extra padded level. */
   .provider-profile-form fieldset:not(.provider-tier-fieldset),
-  .provider-tier-editor fieldset:not(.provider-tier-fieldset) {
+.provider-tier-editor fieldset:not(.provider-tier-fieldset) {
     padding: 0.75rem;
   }
   /* MoonMind#4559: tier selects size to their longest option in WebKit and
@@ -10448,12 +10223,12 @@ button.workflow-workspace-sidebar-row:active {
    * rendered size (width stays a definite 100%, block axis untouched, native
    * popup unaffected); engines without support keep today's behavior. */
   .provider-profile-form select,
-  .provider-tier-editor select {
+.provider-tier-editor select {
     width: 100%;
     contain: inline-size;
   }
   .provider-profile-form label,
-  .provider-tier-editor label {
+.provider-tier-editor label {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     min-width: 0;
@@ -10501,7 +10276,7 @@ button.workflow-workspace-sidebar-row:active {
  * narrow widths and short heights without nested scroll traps. */
 @media (max-width: 720px) {
   .dashboard-content [role="dialog"]:not(.fixed):not(.queue-dialog-panel):not(.h-full),
-  .dashboard-content [data-state="open"][role="dialog"]:not(.fixed):not(.queue-dialog-panel):not(.h-full) {
+.dashboard-content [data-state="open"][role="dialog"]:not(.fixed):not(.queue-dialog-panel):not(.h-full) {
     max-width: calc(100vw - 1.5rem);
     max-height: calc(100dvh - 2rem);
     overflow: auto;
@@ -10652,7 +10427,7 @@ button.workflow-workspace-sidebar-row:active {
 }
 @media (forced-colors: active) {
   .wf-native-chat__iframe,
-  .wf-native-chat__state {
+.wf-native-chat__state {
     border: 1px solid CanvasText;
   }
   .wf-native-chat__spinner {
@@ -10851,7 +10626,7 @@ button.workflow-workspace-sidebar-row:active {
   /* Genuinely two-dimensional content (policy JSON, diffs) wraps instead
    * of expanding the page or trapping keyboard users in a scroll region. */
   .omnigent-inventory pre,
-  .omnigent-policy-detail pre {
+.omnigent-policy-detail pre {
     max-width: 100%;
     min-width: 0;
     overflow-x: auto;
@@ -10861,9 +10636,9 @@ button.workflow-workspace-sidebar-row:active {
 
   /* 16px mobile form-text baseline so phones do not auto-zoom on focus. */
   .provider-profile-form input,
-  .provider-profile-form select,
-  .provider-profile-form textarea,
-  .omnigent-inventory input[type="search"] {
+.provider-profile-form select,
+.provider-profile-form textarea,
+.omnigent-inventory input[type="search"] {
     font-size: 1rem;
   }
 
@@ -10900,14 +10675,14 @@ button.workflow-workspace-sidebar-row:active {
    * instead of each level repeating desktop padding that consumes reading
    * width. Large desktop radii shrink with the padding. */
   .settings-page [class~="p-6"],
-  .settings-page [class~="p-5"],
-  .settings-page [class~="p-4"] {
+.settings-page [class~="p-5"],
+.settings-page [class~="p-4"] {
     padding: 0.75rem;
   }
 
   .settings-page [class~="px-6"],
-  .settings-page [class~="px-5"],
-  .settings-page [class~="px-4"] {
+.settings-page [class~="px-5"],
+.settings-page [class~="px-4"] {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
@@ -10918,7 +10693,7 @@ button.workflow-workspace-sidebar-row:active {
   }
 
   .settings-page [class~="rounded-3xl"],
-  .settings-page [class~="rounded-[2rem]"] {
+.settings-page [class~="rounded-[2rem]"] {
     border-radius: 1rem;
   }
 
@@ -10939,6 +10714,168 @@ button.workflow-workspace-sidebar-row:active {
 .model-selection { min-width: 0; grid-column: 1 / -1; }
 .model-selection__fields { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 3fr) minmax(0, 1fr); gap: 1rem; }
 .model-selection__fields label { min-width: 0; }
-.model-selection__fields input, .model-selection__fields select { width: 100%; min-width: 0; box-sizing: border-box; }
+.model-selection__fields input,
+.model-selection__fields select { width: 100%; min-width: 0; box-sizing: border-box; }
 .model-selection p { overflow-wrap: anywhere; }
 @media (max-width: 640px) { .model-selection__fields { grid-template-columns: minmax(0, 1fr); } }
+.notice.warning,
+.notice-warning { border-color: rgb(var(--mm-warn) / 0.5); background: rgb(var(--mm-warn) / 0.08); color: rgb(var(--mm-status-warning)); }
+.notice.subtle { color: rgb(var(--mm-muted)); background: rgb(var(--mm-panel)); }
+.badge { display: inline-flex; border: 1px solid currentColor; border-radius: 999px; padding: 0.12rem 0.45rem; font-size: 0.8rem; font-weight: 600; }
+.badge-success { color: rgb(var(--mm-status-ok)); background: rgb(var(--mm-ok) / 0.08); }
+.badge-warning { color: rgb(var(--mm-status-warning)); background: rgb(var(--mm-warn) / 0.08); }
+.badge-error { color: rgb(var(--mm-status-danger)); background: rgb(var(--mm-danger) / 0.08); }
+.td-facts-grid,
+.details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: 0.65rem 1rem; margin: 0; }
+.td-facts-grid dd,
+.details-grid dd { margin: 0; overflow-wrap: anywhere; }
+.td-facts-grid dt,
+.details-grid dt { color: rgb(var(--mm-muted)); font-size: 0.8rem; }
+.button-row,
+.button-group,
+.action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.field-hint { color: rgb(var(--mm-muted)); font-size: 0.8rem; }
+/* Shared control visuals. Native and bespoke controls start from the neutral reset. */
+:where(button) {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+:where(.mm-button) {
+  --mm-button-fill: rgb(var(--mm-panel));
+  --mm-button-color: rgb(var(--mm-ink));
+  --mm-button-stroke: rgb(var(--mm-border));
+  --mm-button-hover: color-mix(in srgb, rgb(var(--mm-panel)) 92%, rgb(var(--mm-ink)));
+  --mm-button-press: color-mix(in srgb, rgb(var(--mm-panel)) 90%, black);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: fit-content;
+  min-height: 2.25rem;
+  border: 1px solid var(--mm-button-stroke);
+  border-radius: 0.6rem;
+  padding: 0.45rem 0.85rem;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.mm-button--primary {
+  --mm-button-fill: rgb(var(--mm-button-primary));
+  --mm-button-color: white;
+  --mm-button-stroke: transparent;
+  --mm-button-hover: color-mix(in srgb, rgb(var(--mm-button-primary)) 92%, black);
+  --mm-button-press: color-mix(in srgb, rgb(var(--mm-button-primary)) 78%, black);
+}
+.mm-button--danger {
+  --mm-button-fill: rgb(var(--mm-button-danger));
+  --mm-button-color: white;
+  --mm-button-stroke: transparent;
+  --mm-button-hover: color-mix(in srgb, rgb(var(--mm-button-danger)) 92%, black);
+  --mm-button-press: color-mix(in srgb, rgb(var(--mm-button-danger)) 78%, black);
+}
+.mm-button--ghost,
+.mm-button--icon {
+  --mm-button-fill: transparent;
+  --mm-button-color: rgb(var(--mm-ink));
+  --mm-button-stroke: transparent;
+  --mm-button-hover: rgb(var(--mm-ink) / 0.07);
+  --mm-button-press: var(--mm-button-hover);
+}
+.mm-button--primary,
+.mm-button--secondary,
+.mm-button--ghost,
+.mm-button--danger,
+.mm-button--icon {
+  background: var(--mm-button-fill);
+  color: var(--mm-button-color);
+  border-color: var(--mm-button-stroke);
+  box-shadow: none;
+}
+.mm-button--icon {
+  padding: 0.35rem;
+  aspect-ratio: 1;
+}
+.mm-button--sm {
+  min-height: 1.85rem;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.8rem;
+}
+.mm-button--lg {
+  min-height: 2.75rem;
+  padding: 0.6rem 1.1rem;
+}
+.mm-button:is([aria-pressed="true"], [aria-selected="true"], .active):not(:disabled):not([aria-disabled="true"]) {
+  --mm-button-fill: rgb(var(--mm-selected-fill));
+  --mm-button-color: rgb(var(--mm-selected-text));
+  --mm-button-stroke: currentColor;
+  --mm-button-hover: color-mix(in srgb, rgb(var(--mm-selected-fill)) 95%, black);
+  --mm-button-press: color-mix(in srgb, rgb(var(--mm-selected-fill)) 88%, black);
+  background: var(--mm-button-fill);
+  color: var(--mm-button-color);
+  border-color: var(--mm-button-stroke);
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+@media (hover: hover) {
+  .mm-button:not(:disabled):not([aria-disabled="true"]):hover {
+    background: var(--mm-button-hover);
+    background-image: none;
+    color: var(--mm-button-color);
+    border-color: var(--mm-button-stroke);
+    box-shadow: none;
+    transform: none;
+    filter: none;
+  }
+}
+.mm-button:not(:disabled):not([aria-disabled="true"]):active {
+  background: var(--mm-button-press);
+  background-image: none;
+  color: var(--mm-button-color);
+  border-color: var(--mm-button-stroke);
+  box-shadow: inset 0 2px 3px rgb(0 0 0 / 0.3);
+  transform: none;
+  filter: none;
+}
+button:disabled,
+.mm-button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: var(--mm-control-disabled-opacity);
+}
+.mm-button:is(:disabled, [aria-disabled="true"]) {
+  background: var(--mm-button-fill);
+  border-color: var(--mm-button-stroke);
+  color: var(--mm-button-color);
+  background-image: none;
+  box-shadow: none;
+  transform: none;
+  filter: none;
+}
+/* Outline is independent of fill, hover shadows and selected-state borders. */
+:is(button, a[href], input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid rgb(var(--mm-focus)) !important;
+  outline-offset: 3px;
+}
+@media (forced-colors: active) {
+  :is(button, a[href], input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: Highlight !important;
+  }
+  .mm-button:is([aria-pressed="true"], [aria-selected="true"], .active) {
+    border: 2px solid ButtonText;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mm-button { transition: none; }
+}
+
+.mm-button-reason { flex-basis: 100%; color: rgb(var(--mm-muted)); font-size: 0.8rem; }
+.queue-inline-selector-label { display: block; padding-left: 0.15rem; font-size: 0.8rem; color: rgb(var(--mm-muted)); }
+.queue-floating-bar .queue-inline-selector svg { top: auto; bottom: 0.6rem; transform: none; }

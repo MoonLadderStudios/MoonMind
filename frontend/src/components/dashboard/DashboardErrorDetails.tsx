@@ -1,3 +1,4 @@
+import { Button } from '../Button';
 import { useId, useState, type ReactNode } from 'react';
 import { copyTextToClipboard } from '../../utils/clipboard';
 
@@ -142,13 +143,12 @@ export function DashboardErrorDetails({
               <pre className="dashboard-error-details__raw">{rawError}</pre>
             ) : null}
             <div className="dashboard-error-details__actions">
-              <button
+              <Button variant="secondary" size="sm"
                 type="button"
-                className="secondary small"
                 onClick={handleCopy}
               >
                 {copied ? 'Copied' : copyLabel}
-              </button>
+              </Button>
             </div>
           </div>
         </details>

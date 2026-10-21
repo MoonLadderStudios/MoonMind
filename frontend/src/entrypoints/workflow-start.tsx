@@ -1,7 +1,7 @@
+import { Button } from '../components/Button';
 import { FALLBACK_TIER_EFFORT_OPTIONS, type ProviderProfileTierCapabilities } from "../utils/providerProfileTiers";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
-import { createPortal } from "react-dom";
 import { ModelSelectionFields } from "../components/workflows/ModelSelectionFields";
 import { CreateOptionDisclosure } from "../components/workflows/CreateOptionDisclosure";
 import {
@@ -214,6 +214,7 @@ export const BranchInputField = memo(function BranchInputField({
   syncToken,
   datalistId,
   inputName,
+  inputId,
   ariaLabel,
   title,
   placeholder,
@@ -227,6 +228,7 @@ export const BranchInputField = memo(function BranchInputField({
   syncToken: number;
   datalistId: string;
   inputName: string;
+  inputId?: string;
   ariaLabel: string;
   title: string;
   placeholder: string;
@@ -295,6 +297,7 @@ export const BranchInputField = memo(function BranchInputField({
   return (
     <>
       <input
+        id={inputId}
         name={inputName}
         aria-label={ariaLabel}
         title={title}
@@ -4420,7 +4423,7 @@ function serializeToolInputValues(values: Record<string, unknown>): string {
   return JSON.stringify(values, null, 2);
 }
 
-function SchemaCapabilityFields({
+export function SchemaCapabilityFields({
   fields,
   detail,
   values,
@@ -4441,6 +4444,7 @@ function SchemaCapabilityFields({
   onChange: (name: string, value: unknown) => void;
   onGitHubIssueRepositoryChange?: (repository: string) => void;
 }): ReactElement | null {
+  const fieldGroupId = useId();
   if (fields.length === 0) {
     return null;
   }
@@ -4455,9 +4459,10 @@ function SchemaCapabilityFields({
         const widget = capabilityWidgetName(fieldSchema, uiSchema);
         const label = capabilityFieldLabel(name, fieldSchema);
         const value = capabilityInputValue(values, effectiveDefaults, name);
-        const inputId = `queue-capability-input-${name}`;
+        const inputId = `queue-capability-input-${fieldGroupId}-${name}`;
         const error = errors[name];
         const description = String(fieldSchema.description || "").trim();
+        const describedBy = [description ? `${inputId}-hint` : '', error ? `${inputId}-error` : ''].filter(Boolean).join(' ') || undefined;
         const choices = schemaChoiceOptions(fieldSchema);
         const hasTypeSafeRenderer =
           fieldSchema.type === "boolean" ||
@@ -4478,12 +4483,14 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
                 onChange={(event) => onChange(name, event.target.value)}
               />
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
               <span className="notice small">
                 Widget {widget} is unavailable; using a text field.
               </span>
-              {error ? <span className="notice small">{error}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -4505,6 +4512,7 @@ function SchemaCapabilityFields({
                 placeholder={placeholder}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
                 onChange={(event) => {
                   if (provider === "github") {
                     const normalizedIssue = normalizeGitHubIssueInput(
@@ -4536,8 +4544,8 @@ function SchemaCapabilityFields({
                   });
                 }}
               />
-              {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -4552,10 +4560,11 @@ function SchemaCapabilityFields({
                 checked={Boolean(value)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
                 onChange={(event) => onChange(name, event.target.checked)}
               />
-              {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -4586,6 +4595,7 @@ function SchemaCapabilityFields({
                 value={selectedValues}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
                 onChange={(event) => {
                   const selected = Array.from(event.currentTarget.selectedOptions)
                     .map((option) => {
@@ -4603,8 +4613,8 @@ function SchemaCapabilityFields({
                   </option>
                 ))}
               </select>
-              {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -4628,6 +4638,7 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
                 onChange={(event) => {
                   const selected = options.find(
                     (option) => String(option.value) === event.target.value,
@@ -4641,8 +4652,8 @@ function SchemaCapabilityFields({
                   </option>
                 ))}
               </select>
-              {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -4659,6 +4670,7 @@ function SchemaCapabilityFields({
                 value={capabilityInputTextValue(values, effectiveDefaults, name)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
                 onChange={(event) =>
                   onChange(
                     name,
@@ -4668,8 +4680,8 @@ function SchemaCapabilityFields({
                   )
                 }
               />
-              {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -4683,12 +4695,13 @@ function SchemaCapabilityFields({
                 value={complexCapabilityTextValue(value)}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
                 onChange={(event) =>
                   onChange(name, parseComplexCapabilityValue(event.target.value))
                 }
               />
-              {description ? <span className="small">{description}</span> : null}
-              {error ? <span className="notice small">{error}</span> : null}
+              {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+              {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
             </label>
           );
         }
@@ -4712,6 +4725,7 @@ function SchemaCapabilityFields({
               value={capabilityInputTextValue(values, effectiveDefaults, name)}
               disabled={disabled}
               aria-invalid={Boolean(error)}
+                aria-describedby={describedBy}
               onChange={(event) =>
                 onChange(
                   name,
@@ -4748,8 +4762,8 @@ function SchemaCapabilityFields({
                 ))}
               </datalist>
             ) : null}
-            {description ? <span className="small">{description}</span> : null}
-            {error ? <span className="notice small">{error}</span> : null}
+            {description ? <span id={`${inputId}-hint`} className="small">{description}</span> : null}
+            {error ? <span id={`${inputId}-error`} className="notice small">{error}</span> : null}
           </label>
         );
       })}
@@ -5842,7 +5856,7 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
       {chip.removable ? (
         <button
           type="button"
-          className="queue-step-icon-button destructive queue-step-capability-chip-remove"
+          className="queue-step-icon-button queue-step-capability-chip-remove"
           aria-label={`Remove ${chip.label} capability from Step ${stepNumber}`}
           title={`Remove ${chip.label} capability from Step ${stepNumber}`}
           onClick={() => onRemove(chip.token)}
@@ -5961,7 +5975,7 @@ function StepContextBar({
               ) : null}
               <button
                 type="button"
-                className="queue-step-icon-button destructive queue-step-attachment-chip-remove"
+                className="queue-step-icon-button queue-step-attachment-chip-remove"
                 aria-label={attachment.removeLabel}
                 title={attachment.removeLabel}
                 onClick={attachment.onRemove}
@@ -6279,8 +6293,6 @@ function WorkflowStartPageContent({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
-  const [submitRippleKey, setSubmitRippleKey] = useState(0);
-  const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
   const submitArrowExitHeldRef = useRef(false);
   const submitArrowExitTimeoutRef = useRef<number | null>(null);
@@ -11739,9 +11751,8 @@ function WorkflowStartPageContent({
               {REMEDIATION_DRAFT_LOAD_MESSAGES[remediationDraftFailure.status]}
             </p>
             <div className="actions">
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="secondary"
                 onClick={() => {
                   clearRemediationCreateDraft(remediationDraftFailure.draftId);
                   setRemediationDraftFailure(null);
@@ -11760,7 +11771,7 @@ function WorkflowStartPageContent({
                 }}
               >
                 Discard draft reference
-              </button>
+              </Button>
             </div>
           </section>
         ) : null}
@@ -11778,9 +11789,8 @@ function WorkflowStartPageContent({
                   Target {remediationDraft.target.title || remediationDraft.target.workflowId}
                 </p>
               </div>
-              <button
+              <Button variant="secondary"
                 type="button"
-                className="secondary"
                 aria-label="Discard remediation draft"
                 onClick={() => {
                   clearRemediationCreateDraft(remediationDraftIdRef.current);
@@ -11801,7 +11811,7 @@ function WorkflowStartPageContent({
                 }}
               >
                 Discard draft
-              </button>
+              </Button>
             </div>
             <fieldset
               className="queue-remediation-pinned-target stack"
@@ -12453,35 +12463,37 @@ function WorkflowStartPageContent({
                       role="group"
                       aria-label={`Step ${index + 1} controls`}
                     >
-                      <button
+                      <Button variant="icon"
                         type="button"
                         className="queue-step-icon-button"
                         data-step-action="up"
                         data-step-index={index}
                         disabled={index === 0}
+                        disabledReason="This is the first step."
                         aria-label="Move step up"
                         title="Move step up"
                         onClick={() => moveStep(index, -1)}
                       >
                         <ArrowUpIcon />
                         <span className="sr-only">Move step up</span>
-                      </button>
-                      <button
+                      </Button>
+                      <Button variant="icon"
                         type="button"
                         className="queue-step-icon-button"
                         data-step-action="down"
                         data-step-index={index}
                         disabled={index === steps.length - 1}
+                        disabledReason="This is the last step."
                         aria-label="Move step down"
                         title="Move step down"
                         onClick={() => moveStep(index, 1)}
                       >
                         <ArrowDownIcon />
                         <span className="sr-only">Move step down</span>
-                      </button>
-                      <button
+                      </Button>
+                      <Button variant="icon"
                         type="button"
-                        className="queue-step-icon-button destructive"
+                        className="queue-step-icon-button"
                         data-step-action="remove"
                         data-step-index={index}
                         aria-label="Remove step"
@@ -12490,7 +12502,7 @@ function WorkflowStartPageContent({
                       >
                         <CloseIcon />
                         <span className="sr-only">Remove step</span>
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
@@ -12577,13 +12589,13 @@ function WorkflowStartPageContent({
                                 {group.tools.map((tool) => {
                                   const toolId = toolDefinitionId(tool);
                                   return (
-                                    <button
+                                    <Button variant="secondary"
                                       key={`${step.localId}-tool-${toolId}`}
                                       type="button"
                                       className={
                                         step.toolId.trim() === toolId
-                                          ? "secondary active"
-                                          : "secondary"
+                                          ? " active"
+                                          : ""
                                       }
                                       aria-pressed={step.toolId.trim() === toolId}
                                       title={tool.description || toolId}
@@ -12592,7 +12604,7 @@ function WorkflowStartPageContent({
                                       }
                                     >
                                       {toolId}
-                                    </button>
+                                    </Button>
                                   );
                                 })}
                               </div>
@@ -12709,15 +12721,14 @@ function WorkflowStartPageContent({
                       )}
                       {showJiraTransitionOptions ? (
                         <div className="stack queue-tool-dynamic-options">
-                          <button
+                          <Button variant="secondary"
                             type="button"
-                            className="secondary"
                             aria-busy={Boolean(jiraTransitionState?.isLoading)}
                             disabled={Boolean(jiraTransitionState?.isLoading)}
                             onClick={() => void loadJiraTransitionOptions(step)}
                           >
                             Load Jira target statuses
-                          </button>
+                          </Button>
                           {jiraTransitionState?.error ? (
                             <p className="notice small">
                               {jiraTransitionState.error}
@@ -13031,7 +13042,7 @@ function WorkflowStartPageContent({
                             })}
                         </div>
                       ) : null}
-                      <button
+                      <Button variant="secondary"
                         type="button"
                         aria-disabled={
                           isApplyingPreset ||
@@ -13039,6 +13050,7 @@ function WorkflowStartPageContent({
                         }
                         aria-busy={isApplyingPreset}
                         title={expandStepPresetTooltip}
+                        disabledReason={expandStepPresetTooltip}
                         disabled={
                           isApplyingPreset ||
                           !step.presetKey
@@ -13046,7 +13058,7 @@ function WorkflowStartPageContent({
                         onClick={() => handleExpandStepPreset(step.localId)}
                       >
                         Expand
-                      </button>
+                      </Button>
                       {stepPresetStatusText(step) ? (
                         <p className="small">{stepPresetStatusText(step)}</p>
                       ) : null}
@@ -13233,7 +13245,7 @@ function WorkflowStartPageContent({
             })}
 
             <div className="queue-step-extension">
-              <button
+              <Button variant="secondary"
                 type="button"
                 className="queue-step-extension-button"
                 data-step-action="add"
@@ -13244,7 +13256,7 @@ function WorkflowStartPageContent({
                   +
                 </span>
                 <span>Add Step</span>
-              </button>
+              </Button>
             </div>
 
             {(presetCatalogEnabled && presetSaveEnabled) ||
@@ -13261,7 +13273,7 @@ function WorkflowStartPageContent({
                       className="actions queue-template-actions queue-preset-management-inline"
                       aria-label="Preset Management"
                     >
-                      <button
+                      <Button variant="icon"
                         type="button"
                         id="queue-template-save-current"
                         className="queue-step-icon-button"
@@ -13272,11 +13284,11 @@ function WorkflowStartPageContent({
                         onClick={openPresetSaveDialog}
                       >
                         <SaveIcon />
-                      </button>
-                      <button
+                      </Button>
+                      <Button variant="danger"
                         type="button"
                         id="queue-template-delete-current"
-                        className="queue-step-icon-button destructive"
+                        className="queue-step-icon-button"
                         aria-label="Delete preset"
                         aria-busy={isDeletingPreset}
                         title="Delete an instance preset by name"
@@ -13284,7 +13296,7 @@ function WorkflowStartPageContent({
                         onClick={openPresetDeleteDialog}
                       >
                         <TrashIcon />
-                      </button>
+                      </Button>
                     </div>
                   </CreateOptionDisclosure>
                 ) : null}
@@ -13333,6 +13345,7 @@ function WorkflowStartPageContent({
                 </option>
               ))}
             </select>
+          </label>
             {runtime === "omnigent" && selectedOmnigentAgentProfileVersion && (
               selectedProfileIsGenericV2
                 ? selectedGenericOmnigentTarget?.available === false
@@ -13340,12 +13353,11 @@ function WorkflowStartPageContent({
             ) ? (
               <span className="small" role="status">
                 Omnigent needs setup: {omnigentSelectionGateReason || "readiness checks failed."}{" "}
-                <button type="button" onClick={() => { void omnigentCatalogQuery.refetch(); void omnigentExecutionReadinessQuery.refetch(); }}>
+                <Button variant="ghost" type="button" onClick={() => { void omnigentCatalogQuery.refetch(); void omnigentExecutionReadinessQuery.refetch(); }}>
                   Refresh readiness
-                </button>
+                </Button>
               </span>
             ) : null}
-          </label>
           {runtime !== "omnigent" && !(showAdvancedStepOptions && backendSelectable) ? (
             <span className="small" data-backend-summary>
               Backend: {formatRuntimeTargetLabel(runtime, runtimeTargetCatalog)}
@@ -13489,12 +13501,12 @@ function WorkflowStartPageContent({
         ) : null}
 
         {runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error) ? (
-          <div className="notice error small" role="alert">
+          <div className="notice error small" role="alert" id="queue-profile-submit-error">
             Profile cannot be submitted: {profileSelectionError}
           </div>
         ) : null}
         {runtime.trim().toLowerCase() === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? (
-          <div className="notice error small" role="alert">
+          <div className="notice error small" role="alert" id="queue-omnigent-submit-error">
             Omnigent cannot be submitted: {profileSelectionError}
           </div>
         ) : null}
@@ -13771,16 +13783,16 @@ function WorkflowStartPageContent({
                         <strong>{match?.title || workflowId}</strong>{" "}
                         <code className="small">{workflowId}</code>
                       </span>
-                      <button
+                      <Button variant="icon"
                         type="button"
-                        className="queue-step-icon-button destructive"
+                        className="queue-step-icon-button"
                         aria-label={`Remove prerequisite ${workflowId}`}
                         title={`Remove prerequisite ${workflowId}`}
                         onClick={() => removeDependency(workflowId)}
                       >
                         <CloseIcon />
                         <span className="sr-only">{`Remove prerequisite ${workflowId}`}</span>
-                      </button>
+                      </Button>
                     </li>
                   );
                 })}
@@ -13901,10 +13913,11 @@ function WorkflowStartPageContent({
             {publicationOutcome}
           </p>
           <div className="queue-floating-bar-row">
-            <div
+            <label
               className="queue-inline-selector queue-inline-selector--repo"
               title={repositoryTooltip}
             >
+              <span className="queue-inline-selector-label">Repository</span>
               <RepoIcon />
               <input
                 name="repository"
@@ -13917,17 +13930,20 @@ function WorkflowStartPageContent({
                   handleRepositoryChange(event.target.value)
                 }
               />
-            </div>
-            <div
+            </label>
+            <label
               className="queue-inline-selector queue-inline-selector--branch"
+              htmlFor="queue-workflow-branch"
               title={branchTooltip}
             >
+              <span className="queue-inline-selector-label">Branch</span>
               <BranchIcon />
               <BranchInputField
                 draftRef={branchDraftRef}
                 syncToken={branchInputSyncToken}
                 datalistId={BRANCH_OPTIONS_DATALIST_ID}
                 inputName="branch"
+                inputId="queue-workflow-branch"
                 ariaLabel="Branch"
                 title={branchTooltip}
                 placeholder={
@@ -13940,11 +13956,12 @@ function WorkflowStartPageContent({
                 onSettled={commitBranchSettled}
                 extraOnChange={markBranchTouchedLive}
               />
-            </div>
-            <div
+            </label>
+            <label
               className="queue-inline-selector queue-inline-selector--publish"
               title={publishModeTooltip}
             >
+              <span className="queue-inline-selector-label">Publish Mode</span>
               <PublishIcon />
               <select
                 name="publishMode"
@@ -13981,8 +13998,8 @@ function WorkflowStartPageContent({
                   PR with Merge Automation
                 </option>
               </select>
-            </div>
-            <button
+            </label>
+            <Button variant="primary"
               type="submit"
               ref={submitButtonRef}
               className={
@@ -13998,14 +14015,15 @@ function WorkflowStartPageContent({
               aria-disabled={isSubmitting || isSubmitBlocked}
               aria-busy={isSubmitting}
               aria-label={primaryCta}
+              aria-describedby={[
+                submitMessage && !submitErrorDetail ? SUBMIT_MESSAGE_ID : null,
+                runtime !== "omnigent" && (selectedProfileMissing || runtimeProfileMismatch || selectedConfiguredProfile?.execution_selection_error)
+                  ? "queue-profile-submit-error" : runtime === "omnigent" && !omnigentSelectionEligible && profileSelectionError ? "queue-omnigent-submit-error" : null,
+              ].filter(Boolean).join(" ") || undefined}
               title={primaryCtaTooltip}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 if (isSubmitBlocked) return;
-                const rect =
-                  submitButtonRef.current?.getBoundingClientRect() ?? null;
-                setSubmitRippleRect(rect);
-                setSubmitRippleKey((value) => value + 1);
                 setIsSubmitArrowExiting(true);
                 scheduleSubmitArrowExitClear();
               }}
@@ -14033,34 +14051,7 @@ function WorkflowStartPageContent({
               ) : (
                 <span>{primaryCta}</span>
               )}
-            </button>
-            {showPrimaryCtaArrow &&
-            submitRippleKey > 0 &&
-            submitRippleRect &&
-            typeof document !== "undefined"
-              ? createPortal(
-                  <span
-                    key={submitRippleKey}
-                    aria-hidden="true"
-                    style={{
-                      position: "fixed",
-                      top: submitRippleRect.top,
-                      left: submitRippleRect.left,
-                      width: submitRippleRect.width,
-                      height: submitRippleRect.height,
-                      pointerEvents: "none",
-                      borderRadius: 999,
-                      zIndex: 41,
-                    }}
-                  >
-                    <span
-                      className="queue-submit-primary-ripple"
-                      onAnimationEnd={() => setSubmitRippleKey(0)}
-                    />
-                  </span>,
-                  document.body,
-                )
-              : null}
+            </Button>
           </div>
         </div>
         </section>
@@ -14080,7 +14071,7 @@ function WorkflowStartPageContent({
                   ? "Save preset"
                   : "Delete preset"}
               </h3>
-              <button
+              <Button variant="icon"
                 type="button"
                 className="queue-step-icon-button"
                 aria-label="Close preset dialog"
@@ -14088,7 +14079,7 @@ function WorkflowStartPageContent({
                 onClick={closePresetDialog}
               >
                 <CloseIcon />
-              </button>
+              </Button>
             </div>
             <label>
               Preset Name
@@ -14123,20 +14114,15 @@ function WorkflowStartPageContent({
               </p>
             ) : null}
             <div className="actions queue-template-actions">
-              <button
+              <Button variant="ghost"
                 type="button"
-                className="secondary"
                 onClick={closePresetDialog}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button variant={presetDialogMode === "delete" ? "danger" : "primary"}
                 type="button"
-                className={
-                  presetDialogMode === "delete"
-                    ? "queue-step-icon-button destructive"
-                    : "queue-step-icon-button"
-                }
+                className="queue-step-icon-button"
                 aria-label={
                   presetDialogMode === "save"
                     ? "Confirm save preset"
@@ -14153,7 +14139,7 @@ function WorkflowStartPageContent({
                 }}
               >
                 {presetDialogMode === "save" ? <SaveIcon /> : <TrashIcon />}
-              </button>
+              </Button>
             </div>
           </section>
         </div>
