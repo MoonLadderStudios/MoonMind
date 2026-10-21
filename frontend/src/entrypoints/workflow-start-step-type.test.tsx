@@ -151,7 +151,7 @@ describe("Task Create Step Type authoring", () => {
             json: async () => ({ workflowId: "wf-123" }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=global")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({

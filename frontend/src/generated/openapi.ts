@@ -10702,12 +10702,8 @@ export interface components {
             title: string;
             /** Description */
             description: string;
-            /**
-             * Scope
-             * @default personal
-             * @enum {string}
-             */
-            scope: "personal" | "global";
+            /** Scope */
+            scope?: ("personal" | "global") | null;
             /** Scoperef */
             scopeRef?: string | null;
             /** Tags */
@@ -10907,12 +10903,8 @@ export interface components {
          * @description Request model for creating presets from draft workflow steps.
          */
         PresetSaveFromWorkflowRequestSchema: {
-            /**
-             * Scope
-             * @default personal
-             * @constant
-             */
-            scope: "personal";
+            /** Scope */
+            scope?: ("personal" | "global") | null;
             /** Scoperef */
             scopeRef?: string | null;
             /** Slug */
@@ -10948,7 +10940,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Scope */
-            scope?: ("global" | "personal") | null;
+            scope?: ("personal" | "global") | null;
             /** Inputmapping */
             inputMapping?: {
                 [key: string]: unknown;
@@ -24423,8 +24415,8 @@ export interface operations {
     };
     expand_template_api_presets__slug__expand_post: {
         parameters: {
-            query: {
-                scope: string;
+            query?: {
+                scope?: string | null;
                 scopeRef?: string | null;
             };
             header?: never;
@@ -24461,8 +24453,8 @@ export interface operations {
     };
     get_template_api_presets__slug__get: {
         parameters: {
-            query: {
-                scope: string;
+            query?: {
+                scope?: string | null;
                 scopeRef?: string | null;
             };
             header?: never;
@@ -24495,8 +24487,8 @@ export interface operations {
     };
     delete_template_api_presets__slug__delete: {
         parameters: {
-            query: {
-                scope: string;
+            query?: {
+                scope?: string | null;
                 scopeRef?: string | null;
             };
             header?: never;
@@ -24527,8 +24519,8 @@ export interface operations {
     };
     review_template_api_presets__slug__review_put: {
         parameters: {
-            query: {
-                scope: string;
+            query?: {
+                scope?: string | null;
                 scopeRef?: string | null;
             };
             header?: never;

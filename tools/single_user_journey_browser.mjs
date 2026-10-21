@@ -96,6 +96,19 @@ try {
     await visit("/settings", () =>
       page.locator("main, #root, [data-dashboard-root]").first().waitFor({ state: "visible" }),
     );
+    const hostileHost = await page.request.get(base + "/api/v1/settings/catalog", {
+      headers: { Host: "foreign.invalid" },
+    });
+    if (![401, 403].includes(hostileHost.status())) {
+      throw new Error(`foreign Host reached operator settings: ${hostileHost.status()}`);
+    }
+    const hostileOrigin = await page.request.patch(base + "/api/v1/settings/workspace", {
+      headers: { Origin: "http://foreign.invalid" },
+      data: { changes: {} },
+    });
+    if (hostileOrigin.status() !== 403) {
+      throw new Error(`foreign Origin reached operator settings: ${hostileOrigin.status()}`);
+    }
   } else if (mode.startsWith("controller-")) {
     await controllerJourney(page, visit, mode === "controller-submit");
   } else {

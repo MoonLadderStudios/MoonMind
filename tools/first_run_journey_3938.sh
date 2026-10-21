@@ -647,12 +647,23 @@ EOF
 fresh_journey() {
   local label="$1"
   checks populate "$label"
+  checks access "$label"
+  local operator_host
+  operator_host="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).netloc)' "$API_BASE")"
+  # Reuse an existing workload's network and the same checker. No test proxy or
+  # additional admission service stands in for the direct-backend boundary.
+  compose exec -T temporal-worker-workflow python - access_denied \
+    --api-base http://api:8000 --operator-host "$operator_host" \
+    --state-file /tmp/moonmind-journey-access.json \
+    < "$SCRIPT_DIR/single_user_journey_checks.py" 2>&1 | redact \
+    | tee "$LOG_DIR/$label-direct-backend.log"
   # MoonLadderStudios/MoonMind#4114: vector-free boundary proof on the
   # candidate instance (fresh installs and the post-upgrade candidate;
   # never on the pre-upgrade old release, which predates retirement).
   checks vector_free "$label"
   browser "$label"
   restart_workflow_worker
+  checks access "$label"
   cancel_from_dashboard "$label"
   checks credential "$label"
   checks verify "$label"

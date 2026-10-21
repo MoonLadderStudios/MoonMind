@@ -54,7 +54,7 @@ are retained predecessor interfaces, not an account-enrollment target.
 
 | Mode | Current use and limits |
 | --- | --- |
-| `disabled` | Default Compose local path, restricted to loopback or an approved ingress boundary. Retains an existing default user when present; guarded fresh initialization or eligible conversion permits a transient local principal without persisting a user. Never an error fallback. |
+| `disabled` | Default Compose local path, restricted to loopback or an approved ingress boundary. Settings, presets, secrets and dashboard consumers use permission admission after guarded conversion; retained UUID consumers still resolve their compatibility principal. Never an error fallback. |
 | `accounts` | Retained predecessor built-in accounts with protected first-owner setup and invite-only enrollment. No Keycloak or mandatory SMTP service. |
 | `oidc` | Advanced external identity-provider integration through a qualified generic OIDC flow (authorization code + PKCE). |
 | `header` | Advanced authenticated ingress. Only a trusted proxy may assert identity; direct API connections never accept user-controlled identity headers. |
@@ -63,8 +63,10 @@ When no default user exists, `api_service/auth_providers.py` admits that transie
 principal only after the conversion ledger records completed, published
 `fresh_init` or `eligible_conversion`. Missing or unreadable conversion evidence
 fails closed with `503 setup_required`; an identity-store failure returns
-`503 unavailable`. This compatibility path does not establish that product
-routes use the account-free admission primitive described in §13.
+`503 unavailable`. Instance settings, presets, secrets and dashboard routes instead
+consume permission-only admission after the same published conversion; they never call
+the transient-person factory. Other UUID consumers retain this compatibility
+path until their owning migration replaces it.
 
 Unknown or retired selectors fail startup with migration guidance. `keycloak`
 must not translate to `disabled`, `default` is not an undocumented alias, and
@@ -430,10 +432,10 @@ Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/operator_admission.py` (FastAPI adapter),
 `api_service/api/routers/operator_boundary_4347.py` (test-only demonstration).
 
-Disabled-mode product routes enforce configured remote ingress and local Origin
-checks. They still resolve `User` for legacy UUID consumers; local Compose still
-relies on its validated publish binding. The permission-only handoff remains
-incomplete. Demonstration routers stay unmounted. Hermetic route evidence does
+Disabled-mode product routes share peer, Host and Origin enforcement. Settings,
+presets, secrets and dashboard routes consume permission-only admission after
+published guarded conversion. Other UUID consumers retain their compatibility
+principal. Demonstration routers stay unmounted; isolated route evidence does
 not establish deployed access.
 
 The rules below describe that primitive. Admission grants operator-interface
@@ -446,8 +448,13 @@ account product, or mandatory service.
 
 | Deployment | Primitive admission rule |
 | --- | --- |
-| Local (`MOONMIND_PUBLIC_BASE_URL` omitted or explicitly loopback) | Both the connecting client address and `Host` must be loopback. No database, cookie, token, or always-on service is consulted. |
+| Local (`MOONMIND_PUBLIC_BASE_URL` omitted or explicitly loopback) | Loopback peer and Host. In Docker Compose, the adapter also recognizes the single kernel default gateway as the host publication peer when the deployment publishes loopback. It trusts no other bridge peer or forwarding claim. |
 | Remote (non-loopback `MOONMIND_PUBLIC_BASE_URL`) | Only the deployment's approved trusted ingress: `MOONMIND_TRUSTED_INGRESS=1` with `MOONMIND_TRUSTED_PROXIES` matching the connecting peer, plus a single well-formed proxy identity assertion, admitted as a boolean (no local account mapping, no role/subject import). |
+
+The Compose entrypoint disables Uvicorn forwarding-header rewriting so admission
+sees the actual connecting peer. Gateway discovery requires the Docker container
+marker and existing deployment/publish configuration; missing or ambiguous
+routing fails closed. Remote configurations still require trusted ingress.
 
 Test-only routers exercise HTTP queries and mutations
 (`/api/v1/operator/status`, `/api/v1/operator/control`), artifact
