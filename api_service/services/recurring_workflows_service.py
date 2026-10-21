@@ -7,7 +7,7 @@ import copy
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Iterable, Mapping, get_args
+from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, and_, func, or_, select
@@ -47,7 +47,7 @@ from moonmind.runtime_intent import (
     model_selection_fields,
     validate_model_selection_submission,
 )
-from moonmind.schemas.temporal_models import ObjectiveOutcomeValue
+from moonmind.statuses.workflow import workflow_objective_outcome
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
@@ -85,7 +85,6 @@ from moonmind.workflows.temporal.schedule_errors import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
-_OBJECTIVE_OUTCOME_VALUES = frozenset(get_args(ObjectiveOutcomeValue))
 
 # MoonLadderStudios/MoonMind#3833: fresh occurrences follow the installed
 # backend's qualified runtime-provider target; a schedule has no target pin of
@@ -2512,7 +2511,7 @@ class RecurringWorkflowsService:
         """Return the recorded execution each dispatched run started.
 
         A run's own outcome only says whether dispatch succeeded; the
-        execution projection carries the lifecycle state and the memo-derived
+        execution projection carries the lifecycle state and the resolved
         outcome the Workflows list shows for the same execution.
         """
 
@@ -2526,20 +2525,20 @@ class RecurringWorkflowsService:
             TemporalExecutionRecord.started_at,
             TemporalExecutionRecord.state,
             TemporalExecutionRecord.memo,
+            TemporalExecutionRecord.finish_summary_json,
         ).where(TemporalExecutionRecord.workflow_id.in_(normalized_ids))
         rows = (await self._session.execute(stmt)).all()
         executions: dict[str, ScheduleRunExecution] = {}
-        for workflow_id, started_at, state, memo in rows:
+        for workflow_id, started_at, state, memo, finish_summary in rows:
             state_value = getattr(state, "value", state)
             memo_values = memo if isinstance(memo, Mapping) else {}
-            objective_outcome = memo_values.get("objectiveOutcome")
             executions[str(workflow_id)] = ScheduleRunExecution(
                 started_at=started_at,
                 state=str(state_value),
-                objective_outcome=(
-                    objective_outcome
-                    if objective_outcome in _OBJECTIVE_OUTCOME_VALUES
-                    else None
+                objective_outcome=workflow_objective_outcome(
+                    state=str(state_value),
+                    memo=memo_values,
+                    finish_summary=finish_summary,
                 ),
                 completion_disposition=(
                     "gated_continuation"

@@ -1790,6 +1790,69 @@ async def test_strictly_newer_timestamp_replaces_without_run_link(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_terminal_objective_views_agree_after_later_activity_timestamp(tmp_path):
+    from types import SimpleNamespace
+
+    from api_service.api.routers.executions import (
+        _serialize_execution,
+        _serialize_execution_list_item,
+    )
+    from api_service.db.models import Base
+
+    workflow_time = datetime(2026, 10, 21, 17, 28, 44, 158840, tzinfo=UTC)
+    activity_time = datetime(2026, 10, 21, 17, 28, 44, 203833, tzinfo=UTC)
+    close_time = datetime(2026, 10, 21, 17, 28, 44, 335029, tzinfo=UTC)
+    workflow_id = "mm:terminal-objective-ordering"
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            source, projection = _seed_execution(
+                session,
+                workflow_id,
+                updated_at=activity_time,
+                state=MoonMindWorkflowState.COMPLETED,
+                close_status=TemporalExecutionCloseStatus.COMPLETED,
+                memo={"title": "Preserved candidate", "objectiveOutcome": "active"},
+            )
+            # Scheduled executions have no canonical admission row. Recreate
+            # a stored terminal record written before objective persistence.
+            session.expunge(source)
+            projection.closed_at = activity_time
+            projection.finish_summary_json = {
+                "finishOutcome": {"code": "PUBLISHED_PR"},
+                "publishContext": {"objectiveOutcome": "failed"},
+            }
+            await session.commit()
+
+        async with session_factory() as session:
+            desc = _temporal_desc(
+                workflow_id=workflow_id,
+                run_id="run-1",
+                updated_at=workflow_time,
+                memo={"title": "Preserved candidate", "objectiveOutcome": "failed"},
+                status=WorkflowExecutionStatus.COMPLETED,
+                close_time=close_time,
+            )
+            desc.search_attributes["mm_state"] = "completed"
+            refreshed = await sync_execution_projection(session, desc)
+            await session.commit()
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.STALE
+            assert refreshed.memo["objectiveOutcome"] == "active"
+            assert _as_utc(refreshed.updated_at) == activity_time
+
+            detail = _serialize_execution(refreshed)
+            visibility = SimpleNamespace(**await map_temporal_state_to_projection(desc))
+            listed = _serialize_execution_list_item(visibility)
+            assert detail.objective_outcome == listed.objective_outcome == "failed"
+            assert detail.state == listed.state == "completed"
+            assert detail.run_metrics["success"] is False
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_stale_observation_preserves_current_result_attribution(tmp_path):
     """REQ-05 (SQLite substitute for integration proof): a stale observation
     must not promote historical input/plan refs to the current result."""

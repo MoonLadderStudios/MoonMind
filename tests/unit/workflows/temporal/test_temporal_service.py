@@ -3632,6 +3632,84 @@ async def test_record_terminal_state_updates_projection_only_child_workflow(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("projection_only", [False, True])
+@pytest.mark.parametrize("already_terminal", [False, True])
+@pytest.mark.parametrize(
+    "stored_outcome, summary_outcome, outcome",
+    [
+        ("active", "failed", "failed"),
+        ("active", "verification_blocked", "verification_blocked"),
+        ("active", "idle", "idle"),
+        ("active", "cancelled", "cancelled"),
+        ("active", "succeeded", "succeeded"),
+        ("succeeded", "failed", "succeeded"),
+        ("failed", "succeeded", "failed"),
+    ],
+)
+async def test_record_terminal_state_persists_final_objective_on_retries(
+    tmp_path,
+    mock_client_adapter,
+    projection_only,
+    already_terminal,
+    stored_outcome,
+    summary_outcome,
+    outcome,
+):
+    async with temporal_db(tmp_path) as session:
+        now = datetime.now(UTC)
+        record_type = (
+            TemporalExecutionRecord
+            if projection_only
+            else TemporalExecutionCanonicalRecord
+        )
+        record = record_type(
+            workflow_id="mm:terminal-objective",
+            run_id="terminal-run",
+            namespace="default",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_id="system",
+            owner_type=TemporalExecutionOwnerType.SYSTEM,
+            state=(
+                MoonMindWorkflowState.COMPLETED
+                if already_terminal
+                else MoonMindWorkflowState.FINALIZING
+            ),
+            close_status=(
+                TemporalExecutionCloseStatus.COMPLETED if already_terminal else None
+            ),
+            entry="user_workflow",
+            search_attributes={"mm_updated_at": now.isoformat()},
+            memo={"title": "Preserved candidate", "objectiveOutcome": stored_outcome},
+            artifact_refs=[],
+            parameters={},
+            created_at=now,
+            started_at=now,
+            updated_at=now,
+            closed_at=now if already_terminal else None,
+        )
+        session.add(record)
+        await session.commit()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        finish_summary = {
+            "finishOutcome": {"code": "PUBLISHED_PR"},
+            "publishContext": {"objectiveOutcome": summary_outcome},
+        }
+
+        for _ in range(2):
+            result = await service.record_terminal_state(
+                workflow_id=record.workflow_id,
+                state="completed",
+                close_status="completed",
+                finish_summary=finish_summary,
+            )
+            await session.refresh(record)
+            assert record.memo["objectiveOutcome"] == outcome
+            assert result.memo["objectiveOutcome"] == outcome
+            assert result.state is MoonMindWorkflowState.COMPLETED
+            assert result.close_status is TemporalExecutionCloseStatus.COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_record_terminal_state_preserves_existing_terminal_summary(
     tmp_path, mock_client_adapter
 ):
