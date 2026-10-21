@@ -442,9 +442,10 @@ deployed access.
 The rules below describe that primitive. Admission grants operator-interface
 access without resolving or creating a persisted person. Consumer migration
 must pass resources and requested actions to business services without an
-always-admin `User` substitute. Artifact operations use the admitted `operator`
-scope; retained creator attribution and conversion-granted protected recovery
-remain separate. Execution creation retains instance ownership and resolves
+always-admin `User` substitute. Artifact and execution operations keep the
+retained local-operator UUID scope, so existing account-free output, claims and
+quota stay continuous without resolving a person; retained creator attribution
+and conversion-granted protected recovery remain separate. Execution creation retains instance ownership and resolves
 already accepted idempotent requests before current defaults. A fan-out marker
 only defers authentication to the execution capability owner; it grants neither
 operator access nor artifact recovery. It introduces no new `AUTH_PROVIDER`

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import (
     get_instance_access_optional,
     get_operator_recovery_principal,
+    instance_operator_principal,
 )
 from api_service.db.base import get_async_session
 from api_service.db.models import User
@@ -207,7 +208,7 @@ async def _resolve_principal(
     # requests. A machine marker is not artifact authority, including in local
     # mode. Ordinary account-free admission carries no person identity.
     if isinstance(user, OperatorAdmission):
-        return "operator"
+        return instance_operator_principal()
     if user is None or getattr(user, "id", None) is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

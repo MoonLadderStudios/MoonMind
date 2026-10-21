@@ -35,7 +35,7 @@ def _override_user_dependencies(app: FastAPI) -> SimpleNamespace:
         for route_entry in router.routes
         if route_entry.dependant is not None
         for dep in route_entry.dependant.dependencies
-        if dep.call.__name__ in {"_strict_current_user", "_optional_current_user"}
+        if dep.call.__name__ in {"_strict_current_user", "_optional_current_user", "get_instance_access", "get_instance_access_optional"}
     }
     if not user_dependencies:
         user_dependencies = {get_current_user(), get_current_user_optional()}

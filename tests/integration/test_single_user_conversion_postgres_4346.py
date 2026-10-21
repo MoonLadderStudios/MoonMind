@@ -25,6 +25,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.auth_providers import instance_operator_principal
 from api_service.db.models import (
     Base,
     ManagedSecret,
@@ -1531,7 +1532,8 @@ async def test_postgres_artifact_journey_needs_no_virtual_person(
     assert download.content == payload
     async with pg_maker() as db:
         artifact = await db.get(TemporalArtifact, artifact_id)
-        assert artifact.created_by_principal == "operator"
+        # Account-free writes keep the retained local-operator scope.
+        assert artifact.created_by_principal == instance_operator_principal()
         service = TemporalArtifactService(TemporalArtifactRepository(db))
         machine_owner = f"workflow:{uuid.uuid4()}"
         restricted, _ = await service.create(

@@ -156,6 +156,24 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
     return False
 
 
+def _local_operator_uuid() -> uuid.UUID:
+    try:
+        return uuid.UUID(settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID)
+    except ValueError:
+        return uuid.UUID(_DEFAULT_USER_ID)
+
+
+def instance_operator_principal() -> str:
+    """Artifact and execution scope for account-free operator admission.
+
+    Account-free installations already own artifacts, use claims and quota
+    under the local-operator UUID string. Keeping that scope preserves raw
+    access to retained restricted output and accounting continuity. It is
+    provenance only: no ``User`` row or person is resolved.
+    """
+    return str(_local_operator_uuid())
+
+
 def _transient_disabled_operator() -> User:
     """Transient local-operator principal for account-free disabled mode.
 
@@ -165,13 +183,8 @@ def _transient_disabled_operator() -> User:
     row (local administrator); relationship traversal is unavailable
     because there is no retained account to traverse.
     """
-    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-    try:
-        user_uuid = uuid.UUID(user_id_str)
-    except ValueError:
-        user_uuid = uuid.UUID(_DEFAULT_USER_ID)
     return User(
-        id=user_uuid,
+        id=_local_operator_uuid(),
         email=settings.oidc.DEFAULT_USER_EMAIL or "operator@localhost",
         is_active=True,
         is_superuser=True,

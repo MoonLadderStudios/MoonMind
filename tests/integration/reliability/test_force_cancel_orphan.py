@@ -78,6 +78,7 @@ def api(service, monkeypatch, *, owner="owner"):
         for dependency in getattr(getattr(route, "dependant", None), "dependencies", ()):
             if getattr(dependency.call, "__name__", "") in {
                 "_strict_current_user", "_optional_current_user",
+                "get_instance_access", "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
     return httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test")
