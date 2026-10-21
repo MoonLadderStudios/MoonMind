@@ -1,0 +1,237 @@
+"""PostgreSQL evidence for bounded tombstone metadata reclamation.
+
+SQLite cannot prove row locking, so these checks run against the supported
+backend: a multi-page backlog drains through the lifecycle owner, a
+protection being written concurrently keeps its tombstone, and a protection
+requested after the purge locked its tombstone reports the artifact as gone.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import func, insert, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.db.models import (
+    Base,
+    OmnigentBridgeSession,
+    TemporalArtifact,
+    TemporalArtifactLink,
+    TemporalArtifactPin,
+    TemporalArtifactStatus,
+    TemporalArtifactStorageBackend,
+)
+from moonmind.omnigent.bridge_store import SEALED_JOURNAL_CHUNKS_KEY
+from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
+    LocalTemporalArtifactStore,
+    TemporalArtifactNotFoundError,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+    generate_artifact_id,
+)
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+HORIZON = timedelta(days=7)
+
+
+@pytest_asyncio.fixture()
+async def pg_maker(control_plane_postgres_url):
+    engine = create_async_engine(control_plane_postgres_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        yield maker
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+def _service(session: AsyncSession, root: Path) -> TemporalArtifactService:
+    return TemporalArtifactService(
+        TemporalArtifactRepository(session),
+        store=LocalTemporalArtifactStore(root),
+        lifecycle_purge_after_seconds=int(HORIZON.total_seconds()),
+    )
+
+
+async def _seed_journal_tombstones(maker, count: int, *, deleted_at: datetime):
+    """Superseded journal pairs as they accumulate: deleted bytes, kept rows."""
+
+    artifact_ids = [generate_artifact_id(deleted_at) for _ in range(count)]
+    async with maker() as session:
+        await session.execute(
+            insert(TemporalArtifact),
+            [
+                {
+                    "artifact_id": artifact_id,
+                    "created_by_principal": "service:omnigent",
+                    "storage_backend": TemporalArtifactStorageBackend.LOCAL_FS,
+                    "storage_key": f"default/artifacts/{artifact_id}",
+                    "status": TemporalArtifactStatus.DELETED,
+                    "deleted_at": deleted_at,
+                    "hard_deleted_at": deleted_at,
+                    "tombstoned_at": deleted_at,
+                    "metadata_json": {},
+                }
+                for artifact_id in artifact_ids
+            ],
+        )
+        await session.execute(
+            insert(TemporalArtifactLink),
+            [
+                {
+                    "id": uuid4(),
+                    "artifact_id": artifact_id,
+                    "namespace": "default",
+                    "workflow_id": "wf-journal",
+                    "run_id": "run-1",
+                    "link_type": "runtime.omnigent.sse.raw",
+                }
+                for artifact_id in artifact_ids
+            ],
+        )
+        await session.commit()
+    return artifact_ids
+
+
+async def _count(session: AsyncSession, model) -> int:
+    return int(await session.scalar(select(func.count()).select_from(model)))
+
+
+async def test_backlog_of_journal_tombstones_drains_in_bounded_pages(
+    pg_maker, tmp_path: Path
+) -> None:
+    now = datetime.now(UTC)
+    # Withheld tombstones sort first, so every page walks past them.
+    protected = await _seed_journal_tombstones(
+        pg_maker, 3, deleted_at=now - HORIZON * 3
+    )
+    await _seed_journal_tombstones(pg_maker, 120, deleted_at=now - HORIZON * 2)
+    recent = await _seed_journal_tombstones(pg_maker, 5, deleted_at=now)
+    async with pg_maker() as session:
+        session.add_all(
+            TemporalArtifactPin(
+                id=uuid4(), artifact_id=artifact_id, pinned_by_principal="operator"
+            )
+            for artifact_id in protected[:2]
+        )
+        # A sealed chunk of a live journal is still recovery data.
+        session.add(
+            OmnigentBridgeSession(
+                bridge_session_id="bridge-active",
+                provider="codex",
+                compatibility_profile="default",
+                moonmind_workflow_id="wf-journal",
+                moonmind_agent_run_id="agent-run-1",
+                idempotency_key="idem-active",
+                omnigent_endpoint_ref="endpoint",
+                host_type="proxy",
+                status="active",
+                metadata_={SEALED_JOURNAL_CHUNKS_KEY: [{"rawEventsRef": protected[2]}]},
+            )
+        )
+        await session.commit()
+
+    async with pg_maker() as session:
+        pages = []
+        summary = await _service(session, tmp_path / "artifacts").drain_lifecycle(
+            principal="service:lifecycle",
+            limit=50,
+            time_budget=timedelta(minutes=5),
+            on_page=pages.append,
+        )
+
+        assert [page.purged_count for page in pages] == [50, 50, 20]
+        assert [page.purge_protected_count for page in pages] == [3, 3, 3]
+        assert summary.purge_protected_count == 3
+        assert summary.purged_link_count == 120
+        assert summary.drained is True
+        retained = len(protected) + len(recent)
+        assert await _count(session, TemporalArtifact) == retained
+        assert await _count(session, TemporalArtifactLink) == retained
+
+
+async def test_tombstone_with_an_in_flight_pin_is_skipped_and_retained(
+    pg_maker, tmp_path: Path
+) -> None:
+    contested, free = await _seed_journal_tombstones(
+        pg_maker, 2, deleted_at=datetime.now(UTC) - HORIZON * 2
+    )
+
+    async with pg_maker() as pinning, pg_maker() as sweeping:
+        # The pin insert holds a foreign-key lock on the tombstone until commit.
+        pinning.add(
+            TemporalArtifactPin(
+                id=uuid4(), artifact_id=contested, pinned_by_principal="operator"
+            )
+        )
+        await pinning.flush()
+
+        summary = await _service(sweeping, tmp_path / "artifacts").sweep_lifecycle(
+            principal="service:lifecycle"
+        )
+        await pinning.commit()
+
+        assert summary.purged_count == 1
+        remaining = set(
+            (await sweeping.scalars(select(TemporalArtifact.artifact_id))).all()
+        )
+        assert remaining == {contested}
+        assert free not in remaining
+        assert await _count(sweeping, TemporalArtifactPin) == 1
+
+
+@pytest.mark.parametrize("protection", ["pin", "link"])
+async def test_protection_requested_during_a_purge_reports_the_artifact_missing(
+    pg_maker, tmp_path: Path, protection: str
+) -> None:
+    (contested,) = await _seed_journal_tombstones(
+        pg_maker, 1, deleted_at=datetime.now(UTC) - HORIZON * 2
+    )
+
+    async with pg_maker() as sweeping, pg_maker() as protecting:
+        repository = TemporalArtifactRepository(sweeping)
+        now = datetime.now(UTC)
+        candidates = await repository.list_purge_candidates(
+            cutoff=now - HORIZON,
+            now=now,
+            storage_backend=TemporalArtifactStorageBackend.LOCAL_FS,
+        )
+        assert [item for item, _key, _at in candidates] == [contested]
+
+        service = _service(protecting, tmp_path / "artifacts")
+        if protection == "pin":
+            request = service.pin(
+                artifact_id=contested, principal="service:omnigent", reason="audit"
+            )
+        else:
+            request = service.link_artifact(
+                artifact_id=contested,
+                principal="service:omnigent",
+                execution_ref=ExecutionRef(
+                    namespace="default",
+                    workflow_id="wf-journal",
+                    run_id="run-2",
+                    link_type="runtime.omnigent.sse.raw",
+                ),
+            )
+        pending = asyncio.ensure_future(request)
+        await asyncio.sleep(0.5)
+        assert not pending.done()
+
+        await repository.purge_artifacts([contested])
+        await sweeping.commit()
+
+        with pytest.raises(TemporalArtifactNotFoundError):
+            await pending
