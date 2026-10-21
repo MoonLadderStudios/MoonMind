@@ -16,7 +16,10 @@ appear on this path: admission is transport + trusted-ingress proof only.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import os
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 
@@ -50,7 +53,49 @@ def _request_inputs(request: Request) -> dict:
         "host_header": request.headers.get("host"),
         "method": request.method or "GET",
         "headers": headers,
+        "local_host_gateway": _local_compose_host_gateway(),
     }
+
+
+def _local_compose_host_gateway() -> str | None:
+    """Identify the Docker host peer for this instance's loopback publication.
+
+    Docker port publication arrives from the host gateway, not 127.0.0.1.
+    Trust only the container's single kernel default gateway, and only for a
+    Compose deployment configured to publish loopback. Ordinary bridge peers
+    and caller-supplied forwarding headers provide no such proof. Host-native
+    servers and ambiguous/unreadable container routing remain loopback-only.
+    """
+    if (
+        not os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME")
+        or not Path("/.dockerenv").is_file()
+    ):
+        return None
+    publish_host = os.environ.get("MOONMIND_API_PUBLISH_HOST", "").strip().strip("[]")
+    try:
+        loopback_publish = (
+            publish_host == "localhost"
+            or ipaddress.ip_address(publish_host).is_loopback
+        )
+    except ValueError:
+        loopback_publish = False
+    if not loopback_publish:
+        return None
+    try:
+        gateways = {
+            str(ipaddress.IPv4Address(bytes.fromhex(fields[2])[::-1]))
+            for line in Path("/proc/net/route").read_text().splitlines()[1:]
+            if (
+                len(fields := line.split()) >= 8
+                and fields[1] == "00000000"
+                and fields[7] == "00000000"
+                and int(fields[3], 16) & 3 == 3
+                and fields[2] != "00000000"
+            )
+        }
+    except (OSError, ValueError):
+        return None
+    return next(iter(gateways)) if len(gateways) == 1 else None
 
 
 async def require_operator(request: Request) -> OperatorAdmission:
@@ -67,8 +112,6 @@ async def require_operator_optional(request: Request) -> OperatorAdmission | Non
     Missing admission signals return ``None``; an invalid presented
     credential raises instead of falling back to anonymous success.
     """
-    import ipaddress
-
     from moonmind.security.operator_admission import _proxy_identity_header_name
 
     inputs = _request_inputs(request)
@@ -79,7 +122,11 @@ async def require_operator_optional(request: Request) -> OperatorAdmission | Non
         ).is_loopback
     except ValueError:
         loopback = False
-    if not loopback and not headers.get(_proxy_identity_header_name()):
+    host_peer = (
+        bool(inputs["local_host_gateway"])
+        and inputs["client_host"] == inputs["local_host_gateway"]
+    )
+    if not loopback and not host_peer and not headers.get(_proxy_identity_header_name()):
         # No admission signal presented: the separately authenticated
         # machine path authorizes below; nothing is swallowed.
         return None
@@ -110,6 +157,7 @@ async def admit_websocket(websocket) -> OperatorAdmission:
             # would never provide for sockets.
             method="POST",
             headers=headers,
+            local_host_gateway=_local_compose_host_gateway(),
         )
     except OperatorAdmissionError as exc:
         logger.info(

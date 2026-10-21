@@ -70,6 +70,8 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMoc
                     "_current_user_fallback",
                     "_strict_current_user",
                     "_optional_current_user",
+                    "get_instance_access",
+                    "get_instance_access_optional",
                 }:
                     app.dependency_overrides[dep.call] = lambda: mock_user
     return mock_user

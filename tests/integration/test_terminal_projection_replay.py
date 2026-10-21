@@ -131,6 +131,8 @@ async def test_terminal_describe_repairs_metadata_skew(
             if getattr(dependency.call, "__name__", "") in {
                 "_strict_current_user",
                 "_optional_current_user",
+                "get_instance_access",
+                "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)

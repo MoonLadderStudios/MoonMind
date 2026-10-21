@@ -142,7 +142,11 @@ async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
         wrapped = getattr(route, "original_router", route)
         routes.extend(getattr(wrapped, "routes", ()))
         for dependency in getattr(getattr(route, "dependant", None), "dependencies", ()):
-            if getattr(dependency.call, "__name__", "") == "_current_user_fallback":
+            if getattr(dependency.call, "__name__", "") in {
+                "_current_user_fallback",
+                "get_instance_access",
+                "get_instance_access_optional",
+            }:
                 app.dependency_overrides[dependency.call] = lambda: user
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)
 
@@ -210,7 +214,11 @@ async def test_product_list_repairs_included_rows_and_excludes_persisted_interna
         route = routes.pop()
         routes.extend(getattr(getattr(route, "original_router", route), "routes", ()))
         for dependency in getattr(getattr(route, "dependant", None), "dependencies", ()):
-            if getattr(dependency.call, "__name__", "") == "_current_user_fallback":
+            if getattr(dependency.call, "__name__", "") in {
+                "_current_user_fallback",
+                "get_instance_access",
+                "get_instance_access_optional",
+            }:
                 app.dependency_overrides[dependency.call] = lambda: user
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:

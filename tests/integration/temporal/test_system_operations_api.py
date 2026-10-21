@@ -63,6 +63,8 @@ def test_worker_pause_route_matches_settings_runtime_contract(
 
     app.dependency_overrides[get_async_session] = _session_dep
     app.dependency_overrides[_get_temporal_execution_service] = FakeTemporalService
+    # Dashboard pages share the settings routes' instance dependency.
+    app.dependency_overrides[SETTINGS_CURRENT_USER_DEP] = _override_user
     for route in app.routes:
         dependant = getattr(route, "dependant", None)
         if dependant is None:

@@ -379,7 +379,7 @@ class PresetCreateRequestSchema(BaseModel):
     slug: Optional[str] = None
     title: str
     description: str
-    scope: Literal["personal", "global"] = "personal"
+    scope: Literal["personal", "global"] | None = None
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     tags: list[str] = Field(default_factory=list)
     inputs: list[PresetInputSchema] = Field(default_factory=list)
@@ -460,7 +460,7 @@ class PresetSaveFromWorkflowRequestSchema(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    scope: Literal["personal"] = "personal"
+    scope: Literal["personal", "global"] | None = None
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     slug: Optional[str] = None
     title: str

@@ -16,6 +16,7 @@ from moonmind.security.auth_modes_4120 import (
     get_request_production_mode,
     is_disabled_local_mode,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 logger = logging.getLogger(__name__)
 
@@ -123,9 +124,8 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
     Returns True only when the guarded conversion ledger records a
     completed, published fresh-init or eligible conversion: migration
     state proves the source needed no account (or converted cleanly), so
-    ordinary disabled-mode routes may serve a transient local-operator
-    principal without minting a synthetic User row. Fresh installations
-    initialize without a person and successful restarts no longer require
+    ordinary disabled-mode routes may serve operator admission without resolving
+    a person. Fresh installations and successful restarts no longer require
     live account tables. Any error -- including a missing ledger table on
     pre-386 schemas -- fails closed to False. A later subsystem conversion
     must not revoke already-established admission; its new access authority
@@ -156,6 +156,24 @@ async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
     return False
 
 
+def _local_operator_uuid() -> uuid.UUID:
+    try:
+        return uuid.UUID(settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID)
+    except ValueError:
+        return uuid.UUID(_DEFAULT_USER_ID)
+
+
+def instance_operator_principal() -> str:
+    """Artifact and execution scope for account-free operator admission.
+
+    Account-free installations already own artifacts, use claims and quota
+    under the local-operator UUID string. Keeping that scope preserves raw
+    access to retained restricted output and accounting continuity. It is
+    provenance only: no ``User`` row or person is resolved.
+    """
+    return str(_local_operator_uuid())
+
+
 def _transient_disabled_operator() -> User:
     """Transient local-operator principal for account-free disabled mode.
 
@@ -165,13 +183,8 @@ def _transient_disabled_operator() -> User:
     row (local administrator); relationship traversal is unavailable
     because there is no retained account to traverse.
     """
-    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-    try:
-        user_uuid = uuid.UUID(user_id_str)
-    except ValueError:
-        user_uuid = uuid.UUID(_DEFAULT_USER_ID)
     return User(
-        id=user_uuid,
+        id=_local_operator_uuid(),
         email=settings.oidc.DEFAULT_USER_EMAIL or "operator@localhost",
         is_active=True,
         is_superuser=True,
@@ -179,7 +192,9 @@ def _transient_disabled_operator() -> User:
     )
 
 
-async def _load_disabled_user(session: AsyncSession) -> User:
+async def _load_disabled_user(
+    session: AsyncSession, *, allow_transient: bool = True
+) -> User:
     """Resolve the persisted local-mode principal, failing closed.
 
     A present default row keeps serving exactly as before (existing
@@ -205,7 +220,7 @@ async def _load_disabled_user(session: AsyncSession) -> User:
         )
         raise HTTPException(status_code=503, detail="unavailable")
     if user_obj is None:
-        if await _disabled_account_free_allowed(session):
+        if allow_transient and await _disabled_account_free_allowed(session):
             logger.info(
                 "auth_event mode=disabled reason=local_operator code=account_free",
             )
@@ -325,6 +340,45 @@ async def _strict_current_user(
     user = await _resolve_session_principal(request, session, optional=False)
     assert user is not None
     return user
+
+
+async def get_instance_access(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+) -> User | OperatorAdmission:
+    """Instance consumers receive admission, never an account-free User.
+
+    The published conversion ledger protects retained data. Predecessor account
+    deployments retain their existing session authority and persisted principal
+    until their owning conversion completes; no virtual person is made here.
+    """
+    if is_disabled_local_mode():
+        from api_service.operator_admission import require_operator
+
+        admission = await require_operator(request)
+        if await _disabled_account_free_allowed(session):
+            request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
+            return admission
+        # Unconverted installations can still serve their retained real account.
+        return await _load_disabled_user(session, allow_transient=False)
+    return await get_current_user()(request, session)
+
+
+async def get_instance_access_optional(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+) -> User | OperatorAdmission | None:
+    """Instance admission with the existing separately verified fan-out path.
+
+    A fan-out marker only defers authentication to its owning route. Artifact
+    consumers reject the missing admission; execution consumers must verify the
+    capability and its parent. No marker can mint operator recovery authority.
+    """
+    if request.headers.get("x-moonmind-execution-fanout", "").strip() == "v1":
+        return None
+    if is_disabled_local_mode():
+        return await get_instance_access(request, session)
+    return await _optional_current_user(request, session)
 
 
 async def _optional_current_user(

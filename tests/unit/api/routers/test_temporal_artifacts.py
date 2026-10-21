@@ -15,7 +15,7 @@ from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     router,
 )
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access_optional
 from api_service.db import models as db_models
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactExpiredError,
@@ -84,17 +84,7 @@ def _override_user_dependencies(app: FastAPI) -> None:
     mock_user = SimpleNamespace(
         id=uuid4(), email="artifact@example.com", is_active=True
     )
-    user_dependencies = {
-        dep.call
-        for route in router.routes
-        if route.dependant is not None
-        for dep in route.dependant.dependencies
-        if dep.call.__name__ in {"_current_user_fallback", "_optional_current_user"}
-    }
-    if not user_dependencies:
-        user_dependencies = {get_current_user(), get_current_user_optional()}
-    for dependency in user_dependencies:
-        app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
+    app.dependency_overrides[get_instance_access_optional] = lambda: mock_user
 
 def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()

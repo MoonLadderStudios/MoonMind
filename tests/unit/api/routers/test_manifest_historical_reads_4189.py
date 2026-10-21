@@ -44,7 +44,12 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
         get_temporal_client_adapter,
         router,
     )
-    from api_service.auth_providers import get_current_user, get_current_user_optional
+    from api_service.auth_providers import (
+        get_current_user,
+        get_current_user_optional,
+        get_instance_access,
+        get_instance_access_optional,
+    )
     from api_service.db.base import get_async_session
     from api_service.db.models import Base
     from moonmind.workflows.temporal import (
@@ -111,6 +116,10 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
             app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
             app.dependency_overrides[get_current_user()] = lambda: principal["user"]
             app.dependency_overrides[get_current_user_optional()] = (
+                lambda: principal["user"]
+            )
+            app.dependency_overrides[get_instance_access] = lambda: principal["user"]
+            app.dependency_overrides[get_instance_access_optional] = (
                 lambda: principal["user"]
             )
 

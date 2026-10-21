@@ -2662,7 +2662,7 @@ describe("WorkflowStart schedule mode entry", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=global")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -2916,7 +2916,7 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=global")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -8760,7 +8760,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -8824,7 +8824,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -8884,7 +8884,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -8976,7 +8976,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -9066,7 +9066,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -9191,7 +9191,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -9275,7 +9275,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -9394,7 +9394,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -9500,7 +9500,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -9664,7 +9664,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -10199,6 +10199,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+
   it("adds hover tooltips to Create page buttons", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
@@ -10429,7 +10430,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -10510,7 +10511,7 @@ describe.skip("Task Create Entrypoint", () => {
     const defaultFetch = fetchSpy.getMockImplementation();
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -14519,7 +14520,7 @@ describe("Task Create MM-641 authoring validation", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -15281,7 +15282,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         json: async () => ({ items: [] }),
       } as Response);
     }
-    if (url.startsWith("/api/presets?scope=global")) {
+    if (url === "/api/presets") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -15599,7 +15600,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     };
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -15736,7 +15737,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("explains a submit-time preset publish policy that needs the cleared repository", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -15987,7 +15988,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("submits Jira Orchestrate preset runs with the executable first-step skill", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -16102,7 +16103,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("defaults parent publish mode to none when selecting Jira Breakdown and Orchestrate as a Preset step", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -16276,7 +16277,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     };
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -16387,7 +16388,7 @@ describe("Task Create MM-578 Preset expansion", () => {
   it("does not force none publish mode from stale Jira Breakdown preset provenance", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -17628,7 +17629,7 @@ describe("Task Create schema-driven capability inputs", () => {
         json: async () => ({ items: [] }),
       } as Response);
     }
-    if (url.startsWith("/api/presets?scope=global")) {
+    if (url === "/api/presets") {
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -18176,7 +18177,7 @@ describe("Task Create schema-driven capability inputs", () => {
     };
     fetchSpy.mockImplementation((input, init) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({ ok: true, json: async () => ({ items: [detail] }) } as Response);
       }
       if (url.startsWith(`/api/presets/${slug}?`)) {
@@ -18235,7 +18236,7 @@ describe("Task Create schema-driven capability inputs", () => {
   it("keeps an advanced-only preset schema hidden without rendering its legacy fallback", async () => {
     fetchSpy.mockImplementation(async (input, init) => {
       const response = await mockSchemaCapabilityFetch(input, init);
-      if (String(input).startsWith("/api/presets?scope=global")) {
+      if (String(input) === "/api/presets") {
         const body = await response.json();
         return {
           ok: true,
@@ -20004,7 +20005,7 @@ describe("Task Create governed Tool authoring", () => {
           }),
         } as Response);
       }
-      if (url.startsWith("/api/presets?scope=global")) {
+      if (url === "/api/presets") {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -20977,6 +20978,14 @@ describe("Task Create runtime switch layout stability", () => {
     fetchSpy.mockRestore();
   });
 
+  it("loads the instance preset catalog without requesting person partitions", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => {
+      expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/presets")).toBe(true);
+    });
+    expect(fetchSpy.mock.calls.some(([url]) => /\/api\/presets\?scope=/.test(String(url)))).toBe(false);
+  });
+
   it("keeps Profile inventory and an explicit Profile recoverable when the Harness changes", async () => {
     const fallback = fetchSpy.getMockImplementation()!;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -21520,7 +21529,7 @@ describe("Task Create runtime switch layout stability", () => {
     const detail = { slug: "saved-selection", scope: "global", title: "Saved selection", description: "Saved model intent", inputs: [] };
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.startsWith("/api/presets?")) return Promise.resolve({ ok: true, json: async () => ({ items: [detail] }) } as Response);
+      if (url === "/api/presets") return Promise.resolve({ ok: true, json: async () => ({ items: [detail] }) } as Response);
       if (url.startsWith("/api/presets/saved-selection:expand")) {
         return Promise.resolve({ ok: true, json: async () => ({
           steps: [{ id: "saved-work", type: "skill", instructions: "Restored selection", skill: { id: "auto", args: {}, runtime }, ...(Object.keys(runtime).length ? { runtime } : {}) }],

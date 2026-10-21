@@ -124,7 +124,9 @@ def fanout_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
     app.dependency_overrides[temporal_artifacts._get_temporal_artifact_service] = (
         lambda: artifact_service
     )
-    with TestClient(app) as client:
+    with TestClient(
+        app, base_url="http://localhost", client=("127.0.0.1", 32000)
+    ) as client:
         yield SimpleNamespace(
             client=client,
             session=session,
@@ -332,7 +334,7 @@ def test_completed_conversion_admits_account_free_artifact_operator(
 
     assert response.status_code == 200, response.text
     assert response.json()["items"] == []
-    fanout_client.session.get.assert_awaited_once_with(User, UUID(operator_id))
+    fanout_client.session.get.assert_not_awaited()
     fanout_client.session.execute.assert_awaited_once()
     assert (
         fanout_client.artifact_service.list_authorized_collection.await_args.kwargs[

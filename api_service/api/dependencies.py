@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 
 from api_service.db.models import User
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 
 def ensure_preset_catalog_enabled() -> None:
     """Raise a 404 when the preset catalog is disabled."""
@@ -20,15 +21,26 @@ def ensure_preset_catalog_enabled() -> None:
 
 def resolve_template_scope_for_user(
     *,
-    user: User,
-    scope: str,
+    user: User | OperatorAdmission,
+    scope: str | None,
     scope_ref: str | None,
     write: bool = False,
 ) -> tuple[str, str | None]:
     """Normalize and authorize scope access for template catalog requests."""
 
-    normalized_scope = str(scope or "").strip().lower()
+    default_scope = "global" if isinstance(user, OperatorAdmission) else "personal"
+    normalized_scope = str(scope or default_scope).strip().lower()
     normalized_scope_ref = str(scope_ref or "").strip() or None
+    if isinstance(user, OperatorAdmission):
+        if normalized_scope != "global" or normalized_scope_ref is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_template_scope",
+                    "message": "Instance presets have no personal scope or scopeRef.",
+                },
+            )
+        return "global", None
     user_id = str(getattr(user, "id", "") or "")
     is_superuser = bool(getattr(user, "is_superuser", False))
 

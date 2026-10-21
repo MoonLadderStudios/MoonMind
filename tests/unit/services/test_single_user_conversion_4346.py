@@ -383,8 +383,8 @@ async def test_schedule_preset_settings_workflow_surfaces_attribute_owners(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_single_operator_subsystem_presence_requires_coverage(tmp_path):
-    """One operator with schedules/presets refuses without registered coverage."""
+async def test_single_operator_instance_resources_publish_without_noop_transforms(tmp_path):
+    """Instance resources preserve their existing owners' supported behavior."""
     from api_service.services import single_user_conversion as suc
 
     engine, factory = _factory(tmp_path, "single-surface.db")
@@ -422,13 +422,13 @@ async def test_single_operator_subsystem_presence_requires_coverage(tmp_path):
         assert decision.disposition == "eligible_conversion"
         assert set(decision.present_subsystems) >= {"schedules", "presets"}
         pre = await suc.preflight(session)
-        # Shared entrypoint default transforms cover only profile_secrets,
-        # so schedules/presets presence must refuse rather than partially convert.
+        # These owners already consume schedules and global presets without
+        # changing their stored identities, content or accepted work.
         result = await suc.run_guarded_upgrade(
             session, operator_authorized=True
         )
-        assert result.published is False
-        assert result.decision.reason_code == "missing_transform_coverage"
+        assert result.published is True
+        assert result.decision.reason_code == "single_operator"
         assert result.digest == pre.digest
 
 
@@ -475,7 +475,7 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
     import logging
 
     from api_service.db import base as db_base
-    from api_service.db.models import RecurringWorkflowDefinition
+    from api_service.db.models import SettingsOverride
     from api_service.main import _run_guarded_single_user_upgrade
 
     engine, factory = _factory(tmp_path, "startup-refusal.db")
@@ -484,11 +484,11 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
     async with factory() as session:
         u = await _mk_user(session)
         session.add(
-            RecurringWorkflowDefinition(
-                name="sched-secret-name",
-                cron="0 * * * *",
-                timezone="UTC",
-                owner_user_id=u.id,
+            SettingsOverride(
+                scope="user",
+                user_id=u.id,
+                key="theme",
+                value_json="setting-secret-value",
             )
         )
         await session.commit()
@@ -514,6 +514,6 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
     assert summary["published"] is False
     assert (
         "Single-user guarded upgrade blocked (missing_transform_coverage: "
-        "retained subsystems lack registered transforms: schedules)"
+        "retained subsystems lack registered transforms: settings)"
     ) in logged
-    assert "sched-secret-name" not in logged
+    assert "setting-secret-value" not in logged

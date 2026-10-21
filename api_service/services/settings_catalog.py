@@ -474,6 +474,10 @@ def coerce_settings_subject_id(value: Any) -> UUID | None:
 
 
 def settings_permissions_for_user(user: Any) -> set[str]:
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    if isinstance(user, OperatorAdmission):
+        return set(SETTINGS_PERMISSION_NAMES) - {"settings.user.write"}
     if bool(getattr(user, "is_superuser", False)):
         return set(SETTINGS_PERMISSION_NAMES)
     raw_permissions = getattr(user, "settings_permissions", set()) or set()

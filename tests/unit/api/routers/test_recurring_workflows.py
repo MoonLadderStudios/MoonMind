@@ -735,6 +735,8 @@ async def test_recurring_http_api_rejects_retired_retrieval_without_persisting(
             if dependency.call.__name__ in {
                 "_strict_current_user",
                 "_optional_current_user",
+                "get_instance_access",
+                "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
 
@@ -820,6 +822,8 @@ async def test_mm3935_schedule_edit_route_admits_a_default_omnigent_target(
             if dependency.call.__name__ in {
                 "_strict_current_user",
                 "_optional_current_user",
+                "get_instance_access",
+                "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
 

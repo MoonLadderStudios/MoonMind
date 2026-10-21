@@ -74,7 +74,12 @@ from api_service.api.execution_principal import (
 )
 from api_service.api.routers.temporal_artifacts import _resolve_recovery_principal
 from api_service.api.schemas import CreateJobRequest
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import (
+    get_current_user,
+    get_instance_access,
+    get_instance_access_optional,
+    instance_operator_principal,
+)
 from api_service.core import sync as execution_sync
 from api_service.db import models as db_models
 from api_service.db.base import async_session_maker, get_async_session
@@ -149,6 +154,7 @@ from moonmind.runtime_intent import (
     validate_runtime_tier_intent,
     has_profile_selector,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchApiSourceModel,
@@ -2596,18 +2602,20 @@ def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
 
 
-def _owner_id(user: User | None) -> str | None:
+def _owner_id(user: User | OperatorAdmission | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
 
 
-def _execution_principal(user: User | None) -> str:
+def _execution_principal(user: User | OperatorAdmission | None) -> str:
     """Single-user (#4351) execution principal with instance fallback.
 
-    The admitted operator without a persisted account row acts as the
-    stable ``system`` principal; legacy human-owner id strings persist as
-    non-authoritative provenance on retained records.
+    Permission admission shares the artifact routes' instance-operator scope,
+    distinct from machine execution ownership. Legacy human-owner strings
+    remain provenance on retained records.
     """
+    if isinstance(user, OperatorAdmission):
+        return instance_operator_principal()
     return _owner_id(user) or "system"
 
 
@@ -6419,7 +6427,7 @@ async def _hydrate_execution_report_projection(
     if session is None or execution.entry != "user_workflow" or not execution.run_id:
         return execution
 
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     try:
         artifact_service = get_temporal_artifact_service(session)
         report_roles = (
@@ -10448,7 +10456,7 @@ async def _validate_model_selection_submission(
         try:
             _artifact, body = await get_temporal_artifact_service(session).read(
                 artifact_id=_artifact_id_from_ref(ref),
-                principal=str(getattr(user, "id", "") or "system"),
+                principal=_execution_principal(user),
                 allow_restricted_raw=True,
             )
             return json.loads(body.decode("utf-8"))
@@ -10630,7 +10638,7 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         artifact_service = get_temporal_artifact_service(session)
         _artifact, body = await artifact_service.read(
             artifact_id=artifact_id,
-            principal=str(getattr(user, "id", "") or "system"),
+            principal=_execution_principal(user),
             allow_restricted_raw=True,
         )
         decoded = json.loads(body.decode("utf-8"))
@@ -10769,7 +10777,7 @@ async def _persist_original_workflow_input_snapshot(
         source_run_id=source_run_id,
     )
     artifact_service = get_temporal_artifact_service(session)
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     body = json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )
@@ -11604,8 +11612,19 @@ async def _create_execution_from_workflow_request(
     create_idempotency_key = str(
         task_payload.get("idempotencyKey") or payload.get("idempotencyKey") or ""
     ).strip()
+    if create_idempotency_key and isinstance(user, OperatorAdmission):
+        # A permission handoff must not change the identity of accepted work.
+        # The service owns instance create identity, including requests admitted
+        # with the predecessor UUID-derived workflow ID.
+        existing_execution = await service.find_create_execution(
+            idempotency_key=create_idempotency_key,
+            owner_id=None,
+            workflow_type="MoonMind.UserWorkflow",
+        )
+        if existing_execution is not None:
+            return _serialize_execution(existing_execution, user=user)
     reserved_workflow_id = (
-        f"mm:{uuid5(NAMESPACE_URL, f'{user.id}:user-workflow:{create_idempotency_key}')}"
+        f"mm:{uuid5(NAMESPACE_URL, f'{_execution_principal(user)}:user-workflow:{create_idempotency_key}')}"
         if create_idempotency_key
         else f"mm:{uuid4()}"
     )
@@ -11758,7 +11777,7 @@ async def _create_execution_from_workflow_request(
     ) = await _validate_and_collect_task_input_attachments(
         task_payload=task_payload,
         session=session,
-        principal=str(user.id),
+        principal=_execution_principal(user),
     )
     step_count = _coerce_step_count(task_payload.get("steps"))
     normalized_steps = _normalize_task_steps(task_payload)
@@ -12456,7 +12475,7 @@ async def _create_execution_from_workflow_request(
             attachment_refs=attachment_index,
         )
         artifact_service = get_temporal_artifact_service(session)
-        principal_id = str(getattr(user, "id", "") or "system")
+        principal_id = _execution_principal(user)
         (
             prelaunch_task_input_snapshot_ref,
             prelaunch_task_input_snapshot_digest,
@@ -14938,7 +14957,7 @@ async def create_execution(
     payload: dict[str, Any] = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User | None = Depends(get_current_user_optional()),
+    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -15293,7 +15312,7 @@ async def list_executions(
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
@@ -18089,7 +18108,7 @@ async def describe_execution(
     response: Response,
     source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
-    user: User | None = Depends(get_current_user_optional()),
+    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -20007,7 +20026,7 @@ async def cancel_execution(
     response: Response,
     payload: CancelExecutionRequest | None = None,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User | None = Depends(get_current_user_optional()),
+    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
     authorization: str | None = Header(None, alias="Authorization"),
     execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),

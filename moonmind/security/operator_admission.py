@@ -134,7 +134,7 @@ class OperatorAdmissionError(Exception):
 class OperatorAdmission:
     """Permission to use the operator interface (no person identity)."""
 
-    via: str  # "loopback" | "trusted_ingress"
+    via: str  # "loopback" | "host_publish" | "trusted_ingress"
     subject: None = None  # Always None: no persisted person is resolved.
 
     def describe(self) -> str:
@@ -528,6 +528,7 @@ def resolve_operator_admission(
     method: str = "GET",
     headers: Mapping | None = None,
     environ: Mapping | None = None,
+    local_host_gateway: str | None = None,
 ) -> OperatorAdmission:
     """Resolve operator admission for one request (no I/O, no database).
 
@@ -573,6 +574,13 @@ def resolve_operator_admission(
         if _is_loopback_ip(client_host) and _is_loopback_host(host_header):
             logger.info("auth_event boundary=operator reason=admitted via=loopback")
             return OperatorAdmission(via="loopback")
+        if (
+            local_host_gateway
+            and client_host == local_host_gateway
+            and _is_loopback_host(host_header)
+        ):
+            logger.info("auth_event boundary=operator reason=admitted via=host_publish")
+            return OperatorAdmission(via="host_publish")
         logger.info("auth_event boundary=operator reason=denial code=auth_required")
         raise OperatorAdmissionError(
             "auth_required",

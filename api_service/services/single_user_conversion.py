@@ -1315,6 +1315,59 @@ def _scrub_outcome_keys(mapping: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _preserved_instance_subsystems(session: AsyncSession) -> set[str]:
+    """Identify retained resources already consumed without an owner predicate.
+
+    Schedule and execution owners already treat historical human fields as
+    provenance. Rewriting those rows would change accepted work needlessly.
+    Workspace settings and global presets likewise need no data conversion.
+    Legacy personal data still needs its owning conversion; the existence of
+    a single person alone does not make it visible to instance consumers.
+    Called only under the guarded apply's inventory locks with real defaults.
+    """
+    from api_service.db.models import (
+        Preset,
+        PresetFavorite,
+        PresetRecent,
+        PresetScopeType,
+        SettingsOverride,
+    )
+
+    async def has_rows(model, predicate) -> bool:
+        try:
+            async with session.begin_nested():
+                return (
+                    await session.execute(
+                        select(1).select_from(model).where(predicate).limit(1)
+                    )
+                ).first() is not None
+        except Exception as exc:
+            if _is_absent_table_error(exc):
+                return False
+            raise
+
+    preserved = {"schedules", "temporal"}
+    zero = UUID(DEPLOYMENT_SUBJECT_ID)
+    if not await has_rows(
+        SettingsOverride,
+        or_(
+            SettingsOverride.scope != "workspace",
+            SettingsOverride.user_id != zero,
+            SettingsOverride.workspace_id != zero,
+        ),
+    ):
+        preserved.add("settings")
+    personal_catalog = await has_rows(
+        Preset,
+        or_(Preset.scope_type != PresetScopeType.GLOBAL, Preset.scope_ref.is_not(None)),
+    )
+    personal_favorites = await has_rows(PresetFavorite, PresetFavorite.user_id != zero)
+    personal_recents = await has_rows(PresetRecent, PresetRecent.user_id != zero)
+    if not (personal_catalog or personal_favorites or personal_recents):
+        preserved.add("presets")
+    return preserved
+
+
 async def apply_conversion(
     session: AsyncSession,
     preflight_result: PreflightResult,
@@ -1384,7 +1437,16 @@ async def apply_conversion(
                 digest=preflight_result.digest, published=False, decision=decision
             )
 
-        missing = [s for s in fresh.present_subsystems if s not in transforms]
+        preserved = (
+            await _preserved_instance_subsystems(session)
+            if production_transforms
+            else set()
+        )
+        missing = [
+            s
+            for s in fresh.present_subsystems
+            if s not in transforms and s not in preserved
+        ]
         if missing:
             return ApplyResult(
                 digest=preflight_result.digest,
@@ -1747,11 +1809,10 @@ async def artifacts_transform(
 
 
 #: Production subsystem transforms registered into the shared entrypoint.
-#: ``profile_secrets`` is the concrete #4349 conversion. Settings, presets,
-#: schedules, temporal, and workflow transforms are owned by
-#: subsystem child issues; until they register here, an eligible source
-#: holding those subsystems refuses with ``missing_transform_coverage``
-#: rather than exposing a partially converted result.
+#: Only subsystems that mutate data need transforms. Existing instance-scoped
+#: settings/presets and owner-independent schedules/executions are preserved by
+#: the guarded entrypoint. Personal settings/presets and legacy workflow data
+#: still refuse until their owning conversion is available.
 DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
     "profile_secrets": profile_secrets_transform,
     "artifacts": artifacts_transform,

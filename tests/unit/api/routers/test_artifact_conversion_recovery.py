@@ -12,7 +12,11 @@ from sqlalchemy import select
 
 from api_service.api.routers import temporal_artifacts
 from api_service.api.routers import agent_runs, sessions
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import (
+    get_current_user,
+    get_current_user_optional,
+    get_instance_access_optional,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     TemporalArtifact, TemporalArtifactRedactionLevel, TemporalArtifactUseClaim,
@@ -165,6 +169,7 @@ async def test_session_and_direct_recovery_share_trusted_operator_scope(
             local_identity = User(id=UUID(DEFAULT_OPERATOR), email="operator@example.invalid")
             untrusted.dependency_overrides[get_current_user()] = lambda: local_identity
             untrusted.dependency_overrides[get_current_user_optional()] = lambda: local_identity
+            untrusted.dependency_overrides[get_instance_access_optional] = lambda: local_identity
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=untrusted),
                                         base_url="http://localhost") as client:
                 for path in [f"/api/artifacts/{rows['main']}/download",
@@ -432,8 +437,10 @@ async def test_default_uuid_without_server_admission_cannot_use_conversion_grant
             app = mounted_app(session, tmp_path)
             # This simulates an authenticated UUID, not disabled-mode admission.
             # The actual artifact principal and recovery dependencies stay intact.
-            app.dependency_overrides[get_current_user_optional()] = lambda: User(
+            authenticated = User(
                 id=UUID(DEFAULT_OPERATOR), email="other@example.invalid", is_active=True)
+            app.dependency_overrides[get_current_user_optional()] = lambda: authenticated
+            app.dependency_overrides[get_instance_access_optional] = lambda: authenticated
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                         base_url="http://localhost") as client:
                 response = await client.get(f"/api/artifacts/{artifact_id}/download",

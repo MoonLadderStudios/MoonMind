@@ -7,7 +7,6 @@
     "event": "tier",
     "parameters": {},
     "request": {
-      "scope": "personal",
       "title": "Model selection tier",
       "description": "Model selection tier",
       "steps": [
@@ -36,7 +35,6 @@
     "event": "clear-model",
     "parameters": {},
     "request": {
-      "scope": "personal",
       "title": "Model selection custom-model-default",
       "description": "Model selection custom-model-default",
       "steps": [
@@ -66,7 +64,6 @@
     "event": "clear-both",
     "parameters": {},
     "request": {
-      "scope": "personal",
       "title": "Model selection custom-defaults",
       "description": "Model selection custom-defaults",
       "steps": [
@@ -98,7 +95,6 @@
       "seed": 7
     },
     "request": {
-      "scope": "personal",
       "title": "Model selection saved-mixed",
       "description": "Model selection saved-mixed",
       "steps": [
@@ -132,7 +128,6 @@
       "temperature": 0
     },
     "request": {
-      "scope": "personal",
       "title": "Model selection saved-partial",
       "description": "Model selection saved-partial",
       "steps": [
@@ -161,7 +156,6 @@
     "event": "untouched",
     "parameters": {},
     "request": {
-      "scope": "personal",
       "title": "Model selection omitted",
       "description": "Model selection omitted",
       "steps": [

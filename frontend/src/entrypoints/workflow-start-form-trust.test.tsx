@@ -196,7 +196,7 @@ describe("Workflow Create form trust", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=global")) {
+        if (url === "/api/presets") {
           return Promise.resolve({
             ok: true,
             json: async () => ({

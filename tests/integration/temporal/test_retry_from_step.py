@@ -120,6 +120,8 @@ def _app(service, session, env, user) -> FastAPI:
                 "_current_user_fallback",
                 "_strict_current_user",
                 "_optional_current_user",
+                "get_instance_access",
+                "get_instance_access_optional",
             }:
                 app.dependency_overrides[dependency.call] = lambda: user
     return app

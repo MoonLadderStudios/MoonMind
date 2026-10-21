@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 import yaml
 from jinja2 import StrictUndefined, TemplateError, UndefinedError, nodes
 from jinja2.sandbox import SandboxedEnvironment
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,6 +56,9 @@ from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     validate_remediation_loop_agent_instructions,
 )
+
+# Existing account-free preference partition, never an actor or admission proof.
+INSTANCE_PREFERENCE_KEY = UUID(int=0)
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -2081,18 +2084,24 @@ class PresetCatalogService:
         favorites_only: bool = False,
         user_id: UUID | None = None,
         include_inactive: bool = False,
+        include_global: bool = False,
     ) -> list[dict[str, Any]]:
         stmt = select(Preset)
         if not include_inactive:
             stmt = stmt.where(Preset.is_active.is_(True))
         if scope is not None:
             scope_type = _normalize_scope(scope)
-            stmt = stmt.where(Preset.scope_type == scope_type)
+            scope_filter = Preset.scope_type == scope_type
             if scope_type is not PresetScopeType.GLOBAL:
-                stmt = stmt.where(
+                scope_filter &= (
                     Preset.scope_ref
                     == _normalize_scope_ref(scope_type, scope_ref)
                 )
+            if include_global:
+                scope_filter = or_(
+                    scope_filter, Preset.scope_type == PresetScopeType.GLOBAL
+                )
+            stmt = stmt.where(scope_filter)
 
         template_rows = (await self._session.execute(stmt)).scalars().all()
         lowered_tag = str(tag or "").strip().lower()

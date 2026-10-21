@@ -17,6 +17,8 @@ class _Execution:
         self.statuses = statuses
         self.reads = 0
         self.preset: dict[str, Any] = {}
+        self.preset_expansion: dict[str, Any] = {}
+        self.preset_expansions: list[Any] = []
         self.submissions: list[Any] = []
         self.agent_profiles = [
             [
@@ -87,6 +89,11 @@ def api_server():
                     self._send(
                         execution.admission_status, {"detail": "admission refused"}
                     )
+            elif self.path.startswith("/api/presets/") and ":expand?" in self.path:
+                execution.preset_expansions.append(
+                    {"path": self.path, "body": json.loads(body)}
+                )
+                self._send(200, execution.preset_expansion)
             else:
                 self._send(201, {})
 
@@ -387,7 +394,18 @@ def test_preset_read_back_requires_the_saved_version(api_server, tmp_path):
         "steps": [{"instructions": "Say hello."}],
     }
     api = journey.Api(base)
-    state = {"preset": journey.preset_identity(saved)}
+    state = {
+        "preset": journey.preset_identity(saved),
+        "presetApplication": {"inputs": {}, "instructions": ["Say hello."]},
+    }
+    execution.preset_expansion = {
+        "steps": [{"instructions": "Say hello."}],
+        "appliedTemplate": {
+            "slug": saved["slug"],
+            "presetDigest": saved["presetDigest"],
+            "inputs": {},
+        },
+    }
 
     execution.preset = dict(saved)
     journey.verify_preset(api, state)
@@ -395,6 +413,81 @@ def test_preset_read_back_requires_the_saved_version(api_server, tmp_path):
     execution.preset = {**saved, "presetDigest": "sha256:changed"}
     with pytest.raises(journey.JourneyFailure, match="preset journey-preset changed"):
         journey.verify_preset(api, state)
+
+
+def _preset_with_explicit_input(execution):
+    execution.preset = {
+        "slug": "instance-journey-preset",
+        "scope": "global",
+        "scopeRef": None,
+        "title": "Operator custom preset",
+        "presetDigest": "sha256:custom",
+        "inputs": [
+            {
+                "name": "audience",
+                "label": "Audience",
+                "type": "text",
+                "required": True,
+                "default": "default audience",
+            }
+        ],
+        "steps": [{"instructions": "Write for {{ inputs.audience }}."}],
+    }
+    execution.preset_expansion = {
+        "steps": [{"instructions": "Write for operator choice."}],
+        "appliedTemplate": {
+            "slug": "instance-journey-preset",
+            "presetDigest": "sha256:custom",
+            "inputs": {"audience": "operator choice"},
+        },
+    }
+    return {
+        "preset": journey.preset_identity(execution.preset),
+        "presetApplication": {
+            "inputs": {"audience": "operator choice"},
+            "instructions": ["Write for operator choice."],
+        },
+    }
+
+
+def test_preset_read_back_preserves_input_contract(api_server):
+    base, execution = api_server
+    state = _preset_with_explicit_input(execution)
+    execution.preset["inputs"] = [{**execution.preset["inputs"][0], "default": "lost"}]
+
+    with pytest.raises(journey.JourneyFailure, match="preset .* changed"):
+        journey.verify_preset(journey.Api(base), state)
+
+
+def test_preset_expands_saved_explicit_input_without_person_scope(api_server):
+    base, execution = api_server
+    state = _preset_with_explicit_input(execution)
+
+    journey.verify_preset(journey.Api(base), state)
+
+    assert execution.preset_expansions == [
+        {
+            "path": "/api/presets/instance-journey-preset:expand?scope=global",
+            "body": {"inputs": {"audience": "operator choice"}},
+        }
+    ]
+
+
+@pytest.mark.parametrize("mismatch", ["inputs", "instructions", "slug", "presetDigest"])
+def test_preset_expansion_never_accepts_lost_explicit_inputs(api_server, mismatch):
+    base, execution = api_server
+    state = _preset_with_explicit_input(execution)
+    if mismatch == "instructions":
+        execution.preset_expansion["steps"] = [
+            {"instructions": "Write for default audience."}
+        ]
+    else:
+        execution.preset_expansion["appliedTemplate"][mismatch] = (
+            {} if mismatch == "inputs" else "wrong"
+        )
+
+    with pytest.raises(journey.JourneyFailure, match="preset .* expansion changed"):
+        journey.verify_preset(journey.Api(base), state)
 
 
 def _conversion(tmp_path, log_text):
@@ -437,7 +530,7 @@ def test_account_era_source_that_converts_as_fresh_fails(tmp_path):
     assert code == 1
 
 
-def test_missing_transform_coverage_is_recorded_as_unpublished(tmp_path, capsys):
+def test_missing_transform_coverage_fails_populated_upgrade(tmp_path, capsys):
     code, state = _conversion(
         tmp_path,
         "Single-user guarded upgrade blocked (missing_transform_coverage: "
@@ -446,13 +539,13 @@ def test_missing_transform_coverage_is_recorded_as_unpublished(tmp_path, capsys)
         "conversion-side mutation.\n",
     )
 
-    assert code == 0
+    assert code == 1
     assert state["conversion"] == {
         "outcome": "blocked",
         "reason": "missing_transform_coverage",
         "pendingSubsystems": ["schedules", "temporal"],
     }
-    assert "NOT published" in capsys.readouterr().out
+    assert "NOT published" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 from api_service.api.schemas import GitHubTokenProbeRequest
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
 from api_service.services.settings_catalog import (
     SettingsAuditResponse,
@@ -30,7 +30,7 @@ from api_service.services.settings_catalog import (
 from moonmind.workflows.executions.repository_contract import RepositoryRouteError
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-SETTINGS_CURRENT_USER_DEP = get_current_user()
+SETTINGS_CURRENT_USER_DEP = get_instance_access
 logger = logging.getLogger(__name__)
 
 VALID_SETTING_SCOPES = set(get_args(SettingScope))

@@ -1178,11 +1178,6 @@ interface TemplateOption extends PresetSummary {
   key: string;
 }
 
-interface TemplateCatalogResult {
-  items: TemplateOption[];
-  failedScopes: TemplateScope[];
-}
-
 interface TrustedToolDefinition {
   name: string;
   description?: string;
@@ -7332,50 +7327,24 @@ function WorkflowStartPageContent({
       taskTemplateListEndpoint,
     ],
     enabled: presetCatalogEnabled,
-    queryFn: async (): Promise<TemplateCatalogResult> => {
-      // Backend-owned scope contract (MoonLadderStudios/MoonMind#4350 owns the
-      // unified-catalog policy): GET /api/presets defaults to scope=personal
-      // and has no unified list surface, so both partitions are fetched and
-      // merged into the single unified instance list shown by the UI.
-      // Removal condition: replace with one scope-free fetch when #4350 lands.
-      const scopes: TemplateScope[] = ["global", "personal"];
-      const results = await Promise.all(
-        scopes.map(async (scope) => {
-          try {
-            const response = await fetch(
-              withQueryParams(taskTemplateListEndpoint, { scope }),
-              {
-                headers: { Accept: "application/json" },
-              },
-            );
-            if (!response.ok) {
-              throw new Error(
-                await responseErrorMessage(response, "Failed to load presets."),
-              );
-            }
-            const data = (await response.json()) as PresetListResponse;
-            const items = (data.items || []).map((item) => ({
-              ...item,
-              key: templateKey(item.scope, item.slug, item.scopeRef),
-            }));
-            return { scope, items, failed: false };
-          } catch {
-            return { scope, items: [] as TemplateOption[], failed: true };
-          }
-        }),
-      );
-      return {
-        items: results
-          .flatMap((result) => result.items)
-          .sort((left, right) => left.title.localeCompare(right.title)),
-        failedScopes: results
-          .filter((result) => result.failed)
-          .map((result) => result.scope),
-      };
+    queryFn: async (): Promise<TemplateOption[]> => {
+      const response = await fetch(taskTemplateListEndpoint, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(await responseErrorMessage(response, "Failed to load presets."));
+      }
+      const data = (await response.json()) as PresetListResponse;
+      return (data.items || [])
+        .map((item) => ({
+          ...item,
+          key: templateKey(item.scope, item.slug, item.scopeRef),
+        }))
+        .sort((left, right) => left.title.localeCompare(right.title));
     },
   });
 
-  const templateItems = templateOptionsQuery.data?.items || [];
+  const templateItems = templateOptionsQuery.data || [];
 
   useEffect(() => {
     if (!presetCatalogEnabled || !selectedPresetKey) {
@@ -9390,12 +9359,6 @@ function WorkflowStartPageContent({
           Accept: "application/json",
         },
         body: JSON.stringify({
-          // Backend-owned save contract (MoonLadderStudios/MoonMind#4350):
-          // PresetSaveFromWorkflowRequestSchema requires scope "personal".
-          // The UI presents the saved preset in the single instance catalog
-          // without a Personal/Global selector. Removal condition: drop this
-          // field when #4350 accepts a scope-free save.
-          scope: "personal",
           title,
           description: title,
           steps: presetSteps,
