@@ -154,7 +154,7 @@ Through `deployment_release --omnigent-journal-prepare`, the bridge store replac
 
 The controller observes installed services and concrete images, required health, ordinary workflow dispatch, and the operator access path; a running container does not prove that work can execute or that the dashboard serves the intended release. A run-to-completion service (such as `init-db`) passes when it exited 0; any other non-running service fails.
 
-The API runs guarded single-user conversion on startup; the controller records that disposition, read through the API container's healthcheck route, as `single-user-conversion`. A refusal keeps the installation, source data, and access protection but leaves the operation `partially_verified`; deferred or unreported results are unavailable.
+The API runs guarded single-user conversion on startup; the controller records that disposition, read through the API container's healthcheck route, as `single-user-conversion`. A refusal keeps the installation, source data, and access protection but leaves the operation `partially_verified`; deferred or unreported results are unavailable. The fresh and upgrade Compose journeys run this same check against their live stacks and require `fresh_init` or `eligible_conversion` to be published.
 
 Unavailable optional integrations are reported separately; mandatory verification is never converted to success.
 

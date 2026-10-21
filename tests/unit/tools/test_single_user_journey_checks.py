@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tools import single_user_journey_checks as journey
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 class _Execution:
@@ -579,6 +582,119 @@ def test_latest_startup_outcome_wins(tmp_path):
 
     assert code == 0
     assert state["conversion"]["outcome"] == "published"
+
+
+class _ComposeRunner:
+    """Answer the deployment controller's own Compose commands."""
+
+    def __init__(self, reported: Any, *, api_state: str = "running") -> None:
+        self.reported = reported
+        self.api_state = api_state
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(self, args, timeout_seconds):
+        self.calls.append(tuple(args))
+        if "ps" in args:
+            row = {"Service": "api", "State": self.api_state, "Health": "healthy"}
+            return {"exit": 0, "stdout": json.dumps(row), "output": ""}
+        line = "MOONMIND_SINGLE_USER_CONVERSION=" + json.dumps(self.reported)
+        return {"exit": 0, "stdout": line + "\n", "output": line}
+
+
+def _controller_conversion(tmp_path, monkeypatch, runner, expect):
+    """Run the phase through the repository's real deploy/controller code."""
+
+    monkeypatch.syspath_prepend(str(ROOT / "deploy/controller"))
+    import server as controller
+
+    monkeypatch.setattr(controller.engine, "subprocess_runner", lambda: runner)
+    state_file = tmp_path / "state.json"
+    code = journey.main(
+        [
+            "controller_conversion",
+            "--api-base",
+            "http://127.0.0.1:9",
+            "--state-file",
+            str(state_file),
+            "--repo",
+            str(ROOT),
+            "--project",
+            "moonmind-test-journey",
+            "--compose-file",
+            str(ROOT / "docker-compose.yaml"),
+            "--expect",
+            expect,
+            "--timeout",
+            "0",
+        ]
+    )
+    return code, json.loads(state_file.read_text())
+
+
+@pytest.mark.parametrize("disposition", ["fresh_init", "eligible_conversion"])
+def test_controller_conversion_check_must_report_the_expected_publish(
+    tmp_path, monkeypatch, disposition
+):
+    runner = _ComposeRunner(
+        {
+            "published": True,
+            "disposition": disposition,
+            "reasonCode": "",
+            "personCount": 1,
+        }
+    )
+
+    code, state = _controller_conversion(tmp_path, monkeypatch, runner, disposition)
+
+    assert code == 0
+    assert state["controllerConversion"] == {
+        "name": "single-user-conversion",
+        "status": "passed",
+        "detail": f"{disposition} published",
+    }
+    exec_call = next(call for call in runner.calls if "exec" in call)
+    assert exec_call[:4] == (
+        "docker",
+        "compose",
+        "--project-name",
+        "moonmind-test-journey",
+    )
+    assert exec_call[exec_call.index("exec") :][:4] == ("exec", "-T", "api", "python")
+
+
+@pytest.mark.parametrize(
+    ("reported", "api_state", "expect"),
+    [
+        (
+            {
+                "published": False,
+                "disposition": "refused",
+                "reasonCode": "multi_person",
+            },
+            "running",
+            "eligible_conversion",
+        ),
+        ({"deferred": True, "reason": "OperationalError"}, "running", "fresh_init"),
+        (None, "running", "fresh_init"),
+        (
+            {"published": True, "disposition": "fresh_init"},
+            "running",
+            "eligible_conversion",
+        ),
+        ({"published": True, "disposition": "fresh_init"}, "exited", "fresh_init"),
+    ],
+)
+def test_controller_conversion_refused_unknown_or_unexpected_fails(
+    tmp_path, monkeypatch, reported, api_state, expect
+):
+    runner = _ComposeRunner(reported, api_state=api_state)
+
+    code, state = _controller_conversion(tmp_path, monkeypatch, runner, expect)
+
+    assert code == 1
+    assert state["controllerConversion"]["status"] != "passed" or (
+        state["controllerConversion"]["detail"] != f"{expect} published"
+    )
 
 
 def test_api_bypasses_egress_proxy_for_loopback(api_server, tmp_path, monkeypatch):

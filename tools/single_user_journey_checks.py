@@ -63,6 +63,14 @@ recreated stack, can verify what an earlier phase saved):
     (``--api-log``) and require a published eligible single-operator conversion.
     Refusal is preserved in the state for diagnostics and fails this eligible
     upgrade lane; protected refusal has separate PostgreSQL coverage.
+``controller_conversion``
+    Run the deployment controller's own update-result check
+    (``single_user_conversion_check`` from ``--repo``'s ``deploy/controller``)
+    against the live Compose stack and require ``<--expect> published``:
+    ``fresh_init`` on a fresh install, ``eligible_conversion`` after an
+    account-era upgrade. The controller observes ``api`` with ``compose ps``
+    and reads its startup disposition with ``compose exec``, exactly as it
+    does after an update.
 ``controller_absent``
     MoonLadderStudios/MoonMind#4502, before a deployment controller is
     installed: Settings Operations reports it not installed, and one update
@@ -756,6 +764,46 @@ def conversion(state: dict[str, Any], *, api_log: Path) -> None:
     )
 
 
+def controller_conversion(
+    state: dict[str, Any],
+    *,
+    repo: Path,
+    project: str,
+    compose_files: list[str],
+    expected: str,
+    timeout: float,
+) -> None:
+    """Require the controller's conversion check to pass on the running stack."""
+
+    # Resolve the deployed checkout's controller, never the caller's.
+    sys.path.insert(0, str(repo.resolve() / "deploy/controller"))
+    import server as controller
+
+    runner = controller.engine.subprocess_runner()
+    base = controller.engine.compose_base(
+        project=project,
+        project_dir=str(repo.resolve()),
+        compose_files=[str(Path(path).resolve()) for path in compose_files],
+    )
+    service = controller.CONVERSION_SERVICE
+    observed = controller.engine.wait_for_services(
+        runner, base, (service,), timeout_seconds=timeout
+    )
+    check = controller.single_user_conversion_check(
+        runner, base, api_running=bool(observed["services"].get(service))
+    )
+    state["controllerConversion"] = check
+    if (
+        check.get("status") != "passed"
+        or check.get("detail") != f"{expected} published"
+    ):
+        raise JourneyFailure(
+            f"controller conversion check reported {check.get('status')}: "
+            f"{check.get('detail')} (expected {expected} published)"
+        )
+    log(f"controller conversion check passed: {check['detail']}")
+
+
 def generate_output(
     api: Api, state: dict[str, Any], *, label: str, timeout: float
 ) -> None:
@@ -1433,6 +1481,7 @@ def main(argv: list[str] | None = None) -> int:
             "release",
             "vector_free",
             "conversion",
+            "controller_conversion",
             "controller_absent",
             "controller_ready",
             "controller",
@@ -1447,6 +1496,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cleanup-receipt", type=Path)
     parser.add_argument("--operator-host", help="published Host for direct-backend probes")
     parser.add_argument(
+        "--repo", type=Path, help="deployed checkout (controller_conversion)"
+    )
+    parser.add_argument("--project", help="Compose project (controller_conversion)")
+    parser.add_argument(
+        "--compose-file",
+        action="append",
+        default=[],
+        help="selected Compose file, repeated in order (controller_conversion)",
+    )
+    parser.add_argument(
+        "--expect", help="published disposition (controller_conversion)"
+    )
+    parser.add_argument(
         "--pre-upgrade-release",
         action="store_true",
         help="populate the release an upgrade starts from with its own request",
@@ -1457,7 +1519,9 @@ def main(argv: list[str] | None = None) -> int:
     state: dict[str, Any] = {}
     # These phases start a journey's state; every later phase reads it.
     if args.phase not in {"populate", "controller_absent", "access_denied"}:
-        state = json.loads(args.state_file.read_text())
+        # A fresh install checks its controller result before populating.
+        if args.phase != "controller_conversion" or args.state_file.exists():
+            state = json.loads(args.state_file.read_text())
     try:
         if args.phase == "populate":
             populate(
@@ -1486,6 +1550,20 @@ def main(argv: list[str] | None = None) -> int:
             if args.api_log is None:
                 raise JourneyFailure("conversion needs --api-log")
             conversion(state, api_log=args.api_log)
+        elif args.phase == "controller_conversion":
+            if not (args.repo and args.project and args.compose_file and args.expect):
+                raise JourneyFailure(
+                    "controller_conversion needs --repo, --project, --compose-file "
+                    "and --expect"
+                )
+            controller_conversion(
+                state,
+                repo=args.repo,
+                project=args.project,
+                compose_files=args.compose_file,
+                expected=args.expect,
+                timeout=args.timeout,
+            )
         elif args.phase == "credential":
             credential(api, state, label=args.label)
         elif args.phase == "verify":
