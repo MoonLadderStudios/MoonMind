@@ -179,7 +179,7 @@ def _connect_proxy_handler(
             while stream.readline() not in (b"\r\n", b"\n", b""):
                 pass
             method, _, rest = request_line.partition(" ")
-            if method != "CONNECT" or not rest.startswith("github.com:443 "):
+            if method != "CONNECT" or not rest.lower().startswith("github.com:443 "):
                 self.request.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 return
             self.request.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
