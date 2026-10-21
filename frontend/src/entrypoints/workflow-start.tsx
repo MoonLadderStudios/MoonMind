@@ -1,6 +1,7 @@
 import { Button } from '../components/Button';
 import { FALLBACK_TIER_EFFORT_OPTIONS, type ProviderProfileTierCapabilities } from "../utils/providerProfileTiers";
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { ModelSelectionFields } from "../components/workflows/ModelSelectionFields";
 import { CreateOptionDisclosure } from "../components/workflows/CreateOptionDisclosure";
@@ -6293,6 +6294,8 @@ function WorkflowStartPageContent({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
+  const [submitRippleKey, setSubmitRippleKey] = useState(0);
+  const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
   const submitArrowExitHeldRef = useRef(false);
   const submitArrowExitTimeoutRef = useRef<number | null>(null);
@@ -11563,6 +11566,9 @@ function WorkflowStartPageContent({
         ? "Start New Run"
         : "Start Workflow";
   const showPrimaryCtaArrow = true;
+  // Only actions that start work get the green launch treatment; saving a
+  // draft keeps the standard primary button.
+  const isLaunchCta = pageMode.intent !== "edit";
   const primaryCtaTooltip =
     pageMode.intent === "comparison"
       ? "Start a new comparison run from this workflow draft"
@@ -14005,6 +14011,8 @@ function WorkflowStartPageContent({
               className={
                 showPrimaryCtaArrow
                   ? `queue-submit-primary queue-submit-primary--icon${
+                      isLaunchCta ? " queue-submit-primary--launch" : ""
+                    }${
                       isSubmitArrowExiting
                         ? " queue-submit-primary--arrow-exit"
                         : ""
@@ -14024,6 +14032,12 @@ function WorkflowStartPageContent({
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 if (isSubmitBlocked) return;
+                if (isLaunchCta && !isSubmitting) {
+                  setSubmitRippleRect(
+                    submitButtonRef.current?.getBoundingClientRect() ?? null,
+                  );
+                  setSubmitRippleKey((value) => value + 1);
+                }
                 setIsSubmitArrowExiting(true);
                 scheduleSubmitArrowExitClear();
               }}
@@ -14052,6 +14066,28 @@ function WorkflowStartPageContent({
                 <span>{primaryCta}</span>
               )}
             </Button>
+            {/* Portaled so the liquid-glass bar's overflow does not clip the ring. */}
+            {showPrimaryCtaArrow && isLaunchCta && submitRippleKey > 0 && submitRippleRect
+              ? createPortal(
+                  <span
+                    key={submitRippleKey}
+                    aria-hidden="true"
+                    className="queue-submit-primary-ripple-anchor"
+                    style={{
+                      top: submitRippleRect.top,
+                      left: submitRippleRect.left,
+                      width: submitRippleRect.width,
+                      height: submitRippleRect.height,
+                    }}
+                  >
+                    <span
+                      className="queue-submit-primary-ripple"
+                      onAnimationEnd={() => setSubmitRippleKey(0)}
+                    />
+                  </span>,
+                  document.body,
+                )
+              : null}
           </div>
         </div>
         </section>
