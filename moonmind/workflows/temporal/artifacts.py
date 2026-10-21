@@ -88,6 +88,24 @@ class TemporalArtifactNotFoundError(TemporalArtifactError):
         super().__init__(f"Artifact {artifact_id} was not found")
         self.artifact_id = artifact_id
 
+class TemporalArtifactExpiredError(TemporalArtifactNotFoundError):
+    """A missing artifact old enough for lifecycle retention to have reclaimed it.
+
+    Reclaimed tombstones leave no row, so the explanation is derived from the
+    creation time encoded in the artifact ID rather than from a per-artifact
+    audit record that would grow without bound.
+    """
+
+    def __init__(self, artifact_id: str, *, created_at: datetime) -> None:
+        super().__init__(artifact_id)
+        self.created_at = created_at
+        self.args = (
+            f"Artifact {artifact_id} was not found: it was created at "
+            f"{created_at.isoformat(timespec='seconds')}, beyond the metadata "
+            "retention horizon, so it most likely expired and its metadata "
+            "was reclaimed after its content was deleted",
+        )
+
 class TemporalArtifactStateError(TemporalArtifactError):
     """Raised when an operation is invalid for current artifact state."""
 
@@ -173,13 +191,24 @@ class LifecycleSweepSummary:
     pruned_claim_count: int = 0
     hard_delete_candidate_count: int = 0
     pages: int = 1
-    # False when expired, soft-deleted or deletion-intent work remains for the
-    # next pass.
+    # False when expired, soft-deleted, deletion-intent or purge work remains
+    # for the next pass.
     drained: bool = True
+    # Tombstones past the purge horizon whose metadata was examined, reclaimed,
+    # kept because a protection appeared after selection, or handed back to
+    # deletion reconciliation because the object was still present or the
+    # store could not report it.
+    purge_candidate_count: int = 0
+    purged_count: int = 0
+    purged_link_count: int = 0
+    purge_protected_count: int = 0
+    purge_unconfirmed_count: int = 0
+    purge_error_count: int = 0
 
 @dataclass(slots=True, frozen=True)
 class _StorageLifecycleConfig:
     hard_delete_after: timedelta
+    purge_after: timedelta
 
 def _encode_base32(value: int, length: int) -> str:
     chars = ["0"] * length
@@ -197,6 +226,34 @@ def generate_artifact_id(now: datetime | None = None) -> str:
     ulid_value = (timestamp_bits << 80) | random_bits
     ulid = _encode_base32(ulid_value, 26)
     return f"art_{ulid}"
+
+def artifact_id_created_at(artifact_id: str) -> datetime | None:
+    """Return the creation time encoded in an ``art_<ULID>`` ID, if any."""
+
+    ulid = artifact_id[4:] if artifact_id.startswith("art_") else ""
+    if len(ulid) != 26:
+        return None
+    value = 0
+    for char in ulid.upper():
+        index = _CROCKFORD_BASE32.find(char)
+        if index < 0:
+            return None
+        value = (value << 5) | index
+    try:
+        return datetime.fromtimestamp((value >> 80) / 1000, UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+def _missing_artifact_error(artifact_id: str) -> TemporalArtifactNotFoundError:
+    # Purge requires hard deletion past the horizon, so an artifact created
+    # within the horizon cannot have been reclaimed.
+    created_at = artifact_id_created_at(artifact_id)
+    horizon = timedelta(
+        seconds=settings.workflow.temporal_artifact_lifecycle_purge_after_seconds
+    )
+    if created_at is not None and created_at <= datetime.now(UTC) - horizon:
+        return TemporalArtifactExpiredError(artifact_id, created_at=created_at)
+    return TemporalArtifactNotFoundError(artifact_id)
 
 def _validate_sha256(value: str | None) -> str | None:
     if value is None:
@@ -478,6 +535,10 @@ class TemporalArtifactStore:
     def delete(self, storage_key: str) -> None:
         raise NotImplementedError
 
+    def object_exists(self, storage_key: str) -> bool:
+        """Whether bytes remain at ``storage_key``; raises when unknown."""
+        raise NotImplementedError
+
     def create_multipart_upload(
         self,
         *,
@@ -613,6 +674,9 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
 
     def delete(self, storage_key: str) -> None:
         self.resolve_storage_key(storage_key).unlink(missing_ok=True)
+
+    def object_exists(self, storage_key: str) -> bool:
+        return self.resolve_storage_key(storage_key).exists()
 
     def presign_download(
         self,
@@ -808,6 +872,16 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
 
     def delete(self, storage_key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=storage_key)
+
+    def object_exists(self, storage_key: str) -> bool:
+        try:
+            self._client.head_object(Bucket=self._bucket, Key=storage_key)
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES:
+                return False
+            raise
+        return True
 
     def create_multipart_upload(
         self,
@@ -1026,7 +1100,7 @@ class TemporalArtifactRepository:
     async def get_artifact(self, artifact_id: str) -> db_models.TemporalArtifact:
         artifact = await self._session.get(db_models.TemporalArtifact, artifact_id)
         if artifact is None:
-            raise TemporalArtifactNotFoundError(artifact_id)
+            raise _missing_artifact_error(artifact_id)
         return artifact
 
     async def lock_storage_references(
@@ -1461,6 +1535,131 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    def _purge_eligibility(
+        self,
+        *,
+        cutoff: datetime,
+        now: datetime,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+    ) -> list[Any]:
+        """Tombstones past the horizon that no supported consumer still needs."""
+
+        artifact = db_models.TemporalArtifact
+        artifact_id = artifact.artifact_id
+        claim = db_models.TemporalArtifactUseClaim
+
+        def unreferenced(column: Any, *conditions: Any) -> Any:
+            return (
+                ~exists().where(column == artifact_id, *conditions).correlate(artifact)
+            )
+
+        return [
+            artifact.hard_deleted_at.is_not(None),
+            artifact.hard_deleted_at <= cutoff,
+            artifact.storage_backend == storage_backend,
+            artifact.retention_class != db_models.TemporalArtifactRetentionClass.PINNED,
+            # A pending intent means content deletion is not yet confirmed.
+            unreferenced(db_models.TemporalArtifactDeletionIntent.artifact_id),
+            unreferenced(db_models.TemporalArtifactPin.artifact_id),
+            unreferenced(claim.artifact_id, claim.expires_at > now),
+            # The remediation link would lose its context ref (ON DELETE SET
+            # NULL); keep the tombstone as that run's diagnostic context.
+            unreferenced(
+                db_models.TemporalExecutionRemediationLink.context_artifact_ref
+            ),
+            ~self._active_journal_reference_exists(artifact_id).correlate(artifact),
+        ]
+
+    async def list_purge_candidates(
+        self,
+        *,
+        cutoff: datetime,
+        now: datetime,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+        limit: int = 500,
+    ) -> list[tuple[str, str]]:
+        """Lock one page of purgeable tombstones as (artifact_id, storage_key).
+
+        Rows locked by a concurrent writer, such as a pin, claim or link
+        insert holding its foreign-key lock, are skipped for a later pass.
+        """
+        artifact = db_models.TemporalArtifact
+        stmt = (
+            select(artifact.artifact_id, artifact.storage_key)
+            .where(
+                *self._purge_eligibility(
+                    cutoff=cutoff, now=now, storage_backend=storage_backend
+                )
+            )
+            .order_by(artifact.hard_deleted_at.asc(), artifact.artifact_id.asc())
+            .limit(max(1, int(limit)))
+            .with_for_update(skip_locked=True, of=artifact)
+        )
+        result = await self._session.execute(stmt)
+        return [(str(row[0]), str(row[1])) for row in result.all()]
+
+    async def filter_purge_eligible(
+        self,
+        artifact_ids: list[str],
+        *,
+        cutoff: datetime,
+        now: datetime,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+    ) -> set[str]:
+        """Recheck locked candidates against protections committed meanwhile."""
+        if not artifact_ids:
+            return set()
+        stmt = select(db_models.TemporalArtifact.artifact_id).where(
+            db_models.TemporalArtifact.artifact_id.in_(artifact_ids),
+            *self._purge_eligibility(
+                cutoff=cutoff, now=now, storage_backend=storage_backend
+            ),
+        )
+        result = await self._session.execute(stmt)
+        return {str(value) for value in result.scalars().all()}
+
+    async def storage_keys_with_live_reference(
+        self,
+        *,
+        storage_backend: db_models.TemporalArtifactStorageBackend,
+        storage_keys: set[str],
+    ) -> set[str]:
+        if not storage_keys:
+            return set()
+        stmt = (
+            select(db_models.TemporalArtifact.storage_key)
+            .where(
+                db_models.TemporalArtifact.storage_backend == storage_backend,
+                db_models.TemporalArtifact.storage_key.in_(storage_keys),
+                db_models.TemporalArtifact.hard_deleted_at.is_(None),
+            )
+            .distinct()
+        )
+        result = await self._session.execute(stmt)
+        return {str(value) for value in result.scalars().all()}
+
+    async def purge_artifacts(self, artifact_ids: list[str]) -> tuple[int, int]:
+        """Delete tombstone rows and their links; return (rows, links)."""
+        if not artifact_ids:
+            return 0, 0
+        links = await self._session.execute(
+            delete(db_models.TemporalArtifactLink).where(
+                db_models.TemporalArtifactLink.artifact_id.in_(artifact_ids)
+            )
+        )
+        # Only expired claims can remain; eligibility excludes live ones.
+        await self._session.execute(
+            delete(db_models.TemporalArtifactUseClaim).where(
+                db_models.TemporalArtifactUseClaim.artifact_id.in_(artifact_ids)
+            )
+        )
+        rows = await self._session.execute(
+            delete(db_models.TemporalArtifact).where(
+                db_models.TemporalArtifact.artifact_id.in_(artifact_ids)
+            )
+        )
+        return int(rows.rowcount or 0), int(links.rowcount or 0)
+
     async def get_artifact_for_update(
         self, artifact_id: str
     ) -> db_models.TemporalArtifact:
@@ -1473,7 +1672,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         artifact = result.scalars().first()
         if artifact is None:
-            raise TemporalArtifactNotFoundError(artifact_id)
+            raise _missing_artifact_error(artifact_id)
         return artifact
 
     async def acquire_use_claim(
@@ -1744,6 +1943,7 @@ class TemporalArtifactService:
         presign_ttl_seconds: int | None = None,
         direct_upload_max_bytes: int | None = None,
         lifecycle_hard_delete_after_seconds: int | None = None,
+        lifecycle_purge_after_seconds: int | None = None,
     ) -> None:
         self._repository = repository
         self._store: TemporalArtifactStore = store or self._build_store_from_settings()
@@ -1771,8 +1971,14 @@ class TemporalArtifactService:
             if lifecycle_hard_delete_after_seconds is not None
             else settings.workflow.temporal_artifact_lifecycle_hard_delete_after_seconds
         )
+        purge_after_seconds = (
+            lifecycle_purge_after_seconds
+            if lifecycle_purge_after_seconds is not None
+            else settings.workflow.temporal_artifact_lifecycle_purge_after_seconds
+        )
         self._lifecycle = _StorageLifecycleConfig(
             hard_delete_after=timedelta(seconds=max(0, int(hard_delete_after_seconds))),
+            purge_after=timedelta(seconds=max(0, int(purge_after_seconds))),
         )
 
     @staticmethod
@@ -4006,6 +4212,76 @@ class TemporalArtifactService:
         )
         return artifact
 
+    async def _purge_tombstone_page(
+        self,
+        *,
+        principal: str,
+        now: datetime,
+        limit: int,
+        on_progress: Callable[[], None] | None = None,
+    ) -> dict[str, int]:
+        """Reclaim one page of tombstone metadata after confirmed deletion.
+
+        A tombstone can commit before its object delete finishes, so purging
+        requires no pending deletion intent and either another live row owning
+        the shared bytes or the object store reporting the key absent. Bytes
+        that are still present, or whose state is unknown, go back to
+        deletion-intent reconciliation; the row stays until a later pass
+        confirms the deletion. Rows and links are removed in one transaction,
+        so a failed commit leaves every tombstone for the next pass.
+        """
+        backend = self._store.backend
+        cutoff = now - self._lifecycle.purge_after
+        candidates = await self._repository.list_purge_candidates(
+            cutoff=cutoff, now=now, storage_backend=backend, limit=limit
+        )
+        counts = {"candidates": len(candidates), "purged": 0, "links": 0}
+        counts["protected"] = counts["unconfirmed"] = counts["errors"] = 0
+        if not candidates:
+            return counts
+        eligible = await self._repository.filter_purge_eligible(
+            [artifact_id for artifact_id, _key in candidates],
+            cutoff=cutoff,
+            now=now,
+            storage_backend=backend,
+        )
+        counts["protected"] = len(candidates) - len(eligible)
+        rows = [(item, key) for item, key in candidates if item in eligible]
+        shared = await self._repository.storage_keys_with_live_reference(
+            storage_backend=backend, storage_keys={key for _item, key in rows}
+        )
+        purge_ids: list[str] = []
+        for artifact_id, storage_key in rows:
+            if on_progress is not None:
+                on_progress()
+            if storage_key in shared:
+                # Another live owner keeps the bytes; this reference is gone.
+                purge_ids.append(artifact_id)
+                continue
+            try:
+                present = await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.object_exists, storage_key
+                )
+                outcome, error = "unconfirmed", "purge-unconfirmed: object present"
+            except Exception as exc:  # noqa: BLE001 - recorded on the intent
+                present = True
+                outcome, error = "errors", f"purge-check:{type(exc).__name__}:{exc}"
+            if not present:
+                purge_ids.append(artifact_id)
+                continue
+            await self._repository.record_deletion_intent(
+                artifact_id=artifact_id, principal=principal
+            )
+            await self._repository.note_deletion_attempt(
+                artifact_id=artifact_id, error=error
+            )
+            counts[outcome] += 1
+        counts["purged"], counts["links"] = await self._repository.purge_artifacts(
+            purge_ids
+        )
+        await self._repository.commit()
+        return counts
+
     async def sweep_lifecycle(
         self,
         *,
@@ -4126,16 +4402,32 @@ class TemporalArtifactService:
         reconciled, intent_count = await self._reconcile_deletion_intent_page(
             principal=principal, limit=page_size, on_progress=on_progress
         )
+        purge = await self._purge_tombstone_page(
+            principal=principal,
+            now=sweep_now,
+            limit=page_size,
+            on_progress=on_progress,
+        )
         # A short intent page can still contain failed or uncommitted deletes.
         # Only report drainage after reconciliation leaves no pending intent.
         pending_intents = await self._repository.list_pending_deletion_intents(limit=1)
         await self._repository.commit()
         logger.info(
-            "Temporal artifact sweep_lifecycle principal=%s run_id=%s soft_deleted=%s hard_deleted=%s",
+            "Temporal artifact sweep_lifecycle principal=%s run_id=%s "
+            "soft_deleted=%s hard_deleted=%s reconciled=%s purge_candidates=%s "
+            "purged=%s purged_links=%s purge_protected=%s purge_unconfirmed=%s "
+            "purge_errors=%s",
             principal,
             lifecycle_run_id,
             soft_deleted,
             hard_deleted,
+            reconciled,
+            purge["candidates"],
+            purge["purged"],
+            purge["links"],
+            purge["protected"],
+            purge["unconfirmed"],
+            purge["errors"],
         )
         return LifecycleSweepSummary(
             run_id=lifecycle_run_id,
@@ -4149,8 +4441,19 @@ class TemporalArtifactService:
             drained=not pending_intents
             and all(
                 count < page_size
-                for count in (len(expired), len(hard_candidates), intent_count)
+                for count in (
+                    len(expired),
+                    len(hard_candidates),
+                    intent_count,
+                    purge["candidates"],
+                )
             ),
+            purge_candidate_count=purge["candidates"],
+            purged_count=purge["purged"],
+            purged_link_count=purge["links"],
+            purge_protected_count=purge["protected"],
+            purge_unconfirmed_count=purge["unconfirmed"],
+            purge_error_count=purge["errors"],
         )
 
     async def drain_lifecycle(
@@ -4159,6 +4462,7 @@ class TemporalArtifactService:
         principal: str,
         time_budget: timedelta,
         run_id: str | None = None,
+        now: datetime | None = None,
         limit: int = 500,
         on_page: Callable[[LifecycleSweepSummary], None] | None = None,
         on_progress: Callable[[], None] | None = None,
@@ -4178,16 +4482,21 @@ class TemporalArtifactService:
             page = await self.sweep_lifecycle(
                 principal=principal,
                 run_id=lifecycle_run_id,
+                now=now,
                 limit=limit,
                 on_progress=on_progress,
             )
             pages.append(page)
             if on_page is not None:
                 on_page(page)
+            # Store errors are not progress: an outage hands at most one page
+            # of tombstones to reconciliation per pass.
             progressed = (
                 page.soft_deleted_count
                 + page.hard_deleted_count
                 + page.reconciled_deletion_count
+                + page.purged_count
+                + page.purge_unconfirmed_count
                 > 0
             )
             if page.drained or not progressed or time.monotonic() >= deadline:
@@ -4205,6 +4514,12 @@ class TemporalArtifactService:
             ),
             pages=len(pages),
             drained=pages[-1].drained,
+            purge_candidate_count=sum(p.purge_candidate_count for p in pages),
+            purged_count=sum(p.purged_count for p in pages),
+            purged_link_count=sum(p.purged_link_count for p in pages),
+            purge_protected_count=sum(p.purge_protected_count for p in pages),
+            purge_unconfirmed_count=sum(p.purge_unconfirmed_count for p in pages),
+            purge_error_count=sum(p.purge_error_count for p in pages),
         )
 
     async def compute_preview(
