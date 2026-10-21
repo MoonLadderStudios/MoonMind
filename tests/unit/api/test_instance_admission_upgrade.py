@@ -122,3 +122,121 @@ async def test_converted_loopback_needs_no_retained_account(retained_instance):
     )
     assert auth.get_operator_recovery_principal(incoming) == "operator"
     session.get.assert_not_awaited()
+
+
+@pytest.mark.parametrize("publish_host", ["127.0.0.1", "0.0.0.0"])
+@pytest.mark.parametrize("header", [b"origin", b"referer"])
+@pytest.mark.parametrize("method", ["POST", "PATCH", "DELETE"])
+async def test_retained_account_cannot_bypass_foreign_browser_origin(
+    retained_instance,
+    monkeypatch,
+    publish_host,
+    header,
+    method,
+):
+    session, _user, _result = retained_instance
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", publish_host)
+    incoming = request("127.0.0.1")
+    incoming.scope["method"] = method
+    incoming.scope["headers"].append((header, b"https://foreign.example"))
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_instance_access(incoming, session)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == {"code": "origin_forbidden"}
+    session.get.assert_not_awaited()
+
+
+@pytest.mark.parametrize("peer", ["172.21.0.9", "192.168.65.1"])
+async def test_retained_local_account_does_not_admit_a_direct_backend_peer(
+    retained_instance,
+    monkeypatch,
+    peer,
+):
+    session, _user, _result = retained_instance
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
+    monkeypatch.delenv("MOONMIND_TRUSTED_INGRESS")
+    incoming = request(peer)
+    incoming.scope["headers"].extend(
+        [
+            (b"x-forwarded-for", b"127.0.0.1"),
+            (b"x-moonmind-user", b"operator"),
+        ]
+    )
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_instance_access(incoming, session)
+    assert exc.value.status_code == 401
+    session.get.assert_not_awaited()
+
+
+async def test_retained_loopback_account_rejects_browser_rebinding(
+    retained_instance, monkeypatch
+):
+    session, _user, _result = retained_instance
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
+    incoming = request("127.0.0.1")
+    incoming.scope["method"] = "POST"
+    incoming.scope["headers"] = [
+        (b"host", b"foreign.example"),
+        (b"origin", b"http://foreign.example"),
+    ]
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_instance_access(incoming, session)
+    assert exc.value.status_code == 401
+    session.get.assert_not_awaited()
+
+
+async def test_retained_remote_account_checks_configured_host(
+    retained_instance, monkeypatch
+):
+    session, _user, _result = retained_instance
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "https://operator.example")
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_instance_access(request(), session)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == {"code": "host_forbidden"}
+    session.get.assert_not_awaited()
+
+
+async def test_retained_wildcard_account_requires_approved_ingress(
+    retained_instance, monkeypatch
+):
+    session, _user, _result = retained_instance
+    monkeypatch.delenv("MOONMIND_TRUSTED_INGRESS")
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_instance_access(request(), session)
+    assert exc.value.status_code == 401
+    session.get.assert_not_awaited()
+
+
+@pytest.mark.parametrize("trusted", ["1", "true", "yes"])
+@pytest.mark.parametrize("configured_base", [False, True])
+async def test_retained_approved_ingress_preserves_existing_browser_url(
+    retained_instance,
+    monkeypatch,
+    trusted,
+    configured_base,
+):
+    session, user, _result = retained_instance
+    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", trusted)
+    if configured_base:
+        monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "https://operator.example")
+    incoming = request()
+    incoming.scope["scheme"] = "http" if configured_base else "https"
+    incoming.scope["method"] = "POST"
+    incoming.scope["headers"] = [
+        (b"host", b"operator.example"),
+        (b"origin", b"https://operator.example"),
+    ]
+    assert await auth.get_instance_access(incoming, session) is user
+    assert auth.get_operator_recovery_principal(incoming) is None
+
+
+async def test_retained_local_operator_keeps_its_real_principal(
+    retained_instance,
+    monkeypatch,
+):
+    session, user, _result = retained_instance
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
+    incoming = request("127.0.0.1")
+    assert await auth.get_instance_access(incoming, session) is user
+    assert auth.get_operator_recovery_principal(incoming) is None

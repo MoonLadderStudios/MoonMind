@@ -354,8 +354,11 @@ async def get_instance_access(
     """
     if is_disabled_local_mode():
         if not await _disabled_account_free_allowed(session):
+            from api_service.operator_admission import require_retained_operator_request
+
             # An incomplete conversion cannot cut over the installed access
             # authority. Require the retained real account; never invent one.
+            await require_retained_operator_request(request)
             return await _load_disabled_user(session, allow_transient=False)
         from api_service.operator_admission import require_operator
 
