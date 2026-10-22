@@ -94,8 +94,6 @@ async def _read_launch_constraints(
     async with _catalog_service(tmp_path, slug) as service:
         expanded = await service.expand_template(
             slug=slug,
-            scope="global",
-            scope_ref=None,
             inputs={**_PRESET_INPUTS[slug], "constraints": constraints},
         )
     helper = _load_helper(slug)
@@ -185,8 +183,6 @@ async def _expanded_command(tmp_path: Path, slug: str, inputs: dict[str, Any]) -
     async with _catalog_service(tmp_path, slug) as service:
         expanded = await service.expand_template(
             slug=slug,
-            scope="global",
-            scope_ref=None,
             inputs={**_PRESET_INPUTS[slug], **inputs},
         )
     return _rendered_helper_command(expanded["steps"][0]["instructions"])
@@ -236,7 +232,7 @@ async def test_explicit_empty_max_workflows_matches_omitted_default(tmp_path, sl
 async def test_rendered_launch_preserves_explicit_no_publish_false_and_zero(tmp_path, slug):
     async with _catalog_service(tmp_path, slug) as service:
         expanded = await service.expand_template(
-            slug=slug, scope="global", scope_ref=None,
+            slug=slug,
             inputs={**_PRESET_INPUTS[slug], "publish_mode": "none", "run_verify": False,
                     "max_workflows": "0", "constraints": ""},
         )

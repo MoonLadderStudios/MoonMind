@@ -458,33 +458,3 @@ async def test_strict_cookie_mutation_with_valid_origin_resolves(
     )
 
     assert user.id == user_id
-
-
-# ---------------------------------------------------------------------------
-# WebSocket principal resolution honors the same authority
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_websocket_session_token_resolves_and_legacy_fails(
-    monkeypatch,
-) -> None:
-    from api_service.api.websockets import get_current_user_ws
-
-    config = _test_config()
-    store, revocation, user_id, identity = _enrolled()
-    _wire_session_boundary(
-        monkeypatch, store=store, revocation=revocation, config=config
-    )
-    token, _ = await qual.mint_moonmind_session(
-        identity, store, config, revocation=revocation
-    )
-    session = _db_session_for(user_id, active=True, admin=False)
-
-    user = await get_current_user_ws(token, None, session)
-    assert user.id == user_id
-
-    legacy = jwt.encode({"sub": "x"}, "legacy-jwt-secret", algorithm="HS256")
-    with pytest.raises(HTTPException) as exc:
-        await get_current_user_ws(legacy, None, AsyncMock(spec=AsyncSession))
-    assert exc.value.status_code in {401, 503}

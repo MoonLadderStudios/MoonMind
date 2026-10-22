@@ -35,7 +35,7 @@ from api_service.api.routers.omnigent_bridge import (
     workflow_chat_router,
 )
 from api_service.api.routers.omnigent_bridge import get_capability_registry
-from api_service.auth_providers import get_current_user
+from api_service.api.workflow_chat_access import get_workflow_chat_access
 from moonmind.omnigent import native_ui_compat
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
@@ -421,7 +421,7 @@ def _build(
     store = store or _FakeStore()
     registry = registry or _fake_registry()
     config = SimpleNamespace(host_protocol_mode=host_protocol_mode)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_workflow_chat_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: (
         service or _FakeService(owner_id)
     )
@@ -449,7 +449,7 @@ def _build_embedded(
     store = store or _FakeStore()
     registry = registry or _fake_registry()
     config = SimpleNamespace(host_protocol_mode=HOST_PROTOCOL_MODE_EMBEDDED)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_workflow_chat_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: (
         service or _FakeService(owner_id)
     )

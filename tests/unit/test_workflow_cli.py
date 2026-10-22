@@ -105,7 +105,7 @@ def test_payload_keeps_server_owned_resolution() -> None:
 def test_preset_without_instructions_keeps_plan_source() -> None:
     payload = build_execution_payload(preset="demo-preset", idempotency_key="req-p")
     task = payload["payload"]["task"]
-    assert task["taskTemplate"] == {"slug": "demo-preset", "scope": "global"}
+    assert task["taskTemplate"] == {"slug": "demo-preset"}
     assert task["instructions"].strip() != ""
     assert "goal" not in task
 

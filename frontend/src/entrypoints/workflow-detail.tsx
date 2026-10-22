@@ -915,6 +915,7 @@ const ExecutionDetailSchema = z
       version: z.number().int().positive().optional(),
       providerProfileRef: z.string().optional(),
     }).nullable().optional(),
+    agentRequired: z.boolean().nullable().optional(),
     providerId: z.string().nullable().optional(),
     providerLabel: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
@@ -2350,6 +2351,15 @@ function MergeAutomationPanel({
       }));
   const blockers = mergeAutomation.blockers || [];
   const artifactRefs = mergeAutomation.artifactRefs;
+  const reviewRequest = mergeAutomation.reviewLoop?.activeRequest;
+  const reviewProvider = typeof reviewRequest?.provider === 'string'
+    ? reviewRequest.provider.charAt(0).toUpperCase() + reviewRequest.provider.slice(1)
+    : null;
+  const reviewRequestId = reviewRequest?.requestCommentId;
+  const reviewPrUrl = normalizeGitHubPullRequestUrl(mergeAutomation.prUrl);
+  const reviewRequestHref = reviewPrUrl && typeof reviewRequestId === 'number' && Number.isSafeInteger(reviewRequestId) && reviewRequestId > 0
+    ? `${reviewPrUrl}#issuecomment-${reviewRequestId}`
+    : null;
   const reviewPending = ['awaiting_child', 'waiting', 'executing'].includes(mergeAutomation.status || '');
   let resolverStatusMessage = 'Waiting for required checks before launching pr-resolver.';
   if (mergeAutomation.status === 'review_complete') {
@@ -2364,9 +2374,18 @@ function MergeAutomationPanel({
 
   return (
     <section className="stack">
-      <h3>Merge Automation</h3>
+      <h3>{mergeAutomation.finishMode === 'review_only' ? 'PR Review' : 'Merge Automation'}</h3>
       <div className="grid-2">
         <Card label="Status">{formatStatusLabel(mergeAutomation.status)}</Card>
+        {reviewProvider ? <Card label="External reviewer">{reviewProvider}</Card> : null}
+        {reviewRequestHref ? (
+          <Card label="Review request">
+            <a href={reviewRequestHref} target="_blank" rel="noreferrer">View review request</a>
+            {typeof reviewRequest?.requestedAt === 'string' ? (
+              <div className="small">Requested {formatWhen(reviewRequest.requestedAt)}</div>
+            ) : null}
+          </Card>
+        ) : null}
         {mergeAutomation.cycles !== undefined && mergeAutomation.cycles !== null ? (
           <Card label="Cycles">{String(mergeAutomation.cycles)}</Card>
         ) : null}
@@ -10411,31 +10430,34 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           {overviewTabActive ? (
             <div className="td-facts-region">
               <FactGroup title="Agent">
-                {recordedHarnessLabel(execution.targetRuntime) ? (
+                {execution.agentRequired === false ? (
+                  <Fact label="Execution">No agent harness is used; this workflow runs native tools.</Fact>
+                ) : null}
+                {execution.agentRequired !== false && recordedHarnessLabel(execution.targetRuntime) ? (
                   <Fact label="Harness">{recordedHarnessLabel(execution.targetRuntime)}</Fact>
                 ) : null}
-                {recordedBackendLabel(execution.targetRuntime) ? (
+                {execution.agentRequired !== false && recordedBackendLabel(execution.targetRuntime) ? (
                   <Fact label="Backend">{recordedBackendLabel(execution.targetRuntime)}</Fact>
                 ) : null}
-                {historicalModel ? (
+                {execution.agentRequired !== false && historicalModel ? (
                   <Fact label="Model">
                     <code className="text-xs">{historicalModel}</code>
                   </Fact>
                 ) : null}
                 {historicalProfileId ? (
-                  <Fact label="Provider Profile">
+                  <Fact label={execution.agentRequired === false ? 'Unused Provider Profile' : 'Provider Profile'}>
                     {recordedProfileLabel || (
                       <code className="text-xs break-all">{historicalProfileId}</code>
                     )}
                   </Fact>
                 ) : null}
-                {recordedProviderSummary(execution, historicalProfileId) ? (
+                {execution.agentRequired !== false && recordedProviderSummary(execution, historicalProfileId) ? (
                   <Fact label="Provider">
                     {recordedProviderSummary(execution, historicalProfileId)}
                   </Fact>
                 ) : null}
-                {historicalEffort ? <Fact label="Effort">{historicalEffort}</Fact> : null}
-                {modelTierResolution ? (
+                {execution.agentRequired !== false && historicalEffort ? <Fact label="Effort">{historicalEffort}</Fact> : null}
+                {execution.agentRequired !== false && modelTierResolution ? (
                   <>
                     <Fact label="Requested Tier">
                       {modelTierResolution.requestedModelTier === null

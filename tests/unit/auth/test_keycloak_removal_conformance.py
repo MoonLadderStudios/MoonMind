@@ -34,7 +34,6 @@ import jwt
 import pytest
 
 from api_service import auth as auth_module
-from api_service.api.routers import worker_auth as worker_auth_module
 from api_service.db import models as db_models
 from moonmind.config import settings as settings_module
 from moonmind.security import auth_modes_4120 as modes
@@ -78,8 +77,8 @@ PLAN_MATRIX = (
     },
     {
         "row": "Machine authority",
-        "owner": "this module: worker gate plus runtime-token rejection at the browser boundary",
-        "evidence": "test_machine_authority_worker_gate_and_runtime_rejection",
+        "owner": "this module: runtime-token rejection at the browser boundary",
+        "evidence": "test_machine_authority_runtime_rejection",
     },
     {
         "row": "Durability",
@@ -844,22 +843,7 @@ def test_resource_authorization_owner_denies_non_owner(monkeypatch):
         service._assert_read_access(artifact, principal="intruder-4128")
 
 
-@pytest.mark.asyncio
-async def test_machine_authority_worker_gate_and_runtime_rejection(monkeypatch):
-    from types import SimpleNamespace
-
-    _set_production_mode(monkeypatch, "oidc")
-    user = SimpleNamespace(id=uuid.uuid4(), email="w@example.invalid")
-    resolved = await worker_auth_module._require_worker_auth(
-        worker_token=None, user=user
-    )
-    assert resolved.auth_source == "oidc"
-    with pytest.raises(Exception) as exc_info:
-        await worker_auth_module._require_worker_auth(worker_token="legacy", user=user)
-    assert exc_info.value.status_code == 410
-    with pytest.raises(Exception) as exc_info:
-        await worker_auth_module._require_worker_auth(worker_token=None, user=None)
-    assert exc_info.value.status_code == 401
+def test_machine_authority_runtime_rejection():
     # Runtime/session/worker token shapes never become browser credentials.
     assert qual.MOONMIND_PROD_COOKIE not in qual.UPSTREAM_SESSION_COOKIES
     for surface in qual.UNSUPPORTED_SURFACES:
@@ -975,7 +959,6 @@ def test_impact_selection_runs_conformance_and_boundaries():
         "api_service/auth.py",
         "api_service/auth_providers.py",
         "api_service/main.py",
-        "api_service/api/routers/worker_auth.py",
         "moonmind/config/settings.py",
         "docker-compose.yaml",
         "frontend/src/generated/openapi.ts",

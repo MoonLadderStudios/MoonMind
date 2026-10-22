@@ -158,7 +158,6 @@ describe("Task Create Step Type authoring", () => {
               items: [
                 {
                   slug: "jira-orchestrate",
-                  scope: "global",
                   title: "Jira Orchestrate",
                   description: "Implement a Jira issue.",
                 },
@@ -166,15 +165,11 @@ describe("Task Create Step Type authoring", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=personal")) {
-          return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
-        }
-        if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
+        if (url === "/api/presets/jira-orchestrate") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
               slug: "jira-orchestrate",
-              scope: "global",
               title: "Jira Orchestrate",
               description: "Implement a Jira issue.",
               inputs: [
@@ -198,7 +193,7 @@ describe("Task Create Step Type authoring", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets/jira-orchestrate:expand?scope=global")) {
+        if (url === "/api/presets/jira-orchestrate:expand") {
           const body = JSON.parse(String(init?.body || "{}")) as {
             inputs?: { feature_request?: string };
           };
@@ -349,7 +344,7 @@ describe("Task Create Step Type authoring", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-orchestrate" },
+      target: { value: "jira-orchestrate" },
     });
 
     selectStepType(primaryStep, "Tool");
@@ -408,7 +403,7 @@ describe("Task Create Step Type authoring", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-orchestrate" },
+      target: { value: "jira-orchestrate" },
     });
 
     fireEvent.click(within(secondStep).getByRole("button", { name: "Expand" }));
@@ -460,7 +455,7 @@ describe("Task Create Step Type authoring", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-orchestrate" },
+      target: { value: "jira-orchestrate" },
     });
     const instructions = within(step).getByLabelText(
       "Instructions",
@@ -476,7 +471,7 @@ describe("Task Create Step Type authoring", () => {
 
     const expandCalls = fetchSpy.mock.calls.filter(([url]) =>
       String(url).startsWith(
-        "/api/presets/jira-orchestrate:expand?scope=global",
+        "/api/presets/jira-orchestrate:expand",
       ),
     );
     expect(expandCalls).toHaveLength(1);
@@ -490,9 +485,7 @@ describe("Task Create Step Type authoring", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (
-        url.startsWith(
-          "/api/presets/jira-orchestrate:expand?scope=global",
-        )
+        (url === "/api/presets/jira-orchestrate:expand")
       ) {
         return new Promise<Response>((resolve) => {
           resolveExpand = resolve;
@@ -512,7 +505,7 @@ describe("Task Create Step Type authoring", () => {
       expect(presetSelect.options.length).toBeGreaterThan(1);
     });
     fireEvent.change(presetSelect, {
-      target: { value: "global::::jira-orchestrate" },
+      target: { value: "jira-orchestrate" },
     });
     const instructions = within(step).getByLabelText(
       "Instructions",

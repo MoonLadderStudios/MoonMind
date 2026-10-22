@@ -7,12 +7,13 @@ from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from api_service.api.instance_access import access_principal
 from api_service.api.routers.temporal_artifacts import (
     artifact_read_response_policy,
     _get_temporal_artifact_service,
@@ -21,8 +22,7 @@ from api_service.api.routers.temporal_artifacts import (
     _resolve_recovery_principal,
     _serialize_metadata,
 )
-from api_service.auth_providers import get_current_user
-from api_service.db.models import User
+from api_service.auth_providers import get_instance_access
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactMetadataModel,
     ArtifactRefModel,
@@ -167,9 +167,9 @@ async def _load_exact_execution_owner_binding(
             owner_type = "system" if owner_id.lower() == "system" or not owner_id else "user"
         return owner_type or None, owner_id or None
 
-async def _require_observability_access(record: object, user: User) -> None:
+async def _require_observability_access(record: object, user: Any) -> None:
     # Single-user (#4351): agent-run observability is instance-visible to
-    # the admitted operator. The shared admission boundary (get_current_user)
+    # the admitted operator. The shared admission boundary (get_instance_access)
     # owns access; retained owner bindings persist as provenance and never
     # gate reads. State/source/approval validation stays at owning bounds.
     workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
@@ -180,7 +180,7 @@ async def _require_observability_access(record: object, user: User) -> None:
         )
     return None
 
-async def _require_agent_run_access(agent_run_id: str, user: User) -> None:
+async def _require_agent_run_access(agent_run_id: str, user: Any) -> None:
     # Single-user (#4351): agent-run and session projections are
     # instance-visible to the admitted operator. See above.
     if not str(agent_run_id or "").strip():
@@ -322,7 +322,7 @@ async def _build_agent_run_artifact_session_projection(
 async def _load_session_projection_for_alias(
     *,
     session_id: str,
-    user: User,
+    user: Any,
     principal: str,
     service: TemporalArtifactService,
     recovery_principal: str | None = None,
@@ -479,7 +479,7 @@ async def _read_session_resource_artifact(
     *,
     session_id: str,
     artifact_id: str,
-    user: User,
+    user: Any,
     principal: str,
     service: TemporalArtifactService,
     recovery_principal: str | None = None,
@@ -1400,7 +1400,7 @@ def _resolve_legacy_log_artifact_path(
 )
 async def get_observability_summary(
     id: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ) -> dict:
     """Fetch the observability summary for a agent run from the shared agent jobs volume."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
@@ -1461,7 +1461,7 @@ async def get_observability_summary(
 async def get_agent_run_artifact_session(
     agent_run_id: str,
     session_id: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     recovery_principal: str | None = Depends(_resolve_recovery_principal),
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
@@ -1469,7 +1469,7 @@ async def get_agent_run_artifact_session(
 ) -> ArtifactSessionProjectionModel:
     await _require_agent_run_access(agent_run_id, _user)
     projection = await _build_agent_run_artifact_session_projection(
-        principal=str(_user.id),
+        principal=access_principal(_user),
         recovery_principal=recovery_principal,
         agent_run_id=agent_run_id,
         session_id=session_id,
@@ -1489,7 +1489,7 @@ async def get_agent_run_artifact_session(
 )
 async def list_session_resources(
     session_id: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(
@@ -1517,7 +1517,7 @@ async def list_session_resources(
 )
 async def list_session_resource_files(
     session_id: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(
@@ -1542,7 +1542,7 @@ async def list_session_resource_files(
 async def get_session_resource_content(
     session_id: str,
     artifact_id: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(
@@ -1569,7 +1569,7 @@ async def get_session_resource_content(
 async def download_session_resource(
     session_id: str,
     artifact_id: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
@@ -1597,7 +1597,7 @@ async def control_agent_run_artifact_session(
     agent_run_id: str,
     session_id: str,
     payload: ArtifactSessionControlRequest,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     recovery_principal: str | None = Depends(_resolve_recovery_principal),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactSessionControlResponse:
@@ -1683,7 +1683,7 @@ async def control_agent_run_artifact_session(
         )
 
     projection = await _build_agent_run_artifact_session_projection(
-        principal=str(_user.id),
+        principal=access_principal(_user),
         recovery_principal=recovery_principal,
         agent_run_id=agent_run_id,
         session_id=session_id,
@@ -1716,7 +1716,7 @@ async def get_agent_run_observability_events(
     kind: list[str] | None = Query(default=None),
     session_epoch: list[int] | None = Query(default=None, alias="sessionEpoch"),
     thread_id: list[str] | None = Query(default=None, alias="threadId"),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ) -> dict:
     """Return structured observability history for one agent run."""
     if session_epoch is not None and any(item < 1 for item in session_epoch):
@@ -1803,7 +1803,7 @@ async def stream_agent_run_live_logs(
     id: str,
     request: Request,
     since: int | None = Query(default=None, ge=0, description="Resume from sequence number"),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ):
     """Serve SSE real-time stream for active runs."""
     store = ManagedRunStore(_get_agent_runtime_store_root())
@@ -1893,7 +1893,7 @@ async def stream_agent_run_live_logs(
 async def stream_agent_run_log(
     id: str,
     stream_name: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ):
     """Serve stdout, stderr, or merged logs directly from the shared volume."""
     if stream_name not in ("stdout", "stderr", "merged"):
@@ -2041,7 +2041,7 @@ async def stream_agent_run_log(
 )
 async def get_agent_run_diagnostics(
     id: str,
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ):
     """Return the diagnostics.json payload for a agent run."""
     store = ManagedRunStore(_get_agent_runtime_store_root())

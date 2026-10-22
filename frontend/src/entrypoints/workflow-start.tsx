@@ -491,11 +491,6 @@ function repositoryOptionValue(
   );
 }
 
-type TemplateScope = "global" | "personal"; // Backend-owned catalog partition
-// (MoonLadderStudios/MoonMind#4353 presents one unified instance list; the
-// scope/scopeRef routing contract is owned by #4350. Removal condition:
-// when the backend exposes a unified preset list/detail/save surface without
-// scope partitioning, delete this type and the scope plumbing below).
 type ScheduleMode = "immediate" | "once" | "deferred_minutes" | "recurring";
 
 interface DashboardConfig {
@@ -1076,8 +1071,6 @@ interface PresetInputDefinition {
 
 interface PresetSummary {
   slug: string;
-  scope: TemplateScope;
-  scopeRef?: string | null;
   title: string;
   description: string;
   presetDigest?: string | null;
@@ -1380,14 +1373,6 @@ function readDashboardConfig(payload: BootPayload): DashboardConfig {
     | { dashboardConfig?: DashboardConfig }
     | undefined;
   return raw?.dashboardConfig ?? {};
-}
-
-function templateKey(
-  scope: TemplateScope,
-  slug: string,
-  scopeRef?: string | null,
-): string {
-  return `${scope}::${String(scopeRef || "").trim()}::${slug}`;
 }
 
 function interpolatePath(
@@ -3349,10 +3334,6 @@ function canLookupRepositoryBranches(value: string): boolean {
   return candidate.startsWith("git@");
 }
 
-// MoonLadderStudios/MoonMind#4353: the account-free instance presents one
-// unified preset catalog. Template `scope`/`scopeRef` remain backend-owned
-// routing fields (passed through untouched for detail/expand/delete), but the
-// UI never labels or partitions presets as Personal/Global.
 function presetOptionLabel(item: TemplateOption, items: TemplateOption[]): string {
   const titleCollides = items.some(
     (other) => other !== item && other.title === item.title,
@@ -3367,9 +3348,7 @@ export function preferredTemplate(items: TemplateOption[]): TemplateOption | nul
   ];
 
   for (const slug of preferredSlugs) {
-    const preferred =
-      items.find((item) => item.slug === slug && item.scope === "global") ||
-      items.find((item) => item.slug === slug);
+    const preferred = items.find((item) => item.slug === slug);
     if (preferred) {
       return preferred;
     }
@@ -7431,7 +7410,7 @@ function WorkflowStartPageContent({
       return (data.items || [])
         .map((item) => ({
           ...item,
-          key: templateKey(item.scope, item.slug, item.scopeRef),
+          key: item.slug,
         }))
         .sort((left, right) => left.title.localeCompare(right.title));
     },
@@ -8947,15 +8926,7 @@ function WorkflowStartPageContent({
     preset: TemplateOption,
   ): Promise<PresetDetail> {
     const response = await fetch(
-      withQueryParams(
-        interpolatePath(taskTemplateDetailEndpoint, {
-          slug: preset.slug,
-        }),
-        {
-          scope: preset.scope,
-          scopeRef: preset.scopeRef || undefined,
-        },
-      ),
+      interpolatePath(taskTemplateDetailEndpoint, { slug: preset.slug }),
       { headers: { Accept: "application/json" } },
     );
     if (!response.ok) {
@@ -8979,10 +8950,6 @@ function WorkflowStartPageContent({
     featureRequestOverride?: string;
     submitIntent?: string;
   }): Promise<PresetExpansionState> {
-    const scopeParams = {
-      scope: preset.scope,
-      scopeRef: preset.scopeRef || undefined,
-    };
     const schemaDriven = schemaContractHasFields(detail);
     const { values: inputs, assumptions } = schemaDriven
       ? {
@@ -9000,12 +8967,7 @@ function WorkflowStartPageContent({
         );
     const presetRuntime = runtime.trim().toLowerCase();
     const expandResponse = await fetch(
-      withQueryParams(
-        interpolatePath(taskTemplateExpandEndpoint, {
-          slug: preset.slug,
-        }),
-        scopeParams,
-      ),
+      interpolatePath(taskTemplateExpandEndpoint, { slug: preset.slug }),
       {
         method: "POST",
         headers: {
@@ -9205,7 +9167,11 @@ function WorkflowStartPageContent({
     const step = steps.find((candidate) => candidate.localId === localId);
     const preset = templateItems.find((item) => item.key === step?.presetKey);
     if (!step || !preset) {
-      updateStep(localId, { presetMessage: "Choose a preset first." });
+      updateStep(localId, {
+        presetMessage: step?.presetKey
+          ? "This preset is no longer available. Choose a current preset before continuing."
+          : "Choose a preset first.",
+      });
       return;
     }
     const requestedInstructions = step.instructions;
@@ -9466,6 +9432,7 @@ function WorkflowStartPageContent({
           Accept: "application/json",
         },
         body: JSON.stringify({
+          releaseStatus: "draft",
           title,
           description: title,
           steps: presetSteps,
@@ -9504,13 +9471,8 @@ function WorkflowStartPageContent({
     const matchesName = (item: (typeof templateItems)[number]) =>
       item.title.trim().toLowerCase() === normalized ||
       item.slug.trim().toLowerCase() === normalized;
-    // The unified instance catalog deletes whichever listed preset matches;
-    // the preset's own backend scope/scopeRef travels with the request and
-    // the server remains the authorization boundary (detail/delete/expand
-    // require scope as Query(...); owned by #4350 with the same removal
-    // condition as the list/save contract above). A colliding title/slug
-    // across scopes must not silently pick the first sorted match: require
-    // an unambiguous exact slug instead of issuing a destructive request.
+    // A duplicate display title must not select an arbitrary preset for deletion.
+    // Require the unique catalog slug when the title is ambiguous.
     const matches = templateItems.filter(matchesName);
     if (matches.length === 0) {
       setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
@@ -9550,15 +9512,7 @@ function WorkflowStartPageContent({
     setTemplateMessage("Deleting preset...");
     try {
       const response = await fetch(
-        withQueryParams(
-          interpolatePath(taskTemplateDetailEndpoint, {
-            slug: target.slug,
-          }),
-          {
-            scope: target.scope,
-            scopeRef: target.scopeRef || undefined,
-          },
-        ),
+        interpolatePath(taskTemplateDetailEndpoint, { slug: target.slug }),
         {
           method: "DELETE",
           headers: { Accept: "application/json" },
@@ -9766,7 +9720,9 @@ function WorkflowStartPageContent({
       }
       const preset = templateItems.find((item) => item.key === step.presetKey);
       if (!preset) {
-        const message = "Choose a preset first.";
+        const message = step.presetKey
+          ? "This preset is no longer available. Choose a current preset before continuing."
+          : "Choose a preset first.";
         updatePresetSubmitExpansion(step.localId, {
           presetMessage: message,
           submitExpansion: {

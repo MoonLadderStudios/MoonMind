@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import issue_lifecycle as issue_lifecycle_router
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 
 REPO = "o/r"
 ISSUE_NUMBER = 4183
@@ -32,7 +32,7 @@ def _client(user: SimpleNamespace | None, github_service: object | None = None) 
     app = FastAPI()
     app.include_router(issue_lifecycle_router.router)
     if user is not None:
-        app.dependency_overrides[get_current_user()] = lambda: user
+        app.dependency_overrides[get_instance_access] = lambda: user
     if github_service is not None:
         app.dependency_overrides[issue_lifecycle_router.get_github_service] = lambda: github_service
     return TestClient(app, raise_server_exceptions=False)

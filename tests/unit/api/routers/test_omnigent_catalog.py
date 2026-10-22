@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import omnigent_catalog as catalog
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from moonmind.security.egress import (
     OMNIGENT_EGRESS_NETWORK_REF,
@@ -356,7 +356,7 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     )
     app = FastAPI()
     app.include_router(catalog.router)
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=None, is_superuser=superuser
     )
     app.dependency_overrides[get_async_session] = lambda: session
@@ -1206,7 +1206,7 @@ def test_catalog_requires_authentication():
     def unauthenticated():
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    app.dependency_overrides[get_current_user()] = unauthenticated
+    app.dependency_overrides[get_instance_access] = unauthenticated
     response = TestClient(app).get("/api/omnigent/codex-catalog-readiness")
     assert response.status_code in {401, 403}
 
@@ -1532,7 +1532,7 @@ def test_catalog_filters_persisted_policies_not_visible_to_caller(monkeypatch):
         monkeypatch,
         session=_Session([_profile()], policies=[(identity, version)]),
     )
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id="current-user", is_superuser=False
     )
     monkeypatch.setattr(
@@ -1553,7 +1553,7 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
     visible = _profile(profile_id="visible", owner_user_id=None)
     hidden = _profile(profile_id="hidden", owner_user_id="other-user")
     app = _app(monkeypatch, session=_Session([visible, hidden]))
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id="current-user", is_superuser=False
     )
     monkeypatch.setattr(

@@ -274,6 +274,7 @@ const ExecutionRowSchema = z
     repository: z.string().nullable().optional(),
     integration: z.string().nullable().optional(),
     targetRuntime: z.string().nullable().optional(),
+    agentRequired: z.boolean().nullable().optional(),
     // A malformed summary degrades to "unavailable" instead of failing the page.
     providerProfile: ProviderProfileSummarySchema.nullable().optional().catch(undefined),
     targetSkill: z.string().nullable().optional(),
@@ -362,6 +363,7 @@ function providerProfileLabel(
 function providerProfileDisplay(
   summary: ProviderProfileSummary | null | undefined,
   ambiguousLabels: ReadonlySet<string>,
+  agentRequired?: boolean | null,
 ): ProviderProfileDisplay {
   if (!summary || (summary.selectionState === 'recorded' && !summary.profiles.length)) {
     return {
@@ -389,8 +391,8 @@ function providerProfileDisplay(
     const hidden = total - 1;
     return {
       primary: 'Multiple profiles',
-      secondary: `${firstLabel} +${hidden}`,
-      title: `Multiple profiles: ${describe}${total > summary.profiles.length ? ' and more' : ''}`,
+      secondary: `${firstLabel} +${hidden}${agentRequired === false ? ' · Not used · native tools' : ''}`,
+      title: `${agentRequired === false ? 'Unused agent configuration' : 'Multiple profiles'}: ${describe}${total > summary.profiles.length ? ' and more' : ''}`,
       sortRank: 0,
       sortKey: `multiple profiles ${firstLabel.toLowerCase()}`,
       tieBreakId: first.id,
@@ -399,8 +401,10 @@ function providerProfileDisplay(
   const harness = (first.harness || '').trim();
   return {
     primary: firstLabel,
-    secondary: harness ? `Harness: ${harness}` : undefined,
-    title: describe + (harness ? ` · Harness: ${harness}` : ''),
+    secondary: agentRequired === false ? 'Not used · native tools' : harness ? `Harness: ${harness}` : undefined,
+    title: agentRequired === false
+      ? `Unused agent configuration: ${describe}. This workflow runs native tools.`
+      : describe + (harness ? ` · Harness: ${harness}` : ''),
     sortRank: 0,
     sortKey: firstLabel.toLowerCase(),
     tieBreakId: first.id,
@@ -3348,6 +3352,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                 display={providerProfileDisplay(
                                   row.providerProfile,
                                   knownProviderProfiles.ambiguous,
+                                  row.agentRequired,
                                 )}
                               />
                             </td>
@@ -3421,6 +3426,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             display={providerProfileDisplay(
                               row.providerProfile,
                               knownProviderProfiles.ambiguous,
+                              row.agentRequired,
                             )}
                           />
                         </dd>

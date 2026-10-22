@@ -61,7 +61,6 @@ from temporalio.api.operatorservice.v1 import ListSearchAttributesRequest
 from temporalio.client import Client
 from temporalio.service import RPCError
 
-from api_service.api.dependencies import resolve_template_scope_for_user
 from api_service.api.execution_fanout import (
     EXECUTION_FANOUT_HEADER,
     enforce_fanout_child_visibility,
@@ -78,6 +77,7 @@ from api_service.auth_providers import (
     get_current_user,
     get_instance_access,
     get_instance_access_optional,
+    get_instance_operator_access,
     instance_operator_principal,
 )
 from api_service.core import sync as execution_sync
@@ -4570,6 +4570,26 @@ def _bounded_execution_progress_from_sources(
     return None
 
 
+def _execution_agent_required(parameters: Mapping[str, Any]) -> bool | None:
+    task = _workflow_payload_from_parameters(parameters)
+    # Runtime/profile defaults alone cannot prove whether an agent will run.
+    if not any(
+        key in task
+        for key in (
+            "steps",
+            "plan",
+            "tool",
+            "skill",
+            "instructions",
+            "taskTemplate",
+            "task_template",
+            "includes",
+        )
+    ):
+        return None
+    return workflow_requires_agent(task, parameters)
+
+
 def _serialize_execution_list_item(record) -> ExecutionListItemModel:
     close_status = _enum_value(getattr(record, "close_status", None))
     if close_status == TemporalExecutionCloseStatus.COMPLETED.value:
@@ -4768,6 +4788,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
             memo,
             search_value=search_attributes.get(PROVIDER_PROFILE_SEARCH_ATTRIBUTE),
         ),
+        agent_required=_execution_agent_required(params),
         target_skill=target_skill,
         task_skills=task_skills,
         repository=repository,
@@ -5244,6 +5265,7 @@ def _serialize_execution(
         title=title,
         summary=summary,
         task_instructions=_derive_full_workflow_instructions(task_payload),
+        agent_required=_execution_agent_required(params),
         status=dashboard_status,
         dashboard_status=dashboard_status,
         objective_outcome=objective_outcome,
@@ -6395,7 +6417,29 @@ async def _enrich_execution_merge_automation(
             update={"resolver_children": resolver_children}
         )
 
-    return execution.model_copy(update={"merge_automation": normalized})
+    updates: dict[str, Any] = {"merge_automation": normalized}
+    active_request = (
+        normalized.review_loop.active_request if normalized.review_loop else None
+    )
+    if (
+        execution.raw_state == "awaiting_external"
+        and execution.temporal_status == "running"
+        and not execution.paused
+        and execution.waiting_reason
+        in {
+            None,
+            "external_completion",
+            "Waiting for PR merge automation.",
+        }
+        and normalized.status == "waiting"
+        and isinstance(active_request, Mapping)
+    ):
+        provider = _coerce_temporal_scalar(active_request.get("provider"))
+        if provider:
+            target = f" of PR #{normalized.pr_number}" if normalized.pr_number else ""
+            review_wait = f"Waiting for {provider.capitalize()} review{target}."
+            updates.update(summary=review_wait, waiting_reason=review_wait)
+    return execution.model_copy(update=updates)
 
 
 def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:
@@ -9323,7 +9367,6 @@ def _apply_goal_schedule_metadata(
     task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {
         "slug": str(applied_template.get("slug") or schedule.slug),
-        "scope": "global",
     }
     task_payload["presetSchedule"] = {
         "source": "goal",
@@ -9420,24 +9463,6 @@ async def _expand_goal_preset_for_workflow_submission(
             PresetValidationError,
         )
 
-        template_payload = dict(task_payload.get("taskTemplate") or {})
-        template_scope, template_scope_ref = resolve_template_scope_for_user(
-            user=user,
-            scope=str(template_payload.get("scope") or "global"),
-            scope_ref=(
-                template_payload.get("scopeRef")
-                or template_payload.get("scope_ref")
-            ),
-            write=False,
-        )
-        template_payload["scope"] = template_scope
-        if template_scope_ref is None:
-            template_payload.pop("scopeRef", None)
-            template_payload.pop("scope_ref", None)
-        else:
-            template_payload["scopeRef"] = template_scope_ref
-            template_payload.pop("scope_ref", None)
-        task_payload["taskTemplate"] = template_payload
         try:
             expanded_parameters = await expand_preset_for_child_run(
                 session=session,
@@ -9447,7 +9472,6 @@ async def _expand_goal_preset_for_workflow_submission(
                     "targetRuntime": target_runtime,
                 },
                 allow_goal_schedule=False,
-                user_id=getattr(user, "id", None),
             )
         except PresetNotFoundError as exc:
             raise HTTPException(
@@ -9506,8 +9530,6 @@ async def _expand_goal_preset_for_workflow_submission(
 
     expand_kwargs = {
         "slug": schedule.slug,
-        "scope": "global",
-        "scope_ref": None,
         "inputs": template_inputs,
         "context": context,
         "options": ExpandOptions(should_enforce_step_limit=True),
@@ -18293,7 +18315,7 @@ async def resolve_workflow_chat_binding(
     workflow_id: str,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_operator_access),
 ) -> WorkflowChatBinding:
     """Resolve the authorized, browser-safe native Workflow Chat binding.
 

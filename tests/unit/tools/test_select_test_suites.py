@@ -1045,7 +1045,6 @@ def test_shared_resource_changes_require_real_docker_journey():
         "api_service/auth.py",
         "api_service/auth_providers.py",
         "api_service/main.py",
-        "api_service/api/routers/worker_auth.py",
         "moonmind/omnigent/bridge_security.py",
         # Instance configuration and credential bindings.
         "api_service/api/routers/settings.py",

@@ -1,8 +1,7 @@
-"""Disposable Compose upgrade routing convergence using the selected controller.
+"""Disposable Compose upgrade through the selected production controller.
 
-This adapter does not run the updater API. It preserves the controller's local
-operation/lock state and invokes its normal routing convergence after Compose
-has installed the candidate workers.
+The same operation and lock own image staging, recreation, conversion and access
+verification. The adapter adds only isolated test-target admission and diagnostics.
 """
 
 from __future__ import annotations
@@ -154,8 +153,12 @@ class DiagnosticRunner:
 def validate_target(*, repo, project, image, compose_files):
     if not re.fullmatch(r"moonmind-test(?:-[a-z0-9][a-z0-9_-]*)?", project):
         raise ValueError("cutover requires an isolated moonmind-test project")
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
-        raise ValueError("cutover requires the inspected candidate image ID")
+    if not re.fullmatch(
+        r"(?:sha256:[0-9a-f]{64}|127\.0\.0\.1:[0-9]+/moonmind:journey)", image
+    ):
+        raise ValueError(
+            "upgrade requires its inspected image ID or isolated registry image"
+        )
     repo = Path(repo).resolve()
     marker = repo / ".first-run-journey-project"
     if (
@@ -191,45 +194,71 @@ def run_cutover(
     identity = hashlib.sha256(
         json.dumps([project, image, revision, target], sort_keys=True).encode()
     ).hexdigest()[:24]
+    operation_id = f"journey-cutover-{identity}"
     store = controller.record_mod.OperationStore(state)
     with controller.lock_mod.StackLock(state, project).acquire():
-        operation = store.begin(
-            stack=project,
-            desired_image=image,
-            source_revision=revision,
-            reason="Disposable Compose upgrade routing convergence",
-            target=target,
-            operation_id=f"journey-cutover-{identity}",
-        )
-        if operation["target"] != target or operation["desired"]["image"] != image:
-            raise ValueError("existing cutover operation targets another deployment")
-        overlay = controller.write_image_overlay(
-            str(state), operation["operationId"], image
-        )
         runner = controller.engine.subprocess_runner()
-        if diagnostics_path is not None:
-            runner = DiagnosticRunner(
-                runner, controller=controller, path=diagnostics_path,
-                project=project, operation_id=operation["operationId"],
+        try:
+            operation = store.load(operation_id)
+        except KeyError:
+            base = controller.engine.compose_base(
+                project=project,
+                project_dir=str(repo),
+                compose_files=compose_files,
             )
-        check = controller.converge_routing_cutover(
-            store,
-            operation,
-            runner=runner,
-            overlay=overlay,
-        )
-        receipt = store.routing_cutover(stack=project)
+            rendered = controller.engine.run_command(
+                runner,
+                (*base, "config", "--services"),
+                timeout_seconds=controller.TARGET_CONFIG_TIMEOUT_SECONDS,
+            )
+            services = [
+                name
+                for name in controller.engine.command_stdout(rendered).split()
+                if name not in controller.DEFAULT_EXCLUDED_SERVICES
+            ]
+            if int(rendered.get("exit", 0)) or not services:
+                raise RuntimeError("the disposable upgrade renders no services")
+            operation = store.begin(
+                stack=project,
+                desired_image=image,
+                source_revision=revision,
+                reason="Disposable Compose upgrade through the production controller",
+                target={**target, "services": services},
+                operation_id=operation_id,
+            )
+        if (
+            any(operation["target"].get(key) != value for key, value in target.items())
+            or operation["desired"]["image"] != image
+        ):
+            raise ValueError("existing upgrade operation targets another deployment")
+        if operation.get("status") not in controller.record_mod.TERMINAL_STATUSES:
+            if diagnostics_path is not None:
+                runner = DiagnosticRunner(
+                    runner,
+                    controller=controller,
+                    path=diagnostics_path,
+                    project=project,
+                    operation_id=operation_id,
+                )
+            # Decorate only Docker diagnostics; the production owner retains
+            # its ordinary staging, recreation and verification behavior.
+            original_runner = controller.engine.subprocess_runner
+            controller.engine.subprocess_runner = lambda: runner
+            try:
+                controller._apply_recording_failure(
+                    store,
+                    operation_id,
+                    lambda current: controller.production_apply(store, current),
+                )
+            finally:
+                controller.engine.subprocess_runner = original_runner
+        final = store.load(operation_id)
         return {
-            "passed": bool(
-                check
-                and check.get("status") == "passed"
-                and receipt
-                and receipt.get("routingCutover", {}).get("status") == "completed"
-            ),
-            "check": check,
-            "receipt": receipt,
-            "operation": store.load(operation["operationId"]),
+            "passed": final.get("status") == "succeeded",
+            "receipt": store.routing_cutover(stack=project),
+            "operation": final,
         }
+
 
 
 def main():

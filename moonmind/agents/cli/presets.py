@@ -24,14 +24,10 @@ class PresetClient:
     def list_templates(
         self,
         *,
-        scope: str,
-        scope_ref: str | None = None,
         tag: str | None = None,
         search: str | None = None,
     ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"scope": scope}
-        if scope_ref:
-            params["scopeRef"] = scope_ref
+        params: dict[str, Any] = {}
         if tag:
             params["tag"] = tag
         if search:
@@ -50,14 +46,10 @@ class PresetClient:
         self,
         *,
         slug: str,
-        scope: str,
         inputs: dict[str, Any],
-        scope_ref: str | None = None,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {"scope": scope}
-        if scope_ref:
-            params["scopeRef"] = scope_ref
+        params: dict[str, Any] = {}
         response = requests.post(
             f"{self.base_url.rstrip('/')}/api/presets/{slug}:expand",
             headers=self._headers(),

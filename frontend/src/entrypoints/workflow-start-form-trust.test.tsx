@@ -207,7 +207,6 @@ describe("Workflow Create form trust", () => {
               items: [
                 {
                   slug: "jira-orchestrate",
-                  scope: "global",
                   title: "Jira Orchestrate",
                   description: "Implement a Jira issue.",
                 },
@@ -215,22 +214,18 @@ describe("Workflow Create form trust", () => {
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets?scope=personal")) {
-          return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
-        }
-        if (url.startsWith("/api/presets/jira-orchestrate?scope=global")) {
+        if (url === "/api/presets/jira-orchestrate") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
               slug: "jira-orchestrate",
-              scope: "global",
               title: "Jira Orchestrate",
               description: "Implement a Jira issue.",
               inputs: [],
             }),
           } as Response);
         }
-        if (url.startsWith("/api/presets/jira-orchestrate:expand?scope=global")) {
+        if (url === "/api/presets/jira-orchestrate:expand") {
           return Promise.resolve({
             ok: true,
             json: async () => ({
@@ -944,7 +939,7 @@ describe("Workflow Create form trust", () => {
     });
     const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => expect(presetSelect.options.length).toBeGreaterThan(1));
-    fireEvent.change(presetSelect, { target: { value: "global::::jira-orchestrate" } });
+    fireEvent.change(presetSelect, { target: { value: "jira-orchestrate" } });
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(

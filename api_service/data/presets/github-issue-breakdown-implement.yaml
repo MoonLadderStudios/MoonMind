@@ -1,7 +1,6 @@
 slug: github-issue-breakdown-implement
 title: Breakdown and GitHub Issue Implement
 description: Break a preferred source input into stories, create GitHub issues, then create dependent GitHub Issue Implement workflow executions for each generated issue.
-scope: global
 tags:
   - github
   - moonspec

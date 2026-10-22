@@ -269,7 +269,7 @@ async def test_saved_runtime_snapshot_survives_preset_expansion(
     workflow = (
         {"goal": "Run a preset"}
         if preset_kind == "goal"
-        else {"taskTemplate": {"slug": "explicit-preset", "scope": "global"}}
+        else {"taskTemplate": {"slug": "explicit-preset"}}
     )
     response = await context.client.post(
         "/api/executions",

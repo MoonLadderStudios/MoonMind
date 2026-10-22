@@ -13,7 +13,7 @@ import pytest
 import yaml
 from sqlalchemy import UniqueConstraint, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import selectinload, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers import executions as executions_module
 from api_service.api.schemas import CreateJobRequest
@@ -23,7 +23,6 @@ from api_service.db.models import (
     Preset,
     PresetRecent,
     PresetReleaseStatus,
-    PresetScopeType,
     ProviderProfileAuthState,
 )
 from api_service.services.presets.catalog import (
@@ -36,10 +35,10 @@ from api_service.services.presets.catalog import (
 from api_service.services.presets.save import PresetSaveService
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.service import TemporalExecutionService
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
 pytestmark = [pytest.mark.asyncio]
+
 
 @asynccontextmanager
 async def template_db(tmp_path):
@@ -57,14 +56,15 @@ async def template_db(tmp_path):
     finally:
         await engine.dispose()
 
+
 def _write_seed_template(seed_dir, seed_data: dict) -> None:
     seed_dir.mkdir(exist_ok=True)
     seed_file = seed_dir / f"{seed_data['slug']}.yaml"
     with open(seed_file, "w") as f:
         yaml.dump(seed_data, f)
 
+
 async def test_create_and_expand_template_deterministic_ids(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -72,8 +72,6 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
                 slug="pr-check",
                 title="PR Check",
                 description="Template for PR checks",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=["quality"],
                 inputs_schema=[
                     {
@@ -96,18 +94,14 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=["codex"],
-                created_by=user_id,
             )
             assert created["slug"] == "pr-check"
 
             expanded = await service.expand_template(
                 slug="pr-check",
-                scope="personal",
-                scope_ref=str(user_id),
                 inputs={"summary": "fix failing tests"},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
-                user_id=user_id,
             )
 
     assert len(expanded["steps"]) == 1
@@ -120,7 +114,6 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
 
 
 async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -128,8 +121,6 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
                 slug="tiered-workflow",
                 title="Tiered Workflow",
                 description="Template carrying MM-1168 model tier intent.",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=["runtime"],
                 inputs_schema=[],
                 steps=[
@@ -148,7 +139,6 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
             # #4636 rejects new strict authoring. Exercise the retained reader
@@ -165,12 +155,9 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
 
             expanded = await service.expand_template(
                 slug="tiered-workflow",
-                scope="personal",
-                scope_ref=str(user_id),
                 inputs={},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
-                user_id=user_id,
             )
 
     runtime = expanded["steps"][0]["skill"]["runtime"]
@@ -239,8 +226,6 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                     slug="portable-tiered-workflow",
                     title="Portable Tiered Workflow",
                     description="One tier-based preset for differing profile policies.",
-                    scope="personal",
-                    scope_ref=str(user_id),
                     tags=["runtime"],
                     inputs_schema=[],
                     steps=[
@@ -257,12 +242,9 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=user_id,
                 )
                 expanded = await catalog.expand_template(
                     slug="portable-tiered-workflow",
-                    scope="personal",
-                    scope_ref=str(user_id),
                     inputs={},
                     context={},
                     options=ExpandOptions(should_enforce_step_limit=True),
@@ -342,7 +324,6 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
 
 
 async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -352,8 +333,6 @@ async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
                     slug="bad-tier",
                     title="Bad Tier",
                     description="Template with invalid tier intent.",
-                    scope="personal",
-                    scope_ref=str(user_id),
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -365,7 +344,6 @@ async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=user_id,
                 )
 
             with pytest.raises(PresetValidationError, match="tierFallback"):
@@ -373,8 +351,6 @@ async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
                     slug="bad-fallback",
                     title="Bad Fallback",
                     description="Template with invalid fallback intent.",
-                    scope="personal",
-                    scope_ref=str(user_id),
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -391,11 +367,10 @@ async def test_mm1171_preset_runtime_rejects_invalid_tier_values(tmp_path):
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=user_id,
                 )
 
+
 async def test_checkpoint_branching_policy_expands_only_when_enabled(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -403,8 +378,6 @@ async def test_checkpoint_branching_policy_expands_only_when_enabled(tmp_path):
                 slug="branch-exploration",
                 title="Branch Exploration",
                 description="Template with bounded branch exploration",
-                scope="global",
-                scope_ref=None,
                 tags=["checkpoint-branch"],
                 inputs_schema=[],
                 steps=[{"title": "Inspect", "instructions": "Inspect checkpoint"}],
@@ -432,13 +405,10 @@ async def test_checkpoint_branching_policy_expands_only_when_enabled(tmp_path):
                     }
                 },
                 required_capabilities=["codex"],
-                created_by=user_id,
             )
 
             expanded = await service.expand_template(
                 slug="branch-exploration",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -461,8 +431,8 @@ async def test_checkpoint_branching_policy_expands_only_when_enabled(tmp_path):
         "maxBudgetUsd": 5.5,
     }
 
+
 async def test_disabled_checkpoint_branching_policy_is_explicitly_carried(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -470,25 +440,21 @@ async def test_disabled_checkpoint_branching_policy_is_explicitly_carried(tmp_pa
                 slug="branch-disabled",
                 title="Branch Disabled",
                 description="Template with disabled branch exploration",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"title": "Run", "instructions": "Run normally"}],
                 annotations={"checkpointBranching": {"enabled": False}},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
             expanded = await service.expand_template(
                 slug="branch-disabled",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
 
     assert expanded["checkpointBranching"] == {"enabled": False}
+
 
 async def test_checkpoint_branching_policy_expands_from_snake_case_annotation(tmp_path):
     user_id = uuid4()
@@ -499,7 +465,7 @@ async def test_checkpoint_branching_policy_expands_from_snake_case_annotation(tm
                     slug="branch-legacy-snake",
                     title="Branch Legacy Snake",
                     description="Template with legacy snake_case annotation",
-                    scope_type=PresetScopeType.GLOBAL,
+                    scope_type=None,
                     scope_ref=None,
                     tags=[],
                     inputs_schema=[],
@@ -531,8 +497,6 @@ async def test_checkpoint_branching_policy_expands_from_snake_case_annotation(tm
             service = PresetCatalogService(session)
             expanded = await service.expand_template(
                 slug="branch-legacy-snake",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -540,15 +504,22 @@ async def test_checkpoint_branching_policy_expands_from_snake_case_annotation(tm
     assert expanded["checkpointBranching"]["enabled"] is True
     assert expanded["checkpointBranching"]["triggers"] == ["failed_step"]
 
+
 @pytest.mark.parametrize(
     ("policy_patch", "message"),
     [
         ({"enabled": "true"}, "enabled"),
-        ({"triggers": ["unexpected_trigger"]}, "Unsupported checkpointBranching trigger"),
+        (
+            {"triggers": ["unexpected_trigger"]},
+            "Unsupported checkpointBranching trigger",
+        ),
         ({"maxBranchesPerCheckpoint": 0}, "maxBranchesPerCheckpoint"),
         ({"maxTurnsPerBranch": 0}, "maxTurnsPerBranch"),
         ({"promotionPolicy": "auto_promote"}, "promotionPolicy"),
-        ({"runtimeContextPolicy": "external_provider_continuation"}, "runtimeContextPolicy"),
+        (
+            {"runtimeContextPolicy": "external_provider_continuation"},
+            "runtimeContextPolicy",
+        ),
         ({"publishMode": "branch"}, "publishMode"),
         ({"sideEffectPolicy": "shared_workspace"}, "sideEffectPolicy"),
         ({"maxBudgetUsd": 0}, "maxBudgetUsd"),
@@ -564,7 +535,6 @@ async def test_checkpoint_branching_policy_expands_from_snake_case_annotation(tm
 async def test_checkpoint_branching_policy_fails_closed(
     tmp_path, policy_patch, message
 ):
-    user_id = uuid4()
     policy = {
         "enabled": True,
         "triggers": ["failed_step"],
@@ -586,18 +556,15 @@ async def test_checkpoint_branching_policy_fails_closed(
                     slug="branch-policy-invalid",
                     title="Branch Policy Invalid",
                     description="Invalid branch policy",
-                    scope="global",
-                    scope_ref=None,
                     tags=[],
                     inputs_schema=[],
                     steps=[{"title": "Run", "instructions": "Run normally"}],
                     annotations={"checkpointBranching": policy},
                     required_capabilities=[],
-                    created_by=user_id,
                 )
 
+
 async def test_create_template_strips_tool_version_identity(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -605,8 +572,6 @@ async def test_create_template_strips_tool_version_identity(tmp_path):
                 slug="tool-version",
                 title="Tool Version",
                 description="Strips semantic tool versions.",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -623,7 +588,6 @@ async def test_create_template_strips_tool_version_identity(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
     assert created["steps"][0]["tool"] == {
@@ -631,11 +595,11 @@ async def test_create_template_strips_tool_version_identity(tmp_path):
         "inputs": {"issueKey": "MM-916"},
     }
 
+
 @pytest.mark.parametrize("slug", ["jira-orchestrate", "moonspec-orchestrate"])
 async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
     tmp_path, slug: str
 ):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -643,8 +607,6 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
                 slug=slug,
                 title=slug,
                 description="Legacy orchestrate template",
-                scope="global",
-                scope_ref=None,
                 tags=["moonspec"],
                 inputs_schema=[
                     {
@@ -671,13 +633,10 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
                 ],
                 annotations={},
                 required_capabilities=["git"],
-                created_by=user_id,
             )
 
             expanded = await service.expand_template(
                 slug=slug,
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "Implement MM-600",
                     "orchestration_mode": "docs",
@@ -687,8 +646,8 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
     assert expanded["appliedTemplate"]["inputs"]["orchestration_mode"] == "runtime"
     assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
 
+
 async def test_template_serializes_normalized_capability_input_contract(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -696,8 +655,6 @@ async def test_template_serializes_normalized_capability_input_contract(tmp_path
                 slug="schema-capability",
                 title="Schema Capability",
                 description="Schema-driven preset",
-                scope="global",
-                scope_ref=None,
                 tags=["schema"],
                 inputs_schema=[
                     {
@@ -719,10 +676,14 @@ async def test_template_serializes_normalized_capability_input_contract(tmp_path
                         },
                     }
                 ],
-                steps=[{"title": "Use issue", "instructions": "{{ inputs.jira_issue.key }}"}],
+                steps=[
+                    {
+                        "title": "Use issue",
+                        "instructions": "{{ inputs.jira_issue.key }}",
+                    }
+                ],
                 annotations={},
                 required_capabilities=["jira"],
-                created_by=user_id,
             )
 
     assert created["inputSchema"]["type"] == "object"
@@ -731,8 +692,8 @@ async def test_template_serializes_normalized_capability_input_contract(tmp_path
     assert created["uiSchema"]["jira_issue"]["widget"] == "jira.issue-picker"
     assert created["defaults"] == {}
 
+
 async def test_expand_template_preserves_literal_placeholders_from_user_input(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -740,8 +701,6 @@ async def test_expand_template_preserves_literal_placeholders_from_user_input(tm
                 slug="literal-placeholder-input",
                 title="Literal Placeholder Input",
                 description="Allows user-provided handlebars content.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[
                     {
@@ -761,13 +720,10 @@ async def test_expand_template_preserves_literal_placeholders_from_user_input(tm
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
             expanded = await service.expand_template(
                 slug="literal-placeholder-input",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": (
                         "Preserve the literal {{ downstream.value }} token."
@@ -778,8 +734,8 @@ async def test_expand_template_preserves_literal_placeholders_from_user_input(tm
 
     assert "{{ downstream.value }}" in expanded["steps"][0]["instructions"]
 
+
 async def test_expand_template_rejects_unknown_template_variable(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -787,8 +743,6 @@ async def test_expand_template_rejects_unknown_template_variable(tmp_path):
                 slug="unknown-template-variable",
                 title="Unknown Template Variable",
                 description="Rejects template authoring mistakes.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -799,20 +753,17 @@ async def test_expand_template_rejects_unknown_template_variable(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
             with pytest.raises(PresetValidationError, match="unknown variable"):
                 await service.expand_template(
                     slug="unknown-template-variable",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={},
                 )
 
+
 async def test_expand_template_reports_malformed_template_as_validation_error(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -820,8 +771,6 @@ async def test_expand_template_reports_malformed_template_as_validation_error(tm
                 slug="malformed-template",
                 title="Malformed Template",
                 description="Rejects malformed Jinja templates.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -832,20 +781,19 @@ async def test_expand_template_reports_malformed_template_as_validation_error(tm
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
-            with pytest.raises(PresetValidationError, match="Template rendering failed"):
+            with pytest.raises(
+                PresetValidationError, match="Template rendering failed"
+            ):
                 await service.expand_template(
                     slug="malformed-template",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={},
                 )
 
+
 async def test_template_rejects_secret_like_schema_defaults(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -854,8 +802,6 @@ async def test_template_rejects_secret_like_schema_defaults(tmp_path):
                     slug="unsafe-default",
                     title="Unsafe Default",
                     description="Schema-driven preset",
-                    scope="global",
-                    scope_ref=None,
                     tags=["schema"],
                     inputs_schema=[
                         {
@@ -869,13 +815,12 @@ async def test_template_rejects_secret_like_schema_defaults(tmp_path):
                     steps=[{"title": "Use issue", "instructions": "Use issue"}],
                     annotations={},
                     required_capabilities=["jira"],
-                    created_by=user_id,
                 )
+
 
 async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
     tmp_path,
 ):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -883,8 +828,6 @@ async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
                 slug="github-issue-input",
                 title="GitHub issue input",
                 description="Schema-driven issue input",
-                scope="global",
-                scope_ref=None,
                 tags=["schema"],
                 inputs_schema=[
                     {
@@ -910,13 +853,10 @@ async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
                 ],
                 annotations={},
                 required_capabilities=["github"],
-                created_by=user_id,
             )
 
             expanded = await service.expand_template(
                 slug="github-issue-input",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "github_issue": {
                         "number": 3514,
@@ -926,9 +866,9 @@ async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
                 context={},
             )
 
-            assert expanded["appliedTemplate"]["inputs"]["github_issue"][
-                "number"
-            ] == 3514
+            assert (
+                expanded["appliedTemplate"]["inputs"]["github_issue"]["number"] == 3514
+            )
 
             for unsafe_body in (
                 "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
@@ -939,8 +879,6 @@ async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
                 with pytest.raises(PresetValidationError, match="secret-like"):
                     await service.expand_template(
                         slug="github-issue-input",
-                        scope="global",
-                        scope_ref=None,
                         inputs={
                             "github_issue": {
                                 "number": 3514,
@@ -950,8 +888,8 @@ async def test_object_input_allows_bearer_prose_but_rejects_bearer_credentials(
                         context={},
                     )
 
+
 async def test_expand_schema_capability_reports_field_addressable_errors(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -959,8 +897,6 @@ async def test_expand_schema_capability_reports_field_addressable_errors(tmp_pat
                 slug="schema-required",
                 title="Schema Required",
                 description="Schema-driven preset",
-                scope="global",
-                scope_ref=None,
                 tags=["schema"],
                 inputs_schema=[
                     {
@@ -975,17 +911,19 @@ async def test_expand_schema_capability_reports_field_addressable_errors(tmp_pat
                         },
                     }
                 ],
-                steps=[{"title": "Use issue", "instructions": "{{ inputs.jira_issue.key }}"}],
+                steps=[
+                    {
+                        "title": "Use issue",
+                        "instructions": "{{ inputs.jira_issue.key }}",
+                    }
+                ],
                 annotations={},
                 required_capabilities=["jira"],
-                created_by=user_id,
             )
 
             with pytest.raises(PresetValidationError) as excinfo:
                 await service.expand_template(
                     slug="schema-required",
-                    scope="global",
-                    scope_ref=None,
                     inputs={"jira_issue": {}},
                     context={},
                 )
@@ -999,8 +937,10 @@ async def test_expand_schema_capability_reports_field_addressable_errors(tmp_pat
         }
     ]
 
-async def test_expand_annotated_schema_capability_reports_field_addressable_errors(tmp_path):
-    user_id = uuid4()
+
+async def test_expand_annotated_schema_capability_reports_field_addressable_errors(
+    tmp_path,
+):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -1008,11 +948,14 @@ async def test_expand_annotated_schema_capability_reports_field_addressable_erro
                 slug="annotated-schema-required",
                 title="Annotated Schema Required",
                 description="Schema-driven preset",
-                scope="global",
-                scope_ref=None,
                 tags=["schema"],
                 inputs_schema=[],
-                steps=[{"title": "Use issue", "instructions": "{{ inputs.jira_issue.key }}"}],
+                steps=[
+                    {
+                        "title": "Use issue",
+                        "instructions": "{{ inputs.jira_issue.key }}",
+                    }
+                ],
                 annotations={
                     "inputSchema": {
                         "type": "object",
@@ -1035,22 +978,17 @@ async def test_expand_annotated_schema_capability_reports_field_addressable_erro
                     "defaults": {},
                 },
                 required_capabilities=["jira"],
-                created_by=user_id,
             )
 
             with pytest.raises(PresetValidationError) as excinfo:
                 await service.expand_template(
                     slug="annotated-schema-required",
-                    scope="global",
-                    scope_ref=None,
                     inputs={"jira_issue": {}},
                     context={},
                 )
 
             expanded = await service.expand_template(
                 slug="annotated-schema-required",
-                scope="global",
-                scope_ref=None,
                 inputs={"jira_issue": {"key": "MM-593"}},
                 context={},
             )
@@ -1065,8 +1003,8 @@ async def test_expand_annotated_schema_capability_reports_field_addressable_erro
     ]
     assert expanded["appliedTemplate"]["inputs"]["jira_issue"] == {"key": "MM-593"}
 
+
 async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -1074,8 +1012,6 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                 slug="child-checks",
                 title="Child Checks",
                 description="Reusable checks",
-                scope="global",
-                scope_ref=None,
                 tags=["checks"],
                 inputs_schema=[
                     {
@@ -1105,14 +1041,11 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                 ],
                 annotations={},
                 required_capabilities=["codex"],
-                created_by=None,
             )
             await service.create_template(
                 slug="parent-flow",
                 title="Parent Flow",
                 description="Composed flow",
-                scope="global",
-                scope_ref=None,
                 tags=["composed"],
                 inputs_schema=[
                     {
@@ -1127,23 +1060,18 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                         "kind": "include",
                         "slug": "child-checks",
                         "alias": "quality",
-                        "scope": "global",
                         "inputMapping": {"target": "{{ inputs.feature }}"},
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
             expanded = await service.expand_template(
                 slug="parent-flow",
-                scope="global",
-                scope_ref=None,
                 inputs={"feature": "preset composition"},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
-                user_id=user_id,
             )
 
     assert [step["title"] for step in expanded["steps"]] == [
@@ -1173,14 +1101,12 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
         {
             "presetSlug": "parent-flow",
             "presetDigest": expanded["composition"]["digest"],
-            "scope": "global",
             "includePath": ["parent-flow"],
         },
         {
             "presetSlug": "child-checks",
             "presetDigest": expanded["composition"]["includes"][0]["digest"],
             "alias": "quality",
-            "scope": "global",
             "includePath": [
                 "parent-flow",
                 "quality:child-checks",
@@ -1189,9 +1115,7 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
         },
     ]
     assert expanded["appliedTemplate"]["composition"] == expanded["composition"]
-    assert expanded["appliedTemplate"]["authoredPresets"] == expanded[
-        "authoredPresets"
-    ]
+    assert expanded["appliedTemplate"]["authoredPresets"] == expanded["authoredPresets"]
     assert expanded["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetSlug": "child-checks",
@@ -1202,9 +1126,10 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
         ],
         "originalStepId": "lint-target",
     }
-    assert expanded["steps"][1]["presetProvenance"]["source"][
-        "originalStepId"
-    ] == "test-target"
+    assert (
+        expanded["steps"][1]["presetProvenance"]["source"]["originalStepId"]
+        == "test-target"
+    )
     assert expanded["steps"][1]["source"] == {
         "kind": "preset-derived",
         "presetSlug": "child-checks",
@@ -1234,8 +1159,6 @@ async def test_expand_template_preserves_explicit_original_step_id_over_step_id(
                 slug="explicit-original-id",
                 title="Explicit Original Id",
                 description="Preserves source id.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -1248,13 +1171,10 @@ async def test_expand_template_preserves_explicit_original_step_id_over_step_id(
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             expanded = await service.expand_template(
                 slug="explicit-original-id",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -1275,26 +1195,22 @@ async def test_expand_template_omits_original_step_id_when_source_step_has_no_id
                 slug="generated-step",
                 title="Generated Step",
                 description="No source id.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"title": "Generated", "instructions": "Generated"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             expanded = await service.expand_template(
                 slug="generated-step",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
 
     assert "originalStepId" not in expanded["steps"][0]["source"]
     assert "originalStepId" not in expanded["steps"][0]["presetProvenance"]["source"]
+
 
 async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1304,8 +1220,6 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
                 slug="stable-child",
                 title="Stable Child",
                 description="Reusable child",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -1314,14 +1228,11 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="stable-parent",
                 title="Stable Parent",
                 description="Composed parent",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -1330,26 +1241,20 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
                         "kind": "include",
                         "slug": "stable-child",
                         "alias": "child",
-                        "scope": "global",
                     },
                     {"title": "Manual after", "instructions": "Manual after"},
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             first = await service.expand_template(
                 slug="stable-parent",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
             second = await service.expand_template(
                 slug="stable-parent",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -1363,9 +1268,7 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
     assert [step["id"] for step in first["steps"]] == [
         step["id"] for step in second["steps"]
     ]
-    assert first["composition"]["stepIds"] == [
-        step["id"] for step in first["steps"]
-    ]
+    assert first["composition"]["stepIds"] == [step["id"] for step in first["steps"]]
 
 
 async def test_expand_template_skips_steps_with_falsy_enabled_values(tmp_path):
@@ -1376,8 +1279,6 @@ async def test_expand_template_skips_steps_with_falsy_enabled_values(tmp_path):
                 slug="conditional-steps",
                 title="Conditional Steps",
                 description="Conditional steps.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[
                     {
@@ -1406,13 +1307,10 @@ async def test_expand_template_skips_steps_with_falsy_enabled_values(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             expanded = await service.expand_template(
                 slug="conditional-steps",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -1430,8 +1328,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                 slug="deep-child",
                 title="Deep Child",
                 description="Deep child.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[
                     {
@@ -1450,14 +1346,11 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="middle-flow",
                 title="Middle Flow",
                 description="Middle include.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[
                     {
@@ -1476,7 +1369,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                         "kind": "include",
                         "slug": "deep-child",
                         "alias": "deep",
-                        "scope": "global",
                         "inputMapping": {"target": "{{ inputs.target }}"},
                     },
                     {
@@ -1486,14 +1378,11 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="parent-flow",
                 title="Parent Flow",
                 description="Parent include.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[
                     {
@@ -1512,7 +1401,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                         "kind": "include",
                         "slug": "middle-flow",
                         "alias": "middle",
-                        "scope": "global",
                         "inputMapping": {"target": "{{ inputs.feature }}"},
                     },
                     {
@@ -1522,13 +1410,10 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             expanded = await service.expand_template(
                 slug="parent-flow",
-                scope="global",
-                scope_ref=None,
                 inputs={"feature": "recursive provenance"},
                 context={},
             )
@@ -1556,14 +1441,12 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
         {
             "presetSlug": "parent-flow",
             "presetDigest": expanded["composition"]["digest"],
-            "scope": "global",
             "includePath": ["parent-flow"],
         },
         {
             "presetSlug": "middle-flow",
             "presetDigest": expanded["composition"]["includes"][0]["digest"],
             "alias": "middle",
-            "scope": "global",
             "includePath": [
                 "parent-flow",
                 "middle:middle-flow",
@@ -1572,9 +1455,10 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
         },
         {
             "presetSlug": "deep-child",
-            "presetDigest": expanded["composition"]["includes"][0]["includes"][0]["digest"],
+            "presetDigest": expanded["composition"]["includes"][0]["includes"][0][
+                "digest"
+            ],
             "alias": "deep",
-            "scope": "global",
             "includePath": [
                 "parent-flow",
                 "middle:middle-flow",
@@ -1584,6 +1468,7 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
         },
     ]
 
+
 async def test_expand_template_rejects_duplicate_include_aliases(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -1592,14 +1477,11 @@ async def test_expand_template_rejects_duplicate_include_aliases(tmp_path):
                 slug="duplicate-child",
                 title="Duplicate Child",
                 description="Reusable child",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "child"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             with pytest.raises(
@@ -1610,8 +1492,6 @@ async def test_expand_template_rejects_duplicate_include_aliases(tmp_path):
                     slug="duplicate-parent",
                     title="Duplicate Parent",
                     description="Invalid includes",
-                    scope="global",
-                    scope_ref=None,
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -1628,8 +1508,8 @@ async def test_expand_template_rejects_duplicate_include_aliases(tmp_path):
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=None,
                 )
+
 
 async def test_expand_template_rejects_missing_include_target(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1639,8 +1519,6 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
                 slug="missing-target-parent",
                 title="Missing Target Parent",
                 description="Invalid include target",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -1652,7 +1530,6 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             with pytest.raises(
@@ -1661,8 +1538,6 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
             ) as excinfo:
                 await service.expand_template(
                     slug="missing-target-parent",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={},
                 )
@@ -1684,21 +1559,16 @@ async def test_expand_template_strips_include_version(
                 slug="child-checks",
                 title="Child Checks",
                 description="Reusable child.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "child"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="version-field-parent",
                 title="Version Field Parent",
                 description="Strips versioned preset includes.",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -1707,17 +1577,13 @@ async def test_expand_template_strips_include_version(
                         "slug": "child-checks",
                         "version": "2",
                         "alias": "child",
-                        "scope": "global",
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             expanded = await service.expand_template(
                 slug="version-field-parent",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -1726,14 +1592,14 @@ async def test_expand_template_strips_include_version(
     include = expanded["appliedTemplate"]["composition"]["includes"][0]
     assert include["slug"] == "child-checks"
     assert include["alias"] == "child"
-    assert include["scope"] == "global"
+    assert "scope" not in include
     assert "version" not in include
     assert "presetVersion" not in include
+
 
 async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
     tmp_path,
 ):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -1741,8 +1607,6 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
                 slug="moonspec-orchestrate",
                 title="MoonSpec Orchestrate",
                 description="Runtime-only child preset",
-                scope="global",
-                scope_ref=None,
                 tags=["moonspec"],
                 inputs_schema=[
                     {
@@ -1760,14 +1624,11 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
             await service.create_template(
                 slug="parent-flow",
                 title="Parent Flow",
                 description="Composed flow",
-                scope="global",
-                scope_ref=None,
                 tags=["composed"],
                 inputs_schema=[
                     {
@@ -1782,7 +1643,6 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
                         "kind": "include",
                         "slug": "moonspec-orchestrate",
                         "alias": "orchestrate",
-                        "scope": "global",
                         "inputMapping": {
                             "feature_request": "{{ inputs.feature_request }}",
                             "orchestration_mode": "docs",
@@ -1791,19 +1651,16 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
             expanded = await service.expand_template(
                 slug="parent-flow",
-                scope="global",
-                scope_ref=None,
                 inputs={"feature_request": "Implement MM-600"},
                 context={},
-                user_id=user_id,
             )
 
     assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
+
 
 async def test_create_template_strips_templated_include_version(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1814,8 +1671,6 @@ async def test_create_template_strips_templated_include_version(tmp_path):
                 slug="runtime-selected-parent",
                 title="Runtime Selected Parent",
                 description="Strips dynamic child version",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[
                     {
@@ -1830,12 +1685,10 @@ async def test_create_template_strips_templated_include_version(tmp_path):
                         "slug": "child-checks",
                         "version": "{{ inputs.child_version }}",
                         "alias": "checks",
-                        "scope": "global",
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
     assert created["steps"] == [
@@ -1843,9 +1696,9 @@ async def test_create_template_strips_templated_include_version(tmp_path):
             "kind": "include",
             "slug": "child-checks",
             "alias": "checks",
-            "scope": "global",
         }
     ]
+
 
 async def test_create_template_rejects_unsupported_include_fields(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1860,8 +1713,6 @@ async def test_create_template_rejects_unsupported_include_fields(tmp_path):
                     slug="override-parent",
                     title="Override Parent",
                     description="Invalid child overrides",
-                    scope="global",
-                    scope_ref=None,
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -1869,55 +1720,34 @@ async def test_create_template_rejects_unsupported_include_fields(tmp_path):
                             "kind": "include",
                             "slug": "child-checks",
                             "alias": "checks",
-                            "scope": "global",
                             "instructions": "Override child instructions",
                             "skill": {"id": "moonspec-verify"},
                         }
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=None,
                 )
 
-async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
-    async with template_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = PresetCatalogService(session)
-            await service.create_template(
-                slug="global-parent",
-                title="Global Parent",
-                description="Cannot include personal presets",
-                scope="global",
-                scope_ref=None,
+
+async def test_instance_composition_rejects_retired_scope_input(tmp_path):
+    async with template_db(tmp_path) as maker, maker() as session:
+        with pytest.raises(PresetValidationError, match="human scope"):
+            await PresetCatalogService(session).create_template(
+                slug="parent",
+                title="Parent",
+                description="Parent",
                 tags=[],
                 inputs_schema=[],
                 steps=[
                     {
                         "kind": "include",
-                        "slug": "personal-child",
-                        "alias": "private",
+                        "slug": "child",
+                        "alias": "child",
                         "scope": "personal",
                     }
                 ],
-                annotations={},
-                required_capabilities=[],
-                created_by=None,
             )
 
-            with pytest.raises(
-                PresetValidationError,
-                match="Global presets cannot include personal presets.*private:personal-child",
-            ) as excinfo:
-                await service.expand_template(
-                    slug="global-parent",
-                    scope="global",
-                    scope_ref=None,
-                    inputs={},
-                    context={},
-                    options=ExpandOptions(),
-                )
-
-    assert excinfo.value.errors[0]["code"] == "preset_include_scope_violation"
 
 async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1927,8 +1757,6 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                 slug="preset-a",
                 title="Preset A",
                 description="Starts cycle",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -1936,19 +1764,15 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                         "kind": "include",
                         "slug": "preset-b",
                         "alias": "b",
-                        "scope": "global",
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="preset-b",
                 title="Preset B",
                 description="Completes cycle",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -1956,12 +1780,10 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                         "kind": "include",
                         "slug": "preset-a",
                         "alias": "a",
-                        "scope": "global",
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             with pytest.raises(
@@ -1970,14 +1792,13 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
             ) as excinfo:
                 await service.expand_template(
                     slug="preset-a",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={},
                     options=ExpandOptions(),
                 )
 
     assert excinfo.value.errors[0]["code"] == "preset_include_cycle"
+
 
 async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_path):
     async with template_db(tmp_path) as session_maker:
@@ -1987,22 +1808,17 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                 slug="inactive-child",
                 title="Inactive Child",
                 description="Inactive child",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "inactive"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
                 release_status=PresetReleaseStatus.INACTIVE,
             )
             await service.create_template(
                 slug="input-child",
                 title="Input Child",
                 description="Requires input",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[
                     {
@@ -2015,14 +1831,11 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                 steps=[{"instructions": "Handle {{ inputs.topic }}"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="bad-parent",
                 title="Bad Parent",
                 description="Invalid children",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -2030,19 +1843,15 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                         "kind": "include",
                         "slug": "inactive-child",
                         "alias": "inactive",
-                        "scope": "global",
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="input-parent",
                 title="Input Parent",
                 description="Missing child input",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -2050,12 +1859,10 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                         "kind": "include",
                         "slug": "input-child",
                         "alias": "requires-topic",
-                        "scope": "global",
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
 
             with pytest.raises(
@@ -2064,8 +1871,6 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
             ) as inactive_excinfo:
                 await service.expand_template(
                     slug="bad-parent",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={},
                     options=ExpandOptions(),
@@ -2077,8 +1882,6 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
             ) as input_excinfo:
                 await service.expand_template(
                     slug="input-parent",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={},
                     options=ExpandOptions(),
@@ -2089,6 +1892,7 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
         "preset_include_input_mapping_invalid"
     )
 
+
 async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -2097,8 +1901,6 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                 slug="two-step-child",
                 title="Two Step Child",
                 description="Two concrete steps",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -2107,14 +1909,11 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             await service.create_template(
                 slug="limited-parent",
                 title="Limited Parent",
                 description="Limit should apply after flattening",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -2122,18 +1921,14 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                         "kind": "include",
                         "slug": "two-step-child",
                         "alias": "two",
-                        "scope": "global",
                     }
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             template = (
                 await session.execute(
-                    select(Preset)
-                    .where(Preset.slug == "limited-parent")
-                    
+                    select(Preset).where(Preset.slug == "limited-parent")
                 )
             ).scalar_one()
             template.max_step_count = 1
@@ -2145,12 +1940,11 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
             ):
                 await service.expand_template(
                     slug="limited-parent",
-                    scope="global",
-                    scope_ref=None,
                     inputs={},
                     context={},
                     options=ExpandOptions(should_enforce_step_limit=True),
                 )
+
 
 async def test_template_recents_declares_unique_user_template_constraint() -> None:
     constraint_names = {
@@ -2160,15 +1954,13 @@ async def test_template_recents_declares_unique_user_template_constraint() -> No
     }
     assert "uq_preset_recent_user_template" in constraint_names
 
+
 async def test_save_from_workflow_rejects_secret_patterns(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetSaveService(session)
             with pytest.raises(Exception) as exc:
                 await service.save_from_workflow(
-                    scope="personal",
-                    scope_ref=str(user_id),
                     title="Leaky",
                     description="bad",
                     steps=[
@@ -2179,14 +1971,12 @@ async def test_save_from_workflow_rejects_secret_patterns(tmp_path):
                     ],
                     suggested_inputs=[],
                     tags=[],
-                    created_by=user_id,
                 )
 
     assert "Potential secrets detected" in str(exc.value)
 
+
 async def test_list_templates_with_favorites_and_recents(tmp_path):
-    user_id = uuid4()
-    user_str = str(user_id)
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -2194,50 +1984,35 @@ async def test_list_templates_with_favorites_and_recents(tmp_path):
                 slug="first-template",
                 title="First Template",
                 description="One",
-                scope="personal",
-                scope_ref=user_str,
                 tags=["alpha"],
                 inputs_schema=[],
                 steps=[{"instructions": "step one"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
             await service.create_template(
                 slug="second-template",
                 title="Second Template",
                 description="Two",
-                scope="personal",
-                scope_ref=user_str,
                 tags=["beta"],
                 inputs_schema=[],
                 steps=[{"instructions": "step two"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
             await service.set_favorite(
-                user_id=user_id,
                 slug="second-template",
-                scope="personal",
-                scope_ref=user_str,
             )
             await service.expand_template(
                 slug="second-template",
-                scope="personal",
-                scope_ref=user_str,
                 inputs={},
                 context={},
                 options=ExpandOptions(),
-                user_id=user_id,
             )
 
             listed = await service.list_templates(
-                scope="personal",
-                scope_ref=user_str,
                 favorites_only=True,
-                user_id=user_id,
             )
 
     assert len(listed) == 1
@@ -2249,32 +2024,40 @@ async def test_list_templates_with_favorites_and_recents(tmp_path):
     assert "annotations" not in listed[0]
 
 
-async def test_unified_account_catalog_keeps_global_and_own_data_only(tmp_path):
-    owner, other = uuid4(), uuid4()
+async def test_instance_catalog_keeps_custom_data_and_hides_unconverted_rows(tmp_path):
+    from api_service.db.models import PresetScopeType
+
     async with template_db(tmp_path) as maker:
         async with maker() as session:
             catalog = PresetCatalogService(session)
-            for slug, scope, scope_ref in (
-                ("global-custom", "global", None),
-                ("own-custom", "personal", str(owner)),
-                ("other-custom", "personal", str(other)),
-            ):
-                await catalog.create_template(
-                    slug=slug, title=slug, description="Retained definition",
-                    scope=scope, scope_ref=scope_ref, tags=[], inputs_schema=[],
-                    steps=[{"instructions": "Keep custom instructions."}],
-                )
-        async with maker() as restarted:
-            items = await PresetCatalogService(restarted).list_templates(
-                scope="personal", scope_ref=str(owner), include_global=True,
+            await catalog.create_template(
+                slug="instance-custom", title="Custom", description="Retained definition",
+                tags=[], inputs_schema=[],
+                steps=[{"instructions": "Keep custom instructions."}],
             )
-    assert {item["slug"] for item in items} == {"global-custom", "own-custom"}
+            for slug, scope, scope_ref in (
+                ("global-custom", PresetScopeType.GLOBAL, None),
+                ("personal-custom", PresetScopeType.PERSONAL, str(uuid4())),
+            ):
+                session.add(Preset(
+                    slug=slug, title=slug, description="Awaiting guarded conversion",
+                    scope_type=scope, scope_ref=scope_ref,
+                    steps=[{"instructions": "Do not lose retained instructions."}],
+                ))
+            await session.commit()
+        async with maker() as restarted:
+            items = await PresetCatalogService(restarted).list_templates()
+            retained = (await restarted.execute(select(Preset))).scalars().all()
+    assert {item["slug"] for item in items} == {"instance-custom"}
+    assert {row.slug for row in retained} == {
+        "instance-custom", "global-custom", "personal-custom",
+    }
+    assert all(row.steps for row in retained)
+
 
 async def test_list_templates_exposes_declared_workflow_publish(tmp_path):
     """Create reads a preset's declared publication before expansion."""
 
-    user_id = uuid4()
-    user_str = str(user_id)
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -2282,63 +2065,46 @@ async def test_list_templates_exposes_declared_workflow_publish(tmp_path):
                 slug="breakdown-only",
                 title="Breakdown Only",
                 description="Creates tracker issues only.",
-                scope="personal",
-                scope_ref=user_str,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "step one"}],
                 annotations={"workflowPublish": {"mode": "none"}},
                 required_capabilities=[],
-                created_by=user_id,
             )
             await service.create_template(
                 slug="no-policy",
                 title="No Policy",
                 description="Declares no publication.",
-                scope="personal",
-                scope_ref=user_str,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "step two"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
-            listed = await service.list_templates(
-                scope="personal",
-                scope_ref=user_str,
-                user_id=user_id,
-            )
+            listed = await service.list_templates()
 
     by_slug = {item["slug"]: item for item in listed}
     assert by_slug["breakdown-only"]["workflowPublish"] == {"mode": "none"}
     assert "workflowPublish" not in by_slug["no-policy"]
     assert "annotations" not in by_slug["breakdown-only"]
 
+
 async def test_save_from_workflow_marks_favorite_and_recent(tmp_path):
-    user_id = uuid4()
-    user_str = str(user_id)
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             saver = PresetSaveService(session)
             await saver.save_from_workflow(
-                scope="personal",
-                scope_ref=user_str,
                 title="Saved Preset",
                 description="Saved from task",
                 steps=[{"instructions": "run the checks"}],
                 suggested_inputs=[],
                 tags=["saved"],
-                created_by=user_id,
             )
 
             catalog = PresetCatalogService(session)
             listed = await catalog.list_templates(
-                scope="personal",
-                scope_ref=user_str,
                 favorites_only=True,
-                user_id=user_id,
             )
 
     assert len(listed) == 1
@@ -2346,19 +2112,15 @@ async def test_save_from_workflow_marks_favorite_and_recent(tmp_path):
     assert listed[0]["isFavorite"] is True
     assert listed[0]["recentAppliedAt"] is not None
 
-async def test_account_free_operator_expands_favorites_and_saves_presets(tmp_path):
-    """The account-free local operator has no ``user`` row (#4346).
 
-    Expanding a preset records a recent, favoriting records a favorite, and
-    saving records the preset creator. None of these may require an account
-    row, so the write succeeds with foreign keys enforced as on PostgreSQL.
+async def test_account_free_operator_expands_favorites_and_saves_presets(tmp_path):
+    """Instance favorites, recents and saves do not invent a person identity.
+
+    No account row or synthetic UUID may be required for these writes, with
+    foreign keys enforced as on PostgreSQL.
     """
     from sqlalchemy import event
 
-    from api_service.auth_providers import _transient_disabled_operator
-
-    operator = _transient_disabled_operator()
-    operator_ref = str(operator.id)
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path}/account_free.db", future=True
     )
@@ -2379,43 +2141,28 @@ async def test_account_free_operator_expands_favorites_and_saves_presets(tmp_pat
                 slug="issue-search",
                 title="Issue Search",
                 description="Search and implement",
-                scope="personal",
-                scope_ref=operator_ref,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "find an issue"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=operator.id,
             )
             expanded = await catalog.expand_template(
                 slug="issue-search",
-                scope="personal",
-                scope_ref=operator_ref,
                 inputs={},
                 context={},
                 options=ExpandOptions(),
-                user_id=operator.id,
             )
             await catalog.set_favorite(
-                user_id=operator.id,
                 slug="issue-search",
-                scope="personal",
-                scope_ref=operator_ref,
             )
             await PresetSaveService(session).save_from_workflow(
-                scope="personal",
-                scope_ref=operator_ref,
                 title="Saved Preset",
                 description="Saved from task",
                 steps=[{"instructions": "run the checks"}],
-                created_by=operator.id,
             )
             listed = await catalog.list_templates(
-                scope="personal",
-                scope_ref=operator_ref,
                 favorites_only=True,
-                user_id=operator.id,
             )
     finally:
         await engine.dispose()
@@ -2424,9 +2171,8 @@ async def test_account_free_operator_expands_favorites_and_saves_presets(tmp_pat
     assert sorted(item["slug"] for item in listed) == ["issue-search", "saved-preset"]
     assert all(item["recentAppliedAt"] is not None for item in listed)
 
+
 async def test_recents_trimmed_to_latest_five_rows(tmp_path):
-    user_id = uuid4()
-    user_str = str(user_id)
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             catalog = PresetCatalogService(session)
@@ -2436,35 +2182,29 @@ async def test_recents_trimmed_to_latest_five_rows(tmp_path):
                     slug=slug,
                     title=f"Preset {index}",
                     description="seed",
-                    scope="personal",
-                    scope_ref=user_str,
                     tags=[],
                     inputs_schema=[],
                     steps=[{"instructions": f"step {index}"}],
                     annotations={},
                     required_capabilities=[],
-                    created_by=user_id,
                 )
                 await catalog.expand_template(
                     slug=slug,
-                    scope="personal",
-                    scope_ref=user_str,
                     inputs={},
                     context={},
                     options=ExpandOptions(),
-                    user_id=user_id,
                 )
 
             count = await session.scalar(
                 select(func.count())
                 .select_from(PresetRecent)
-                .where(PresetRecent.user_id == user_id)
+                .where(PresetRecent.user_id.is_(None))
             )
 
     assert count == 5
 
+
 async def test_release_status_sets_reviewer_fields(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             catalog = PresetCatalogService(session)
@@ -2472,29 +2212,23 @@ async def test_release_status_sets_reviewer_fields(tmp_path):
                 slug="review-target",
                 title="Review Target",
                 description="To review",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "review me"}],
                 annotations={},
                 required_capabilities=[],
-                created_by=None,
             )
             reviewed = await catalog.set_release_status(
                 slug="review-target",
-                scope="global",
-                scope_ref=None,
                 release_status=PresetReleaseStatus.ACTIVE,
-                reviewer_id=user_id,
             )
 
     assert reviewed["releaseStatus"] == "active"
-    assert reviewed["reviewedBy"] == str(user_id)
+    assert reviewed["reviewedBy"] is None
     assert reviewed["reviewedAt"] is not None
 
+
 async def test_soft_delete_template_marks_inactive(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -2502,49 +2236,41 @@ async def test_soft_delete_template_marks_inactive(tmp_path):
                 slug="to-be-deleted",
                 title="Delete Me",
                 description="Template for deletion",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "Do nothing"}],
-                created_by=user_id,
             )
 
             await service.soft_delete_template(
                 slug="to-be-deleted",
-                scope="personal",
-                scope_ref=str(user_id),
             )
 
             with pytest.raises(PresetNotFoundError, match="Template not found."):
-                await service._get_template_for_scope(
+                await service._get_instance_template(
                     slug="to-be-deleted",
-                    scope=PresetScopeType.PERSONAL,
-                    scope_ref=str(user_id),
                     include_inactive=False,
                 )
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="to-be-deleted",
-                scope=PresetScopeType.PERSONAL,
-                scope_ref=str(user_id),
                 include_inactive=True,
             )
             assert template.is_active is False
 
+
 async def test_soft_delete_template_not_found(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             with pytest.raises(PresetNotFoundError, match="Template not found."):
                 await service.soft_delete_template(
                     slug="does-not-exist",
-                    scope="personal",
-                    scope_ref=str(user_id),
                 )
 
-async def test_deactivate_seed_templates_marks_matching_rows_inactive(tmp_path, monkeypatch):
+
+async def test_deactivate_seed_templates_marks_matching_rows_inactive(
+    tmp_path, monkeypatch
+):
     increment_calls: list[tuple[str, int]] = []
 
     class _FakeMetrics:
@@ -2563,36 +2289,27 @@ async def test_deactivate_seed_templates_marks_matching_rows_inactive(tmp_path, 
                 slug="speckit-orchestrate",
                 title="SpecKit Orchestrate",
                 description="Legacy preset",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "Legacy orchestration"}],
-                created_by=None,
                 seed_source="seed-catalog",
             )
             await service.create_template(
                 slug="legacy-checklist",
                 title="Legacy Checklist",
                 description="Another legacy preset",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "Legacy checklist orchestration"}],
-                created_by=None,
                 seed_source="seed-catalog",
             )
             await service.create_template(
                 slug="moonspec-orchestrate",
                 title="MoonSpec Orchestrate",
                 description="Current preset",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "Current orchestration"}],
-                created_by=None,
                 seed_source="seed-catalog",
             )
 
@@ -2600,18 +2317,13 @@ async def test_deactivate_seed_templates_marks_matching_rows_inactive(tmp_path, 
                 slug="operator-legacy",
                 title="Operator Legacy",
                 description="Keep this workflow",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=[{"instructions": "Operator workflow"}],
-                created_by=None,
             )
 
             deactivated = await service.deactivate_seed_templates(
                 slugs=["speckit-orchestrate", "legacy-checklist", "operator-legacy"],
-                scope="global",
-                scope_ref=None,
             )
 
             assert deactivated == 2
@@ -2619,36 +2331,29 @@ async def test_deactivate_seed_templates_marks_matching_rows_inactive(tmp_path, 
             assert delete_calls == [("delete", 2)]
 
             with pytest.raises(PresetNotFoundError, match="Template not found."):
-                await service._get_template_for_scope(
+                await service._get_instance_template(
                     slug="speckit-orchestrate",
-                    scope=PresetScopeType.GLOBAL,
-                    scope_ref=None,
                     include_inactive=False,
                 )
 
-            legacy_template = await service._get_template_for_scope(
+            legacy_template = await service._get_instance_template(
                 slug="speckit-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
                 include_inactive=True,
             )
             assert legacy_template.is_active is False
 
-            second_legacy_template = await service._get_template_for_scope(
+            second_legacy_template = await service._get_instance_template(
                 slug="legacy-checklist",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
                 include_inactive=True,
             )
             assert second_legacy_template.is_active is False
 
-            current_template = await service._get_template_for_scope(
+            current_template = await service._get_instance_template(
                 slug="moonspec-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
                 include_inactive=False,
             )
             assert current_template.is_active is True
+
 
 async def test_import_seed_templates_success(tmp_path):
     seed_dir = tmp_path / "seeds"
@@ -2656,7 +2361,6 @@ async def test_import_seed_templates_success(tmp_path):
         "slug": "seed-test",
         "title": "Seed Test",
         "description": "A test seed template",
-        "scope": "global",
         "steps": [{"instructions": "seed step"}],
     }
     _write_seed_template(seed_dir, seed_data)
@@ -2668,27 +2372,25 @@ async def test_import_seed_templates_success(tmp_path):
 
             assert created_count == 1
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="seed-test",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "Seed Test"
             assert template.description == "A test seed template"
             assert template.steps == [
                 {
                     "type": "skill",
-                        "instructions": "seed step",
+                    "instructions": "seed step",
                     "skill": {"id": "auto", "args": {}},
                 }
             ]
+
 
 async def test_import_seed_templates_skips_existing(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
         "slug": "seed-test-conflict",
         "title": "Seed Test Conflict",
-        "scope": "global",
         "steps": [{"instructions": "seed step"}],
     }
     _write_seed_template(seed_dir, seed_data)
@@ -2716,7 +2418,6 @@ async def test_sync_seed_templates_preserves_step_original_step_id(tmp_path):
             "slug": "seeded-preset",
             "title": "Seeded Preset",
             "description": "Seed carries source ids.",
-            "scope": "global",
             "steps": [
                 {
                     "id": "current-id",
@@ -2734,14 +2435,13 @@ async def test_sync_seed_templates_preserves_step_original_step_id(tmp_path):
 
             expanded = await service.expand_template(
                 slug="seeded-preset",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
 
     assert expanded["steps"][0]["source"]["originalStepId"] == "seed-source-id"
     assert "originalStepId" not in expanded["steps"][0]
+
 
 async def test_seed_catalog_includes_jira_breakdown_preset(
     tmp_path,
@@ -2753,30 +2453,22 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
         "jira_project_defaults_by_repository",
         None,
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="jira-breakdown",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "Breakdown and Jira Create"
             assert "jira_board_id" not in {
                 item["name"] for item in template.inputs_schema
             }
             assert [
-                (step.get("skill") or step.get("tool"))["id"]
-                for step in template.steps
+                (step.get("skill") or step.get("tool"))["id"] for step in template.steps
             ] == [
                 "jira.load_preset_brief",
                 "moonspec-breakdown",
@@ -2785,8 +2477,6 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
 
             expanded = await service.expand_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -2798,9 +2488,13 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert len(expanded["steps"]) == 2
             assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
             assert expanded["steps"][0]["title"] == "Break down preferred source input"
-            assert "docs/Designs/RuntimeTypes.md" in expanded["steps"][0]["instructions"]
+            assert (
+                "docs/Designs/RuntimeTypes.md" in expanded["steps"][0]["instructions"]
+            )
             assert expanded["steps"][1]["skill"]["id"] == "story.create_jira_issues"
-            assert "Jira Story issue in project MM" in expanded["steps"][1]["instructions"]
+            assert (
+                "Jira Story issue in project MM" in expanded["steps"][1]["instructions"]
+            )
             assert "linear_blocker_chain" in expanded["steps"][1]["instructions"]
             assert "ordered blocker chain" in expanded["steps"][1]["instructions"]
             assert "Source Document path" in expanded["steps"][1]["instructions"]
@@ -2819,8 +2513,6 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
 
             expanded_with_source_issue = await service.expand_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "source_issue_key": "MM-910",
                     "jira_project_key": "MM",
@@ -2840,20 +2532,21 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert expanded_with_source_issue["steps"][1]["skill"]["id"] == (
                 "moonspec-breakdown"
             )
-            assert "jiraPresetBrief" in expanded_with_source_issue["steps"][1][
-                "instructions"
-            ]
-            assert "resolvedSourceDesignPath" in expanded_with_source_issue["steps"][
-                1
-            ]["instructions"]
-            assert "source-resolution error" in expanded_with_source_issue["steps"][
-                1
-            ]["instructions"]
+            assert (
+                "jiraPresetBrief"
+                in expanded_with_source_issue["steps"][1]["instructions"]
+            )
+            assert (
+                "resolvedSourceDesignPath"
+                in expanded_with_source_issue["steps"][1]["instructions"]
+            )
+            assert (
+                "source-resolution error"
+                in expanded_with_source_issue["steps"][1]["instructions"]
+            )
 
             expanded_with_null_optional_sources = await service.expand_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "Inline workflow source.",
                     "source_design_path": None,
@@ -2868,17 +2561,19 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert expanded_with_null_optional_sources["steps"][0]["skill"]["id"] == (
                 "moonspec-breakdown"
             )
-            assert "Inline workflow source." in expanded_with_null_optional_sources[
-                "steps"
-            ][0]["instructions"]
+            assert (
+                "Inline workflow source."
+                in expanded_with_null_optional_sources["steps"][0]["instructions"]
+            )
             assert "sourceDocumentClass as imperative-input" in (
                 expanded_with_null_optional_sources["steps"][0]["instructions"]
             )
             assert "underlying actionable desired system behavior" in (
                 expanded_with_null_optional_sources["steps"][0]["instructions"]
             )
-            assert "fail fast with the moonspec-breakdown imperative-input error" not in (
-                expanded_with_null_optional_sources["steps"][0]["instructions"]
+            assert (
+                "fail fast with the moonspec-breakdown imperative-input error"
+                not in (expanded_with_null_optional_sources["steps"][0]["instructions"])
             )
             assert "imperative-override" not in (
                 expanded_with_null_optional_sources["steps"][0]["instructions"]
@@ -2886,8 +2581,6 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
 
             expanded_with_path_and_issue = await service.expand_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "source_design_path": "docs/Designs/RuntimeTypes.md",
                     "source_issue_key": "MM-910",
@@ -2901,21 +2594,21 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert expanded_with_path_and_issue["steps"][0]["skill"]["id"] == (
                 "moonspec-breakdown"
             )
-            assert "docs/Designs/RuntimeTypes.md" in expanded_with_path_and_issue[
-                "steps"
-            ][0]["instructions"]
+            assert (
+                "docs/Designs/RuntimeTypes.md"
+                in expanded_with_path_and_issue["steps"][0]["instructions"]
+            )
             assert "sourceDocumentClass as imperative-input" in (
                 expanded_with_path_and_issue["steps"][0]["instructions"]
             )
-            assert "fail fast with the moonspec-breakdown imperative-input error" not in (
-                expanded_with_path_and_issue["steps"][0]["instructions"]
+            assert (
+                "fail fast with the moonspec-breakdown imperative-input error"
+                not in (expanded_with_path_and_issue["steps"][0]["instructions"])
             )
 
             with pytest.raises(PresetValidationError) as excinfo:
                 await service.expand_template(
                     slug="jira-breakdown",
-                    scope="global",
-                    scope_ref=None,
                     inputs={
                         "jira_project_key": "MM",
                         "jira_issue_type": "Story",
@@ -2934,6 +2627,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             "recoverable": True,
         }
     ]
+
 
 @pytest.mark.parametrize(
     ("slug", "extra_inputs"),
@@ -2961,12 +2655,7 @@ async def test_jira_breakdown_presets_allow_inline_instruction_roadmaps(
         "jira_project_defaults_by_repository",
         None,
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -2975,8 +2664,6 @@ async def test_jira_breakdown_presets_allow_inline_instruction_roadmaps(
 
             expanded = await service.expand_template(
                 slug=slug,
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": (
                         "Use this recommendation roadmap as breakdown input:\n"
@@ -3007,25 +2694,19 @@ async def test_jira_breakdown_presets_allow_inline_instruction_roadmaps(
         breakdown_instructions
     )
 
+
 async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
     """MM-889: a Document Health Update preset runs review then remediate steps."""
 
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="document-health-update",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "Document Health Update"
             steps = template.steps
@@ -3037,14 +2718,13 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 "document-health-review",
                 "document-health-remediate",
             ]
-            assert [
-                step["annotations"]["documentHealthRole"] for step in steps
-            ] == ["review", "remediate"]
+            assert [step["annotations"]["documentHealthRole"] for step in steps] == [
+                "review",
+                "remediate",
+            ]
 
             expanded = await service.expand_template(
                 slug="document-health-update",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "documentation_scope": "docs/Workflows/",
                     "report_path": "artifacts/document-health-review.json",
@@ -3061,8 +2741,7 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
             assert "docs/Workflows/" in review_step["instructions"]
             assert "review-only step" in review_step["instructions"]
             assert (
-                "artifacts/document-health-review.json"
-                in review_step["instructions"]
+                "artifacts/document-health-review.json" in review_step["instructions"]
             )
             assert "remediation owns authorized edits" in review_step["instructions"]
             assert (
@@ -3076,22 +2755,15 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
 async def test_seed_catalog_includes_document_author_preset(tmp_path):
     """MM-931: docs-native authoring chooses docs architecture fields."""
 
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="document-author",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "Document Author"
             assert template.annotations["sourceIssueKey"] == "MM-931"
@@ -3101,8 +2773,6 @@ async def test_seed_catalog_includes_document_author_preset(tmp_path):
 
             expanded = await service.expand_template(
                 slug="document-author",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "documentation_intent": "Document a new runtime contract.",
                     "preferred_area": "docs/Workflows/",
@@ -3121,17 +2791,13 @@ async def test_seed_catalog_includes_document_author_preset(tmp_path):
             assert "MM-931 from MM-927" in step["instructions"]
             assert "Do not create spec.md" in step["instructions"]
 
+
 async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM")
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3140,8 +2806,6 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
 
             template = await service.get_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
             )
             project_input = next(
                 item
@@ -3152,8 +2816,6 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
 
             expanded = await service.expand_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_issue_type": "Story",
@@ -3162,9 +2824,9 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
                 context={},
             )
 
-            assert "Jira Story issue in project MM" in expanded["steps"][1][
-                "instructions"
-            ]
+            assert (
+                "Jira Story issue in project MM" in expanded["steps"][1]["instructions"]
+            )
             assert "Dependency mode: none." in expanded["steps"][1]["instructions"]
             assert expanded["steps"][1]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
@@ -3172,6 +2834,7 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
                 "dependencyMode": "none",
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
+
 
 async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
     tmp_path,
@@ -3183,12 +2846,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
         "jira_project_defaults_by_repository",
         "ExampleOrg/Platform=PLAT,ExampleOrg/Game=GAME",
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3197,8 +2855,6 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
 
             template = await service.get_template(
                 slug="jira-breakdown-orchestrate",
-                scope="global",
-                scope_ref=None,
             )
             assert "orchestration_mode" not in {
                 item["name"] for item in template["inputs"]
@@ -3212,8 +2868,6 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -3231,9 +2885,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
             jira_step = expanded["steps"][3]
             downstream_step = expanded["steps"][4]
 
-            assert "Jira Story issue in project GAME" in jira_step[
-                "instructions"
-            ]
+            assert "Jira Story issue in project GAME" in jira_step["instructions"]
             assert jira_step["storyOutput"] == {
                 "mode": "jira",
                 "fallback": "fail",
@@ -3261,6 +2913,7 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
             assert "repository" not in expanded["appliedTemplate"]["inputs"]
             assert "runtime_mode" not in expanded["appliedTemplate"]["inputs"]
 
+
 @pytest.mark.parametrize("submitted_project", ["TOOL", "MM"])
 async def test_jira_breakdown_replaces_legacy_placeholder_with_single_allowed_project(
     tmp_path,
@@ -3273,12 +2926,7 @@ async def test_jira_breakdown_replaces_legacy_placeholder_with_single_allowed_pr
         "jira_project_defaults_by_repository",
         None,
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3287,8 +2935,6 @@ async def test_jira_breakdown_replaces_legacy_placeholder_with_single_allowed_pr
 
             expanded = await service.expand_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": submitted_project,
@@ -3305,6 +2951,7 @@ async def test_jira_breakdown_replaces_legacy_placeholder_with_single_allowed_pr
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_project_key"] == "MM"
 
+
 async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3315,12 +2962,7 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
         "jira_project_defaults_by_repository",
         "ExampleOrg/Platform=PLAT,ExampleOrg/Game=GAME",
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3329,8 +2971,6 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "PLAT",
@@ -3356,6 +2996,7 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
                 "run_verify": True
             }
 
+
 async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_repo_policy(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3364,12 +3005,7 @@ async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_
     monkeypatch.setattr(
         settings.atlassian.jira, "jira_project_defaults_by_repository", None
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3378,8 +3014,6 @@ async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_
 
             template = await service.get_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
             )
             project_input = next(
                 item
@@ -3390,8 +3024,6 @@ async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_
 
             expanded = await service.expand_template(
                 slug="jira-breakdown",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_issue_type": "Story",
@@ -3402,23 +3034,17 @@ async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_
 
             assert expanded["steps"][1]["storyOutput"]["jira"]["projectKey"] == "MM"
 
+
 async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="jira-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "Jira Orchestrate"
             assert template.annotations["jiraWorkflow"] == (
@@ -3426,15 +3052,12 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             )
             template_payload = await service.get_template(
                 slug="jira-orchestrate",
-                scope="global",
-                scope_ref=None,
             )
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
             }
             assert [
-                (step.get("skill") or step.get("tool"))["id"]
-                for step in template.steps
+                (step.get("skill") or step.get("tool"))["id"] for step in template.steps
             ] == [
                 "jira.check_blockers",
                 "jira.load_preset_brief",
@@ -3456,8 +3079,6 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
 
             expanded = await service.expand_template(
                 slug="jira-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "jira_issue_key": "MM-328",
                     "source_design_path": "",
@@ -3467,7 +3088,10 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             )
 
             assert len(expanded["steps"]) == 14
-            assert expanded["steps"][0]["title"] == "Check Jira blockers before implementation"
+            assert (
+                expanded["steps"][0]["title"]
+                == "Check Jira blockers before implementation"
+            )
             assert expanded["steps"][0]["type"] == "tool"
             assert expanded["steps"][0]["tool"]["id"] == "jira.check_blockers"
             assert expanded["steps"][0]["tool"]["inputs"] == {
@@ -3483,21 +3107,26 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "linkType": "Blocks",
             }
             assert "Jira issue MM-328" in expanded["steps"][0]["instructions"]
-            assert "deterministic trusted Jira blocker preflight" in expanded["steps"][0]["instructions"]
+            assert (
+                "deterministic trusted Jira blocker preflight"
+                in expanded["steps"][0]["instructions"]
+            )
             assert "other issue as outwardIssue" in expanded["steps"][0]["instructions"]
             assert "other issue as inwardIssue" in expanded["steps"][0]["instructions"]
-            assert "MUST NOT block this orchestration" in expanded["steps"][0]["instructions"]
+            assert (
+                "MUST NOT block this orchestration"
+                in expanded["steps"][0]["instructions"]
+            )
             assert "blocker" in expanded["steps"][0]["instructions"]
             assert "Done" in expanded["steps"][0]["instructions"]
             assert "non-blocker" in expanded["steps"][0]["instructions"]
-            assert "status cannot be determined" in expanded["steps"][0][
-                "instructions"
-            ]
+            assert "status cannot be determined" in expanded["steps"][0]["instructions"]
             assert "raw Jira credentials" in expanded["steps"][0]["instructions"]
             assert "web scraping" in expanded["steps"][0]["instructions"]
-            assert "stop the orchestration immediately" in expanded["steps"][0][
-                "instructions"
-            ]
+            assert (
+                "stop the orchestration immediately"
+                in expanded["steps"][0]["instructions"]
+            )
             assert expanded["steps"][1]["type"] == "tool"
             assert expanded["steps"][1]["tool"]["id"] == "jira.load_preset_brief"
             assert expanded["steps"][1]["tool"]["inputs"] == {
@@ -3507,8 +3136,14 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             }
             assert "Jira preset brief" in expanded["steps"][1]["instructions"]
             assert "Keep the scope narrow." in expanded["steps"][2]["instructions"]
-            assert "one independently testable story" in expanded["steps"][2]["instructions"]
-            assert "upstream breakdown/selector workflow" in expanded["steps"][2]["instructions"]
+            assert (
+                "one independently testable story"
+                in expanded["steps"][2]["instructions"]
+            )
+            assert (
+                "upstream breakdown/selector workflow"
+                in expanded["steps"][2]["instructions"]
+            )
             assert expanded["steps"][3]["type"] == "tool"
             assert expanded["steps"][3]["tool"]["id"] == "jira.update_issue_status"
             assert expanded["steps"][3]["tool"]["inputs"] == {
@@ -3517,8 +3152,14 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             }
             assert "MM-328" in expanded["steps"][3]["instructions"]
             assert "In Progress" in expanded["steps"][3]["instructions"]
-            assert "one independently testable story" in expanded["steps"][4]["instructions"]
-            assert "Do not run moonspec-breakdown from this preset" in expanded["steps"][4]["instructions"]
+            assert (
+                "one independently testable story"
+                in expanded["steps"][4]["instructions"]
+            )
+            assert (
+                "Do not run moonspec-breakdown from this preset"
+                in expanded["steps"][4]["instructions"]
+            )
             assert "Split broad designs when needed" not in [
                 step["title"] for step in expanded["steps"]
             ]
@@ -3528,56 +3169,57 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert expanded["steps"][11]["annotations"]["issueImplementRole"] == (
                 "moonspec-remediation-loop"
             )
-            assert expanded["steps"][11]["annotations"]["remediationLoop"][
-                "remediationTool"
-            ]["inputs"]["selectedSkill"] == "moonspec-implement"
+            assert (
+                expanded["steps"][11]["annotations"]["remediationLoop"][
+                    "remediationTool"
+                ]["inputs"]["selectedSkill"]
+                == "moonspec-implement"
+            )
             assert expanded["steps"][12]["title"] == "Create pull request"
             assert expanded["steps"][12]["annotations"] == {
                 "jiraOrchestrateRole": "pull-request-handoff"
             }
-            assert "controlling moonspec-verify" in expanded["steps"][12][
-                "instructions"
-            ]
-            assert "pull request title must include MM-328" in expanded["steps"][12][
-                "instructions"
-            ]
-            assert "parent workflow must use the pull request URL" in expanded["steps"][12][
-                "instructions"
-            ]
-            assert "explicit PR-publication step" in expanded["steps"][12][
-                "instructions"
-            ]
-            assert "controlling instruction for this step only" in expanded["steps"][12][
-                "instructions"
-            ]
+            assert (
+                "controlling moonspec-verify" in expanded["steps"][12]["instructions"]
+            )
+            assert (
+                "pull request title must include MM-328"
+                in expanded["steps"][12]["instructions"]
+            )
+            assert (
+                "parent workflow must use the pull request URL"
+                in expanded["steps"][12]["instructions"]
+            )
+            assert (
+                "explicit PR-publication step" in expanded["steps"][12]["instructions"]
+            )
+            assert (
+                "controlling instruction for this step only"
+                in expanded["steps"][12]["instructions"]
+            )
             assert "merge automation" in expanded["steps"][12]["instructions"]
             assert "non-draft pull request" in expanded["steps"][12]["instructions"]
             assert "isDraft value is false" in expanded["steps"][12]["instructions"]
             assert "confirmed non-draft" in expanded["steps"][12]["instructions"]
-            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][12][
-                "instructions"
-            ]
+            assert (
+                "artifacts/jira-orchestrate-pr.json"
+                in expanded["steps"][12]["instructions"]
+            )
             assert expanded["steps"][13]["skill"]["id"] == "jira-issue-updater"
             assert expanded["steps"][13]["annotations"] == {
                 "jiraOrchestrateRole": "code-review-handoff"
             }
             assert "pull_request_url" in expanded["steps"][13]["instructions"]
-            assert "stop without changing Jira" in expanded["steps"][13][
-                "instructions"
-            ]
+            assert "stop without changing Jira" in expanded["steps"][13]["instructions"]
             assert "status Review" in expanded["steps"][13]["instructions"]
             assert all(
                 step["title"] != "Return Jira orchestration report"
                 for step in expanded["steps"]
             )
 
+
 async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3586,8 +3228,6 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
 
             expanded = await service.expand_template(
                 slug="jira-implement",
-                scope="global",
-                scope_ref=None,
                 inputs={"jira_issue": {"key": "MM-742"}},
                 context={},
             )
@@ -3645,12 +3285,7 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
 async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
     tmp_path, jira_issue_input
 ):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3659,8 +3294,6 @@ async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
 
             expanded = await service.expand_template(
                 slug="jira-implement",
-                scope="global",
-                scope_ref=None,
                 inputs={"jira_issue": jira_issue_input},
                 context={},
             )
@@ -3674,12 +3307,7 @@ async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
 
 
 async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_path):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3688,13 +3316,9 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
 
             template = await service.get_template(
                 slug="github-issue-implement",
-                scope="global",
-                scope_ref=None,
             )
             expanded = await service.expand_template(
                 slug="github-issue-implement",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
@@ -3706,8 +3330,6 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
             )
             no_verify = await service.expand_template(
                 slug="github-issue-implement",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
@@ -3726,9 +3348,12 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "default": True,
     }
     assert template["annotations"]["defaults"]["run_verify"] is True
-    assert next(item for item in template["inputs"] if item["name"] == "run_verify")[
-        "default"
-    ] is True
+    assert (
+        next(item for item in template["inputs"] if item["name"] == "run_verify")[
+            "default"
+        ]
+        is True
+    )
     assert [step["title"] for step in expanded["steps"]] == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
@@ -3773,9 +3398,10 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "verify_artifact_path": "artifacts/github-issue-implement-verify.json",
     }
     assert "verification target issue_brief" in expanded["steps"][5]["instructions"]
-    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][5][
-        "instructions"
-    ]
+    assert (
+        "artifacts/github-issue-implement-verify.json"
+        in expanded["steps"][5]["instructions"]
+    )
     loop_step = expanded["steps"][6]
     assert loop_step["skill"]["id"] == "auto"
     assert loop_step["annotations"]["issueImplementRole"] == (
@@ -3785,9 +3411,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert loop["kind"] == "remediation_loop"
     assert loop["budgets"]["hardMaxAttempts"] == "6"
     assert loop["remediationTool"]["name"] == "auto"
-    assert loop["remediationTool"]["inputs"]["selectedSkill"] == (
-        "remediate-issue"
-    )
+    assert loop["remediationTool"]["inputs"]["selectedSkill"] == ("remediate-issue")
     assert "assessment_artifact_path" not in loop["remediationTool"]["inputs"]
     assert "authoritative verifier evidence materialized by MoonMind" in (
         loop["remediationTool"]["inputs"]["instructions"]
@@ -3813,15 +3437,17 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         step.get("annotations", {}).get("moonSpecRemediationAttempt")
         for step in expanded["steps"]
     )
-    assert "artifacts/github-issue-implement-verify.json" in expanded["steps"][7][
-        "instructions"
-    ]
-    assert "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED" in (
-        expanded["steps"][7]["instructions"]
+    assert (
+        "artifacts/github-issue-implement-verify.json"
+        in expanded["steps"][7]["instructions"]
     )
-    assert "Closes MoonLadderStudios/MoonMind#123" in expanded["steps"][7][
-        "instructions"
-    ]
+    assert (
+        "controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED"
+        in (expanded["steps"][7]["instructions"])
+    )
+    assert (
+        "Closes MoonLadderStudios/MoonMind#123" in expanded["steps"][7]["instructions"]
+    )
     assert expanded["steps"][8]["tool"]["inputs"]["verificationArtifactPath"] == (
         "artifacts/github-issue-implement-verify.json"
     )
@@ -3852,13 +3478,10 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     )
 
 
-async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(tmp_path):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(
+    tmp_path,
+):
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3867,8 +3490,6 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
 
             expanded = await service.expand_template(
                 slug="issue-implement-work-pr",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "issue_provider": "github",
                     "issue_ref": "MoonLadderStudios/MoonMind#123",
@@ -3884,8 +3505,6 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
             )
             expanded_six = await service.expand_template(
                 slug="issue-implement-work-pr",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "issue_provider": "github",
                     "issue_ref": "MoonLadderStudios/MoonMind#123",
@@ -3907,9 +3526,10 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
         == "moonspec-remediation-loop"
     ]
     assert len(loop_nodes) == 1
-    assert loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
-        "hardMaxAttempts"
-    ] == "2"
+    assert (
+        loop_nodes[0]["annotations"]["remediationLoop"]["budgets"]["hardMaxAttempts"]
+        == "2"
+    )
     six_loop_nodes = [
         step
         for step in expanded_six["steps"]
@@ -3917,9 +3537,12 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(t
         == "moonspec-remediation-loop"
     ]
     assert len(six_loop_nodes) == 1
-    assert six_loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
-        "hardMaxAttempts"
-    ] == "6"
+    assert (
+        six_loop_nodes[0]["annotations"]["remediationLoop"]["budgets"][
+            "hardMaxAttempts"
+        ]
+        == "6"
+    )
     assert len(expanded["steps"]) == len(expanded_six["steps"])
 
 
@@ -3930,8 +3553,7 @@ async def test_remediation_topology_rejects_partial_active_pair() -> None:
                 "issueImplementRole": role,
                 "moonSpecRemediationAttempt": attempt,
                 "moonSpecRemediationMaxAttempts": 2,
-                "moonSpecFinalRemediationGate": role
-                == "moonspec-verification-gate"
+                "moonSpecFinalRemediationGate": role == "moonspec-verification-gate"
                 and attempt == 2,
             }
         }
@@ -3971,32 +3593,21 @@ async def test_remediation_topology_rejects_string_final_gate_flag() -> None:
 
 
 async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_path):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="github-issue-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             template_payload = await service.get_template(
                 slug="github-issue-orchestrate",
-                scope="global",
-                scope_ref=None,
             )
             expanded = await service.expand_template(
                 slug="github-issue-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
@@ -4009,8 +3620,6 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
             )
             no_verify = await service.expand_template(
                 slug="github-issue-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
@@ -4023,16 +3632,25 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
                 context={},
             )
 
-    assert template_payload["annotations"]["inputSchema"]["properties"]["run_verify"][
-        "type"
-    ] == "boolean"
-    assert template_payload["annotations"]["inputSchema"]["properties"]["run_verify"][
-        "default"
-    ] is True
+    assert (
+        template_payload["annotations"]["inputSchema"]["properties"]["run_verify"][
+            "type"
+        ]
+        == "boolean"
+    )
+    assert (
+        template_payload["annotations"]["inputSchema"]["properties"]["run_verify"][
+            "default"
+        ]
+        is True
+    )
     assert template_payload["annotations"]["defaults"]["run_verify"] is True
-    assert next(
-        item for item in template_payload["inputs"] if item["name"] == "run_verify"
-    )["default"] is True
+    assert (
+        next(
+            item for item in template_payload["inputs"] if item["name"] == "run_verify"
+        )["default"]
+        is True
+    )
     assert [step["title"] for step in expanded["steps"]] == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
@@ -4051,9 +3669,14 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Finalize GitHub issue status",
     ]
     assert "one independently testable story" in expanded["steps"][3]["instructions"]
-    assert "upstream breakdown/selector workflow" in expanded["steps"][3]["instructions"]
+    assert (
+        "upstream breakdown/selector workflow" in expanded["steps"][3]["instructions"]
+    )
     assert "one independently testable story" in expanded["steps"][5]["instructions"]
-    assert "Do not run moonspec-breakdown from this preset" in expanded["steps"][5]["instructions"]
+    assert (
+        "Do not run moonspec-breakdown from this preset"
+        in expanded["steps"][5]["instructions"]
+    )
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
     assert expanded["steps"][0]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
@@ -4094,9 +3717,10 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     assert expanded["steps"][14]["annotations"] == {
         "jiraOrchestrateRole": "code-review-handoff"
     }
-    assert "stop without committing, pushing, creating a pull request" in expanded["steps"][
-        13
-    ]["instructions"]
+    assert (
+        "stop without committing, pushing, creating a pull request"
+        in expanded["steps"][13]["instructions"]
+    )
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-orchestrate",
         "issue-implement-assessment",
@@ -4126,7 +3750,11 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Create pull request",
         "Finalize GitHub issue status",
     ]
-    assert all("moonspec-verify" != step["skill"]["id"] for step in no_verify["steps"] if "skill" in step)
+    assert all(
+        "moonspec-verify" != step["skill"]["id"]
+        for step in no_verify["steps"]
+        if "skill" in step
+    )
     assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
@@ -4142,36 +3770,26 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
         "jira_project_defaults_by_repository",
         None,
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="jira-breakdown-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "Breakdown and Jira Orchestrate"
             assert "jira_board_id" not in {
                 item["name"] for item in template.inputs_schema
             }
-            assert template.annotations["sourceSkill"] == (
-                "jira-breakdown"
-            )
+            assert template.annotations["sourceSkill"] == ("jira-breakdown")
             assert template.annotations["output"] == (
                 "dependent-jira-orchestrate-workflows"
             )
             assert [
-                (step.get("skill") or step.get("tool"))["id"]
-                for step in template.steps
+                (step.get("skill") or step.get("tool"))["id"] for step in template.steps
             ] == [
                 "jira.load_preset_brief",
                 "moonspec-breakdown",
@@ -4182,8 +3800,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -4232,9 +3848,10 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                 "inputs": {"run_verify": True},
                 "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
             }
-            assert downstream["jiraOrchestration"]["traceability"]["sourceIssueKey"] == (
-                "MM-404"
-            )
+            assert downstream["jiraOrchestration"]["traceability"][
+                "sourceIssueKey"
+            ] == ("MM-404")
+
 
 async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
     tmp_path,
@@ -4246,12 +3863,7 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
         "jira_project_defaults_by_repository",
         None,
     )
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -4260,8 +3872,6 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -4287,13 +3897,9 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
                 "dependencyMode": "linear_blocker_chain",
             }
 
+
 async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -4302,8 +3908,6 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-implement",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -4320,8 +3924,6 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
 
             template = await service.get_template(
                 slug="jira-breakdown-implement",
-                scope="global",
-                scope_ref=None,
             )
 
     assert template["title"] == "Breakdown and Jira Implement"
@@ -4354,31 +3956,23 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
         "sourceIssueKey": "MM-404"
     }
 
+
 async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="document-update-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "Document Update Orchestrate"
             assert template.annotations["sourceSkill"] == (
                 "document-update-orchestrate"
             )
-            assert template.annotations["output"] == (
-                "document-update-tasks"
-            )
+            assert template.annotations["output"] == ("document-update-tasks")
             assert [
                 step.get("tool", step.get("skill", {})).get("id")
                 for step in template.steps
@@ -4389,8 +3983,6 @@ async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path
 
             expanded = await service.expand_template(
                 slug="document-update-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "document_directory": "docs",
                     "publish_mode": "pr_with_merge_automation",
@@ -4406,34 +3998,36 @@ async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path
             assert expanded["steps"][0]["tool"]["inputs"]["repository"] == (
                 "MoonLadderStudios/MoonMind"
             )
-            assert expanded["steps"][1]["tool"]["id"] == "story.create_document_update_tasks"
-            assert expanded["steps"][1]["documentUpdateOrchestration"]["task"]["publish"] == {
+            assert (
+                expanded["steps"][1]["tool"]["id"]
+                == "story.create_document_update_tasks"
+            )
+            assert expanded["steps"][1]["documentUpdateOrchestration"]["task"][
+                "publish"
+            ] == {
                 "mode": "pr",
                 "mergeAutomation": {"enabled": True},
             }
-            assert expanded["steps"][1]["documentUpdateOrchestration"]["traceability"][
-                "sourceDirectory"
-            ] == "docs"
+            assert (
+                expanded["steps"][1]["documentUpdateOrchestration"]["traceability"][
+                    "sourceDirectory"
+                ]
+                == "docs"
+            )
+
 
 async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
     tmp_path,
 ):
-    seed_dir = (
-        Path(__file__).resolve().parents[3]
-        / "api_service"
-        / "data"
-        / "presets"
-    )
+    seed_dir = Path(__file__).resolve().parents[3] / "api_service" / "data" / "presets"
 
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="moonspec-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "MoonSpec Orchestrate"
             assert [step["skill"]["id"] for step in template.steps] == [
@@ -4453,22 +4047,21 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             assert step_titles[-1] == "Verify completion"
             template_payload = await service.get_template(
                 slug="moonspec-orchestrate",
-                scope="global",
-                scope_ref=None,
             )
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
             }
-            assert next(
-                item
-                for item in template_payload["inputs"]
-                if item["name"] == "run_verify"
-            )["default"] is True
+            assert (
+                next(
+                    item
+                    for item in template_payload["inputs"]
+                    if item["name"] == "run_verify"
+                )["default"]
+                is True
+            )
 
             expanded = await service.expand_template(
                 slug="moonspec-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "MM-366: Simplify Orchestrate Summary",
                     "orchestration_mode": "docs",
@@ -4479,8 +4072,6 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             )
             no_verify = await service.expand_template(
                 slug="moonspec-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "MM-366: Simplify Orchestrate Summary",
                     "source_design_path": "",
@@ -4492,13 +4083,13 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
 
             assert len(expanded["steps"]) == 7
             assert (
-                expanded["appliedTemplate"]["inputs"]["orchestration_mode"]
-                == "runtime"
+                expanded["appliedTemplate"]["inputs"]["orchestration_mode"] == "runtime"
             )
             assert "Selected mode" not in expanded["steps"][0]["instructions"]
-            assert "runtime implementation workflow" in expanded["steps"][0][
-                "instructions"
-            ]
+            assert (
+                "runtime implementation workflow"
+                in expanded["steps"][0]["instructions"]
+            )
             assert expanded["steps"][-1]["title"] == "Verify completion"
             assert "moonspec-verify" == expanded["steps"][-1]["skill"]["id"]
             assert all(
@@ -4516,8 +4107,6 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
 
             expanded_with_source_design = await service.expand_template(
                 slug="moonspec-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "feature_request": "MM-366: Simplify Orchestrate Summary",
                     "source_design_path": "docs/Designs/RuntimeTypes.md",
@@ -4529,13 +4118,13 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 expanded_with_source_design["steps"][0]["instructions"]
             )
 
+
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
     seed_data = {
         "slug": "moonspec-orchestrate",
         "title": "MoonSpec Orchestrate",
         "description": "Seeded preset",
-        "scope": "global",
         "steps": [
             {
                 "title": "Specify",
@@ -4562,13 +4151,12 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
             assert result.created == 1
             assert result.updated == 0
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="moonspec-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.title == "MoonSpec Orchestrate"
             assert template.steps[0]["skill"]["id"] == "moonspec-specify"
+
 
 async def test_sync_seed_templates_preserves_default_expansion_limit_for_includes(
     tmp_path,
@@ -4578,13 +4166,11 @@ async def test_sync_seed_templates_preserves_default_expansion_limit_for_include
         "slug": "composed-seed",
         "title": "Composed Seed",
         "description": "Seeded preset with child include",
-        "scope": "global",
         "steps": [
             {
                 "kind": "include",
                 "slug": "shared-child",
                 "alias": "shared",
-                "scope": "global",
             }
         ],
         "inputs": [],
@@ -4597,13 +4183,12 @@ async def test_sync_seed_templates_preserves_default_expansion_limit_for_include
             service = PresetCatalogService(session)
             await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="composed-seed",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
 
     assert template.max_step_count == 25
+
 
 async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_path):
     seed_dir = tmp_path / "seeds"
@@ -4611,13 +4196,11 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
         "slug": "composed-seed",
         "title": "Composed Seed",
         "description": "Seeded preset with child include",
-        "scope": "global",
         "steps": [
             {
                 "kind": "include",
                 "slug": "shared-child",
                 "alias": "shared",
-                "scope": "global",
             }
         ],
         "inputs": [],
@@ -4632,34 +4215,28 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
                 slug="composed-seed",
                 title="Composed Seed",
                 description="Seeded preset with child include",
-                scope="global",
-                scope_ref=None,
                 tags=[],
                 inputs_schema=[],
                 steps=seed_data["steps"],
                 annotations={"sourceSkill": "composed-seed"},
                 required_capabilities=[],
-                created_by=None,
                 seed_source="seed-catalog",
             )
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="composed-seed",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             template.max_step_count = 1
             await session.commit()
 
             result = await service.sync_seed_templates(seed_dir=seed_dir)
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="composed-seed",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
 
     assert result.updated == 1
     assert template.max_step_count == 25
+
 
 @pytest.mark.parametrize(
     ("created_by", "seed_source"),
@@ -4690,24 +4267,20 @@ async def test_seed_refresh_preserves_custom_collision_through_expansion(
             slug="custom",
             title="Operator preset",
             description="Keep my work",
-            scope="global",
-            scope_ref=None,
             tags=["custom"],
             inputs_schema=[],
             steps=[{"instructions": "Run operator work"}],
-            created_by=created_by,
             seed_source=seed_source,
             release_status=PresetReleaseStatus.ACTIVE,
         )
-        before = await service.expand_template(
-            slug="custom", scope="global", scope_ref=None, inputs={}
-        )
+        retained = await service._get_instance_template(slug="custom")
+        retained.created_by = created_by
+        await session.commit()
+        before = await service.expand_template(slug="custom", inputs={})
         result = await service.sync_seed_templates(seed_dir=seed_dir)
-        after = await service.expand_template(
-            slug="custom", scope="global", scope_ref=None, inputs={}
-        )
-        row = await service._get_template_for_scope(
-            slug="custom", scope=PresetScopeType.GLOBAL, scope_ref=None
+        after = await service.expand_template(slug="custom", inputs={})
+        row = await service._get_instance_template(
+            slug="custom",
         )
         assert after["steps"] == before["steps"]
         assert (
@@ -4724,7 +4297,7 @@ async def test_seed_refresh_preserves_custom_collision_through_expansion(
         # The startup cleanup must not disable the same operator-owned row.
         assert (
             await service.deactivate_seed_templates(
-                slugs=["custom"], scope="global", scope_ref=None
+                slugs=["custom"],
             )
             == 0
         )
@@ -4763,12 +4336,10 @@ async def test_seed_refresh_reaches_expansion_without_rewriting_admitted_work(tm
     async with template_db(tmp_path) as maker, maker() as session:
         service = PresetCatalogService(session)
         assert (await service.sync_seed_templates(seed_dir=seed_dir)).created == 1
-        admitted = await service.expand_template(
-            slug="refreshable", scope="global", scope_ref=None, inputs={}
-        )
+        admitted = await service.expand_template(slug="refreshable", inputs={})
         retained = deepcopy(admitted)
-        row = await service._get_template_for_scope(
-            slug="refreshable", scope=PresetScopeType.GLOBAL, scope_ref=None
+        row = await service._get_instance_template(
+            slug="refreshable",
         )
         # Seed paths may change between installations; provenance is not a path lock.
         row.seed_source = "/previous/install/refreshable.yaml"
@@ -4778,8 +4349,6 @@ async def test_seed_refresh_reaches_expansion_without_rewriting_admitted_work(tm
         assert (await service.sync_seed_templates(seed_dir=seed_dir)).updated == 1
         latest = await service.expand_template(
             slug="refreshable",
-            scope="global",
-            scope_ref=None,
             inputs={"confirm": False, "notes": ""},
         )
         assert latest["steps"][0]["instructions"] == "Updated implementation"
@@ -4818,28 +4387,24 @@ async def test_seed_refresh_preserves_operator_availability_override(
         if override == "review":
             await service.set_release_status(
                 slug="reviewed",
-                scope="global",
-                scope_ref=None,
                 release_status=PresetReleaseStatus.INACTIVE,
-                reviewer_id=reviewer,
             )
         else:
             await service.soft_delete_template(
-                slug="reviewed", scope="global", scope_ref=None
+                slug="reviewed",
             )
         seed["steps"][0]["instructions"] = "Updated implementation"
         _write_seed_template(seed_dir, seed)
         await service.sync_seed_templates(seed_dir=seed_dir)
-        row = await service._get_template_for_scope(
+        row = await service._get_instance_template(
             slug="reviewed",
-            scope=PresetScopeType.GLOBAL,
-            scope_ref=None,
             include_inactive=True,
         )
         assert row.steps[0]["instructions"] == "Updated implementation"
         if override == "review":
             assert row.release_status == PresetReleaseStatus.INACTIVE
-            assert row.reviewed_by == reviewer
+            assert row.reviewed_by is None
+            assert row.reviewed_at is not None
         else:
             assert row.is_active is False
 
@@ -4850,7 +4415,6 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
         "slug": "moonspec-orchestrate",
         "title": "MoonSpec Orchestrate",
         "description": "Updated seeded preset",
-        "scope": "global",
         "steps": [
             {
                 "title": "Specify",
@@ -4882,14 +4446,11 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
                 slug="moonspec-orchestrate",
                 title="Legacy Preset",
                 description="Old preset",
-                scope="global",
-                scope_ref=None,
                 tags=["legacy"],
                 inputs_schema=[],
                 steps=[{"instructions": "legacy step"}],
                 annotations={"sourceSkill": "legacy-orchestrate"},
                 required_capabilities=[],
-                created_by=None,
                 seed_source="seed-catalog",
                 release_status=PresetReleaseStatus.ACTIVE,
             )
@@ -4899,18 +4460,16 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
             assert result.created == 0
             assert result.updated == 1
 
-            template = await service._get_template_for_scope(
+            template = await service._get_instance_template(
                 slug="moonspec-orchestrate",
-                scope=PresetScopeType.GLOBAL,
-                scope_ref=None,
             )
             assert template.description == "Updated seeded preset"
             assert len(template.steps) == 2
             assert template.steps[0]["skill"]["id"] == "moonspec-specify"
             assert template.annotations["sourceSkill"] == "moonspec-orchestrate"
 
+
 async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -4918,8 +4477,6 @@ async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
                 slug="jira-transition-tool",
                 title="Jira Transition Tool",
                 description="Typed Jira transition",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=["jira"],
                 inputs_schema=[],
                 steps=[
@@ -4941,16 +4498,12 @@ async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
             expanded = await service.expand_template(
                 slug="jira-transition-tool",
-                scope="personal",
-                scope_ref=str(user_id),
                 inputs={},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
-                user_id=user_id,
             )
 
     step = created["steps"][0]
@@ -4961,8 +4514,8 @@ async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
     assert expanded["steps"][0]["type"] == "tool"
     assert expanded["steps"][0]["tool"]["id"] == "jira.transition_issue"
 
+
 async def test_mm557_accepts_explicit_and_legacy_skill_steps(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -4970,8 +4523,6 @@ async def test_mm557_accepts_explicit_and_legacy_skill_steps(tmp_path):
                 slug="jira-skill-steps",
                 title="Jira Skill Steps",
                 description="Agentic Jira steps",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=["jira"],
                 inputs_schema=[],
                 steps=[
@@ -4991,12 +4542,14 @@ async def test_mm557_accepts_explicit_and_legacy_skill_steps(tmp_path):
                     {
                         "title": "Legacy implementation step",
                         "instructions": "Implement MM-557.",
-                        "skill": {"id": "jira-implement", "args": {"issueKey": "MM-557"}},
+                        "skill": {
+                            "id": "jira-implement",
+                            "args": {"issueKey": "MM-557"},
+                        },
                     },
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
     explicit, legacy = created["steps"]
@@ -5008,54 +4561,58 @@ async def test_mm557_accepts_explicit_and_legacy_skill_steps(tmp_path):
     assert legacy["type"] == "skill"
     assert legacy["skill"]["id"] == "jira-implement"
 
+
 async def test_mm557_rejects_unsupported_or_mixed_step_type_payloads(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
 
-            with pytest.raises(PresetValidationError, match="Step 1 type must be one of: tool, skill"):
+            with pytest.raises(
+                PresetValidationError, match="Step 1 type must be one of: tool, skill"
+            ):
                 await service.create_template(
                     slug="bad-type",
                     title="Bad Type",
                     description="Bad type",
-                    scope="global",
-                    scope_ref=None,
                     tags=[],
                     inputs_schema=[],
                     steps=[{"type": "command", "instructions": "Run something"}],
                     annotations={},
                     required_capabilities=[],
-                    created_by=None,
                 )
 
-            with pytest.raises(PresetValidationError, match="Step 1 Tool step must not include a skill payload"):
+            with pytest.raises(
+                PresetValidationError,
+                match="Step 1 Tool step must not include a skill payload",
+            ):
                 await service.create_template(
                     slug="tool-with-skill",
                     title="Tool With Skill",
                     description="Bad tool",
-                    scope="global",
-                    scope_ref=None,
                     tags=[],
                     inputs_schema=[],
                     steps=[
                         {
                             "type": "tool",
                             "instructions": "Implement MM-557.",
-                            "skill": {"id": "jira-implement", "args": {"issueKey": "MM-557"}},
+                            "skill": {
+                                "id": "jira-implement",
+                                "args": {"issueKey": "MM-557"},
+                            },
                         }
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=None,
                 )
 
-            with pytest.raises(PresetValidationError, match="Step 1 Skill step must not include a tool payload"):
+            with pytest.raises(
+                PresetValidationError,
+                match="Step 1 Skill step must not include a tool payload",
+            ):
                 await service.create_template(
                     slug="skill-with-tool",
                     title="Skill With Tool",
                     description="Bad skill",
-                    scope="global",
-                    scope_ref=None,
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -5070,11 +4627,10 @@ async def test_mm557_rejects_unsupported_or_mixed_step_type_payloads(tmp_path):
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=None,
                 )
 
+
 async def test_mm557_rejects_shell_snippets_unless_bounded_typed_tool(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -5084,8 +4640,6 @@ async def test_mm557_rejects_shell_snippets_unless_bounded_typed_tool(tmp_path):
                     slug="shell-snippet",
                     title="Shell Snippet",
                     description="Bad shell",
-                    scope="personal",
-                    scope_ref=str(user_id),
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -5097,15 +4651,12 @@ async def test_mm557_rejects_shell_snippets_unless_bounded_typed_tool(tmp_path):
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=user_id,
                 )
 
             created = await service.create_template(
                 slug="bounded-command-tool",
                 title="Bounded Command Tool",
                 description="Approved typed command",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -5123,7 +4674,6 @@ async def test_mm557_rejects_shell_snippets_unless_bounded_typed_tool(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
     assert created["steps"][0]["tool"]["id"] == "command.run_typed"
@@ -5131,7 +4681,6 @@ async def test_mm557_rejects_shell_snippets_unless_bounded_typed_tool(tmp_path):
 
 
 async def test_mm557_tool_args_survive_empty_schema_inputs(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -5140,8 +4689,6 @@ async def test_mm557_tool_args_survive_empty_schema_inputs(tmp_path):
                 slug="tool-args-fallback",
                 title="Tool Args Fallback",
                 description="Tool args from API request payload",
-                scope="personal",
-                scope_ref=str(user_id),
                 tags=[],
                 inputs_schema=[],
                 steps=[
@@ -5157,14 +4704,12 @@ async def test_mm557_tool_args_survive_empty_schema_inputs(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
 
     assert created["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-557"}
 
 
 async def test_mm557_command_tool_rejects_empty_policy_metadata(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -5177,8 +4722,6 @@ async def test_mm557_command_tool_rejects_empty_policy_metadata(tmp_path):
                     slug="empty-command-policy",
                     title="Empty Command Policy",
                     description="Command tool with default schema metadata",
-                    scope="personal",
-                    scope_ref=str(user_id),
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -5194,12 +4737,10 @@ async def test_mm557_command_tool_rejects_empty_policy_metadata(tmp_path):
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=user_id,
                 )
 
 
 async def test_mm569_accepts_valid_tool_skill_and_preset_draft_steps(tmp_path):
-    user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
@@ -5207,8 +4748,6 @@ async def test_mm569_accepts_valid_tool_skill_and_preset_draft_steps(tmp_path):
                 slug="mm569-child-preset",
                 title="MM-569 Child Preset",
                 description="Child preset for explicit Step Type validation.",
-                scope="global",
-                scope_ref=None,
                 tags=["mm-569"],
                 inputs_schema=[
                     {
@@ -5228,14 +4767,11 @@ async def test_mm569_accepts_valid_tool_skill_and_preset_draft_steps(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
             created = await service.create_template(
                 slug="mm569-explicit-step-types",
                 title="MM-569 Explicit Step Types",
                 description="Draft Tool, Skill, and Preset examples.",
-                scope="global",
-                scope_ref=None,
                 tags=["mm-569"],
                 inputs_schema=[],
                 steps=[
@@ -5245,12 +4781,9 @@ async def test_mm569_accepts_valid_tool_skill_and_preset_draft_steps(tmp_path):
                 ],
                 annotations={},
                 required_capabilities=[],
-                created_by=user_id,
             )
             expanded = await service.expand_template(
                 slug="mm569-explicit-step-types",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -5286,8 +4819,6 @@ async def test_mm569_preset_draft_validation_reports_field_addressable_error(
                     slug="mm569-bad-preset",
                     title="MM-569 Bad Preset",
                     description="Invalid preset draft.",
-                    scope="global",
-                    scope_ref=None,
                     tags=[],
                     inputs_schema=[],
                     steps=[
@@ -5301,7 +4832,6 @@ async def test_mm569_preset_draft_validation_reports_field_addressable_error(
                     ],
                     annotations={},
                     required_capabilities=[],
-                    created_by=None,
                 )
 
     assert excinfo.value.errors == [
