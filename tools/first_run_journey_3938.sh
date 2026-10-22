@@ -33,8 +33,8 @@
 # its own docker-compose.yaml) is deployed from a git worktree, and the same
 # work is saved and canceled there. The worktree is then checked out at the
 # candidate revision in place, as an operator's update would, and the stack
-# is recreated on the candidate image (MOONMIND_IMAGE) against the same
-# volumes and state directories. The API startup log must show the guarded
+# is updated by the production controller against the same volumes and state
+# directories. The API startup log must show the guarded
 # conversion classifying the retained data as one eligible operator, and the
 # deployment controller's own conversion check, run against the live stack,
 # must record it as published (a fresh install must record fresh_init). The
@@ -200,6 +200,8 @@ redact() {
 
 JOURNEY_FAILED=1
 ENV_STASH_DIR=""
+UPGRADE_REGISTRY=""
+UPGRADE_CONTROLLER_IMAGE=""
 cleanup() {
   if [[ "$JOURNEY_FAILED" != "0" ]]; then
     mkdir -p "$LOG_DIR" 2>/dev/null || true
@@ -209,6 +211,10 @@ cleanup() {
     echo "Journey failed; bounded redacted logs are in $LOG_DIR." >&2
   fi
   compose "$CLEANUP_TIMEOUT" down --remove-orphans >/dev/null 2>&1 || true
+  if [[ -n "$UPGRADE_REGISTRY" ]]; then
+    docker rm -f -v "$UPGRADE_REGISTRY" >/dev/null 2>&1 || true
+    docker image rm "$UPGRADE_CONTROLLER_IMAGE" >/dev/null 2>&1 || true
+  fi
   if [[ "$DEPLOY_DIR" != "$REPO_ROOT" ]]; then
     # Containers may leave root-owned state behind; remove what this user
     # can and let git forget the worktree.
@@ -591,13 +597,31 @@ upgrade_source_to_candidate() {
   COMPOSE_OVERRIDES=()
 }
 
-# Compose performs the image upgrade; the selected controller owns routing.
+# A local registry supplies the CI-built image to the ordinary pull/apply path,
+# just as the existing disposable controller Compose journeys do.
+prepare_upgrade_controller_image() {
+  UPGRADE_REGISTRY="$PROJECT_NAME-registry"
+  docker run -d --name "$UPGRADE_REGISTRY" -p 127.0.0.1::5000 registry:2 >/dev/null
+  local address attempt
+  address="$(docker port "$UPGRADE_REGISTRY" 5000/tcp)"
+  if [[ ! "$address" =~ ^127\.0\.0\.1:[0-9]+$ ]]; then
+    echo "Error: the disposable upgrade registry has no loopback binding." >&2
+    return 1
+  fi
+  UPGRADE_CONTROLLER_IMAGE="$address/moonmind:journey"
+  docker tag "$CANDIDATE_IMAGE" "$UPGRADE_CONTROLLER_IMAGE"
+  for attempt in 1 2 3; do
+    if docker push "$UPGRADE_CONTROLLER_IMAGE" 2>&1 | redact; then return 0; fi
+    if [[ "$attempt" != 3 ]]; then sleep 1; fi
+  done
+  return 1
+}
+
+# The controller owns the entire candidate installation, including conversion.
 converge_upgrade_routing() {
-  local candidate_image_id
-  candidate_image_id="$(docker image inspect "$MOONMIND_IMAGE" --format '{{.Id}}')"
   python3 "$SCRIPT_DIR/single_user_journey_cutover.py" \
     --repo "$DEPLOY_DIR" --project "$PROJECT_NAME" \
-    --image "$candidate_image_id" --revision "$CANDIDATE_REVISION" \
+    --image "$UPGRADE_CONTROLLER_IMAGE" --revision "$CANDIDATE_REVISION" \
     --receipt-file "$STATE_DIR/routing-cutover.json" \
     -f "$DEPLOY_DIR/docker-compose.yaml" -f "$ISOLATION_OVERRIDE" \
     ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} 2>&1 | redact
@@ -714,9 +738,11 @@ else
 
   echo "Upgrading $PROJECT_NAME in place from $UPGRADE_FROM_REVISION to $CANDIDATE_REVISION ($CANDIDATE_IMAGE)..." | redact
   upgrade_source_to_candidate
-  export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
-  bring_up
+  prepare_upgrade_controller_image
+  export MOONMIND_IMAGE="$UPGRADE_CONTROLLER_IMAGE"
   converge_upgrade_routing
+  record_provenance
+  record_resource_footprint candidate || echo "Note: candidate resource footprint unavailable." >&2
   require_conversion_outcome before-upgrade
   require_controller_conversion before-upgrade eligible_conversion
   checks verify before-upgrade

@@ -73,6 +73,8 @@ class Runner:
 def controller(controller_path, tmp_path, monkeypatch):
     record = load("record")
     server = load("server")
+    monkeypatch.setattr(server, "operator_urls_for_target", lambda *a, **kw: ["https://operator.example"])
+    monkeypatch.setattr(server, "_check_operator_origin", lambda *a, **kw: "ok")
     store = record.OperationStore(tmp_path / "state")
     helper_calls = []
     monkeypatch.setattr(server, "ROUTING_CUTOVER_RETRY_SECONDS", 0)

@@ -16,7 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MOONMIND_CONTROLLER_PORT=8472
 
 WORKDIR /opt/moonmind-controller
-COPY __init__.py redact.py mounts.py lock.py record.py engine.py server.py ./
+COPY __init__.py redact.py mounts.py lock.py record.py engine.py operator_access.py server.py ./
 
 VOLUME ["/var/lib/moonmind-controller"]
 EXPOSE 8472

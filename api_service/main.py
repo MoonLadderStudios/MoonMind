@@ -289,20 +289,54 @@ async def _run_guarded_single_user_upgrade() -> dict:
     and startup continues. Returns a metadata-only summary.
     """
     try:
-        from api_service.services.single_user_conversion import run_guarded_upgrade
+        from api_service.services.single_user_conversion import (
+            completed_guarded_upgrade,
+            run_guarded_upgrade,
+        )
+        from moonmind.security.operator_admission import (
+            OperatorAdmissionError,
+            validate_replacement_operator_admission,
+        )
+
+        try:
+            validate_replacement_operator_admission()
+        except OperatorAdmissionError:
+            logger.warning(
+                "Single-user guarded upgrade deferred: replacement_admission_unavailable; "
+                "retaining the installed access boundary."
+            )
+            return {"deferred": True, "reason": "replacement_admission_unavailable"}
 
         async with get_async_session_context() as session:
+            reconciled_after = None
             try:
                 result = await run_guarded_upgrade(
                     session, operator_authorized=True
                 )
             except Exception as exc:
+                original_error = type(exc).__name__
                 logger.warning(
                     "Single-user guarded upgrade deferred: %s",
-                    type(exc).__name__,
+                    original_error,
                 )
-                return {"deferred": True, "reason": type(exc).__name__}
+                # A lost commit acknowledgment is not proof of rollback.
+                # Observe the existing owner's certified completion through a
+                # new session before any future mutation; never replay here.
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+                try:
+                    async with get_async_session_context() as observer:
+                        result = await completed_guarded_upgrade(observer)
+                except Exception:
+                    result = None
+                if result is None:
+                    return {"deferred": True, "reason": original_error}
+                reconciled_after = original_error
             summary = result.to_sanitized_dict()
+            if reconciled_after:
+                summary["reconciledAfter"] = reconciled_after
             if result.published:
                 logger.info(
                     "Single-user guarded upgrade published (%s)",
@@ -345,12 +379,15 @@ def _single_user_conversion_status(summary: Any) -> dict | None:
     decision = summary.get("decision")
     if not isinstance(decision, dict):
         return None
-    return {
+    result = {
         "published": bool(summary.get("published")),
         "disposition": str(decision.get("disposition") or ""),
         "reasonCode": str(decision.get("reason_code") or ""),
         "personCount": int(decision.get("person_count") or 0),
     }
+    if summary.get("reconciledAfter"):
+        result["reconciledAfter"] = str(summary["reconciledAfter"])
+    return result
 
 
 async def _sync_omnigent_bootstrap_agent_profile() -> bool:

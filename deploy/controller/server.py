@@ -30,7 +30,9 @@ from wsgiref.simple_server import WSGIServer, make_server
 
 import engine
 import lock as lock_mod
+import operator_access as operator_access_mod
 import record as record_mod
+from operator_access import check_operator_url
 from redact import redact_mapping, redact_text
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
@@ -1048,26 +1050,56 @@ OPERATOR_URL_TIMEOUT_SECONDS = 30
 OMNIGENT_CHANNEL_KEYS = ("OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG")
 
 
-def check_operator_url(url: str, *, timeout_seconds: int = OPERATOR_URL_TIMEOUT_SECONDS) -> str:
-    """Probe an operator origin's health endpoint; return "ok" or raise."""
-    import urllib.request
-
-    target = url.rstrip("/") + "/healthz"
-    request = urllib.request.Request(target, method="GET")
+def operator_urls_for_target(target: dict, *, runner, base) -> list[str]:
+    """Use explicit origins or the effective Compose environment and bindings."""
+    if target.get("operatorUrls"):
+        return list(target["operatorUrls"])
+    rendered = engine.run_command(
+        runner, (*base, "config", "--format", "json"),
+        timeout_seconds=TARGET_CONFIG_TIMEOUT_SECONDS,
+    )
+    # Rendered Compose contains secrets. Never attach its bytes to diagnostics.
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            status = response.getcode()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Operator URL {url} failed its health check ({exc}); "
-            "deployment update did not verify"
-        ) from exc
-    if status != 200:
-        raise RuntimeError(
-            f"Operator URL {url} returned HTTP {status} from /healthz; "
-            "deployment update did not verify"
+        if int(rendered.get("exit", 0)):
+            raise ValueError()
+        api = json.loads(engine.command_stdout(rendered))["services"]["api"]
+        public = (api.get("environment", {}).get("MOONMIND_PUBLIC_BASE_URL") or "").strip()
+        if public:
+            return [public.rstrip("/")]
+        origins = []
+        for binding in api.get("ports", ()):
+            if int(binding.get("target", 0)) != 8000 or not binding.get("published"):
+                continue
+            host = binding.get("host_ip") or ""
+            if not host or host in {"0.0.0.0", "::"}:
+                continue
+            if ":" in host:
+                host = f"[{host}]"
+            origins.append(f"http://{host}:{binding['published']}")
+        if origins:
+            return list(dict.fromkeys(origins))
+    except (ValueError, KeyError, TypeError):
+        pass
+    raise RuntimeError("the effective Compose configuration does not identify an operator origin")
+
+
+def _check_operator_origin(url, *, runner, image):
+    # The managed controller has its own network namespace. A short-lived,
+    # unprivileged host-network probe reaches the published host loopback,
+    # rather than mistaking the controller's localhost for the operator route.
+    if (os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1"
+            and urlsplit(url).hostname in {"localhost", "127.0.0.1", "::1"}):
+        result = engine.run_command(
+            runner, ("docker", "run", "--rm", "--read-only", "--cap-drop=ALL",
+                     "--security-opt=no-new-privileges", "--network=host",
+                     "--entrypoint", "python", image, "-c",
+                     Path(operator_access_mod.__file__).read_text(), url),
+            timeout_seconds=OPERATOR_URL_TIMEOUT_SECONDS + 15,
         )
-    return "ok"
+        if int(result.get("exit", 0)) or engine.command_stdout(result).strip() != "ok":
+            raise RuntimeError(redact_text(str(result.get("output") or "operator route probe unavailable")))
+        return "ok"
+    return check_operator_url(url)
 
 
 CONVERSION_SERVICE = "api"
@@ -1141,7 +1173,10 @@ def single_user_conversion_check(runner, base, *, api_running: bool) -> dict:
         }
     disposition = str(status.get("disposition") or "unknown")
     if status.get("published"):
-        return {"name": name, "status": "passed", "detail": f"{disposition} published"}
+        detail = f"{disposition} published"
+        if status.get("reconciledAfter"):
+            detail += f"; reconciled committed conversion after {status['reconciledAfter']}"
+        return {"name": name, "status": "passed", "detail": detail}
     return {
         "name": name,
         "status": "failed",
@@ -1940,16 +1975,33 @@ def _verify_applied_release(
         )
         if routing_cutover:
             recorded.append(routing_cutover)
+    conversion_check = None
     if CONVERSION_SERVICE in services and base is not None:
-        recorded.append(
-            single_user_conversion_check(
-                runner, base, api_running=bool(services_running.get(CONVERSION_SERVICE))
-            )
+        conversion_check = single_user_conversion_check(
+            runner, base, api_running=bool(services_running.get(CONVERSION_SERVICE))
         )
+        # Persist the original disposition before secondary network probes:
+        # observer loss must not erase a refusal already read from the owner.
+        store.record_verification(
+            operation_id, name=conversion_check["name"],
+            status=conversion_check["status"], detail=conversion_check["detail"],
+        )
+        recorded.append(conversion_check)
     operator_access: dict[str, str] = {}
-    for url in target.get("operatorUrls", ()) or ():
+    try:
+        urls = operator_urls_for_target(target, runner=runner, base=base) if (
+            target.get("operatorUrls") or CONVERSION_SERVICE in services
+        ) else []
+    except Exception as exc:
+        urls = []
+        recorded.append({"name": "operator-access", "status": "unavailable",
+                         "detail": "could not derive the protected operator route from deployment "
+                         f"configuration ({type(exc).__name__})"})
+    for url in urls:
         try:
-            operator_access[str(url)] = check_operator_url(str(url))
+            operator_access[str(url)] = _check_operator_origin(
+                str(url), runner=runner, image=operation["desired"]["image"]
+            )
         except Exception as exc:
             operator_access[str(url)] = str(exc)
     dispatch_ok: bool | None = None
@@ -1979,6 +2031,8 @@ def _verify_applied_release(
         # of failing every update with an unavailable mandatory check.
         recorded = [c for c in recorded if c["name"] != "dispatch"]
     for check in recorded:
+        if check is conversion_check:
+            continue
         store.record_verification(
             operation_id,
             name=check["name"],

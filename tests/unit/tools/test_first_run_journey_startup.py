@@ -49,7 +49,9 @@ footprint = config.get("footprint", {}).get(phase, {})
 if args[:1] != ["compose"]:
     with calls.with_suffix(".host.jsonl").open("a") as output:
         output.write(json.dumps(args) + "\n")
-    if args[:2] == ["image", "inspect"]:
+    if args[:1] == ["port"]:
+        print("127.0.0.1:17321")
+    elif args[:2] == ["image", "inspect"]:
         print("sha256:" + "a" * 64)
     else:
         print(footprint.get(args[0], ""))
@@ -327,29 +329,22 @@ def test_startup_stream_retention_is_bounded_without_tail_overlap(
     journey.assert_cleaned()
 
 
-def test_upgrade_source_retries_three_times_and_candidate_once(
+def test_upgrade_source_retries_and_controller_failure_keeps_source_evidence(
     journey: Journey,
 ) -> None:
     result = journey.run(
-        upgrade=True, source_statuses=[7, 8, 0], candidate_statuses=[9], lines=2
+        upgrade=True, source_statuses=[7, 8, 0], cutover_failure=True, lines=2
     )
     assert result.returncode != 0
-    startups = journey.startups()
-    assert [(call["phase"], call["status"]) for call in startups] == [
-        ("source", 7),
-        ("source", 8),
-        ("source", 0),
-        ("candidate", 9),
+    assert [(call["phase"], call["status"]) for call in journey.startups()] == [
+        ("source", 7), ("source", 8), ("source", 0),
     ]
-    for phase, attempt, status in (
-        ("source", 1, 7),
-        ("source", 2, 8),
-        ("source", 3, 0),
-        ("candidate", 1, 9),
-    ):
-        output = _startup_log(journey, "upgrade", phase, attempt)
-        assert f"phase={phase} attempt={attempt}" in output
+    for attempt, status in ((1, 7), (2, 8), (3, 0)):
+        output = _startup_log(journey, "upgrade", "source", attempt)
+        assert f"phase=source attempt={attempt}" in output
         assert f"exit_status={status}" in output
+    receipt = json.loads((journey.logs / "upgrade/state/routing-cutover.json").read_text())
+    assert not receipt["passed"]
     journey.assert_cleaned()
 
 
@@ -607,13 +602,15 @@ def test_early_log_setup_failure_restores_callers_environment(journey, blocked):
 def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> None:
     result = journey.run(upgrade=True, lines=1)
     assert result.returncode == 0, result.stderr
+    # The controller installs the candidate; the runner boots only the source.
+    assert [call["phase"] for call in journey.startups()] == ["source"]
     receipt = json.loads(
         (journey.logs / "upgrade/state/routing-cutover.json").read_text()
     )
     assert receipt["passed"]
     args = receipt["args"]
     assert args[args.index("--project") + 1] == "moonmind-test-startup-unit"
-    assert args[args.index("--image") + 1] == "sha256:" + "a" * 64
+    assert args[args.index("--image") + 1] == "127.0.0.1:17321/moonmind:journey"
     files = [args[index + 1] for index, item in enumerate(args) if item == "-f"]
     assert len(files) == 2
     assert files[0].endswith("/docker-compose.yaml")
