@@ -40,6 +40,7 @@ from moonmind.statuses.step_ledger import (
     step_execution_to_ledger_status,
 )
 from moonmind.statuses.temporal_status import TemporalStatusValue
+from moonmind.statuses.workflow import ObjectiveOutcomeValue
 from moonmind.utils.logging import redact_sensitive_text
 
 # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
@@ -3830,11 +3831,6 @@ class ExecutionOutputBranchModel(BaseModel):
     intent: Literal["normal", "terminal_checkpoint"] = "normal"
     status: str
     evidence_ref: str | None = Field(None, alias="evidenceRef")
-
-
-ObjectiveOutcomeValue = Literal[
-    "active", "succeeded", "failed", "cancelled", "idle", "verification_blocked"
-]
 
 
 class ExecutionModel(BaseModel):

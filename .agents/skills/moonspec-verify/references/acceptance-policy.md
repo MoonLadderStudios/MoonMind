@@ -34,6 +34,34 @@ Classify obligations by their source, before checking tool availability:
   selected operation explicitly requires it (for example draining live handlers
   before their removal). Do not infer deployment authority from implementation.
 
+## Prerequisite implementation and ownership
+
+An open related issue or a responsibility label is not proof that code is
+unavailable or another writer is active. When a prerequisite controls progress,
+check the current implementation and relevant PR, workflow, or claim evidence.
+Distinguish missing repository work from an active writer, an unavailable
+execution capability, and an explicit scope exclusion. Reuse existing work and
+its active owner; responsibility for a component alone does not establish an
+active reservation on changes to it.
+
+Keep missing code needed by the selected scope in the executable backlog when
+the original request authorizes implementing it. A sibling issue reference alone
+does not exclude that work. Honor an explicit instruction to consume another
+issue's deliverable without implementing it; absence of an active writer does
+not expand scope. Complete independent authorized gaps before returning a stop.
+
+Verification returns bounded actionable code gaps as `ADDITIONAL_WORK_NEEDED`
+with `recommendedNextAction: reattempt_current_step` for the existing remediation
+step, even when the verifier is read-only. Do not choose `blocked` merely because
+the work is described in another issue or the verifier cannot edit code. Missing
+implementation stays a gap, not Unverified evidence. If remaining implementation
+cannot proceed because of a confirmed ownership conflict, scope exclusion, or
+unavailable implementation capability, name that boundary, its evidence, owner
+and resume check in the existing handoff. Unavailable verification evidence
+follows the Unverified rule below. Preserve the candidate and passed evidence;
+report a continuation as scheduled only after an existing owner has accepted it.
+Existing authority and attempt limits still govern.
+
 ## Criteria outside the verifier's reach
 
 If the verifying agent can't check a criterion with the capabilities, access,
