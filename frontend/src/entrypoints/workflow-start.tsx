@@ -33,7 +33,7 @@ import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDet
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
-  CreateSubmissionIntents, createSubmissionScope, createSubmissionDestination, createSubmissionResult,
+  CreateSubmissionIntents, createSubmissionScope, createSubmissionDestination, createSubmissionResult, createAttachmentFingerprint,
   type CreateSubmissionIntent,
 } from "../lib/createSubmissionIntent";
 import {
@@ -5329,10 +5329,14 @@ function stripOversizedInlineInstructions(
   }
 }
 
-async function linkInputArtifact(
+export async function linkInputArtifact(
   artifactId: string,
   execution: ExecutionCreateResponse,
-  options: { linkType?: string; label?: string } = {},
+  options: {
+    linkType?: string;
+    label?: string;
+    retry?: { intent: CreateSubmissionIntent; save: () => void } | undefined;
+  } = {},
 ): Promise<void> {
   const workflowId = String(execution.workflowId || "").trim();
   const runId = String(execution.runId || execution.temporalRunId || "").trim();
@@ -5340,7 +5344,58 @@ async function linkInputArtifact(
   if (!artifactId || !workflowId || !runId || !namespace) {
     return;
   }
-  const linkEndpoint = `/api/artifacts/${encodeURIComponent(artifactId)}/links`;
+  const artifactEndpoint = `/api/artifacts/${encodeURIComponent(artifactId)}`;
+  const linkEndpoint = `${artifactEndpoint}/links`;
+  const linkBody = {
+    namespace,
+    workflow_id: workflowId,
+    run_id: runId,
+    link_type: options.linkType || "input.instructions",
+    label: options.label || "Submitted Workflow Input",
+  };
+  const linkKey = JSON.stringify([
+    artifactId, namespace, workflowId, runId, linkBody.link_type, linkBody.label,
+  ]);
+  const retry = options.retry;
+  const progress = retry?.intent.artifactLinks?.[linkKey];
+  const remember = (state: "uncertain" | "complete") => {
+    if (!retry) return;
+    (retry.intent.artifactLinks ??= {})[linkKey] = state;
+    retry.save();
+  };
+  if (progress === "complete") return;
+  if (progress === "uncertain") {
+    // A failed acknowledgment may precede a delayed commit. Only the exact
+    // visible link confirms completion; its absence cannot authorize a new POST.
+    const metadataResponse = await fetch(artifactEndpoint, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!metadataResponse.ok) {
+      throw new Error(await responseErrorMessage(
+        metadataResponse, "Failed to verify the previous input artifact link.",
+      ));
+    }
+    const links = recordValue(await metadataResponse.json()).links;
+    if (!Array.isArray(links) || links.some((value) => {
+      const link = recordValue(value);
+      return ["namespace", "workflow_id", "run_id", "link_type"].some(
+        (field) => typeof link[field] !== "string",
+      ) || (link.label != null && typeof link.label !== "string");
+    })) {
+      throw new Error("Artifact metadata did not identify existing links. Retry when the metadata is available.");
+    }
+    if (links.some((value) => Object.entries(linkBody).every(
+      ([field, expected]) => recordValue(value)[field] === expected,
+    ))) {
+      remember("complete");
+      return;
+    }
+    throw new Error(
+      "The previous artifact link is still unconfirmed. Open the accepted workflow or check again later; the link was not submitted again.",
+    );
+  }
+  remember("uncertain");
   let response: Response;
   try {
     response = await fetch(linkEndpoint, {
@@ -5349,13 +5404,7 @@ async function linkInputArtifact(
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({
-        namespace,
-        workflow_id: workflowId,
-        run_id: runId,
-        link_type: options.linkType || "input.instructions",
-        label: options.label || "Submitted Workflow Input",
-      }),
+      body: JSON.stringify(linkBody),
     });
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
@@ -5381,6 +5430,7 @@ async function linkInputArtifact(
       ),
     );
   }
+  remember("complete");
 }
 
 function ArrowUpIcon() {
@@ -9554,12 +9604,14 @@ function WorkflowStartPageContent({
     updateName,
     inputArtifactRef,
     parametersPatch,
+    isCurrentSubmission,
   }: {
     workflowId: string;
     updateName: "UpdateInputs" | "RequestRerun";
     inputArtifactRef: string | null;
     parametersPatch?: Record<string, unknown> | null;
-  }): Promise<void> {
+    isCurrentSubmission: () => boolean;
+  }): Promise<boolean> {
     const updatePayload = buildTemporalArtifactEditUpdatePayload({
       updateName,
       inputArtifactRef,
@@ -9618,6 +9670,7 @@ function WorkflowStartPageContent({
         result: "success",
         applied,
       });
+      if (!isCurrentSubmission()) return false;
       const statusText = isRerun
         ? applied === "continue_as_new"
           ? "Rerun was requested and the latest execution view is ready."
@@ -9642,6 +9695,7 @@ function WorkflowStartPageContent({
       navigateTo(
         `/workflows/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
       );
+      return true;
     } catch (error) {
       recordTemporalTaskEditingClientEvent({
         event: resultEvent,
@@ -9864,9 +9918,10 @@ function WorkflowStartPageContent({
     const requestId = `submit-${requestSerial}`;
     const createRevision = createDraftRevisionRef.current;
     const submissionHref = window.location.href;
-    const isCurrentCreate = () => pageMode.mode !== "create" || (
-      createMountedRef.current && createDraftRevisionRef.current === createRevision &&
-      window.location.href === submissionHref && submitExpansionRequestIdRef.current === requestSerial
+    const isCurrentCreate = () => (
+      createMountedRef.current && window.location.href === submissionHref &&
+      submitExpansionRequestIdRef.current === requestSerial &&
+      (pageMode.mode !== "create" || createDraftRevisionRef.current === createRevision)
     );
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
@@ -10606,14 +10661,27 @@ function WorkflowStartPageContent({
       };
     }
 
+    if (!isCurrentCreate()) { clearSubmitBusy(); return; }
+    // Capture the history-entry owner before reading files or uploading them.
+    const attachmentIntentStore = pageMode.mode === "create" ? createIntentsRef.current : null;
     const uploadAttachment = async (
       file: File, context: { kind: "objective" } | { kind: "step"; stepLabel: string },
     ) => {
       const cacheKey = JSON.stringify([artifactCreateEndpoint, normalizedRepository, context]);
       const cache = attachmentUploadsRef.current.get(file) ?? new Map<string, StepAttachmentRef>();
-      const existing = cache.get(cacheKey);
+      const fingerprint = attachmentIntentStore ? await createAttachmentFingerprint(file, cacheKey) : null;
+      const existing = fingerprint && attachmentIntentStore
+        ? attachmentIntentStore.attachment(fingerprint) : cache.get(cacheKey);
       if (existing) return existing;
-      const ref = await createInputAttachmentArtifact(artifactCreateEndpoint, file, normalizedRepository, context);
+      // Past retries may reuse prepared refs, but must never prepare a new
+      // upload before the final unchanged-intent check below.
+      if (scheduleMode === "once" && new Date(scheduledFor) <= new Date()) {
+        throw new Error("Scheduled time must be a valid future date.");
+      }
+      if (!isCurrentCreate()) throw new Error("Submission draft changed.");
+      const upload = () => createInputAttachmentArtifact(artifactCreateEndpoint, file, normalizedRepository, context);
+      if (fingerprint && attachmentIntentStore) return attachmentIntentStore.prepareAttachment(fingerprint, upload);
+      const ref = await upload();
       cache.set(cacheKey, ref);
       attachmentUploadsRef.current.set(file, cache);
       return ref;
@@ -10650,7 +10718,7 @@ function WorkflowStartPageContent({
                   ? error
                   : new Error("Failed to upload objective attachment.");
               const message = `Instructions: ${failure.message}`;
-              setAttachmentTargetErrors((current) => ({
+              if (isCurrentCreate()) setAttachmentTargetErrors((current) => ({
                 ...current,
                 [objectiveTargetKey]: message,
               }));
@@ -10680,7 +10748,7 @@ function WorkflowStartPageContent({
                     ? error
                     : new Error("Failed to upload step attachment.");
                 const message = `Step ${index + 1}: ${failure.message}`;
-                setAttachmentTargetErrors((current) => ({
+                if (isCurrentCreate()) setAttachmentTargetErrors((current) => ({
                   ...current,
                   [targetKey]: message,
                 }));
@@ -11299,8 +11367,8 @@ function WorkflowStartPageContent({
       }
       if (scheduleMode === "deferred_minutes" && schedulePayload) {
         createIntent.scheduledFor ??= String(schedulePayload.scheduledFor);
-        schedulePayload.scheduledFor = createIntent.scheduledFor;
         createIntentsRef.current.save(createIntent);
+        schedulePayload.scheduledFor = createIntent.scheduledFor;
       }
       taskPayload.idempotencyKey = createIntent.key;
     }
@@ -11462,6 +11530,7 @@ function WorkflowStartPageContent({
         if (createIntent) {
           createIntent.inputArtifactRef = inputArtifactRef;
           createIntentStore?.save(createIntent);
+          inputArtifactRef = createIntent.inputArtifactRef;
         }
       }
       if (inputArtifactRef) {
@@ -11469,6 +11538,7 @@ function WorkflowStartPageContent({
         stripOversizedInlineInstructions({ payload: artifactPayload });
       }
 
+      if (!isCurrentCreate()) return;
       if (
         pageMode.mode === "edit" ||
         (pageMode.mode === "rerun" && pageMode.intent !== "comparison")
@@ -11481,18 +11551,17 @@ function WorkflowStartPageContent({
               : "Cannot save changes because the execution id is missing.",
           );
         }
-        await handleTemporalTaskEditingSubmit({
+        didNavigateAfterSubmit = await handleTemporalTaskEditingSubmit({
           workflowId,
           updateName:
             pageMode.mode === "rerun" ? "RequestRerun" : "UpdateInputs",
           inputArtifactRef: isExactRerun ? null : inputArtifactRef,
           parametersPatch: isExactRerun ? null : artifactPayload,
+          isCurrentSubmission: isCurrentCreate,
         });
-        didNavigateAfterSubmit = true;
         return;
       }
 
-      if (!isCurrentCreate()) return;
       let created = createIntent?.accepted;
       if (!created) {
         if (createIntent?.uncertain && scheduleMode === "recurring") {
@@ -11508,12 +11577,15 @@ function WorkflowStartPageContent({
           body: JSON.stringify(requestBody),
         });
         if (!response.ok) {
-          if (createIntent && response.status >= 400 && response.status < 500 && response.status !== 408) {
+          const detail = await responseErrorDetail(response, "Failed to start workflow.");
+          if (!isCurrentCreate()) return;
+          // This explicit router rejection occurs before admission/schedule
+          // routing. Unknown server failures must remain uncertain.
+          if (createIntent && ((response.status >= 400 && response.status < 500 && response.status !== 408) ||
+            (response.status === 503 && detail.code === "temporal_submit_disabled"))) {
             createIntent.uncertain = false;
             createIntentStore?.save(createIntent);
           }
-          const detail = await responseErrorDetail(response, "Failed to start workflow.");
-          if (!isCurrentCreate()) return;
           if (detail.code?.startsWith("dependency_")) {
             setDependencyMessage(detail.message);
             return;
@@ -11534,8 +11606,9 @@ function WorkflowStartPageContent({
       }
       if (!isCurrentCreate()) return;
       if (createIntent) setAcceptedCreatePath(createSubmissionDestination(created) || null);
+      const linkRetry = createIntent ? { intent: createIntent, save: () => createIntentStore?.save(createIntent) } : undefined;
       if (inputArtifactRef) {
-        await linkInputArtifact(inputArtifactRef, created);
+        await linkInputArtifact(inputArtifactRef, created, { retry: linkRetry });
       }
       for (const attachment of [
         ...uploadedObjectiveAttachments,
@@ -11544,6 +11617,7 @@ function WorkflowStartPageContent({
         await linkInputArtifact(attachment.artifactId, created, {
           linkType: "input.attachment",
           label: attachment.filename,
+          retry: linkRetry,
         });
       }
       if (!isCurrentCreate()) return;

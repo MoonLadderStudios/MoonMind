@@ -43,3 +43,58 @@ describe('Create submission identity', () => {
     } finally { spy.mockRestore(); }
   });
 });
+
+it('persists only uploaded-ref metadata and hashes actual file contents', async () => {
+  const { createAttachmentFingerprint } = await import('./createSubmissionIntent');
+  const file = (content: string) => new File([content], 'same.png', { type: 'image/png', lastModified: 123 });
+  const original = await createAttachmentFingerprint(file('PRIVATE_A'), 'repository/step');
+  expect(await createAttachmentFingerprint(file('PRIVATE_A'), 'repository/step')).toBe(original);
+  expect(await createAttachmentFingerprint(file('PRIVATE_B'), 'repository/step')).not.toBe(original);
+  const scope = createSubmissionScope();
+  const store = new CreateSubmissionIntents(scope);
+  const ref = { artifactId: 'artifact-1', filename: 'same.png', contentType: 'image/png', sizeBytes: 9, bytes: 'PRIVATE_A', secret: 'SECRET' };
+  store.saveAttachment(original, ref);
+  expect(new CreateSubmissionIntents(scope).attachment(original)).toEqual({ artifactId: 'artifact-1', filename: 'same.png', contentType: 'image/png', sizeBytes: 9 });
+  expect(JSON.stringify(window.sessionStorage)).not.toMatch(/PRIVATE_A|SECRET|bytes|secret/);
+});
+
+it('keeps the first prepared ref when two reconstructed stores finish uploads out of order', async () => {
+  const scope = createSubmissionScope();
+  const oldStore = new CreateSubmissionIntents(scope);
+  const returnedStore = new CreateSubmissionIntents(scope);
+  const ref = (artifactId: string) => ({ artifactId, filename: 'same.png', contentType: 'image/png', sizeBytes: 9 });
+  let finishOld!: (value: ReturnType<typeof ref>) => void;
+  const oldUpload = oldStore.prepareAttachment('same-content', () => new Promise((resolve) => { finishOld = resolve; }));
+  const returnedRef = await returnedStore.prepareAttachment('same-content', async () => ref('accepted-artifact'));
+  const body = { payload: { task: { inputAttachments: [returnedRef] } } };
+  const accepted = returnedStore.forRequest(body);
+  accepted.accepted = { workflowId: 'mm:accepted' };
+  returnedStore.save(accepted);
+  finishOld(ref('late-orphan'));
+  expect(await oldUpload).toEqual(returnedRef);
+  const reloaded = new CreateSubmissionIntents(scope);
+  expect(reloaded.attachment('same-content')).toEqual(returnedRef);
+  expect(reloaded.forRequest(body).accepted).toEqual({ workflowId: 'mm:accepted' });
+});
+
+it('does not let an older store erase accepted identity or completed link progress', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: { instructions: 'Same intent' } } };
+  const oldStore = new CreateSubmissionIntents(scope);
+  const oldIntent = oldStore.forRequest(body);
+  const returnedStore = new CreateSubmissionIntents(scope);
+  const accepted = returnedStore.forRequest(body);
+  accepted.accepted = { workflowId: 'mm:accepted' };
+  accepted.inputArtifactRef = 'canonical-input';
+  accepted.artifactLinks = { link: 'complete' };
+  returnedStore.save(accepted);
+  oldIntent.uncertain = true;
+  oldIntent.inputArtifactRef = 'late-input';
+  oldIntent.artifactLinks = { link: 'uncertain' };
+  oldStore.save(oldIntent);
+  expect(new CreateSubmissionIntents(scope).forRequest(body)).toMatchObject({
+    accepted: { workflowId: 'mm:accepted' }, uncertain: false,
+    inputArtifactRef: 'canonical-input', artifactLinks: { link: 'complete' },
+  });
+  expect(oldIntent.inputArtifactRef).toBe('canonical-input');
+});
