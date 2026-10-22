@@ -867,25 +867,27 @@ jobs:
     if: needs.select-test-suites.outputs.integration_ci == 'true'
     runs-on: ubuntu-latest
     # Hermetic worst case: 12m bounded setup + 23m execution/cleanup + 4m
-    # evidence collection/upload + 1m runner/post-action overhead. Keep the
-    # independent journey rows at their existing 30m deadline.
-    timeout-minutes: ${{ matrix.suite == 'hermetic' && 40 || 30 }}
+    # evidence collection/upload + 1m runner/post-action overhead.
+    # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
+    # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
+    # Setup gets its own budget; the journey test deadlines are unchanged.
+    timeout-minutes: ${{ matrix.suite == 'hermetic' && 40 || 85 }}
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix: ${{ fromJSON(needs.select-test-suites.outputs.integration_matrix) }}
     steps:
       - name: Check out code
-        timeout-minutes: ${{ matrix.suite == 'hermetic' && 2 || 30 }}
+        timeout-minutes: 2
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
       - name: Initialize pinned Omnigent verifier source
-        timeout-minutes: ${{ matrix.suite == 'hermetic' && 2 || 30 }}
+        timeout-minutes: 2
         run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Docker Buildx
-        timeout-minutes: ${{ matrix.suite == 'hermetic' && 2 || 30 }}
+        timeout-minutes: 2
         uses: docker/setup-buildx-action@v3
       - name: Build the pytest image with a shared layer cache
         # The compose ``pytest`` service otherwise rebuilds the dependency
@@ -932,6 +934,7 @@ jobs:
         # these parallel rows export nothing and each run refreshes one copy
         # of the deployable image's layers in the shared Actions cache.
         if: matrix.suite != 'hermetic'
+        timeout-minutes: 15
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -943,19 +946,48 @@ jobs:
           cache-from: type=gha,scope=exact-artifact-api-runtime
       - name: Set up Node for the dashboard journey
         if: endsWith(matrix.suite, '-journey')
+        timeout-minutes: 2
         uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: npm
+      - name: Inspect journey setup disk capacity
+        if: endsWith(matrix.suite, '-journey')
+        timeout-minutes: 1
+        run: |
+          df -h . /tmp /var/cache/apt
+          df -i . /tmp /var/cache/apt
       - name: Install the journey browser's Playwright runtime
         # The journeys open the dashboard compiled into the candidate image
         # from the job host, so Playwright belongs here and not in the image.
-        # Allow slow dependency mirrors to finish before running the journey.
         if: endsWith(matrix.suite, '-journey')
-        timeout-minutes: 10
+        timeout-minutes: 5
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
+      - name: Install the journey browser OS dependencies
+        # Slow but progressing Ubuntu downloads must not share a deadline
+        # with npm or browser acquisition. Scope apt limits to this command;
+        # use the lockfile-installed CLI without changing package sources.
+        if: endsWith(matrix.suite, '-journey')
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          apt_config=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/moonmind-playwright-apt.XXXXXX")
+          trap 'status=$?; rm -f "$apt_config"; printf "OS dependency setup: %ss, exit %s\n" "$SECONDS" "$status"; exit "$status"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' > "$apt_config"
+          sudo env APT_CONFIG="$apt_config" "$(command -v node)" node_modules/playwright/cli.js install-deps chromium
+      - name: Download the journey Chromium browser
+        if: endsWith(matrix.suite, '-journey')
+        timeout-minutes: 5
+        run: node node_modules/playwright/cli.js install chromium
+      - name: Inspect journey setup disk capacity after installation
+        if: always() && endsWith(matrix.suite, '-journey')
+        timeout-minutes: 1
+        run: |
+          df -h . /tmp /var/cache/apt
+          df -i . /tmp /var/cache/apt
       - name: Run disposable default first-run journey
         # MoonLadderStudios/MoonMind#3938 / #4356: one disposable default
         # Compose installation (no .env, no inherited credentials, no seeded
