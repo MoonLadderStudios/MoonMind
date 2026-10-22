@@ -476,3 +476,301 @@ async def test_ambiguous_omitted_schedule_scope_refuses_without_rebinding(
         assert (
             await session.get(Preset, builtin_id)
         ).scope_type is PresetScopeType.GLOBAL
+
+
+async def seed_instance_admission(session, schema_revision):
+    """Persist the real completion shape emitted by the account-free predecessor."""
+    from copy import deepcopy
+
+    result = await run_guarded_upgrade(session, operator_authorized=True)
+    assert result.published
+    row = (await session.execute(select(SingleUserConversionRun))).scalar_one()
+    if schema_revision != "397_instance_preset_catalog":
+        stored = deepcopy(row.result_json)
+        stored["schema_revision"] = schema_revision
+        # Revision 396 predates the preset transform but certifies admission.
+        stored["transforms"].pop("presets")
+        row.result_json = stored
+        await session.commit()
+    return row.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "schema_revision", ["396_artifact_operator_recovery", "397_instance_preset_catalog"]
+)
+async def test_certified_operator_global_preset_converts(
+    preset_sessions, schema_revision
+):
+    async with preset_sessions() as session:
+        await seed_instance_admission(session, schema_revision)
+        # OperatorAdmission has no id. The predecessor route persisted exactly
+        # this global, unseeded shape after account-free admission was established.
+        row = Preset(
+            slug="operator-authored",
+            title="Keep me",
+            description="custom",
+            scope_type=PresetScopeType.GLOBAL,
+            created_by=None,
+            seed_source=None,
+            steps=[
+                {
+                    "instructions": "operator content",
+                    "inputs": {"empty": "", "false": False},
+                }
+            ],
+        )
+        session.add(row)
+        await session.flush()
+        row_id = row.id
+        recent_at = datetime(2026, 1, 1, tzinfo=UTC)
+        session.add(PresetFavorite(user_id=UUID(int=0), template_id=row_id))
+        session.add(
+            PresetRecent(user_id=UUID(int=0), template_id=row_id, applied_at=recent_at)
+        )
+        await session.commit()
+
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+
+        assert result.published, result.decision.to_sanitized_dict()
+        assert result.transforms["presets"]["converted"] == 1
+        session.expire_all()
+        converted = await session.get(Preset, row_id)
+        assert converted.scope_type is None and converted.scope_ref is None
+        assert converted.created_by is None and converted.seed_source is None
+        assert converted.slug == "operator-authored"
+        assert converted.steps == [
+            {
+                "instructions": "operator content",
+                "inputs": {"empty": "", "false": False},
+            }
+        ]
+        assert (
+            await session.execute(select(PresetFavorite.user_id))
+        ).scalar_one() is None
+        recent = (await session.execute(select(PresetRecent))).scalar_one()
+        assert (
+            recent.user_id is None
+            and recent.applied_at.replace(tzinfo=UTC) == recent_at
+        )
+        assert not list((await session.execute(select(User))).scalars())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "schema_revision", ["396_artifact_operator_recovery", "397_instance_preset_catalog"]
+)
+async def test_certified_ownerless_schedule_survives_preset_conversion(
+    preset_sessions,
+    schema_revision,
+):
+    from copy import deepcopy
+
+    from api_service.db.models import RecurringWorkflowDefinition
+
+    async with preset_sessions() as session:
+        await seed_instance_admission(session, schema_revision)
+        preset = Preset(
+            slug="seeded",
+            title="Seed",
+            description="d",
+            scope_type=PresetScopeType.GLOBAL,
+            seed_source="seeded.yaml",
+            steps=[{"instructions": "new definition"}],
+        )
+        target = {
+            "initialParameters": {
+                "workflow": {
+                    "taskTemplate": {
+                        "slug": "seeded",
+                        "scope": "global",
+                        "inputs": {"false": False},
+                    },
+                    "steps": [{"instructions": "frozen accepted work"}],
+                }
+            }
+        }
+        schedule = RecurringWorkflowDefinition(
+            name="account-free",
+            cron="0 * * * *",
+            timezone="UTC",
+            owner_user_id=None,
+            target=deepcopy(target),
+        )
+        session.add_all([preset, schedule])
+        await session.commit()
+        preset_id, schedule_id = preset.id, schedule.id
+
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+
+        assert result.published, result.decision.to_sanitized_dict()
+        session.expire_all()
+        assert (await session.get(Preset, preset_id)).scope_type is None
+        saved = await session.get(RecurringWorkflowDefinition, schedule_id)
+        assert saved.owner_user_id is None
+        assert (
+            saved.target["initialParameters"]["workflow"]["steps"]
+            == target["initialParameters"]["workflow"]["steps"]
+        )
+        assert saved.target["initialParameters"]["workflow"]["taskTemplate"] == {
+            "slug": "seeded",
+            "inputs": {"false": False},
+        }
+        assert not list((await session.execute(select(User))).scalars())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "evidence",
+    ["none", "custom", "incomplete", "old", "unpublished", "ineligible", "malformed"],
+)
+async def test_uncertified_null_owner_resources_still_refuse(preset_sessions, evidence):
+    from copy import deepcopy
+
+    from api_service.db.models import RecurringWorkflowDefinition
+
+    async with preset_sessions() as session:
+        if evidence != "none":
+            ledger_id = await seed_instance_admission(
+                session, "396_artifact_operator_recovery"
+            )
+            ledger = await session.get(SingleUserConversionRun, ledger_id)
+            stored = deepcopy(ledger.result_json)
+            if evidence == "custom":
+                stored.pop("production_transforms_completed")
+            elif evidence == "incomplete":
+                ledger.status = "in_progress"
+            elif evidence == "old":
+                stored["schema_revision"] = "386_single_user_conversion"
+            elif evidence == "unpublished":
+                stored["published"] = False
+            elif evidence == "ineligible":
+                stored["decision"]["eligible"] = False
+            elif evidence == "malformed":
+                stored["transforms"]["artifacts"]["preserved"] = True
+            ledger.result_json = stored
+        row = Preset(
+            slug="unproven",
+            title="Unproven",
+            description="d",
+            scope_type=PresetScopeType.GLOBAL,
+        )
+        schedule = RecurringWorkflowDefinition(
+            name="unproven", cron="0 * * * *", timezone="UTC", owner_user_id=None
+        )
+        session.add_all([row, schedule])
+        await session.commit()
+        row_id = row.id
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+        assert not result.published
+        assert result.decision.reason_code == "unowned_rows"
+        assert (await session.get(Preset, row_id)).scope_type is PresetScopeType.GLOBAL
+
+
+@pytest.mark.asyncio
+async def test_prior_admission_does_not_merge_new_human_owners(preset_sessions):
+    async with preset_sessions() as session:
+        await seed_instance_admission(session, "396_artifact_operator_recovery")
+        _, _, custom_id, _ = await seed_collision(session)
+        second = User(id=uuid4(), email="second-after-admission@example.invalid")
+        session.add(second)
+        await session.flush()
+        session.add(PresetFavorite(user_id=second.id, template_id=custom_id))
+        await session.commit()
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+        assert not result.published and result.decision.reason_code == "multi_person"
+        assert (
+            await session.get(Preset, custom_id)
+        ).scope_type is PresetScopeType.PERSONAL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "scope_ref", "reason"),
+    [
+        (PresetScopeType.PERSONAL, None, "unowned_rows"),
+        (PresetScopeType.GLOBAL, "unknown-scope", "unowned_rows"),
+        (PresetScopeType.PERSONAL, str(UUID(int=999)), "unknown_principal"),
+    ],
+)
+async def test_prior_admission_does_not_infer_ambiguous_preset_scope(
+    preset_sessions,
+    scope,
+    scope_ref,
+    reason,
+):
+    async with preset_sessions() as session:
+        await seed_instance_admission(session, "396_artifact_operator_recovery")
+        row = Preset(
+            slug="unproven",
+            title="Unproven",
+            description="d",
+            scope_type=scope,
+            scope_ref=scope_ref,
+        )
+        session.add(row)
+        await session.commit()
+        row_id = row.id
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+        assert not result.published and result.decision.reason_code == reason
+        preserved = await session.get(Preset, row_id)
+        assert preserved.scope_type is scope and preserved.scope_ref == scope_ref
+
+
+@pytest.mark.asyncio
+async def test_revoked_admission_invalidates_preflight_without_conversion(
+    preset_sessions,
+):
+    from copy import deepcopy
+
+    from api_service.services.single_user_conversion import (
+        DEFAULT_SUBSYSTEM_TRANSFORMS,
+        StaleAttributionError,
+        apply_conversion,
+        preflight,
+    )
+
+    async with preset_sessions() as session:
+        ledger_id = await seed_instance_admission(
+            session, "396_artifact_operator_recovery"
+        )
+        row = Preset(
+            slug="kept",
+            title="Kept",
+            description="d",
+            scope_type=PresetScopeType.GLOBAL,
+        )
+        session.add(row)
+        await session.commit()
+        row_id = row.id
+        bound = await preflight(session)
+        assert bound.decision.eligible
+        await session.rollback()
+    async with preset_sessions() as writer:
+        ledger = await writer.get(SingleUserConversionRun, ledger_id)
+        stored = deepcopy(ledger.result_json)
+        stored["production_transforms_completed"] = False
+        ledger.result_json = stored
+        await writer.commit()
+    async with preset_sessions() as session:
+        with pytest.raises(StaleAttributionError):
+            await apply_conversion(
+                session,
+                bound,
+                operator_authorized=True,
+                transforms=DEFAULT_SUBSYSTEM_TRANSFORMS,
+            )
+        assert (await session.get(Preset, row_id)).scope_type is PresetScopeType.GLOBAL
+        assert (
+            len(
+                (await session.execute(select(SingleUserConversionRun))).scalars().all()
+            )
+            == 1
+        )
+
+
+@pytest.mark.parametrize("payload", [None, [], "complete", True])
+def test_malformed_completion_payload_has_no_authority(payload):
+    from api_service.services.single_user_conversion import _is_production_completion
+
+    assert not _is_production_completion(payload)

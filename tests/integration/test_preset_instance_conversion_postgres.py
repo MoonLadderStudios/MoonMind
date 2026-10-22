@@ -59,11 +59,63 @@ async def preset_sessions(conversion_postgres_url):
         scenarios.test_unknown_personal_scope_is_not_inferred_from_creator,
         scenarios.test_synthetic_local_scope_converts_without_creating_person,
         scenarios.test_ambiguous_omitted_schedule_scope_refuses_without_rebinding,
+        scenarios.test_prior_admission_does_not_merge_new_human_owners,
+        scenarios.test_revoked_admission_invalidates_preflight_without_conversion,
     ],
     ids=lambda fn: fn.__name__,
 )
 async def test_postgres_conversion_boundaries(preset_sessions, scenario):
     await scenario(preset_sessions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "schema_revision", ["396_artifact_operator_recovery", "397_instance_preset_catalog"]
+)
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        scenarios.test_certified_operator_global_preset_converts,
+        scenarios.test_certified_ownerless_schedule_survives_preset_conversion,
+    ],
+    ids=lambda fn: fn.__name__,
+)
+async def test_postgres_certified_predecessor_resources(
+    preset_sessions, schema_revision, scenario
+):
+    await scenario(preset_sessions, schema_revision)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "evidence",
+    ["none", "custom", "incomplete", "old", "unpublished", "ineligible", "malformed"],
+)
+async def test_postgres_uncertified_resources_refuse(preset_sessions, evidence):
+    await scenarios.test_uncertified_null_owner_resources_still_refuse(
+        preset_sessions, evidence
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope,scope_ref,reason",
+    [
+        (scenarios.PresetScopeType.PERSONAL, None, "unowned_rows"),
+        (scenarios.PresetScopeType.GLOBAL, "unknown-scope", "unowned_rows"),
+        (
+            scenarios.PresetScopeType.PERSONAL,
+            str(scenarios.UUID(int=999)),
+            "unknown_principal",
+        ),
+    ],
+)
+async def test_postgres_certification_does_not_infer_scope(
+    preset_sessions, scope, scope_ref, reason
+):
+    await scenarios.test_prior_admission_does_not_infer_ambiguous_preset_scope(
+        preset_sessions, scope, scope_ref, reason
+    )
 
 
 @pytest.mark.asyncio
@@ -164,15 +216,19 @@ async def test_postgres_conversion_excludes_concurrent_writers_and_converters(
     pending = asyncio.create_task(convert())
     try:
         await asyncio.wait_for(entered.wait(), 10)
-        async with preset_sessions() as writer:
-            await writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
-            with pytest.raises(DBAPIError) as exc:
-                await writer.execute(
-                    text("UPDATE presets SET description='unfenced' WHERE id=:id"),
-                    {"id": custom_id},
-                )
-            assert getattr(exc.value.orig, "sqlstate", None) == "55P03"
-            await writer.rollback()
+        for statement, params in (
+            (
+                "UPDATE presets SET description='unfenced' WHERE id=:id",
+                {"id": custom_id},
+            ),
+            ("UPDATE single_user_conversion_runs SET status='in_progress'", {}),
+        ):
+            async with preset_sessions() as writer:
+                await writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
+                with pytest.raises(DBAPIError) as exc:
+                    await writer.execute(text(statement), params)
+                assert getattr(exc.value.orig, "sqlstate", None) == "55P03"
+                await writer.rollback()
         async with preset_sessions() as contender:
             with pytest.raises(ConcurrentConversionError):
                 await run_guarded_upgrade(contender, operator_authorized=True)

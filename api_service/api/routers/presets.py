@@ -20,9 +20,9 @@ from api_service.api.schemas import (
     PresetReviewRequestSchema,
     PresetSaveFromWorkflowRequestSchema,
 )
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import PresetReleaseStatus
-from api_service.operator_admission import require_operator
 from api_service.services.presets.catalog import (
     ExpandOptions,
     PresetCatalogService,
@@ -47,7 +47,7 @@ async def _reject_legacy_scope(request: Request) -> None:
 router = APIRouter(
     prefix="/api/presets",
     tags=["presets"],
-    dependencies=[Depends(require_operator), Depends(_reject_legacy_scope)],
+    dependencies=[Depends(get_instance_access), Depends(_reject_legacy_scope)],
 )
 logger = logging.getLogger(__name__)
 
