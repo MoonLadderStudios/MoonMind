@@ -49,7 +49,9 @@ footprint = config.get("footprint", {}).get(phase, {})
 if args[:1] != ["compose"]:
     with calls.with_suffix(".host.jsonl").open("a") as output:
         output.write(json.dumps(args) + "\n")
-    if args[:2] == ["image", "inspect"]:
+    if args[:1] == ["port"]:
+        print("127.0.0.1:17321")
+    elif args[:2] == ["image", "inspect"]:
         print("sha256:" + "a" * 64)
     else:
         print(footprint.get(args[0], ""))
@@ -182,15 +184,51 @@ def journey(tmp_path: Path) -> Journey:
     (tools / SCRIPT.name).write_text(SCRIPT.read_text())
     (tools / "single_user_journey_checks.py").write_text(API_COUNTERPART)
     (tools / "single_user_journey_cutover.py").write_text(
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "args = sys.argv[1:]\n"
-        "config = json.loads(Path(os.environ['STARTUP_TEST_CONFIG']).read_text())\n"
-        "calls = Path(os.environ['STARTUP_TEST_API_CALLS']).read_text()\n"
-        "result = {'passed': not config.get('cutover_failure'), 'args': args, "
-        "'candidate_work_started': 'after-upgrade' in calls}\n"
-        "Path(args[args.index('--receipt-file') + 1]).write_text(json.dumps(result))\n"
-        "raise SystemExit(0 if result['passed'] else 1)\n"
+        f"import sys\nsys.path.insert(0, {str(SCRIPT.parents[1])!r})\n"
+        + r"""
+import asyncio, hashlib, json, os
+from pathlib import Path
+from deploy.controller.record import OperationStore
+from moonmind.workflows.skills.deployment_release import run_controller_omnigent_step
+
+args = sys.argv[1:]
+config = json.loads(Path(os.environ['STARTUP_TEST_CONFIG']).read_text())
+calls = Path(os.environ['STARTUP_TEST_API_CALLS']).read_text()
+repo = Path(args[args.index('--repo') + 1])
+files = [args[index + 1] for index, item in enumerate(args) if item == '-f']
+target = {'project': args[args.index('--project') + 1],
+          'projectDir': str(repo), 'composeFiles': files}
+state = repo / 'deploy/state'
+os.environ['MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR'] = str(repo)
+os.environ['MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE'] = str(state / '.env.deploy')
+os.environ['MOONMIND_DEPLOYMENT_LOCK_DIR'] = str(state / 'locks')
+# This boundary check exercises the actual path admission and durable helper
+# handoff with Omnigent disabled. It does not claim an image installation.
+os.environ['OMNIGENT_ENABLED'] = 'false'
+operation = OperationStore(state / 'controller').begin(
+    stack=target['project'], desired_image=args[args.index('--image') + 1],
+    source_revision=args[args.index('--revision') + 1], target=target,
+)
+payload = {'operationId': operation['operationId'], 'target': operation['target'],
+           'moonmindImage': operation['desired']['image'],
+           'controllerCapabilities': ['controller-handoff', 'active-journal-transition',
+                                      'unversioned-routing-cutover']}
+selection = asyncio.run(run_controller_omnigent_step('select', payload))
+key = hashlib.sha256(operation['operationId'].encode()).hexdigest()[:32]
+directory = state / 'controller-omnigent-jobs' / key
+request = json.loads((directory / 'request.json').read_text())
+assert json.loads((directory / 'selection.json').read_text()) == selection
+assert asyncio.run(run_controller_omnigent_step('select', payload)) == selection
+assert asyncio.run(run_controller_omnigent_step(
+    'migrate', {**payload, 'selectedRevision': selection.get('revision')}
+)) == selection
+result = {'passed': not config.get('cutover_failure'), 'args': args,
+          'candidate_work_started': 'after-upgrade' in calls,
+          'helperRequest': request, 'helperSelection': selection,
+          'isolation': json.loads(Path(files[1]).read_text())}
+Path(args[args.index('--receipt-file') + 1]).write_text(json.dumps(result))
+raise SystemExit(0 if result['passed'] else 1)
+"""
     )
     (tools / "single_user_journey_browser.mjs").write_text(
         "// External browser counterpart.\n"
@@ -327,29 +365,26 @@ def test_startup_stream_retention_is_bounded_without_tail_overlap(
     journey.assert_cleaned()
 
 
-def test_upgrade_source_retries_three_times_and_candidate_once(
+def test_upgrade_source_retries_and_controller_failure_keeps_source_evidence(
     journey: Journey,
 ) -> None:
     result = journey.run(
-        upgrade=True, source_statuses=[7, 8, 0], candidate_statuses=[9], lines=2
+        upgrade=True, source_statuses=[7, 8, 0], cutover_failure=True, lines=2
     )
     assert result.returncode != 0
-    startups = journey.startups()
-    assert [(call["phase"], call["status"]) for call in startups] == [
+    assert [(call["phase"], call["status"]) for call in journey.startups()] == [
         ("source", 7),
         ("source", 8),
         ("source", 0),
-        ("candidate", 9),
     ]
-    for phase, attempt, status in (
-        ("source", 1, 7),
-        ("source", 2, 8),
-        ("source", 3, 0),
-        ("candidate", 1, 9),
-    ):
-        output = _startup_log(journey, "upgrade", phase, attempt)
-        assert f"phase={phase} attempt={attempt}" in output
+    for attempt, status in ((1, 7), (2, 8), (3, 0)):
+        output = _startup_log(journey, "upgrade", "source", attempt)
+        assert f"phase=source attempt={attempt}" in output
         assert f"exit_status={status}" in output
+    receipt = json.loads(
+        (journey.logs / "upgrade/state/routing-cutover.json").read_text()
+    )
+    assert not receipt["passed"]
     journey.assert_cleaned()
 
 
@@ -408,6 +443,7 @@ def test_successful_startup_preserves_complete_fresh_journey_and_cleanup(
     assert len(journey.startups()) == 1
     calls = [json.loads(line)[0] for line in journey.api_calls.read_text().splitlines()]
     assert calls == [
+        "controller_conversion",
         "populate",
         "access",
         "vector_free",
@@ -605,19 +641,52 @@ def test_early_log_setup_failure_restores_callers_environment(journey, blocked):
 
 def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> None:
     result = journey.run(upgrade=True, lines=1)
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The controller installs the candidate; the runner boots only the source.
+    assert [call["phase"] for call in journey.startups()] == ["source"]
     receipt = json.loads(
         (journey.logs / "upgrade/state/routing-cutover.json").read_text()
     )
     assert receipt["passed"]
     args = receipt["args"]
     assert args[args.index("--project") + 1] == "moonmind-test-startup-unit"
-    assert args[args.index("--image") + 1] == "sha256:" + "a" * 64
+    assert args[args.index("--image") + 1] == "127.0.0.1:17321/moonmind:journey"
     files = [args[index + 1] for index, item in enumerate(args) if item == "-f"]
     assert len(files) == 2
     assert files[0].endswith("/docker-compose.yaml")
     assert files[1].endswith("/isolation.json")
+    request = receipt["helperRequest"]
+    assert request["target"]["composeFiles"] == files
+    assert all(
+        Path(path).is_relative_to(request["target"]["projectDir"]) for path in files
+    )
+    assert receipt["helperSelection"] == {
+        "status": "skipped",
+        "reason": "omnigent runtime not enabled",
+    }
+    assert (
+        receipt["isolation"]["services"]["api"]["environment"][
+            "MOONMIND_CONTROL_PLANE_NETWORK"
+        ]
+        == "moonmind-test-startup-unit_control-plane-network"
+    )
     assert not receipt["candidate_work_started"]
+    phases = [json.loads(line) for line in journey.api_calls.read_text().splitlines()]
+    names = [call[0] for call in phases]
+    assert names.index("conversion") < names.index("controller_conversion")
+    assert names.index("controller_conversion") < names.index(
+        "populate", names.index("conversion")
+    )
+    check = phases[names.index("controller_conversion")]
+    assert check[check.index("--label") + 1] == "before-upgrade"
+    assert check[check.index("--expect") + 1] == "eligible_conversion"
+    assert check[check.index("--project") + 1] == "moonmind-test-startup-unit"
+    assert check[check.index("--repo") + 1] == files[0].removesuffix(
+        "/docker-compose.yaml"
+    )
+    assert [
+        check[index + 1] for index, item in enumerate(check) if item == "--compose-file"
+    ] == files
     journey.assert_cleaned()
 
 

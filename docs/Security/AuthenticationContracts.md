@@ -437,8 +437,10 @@ retain their real predecessor principal until guarded conversion publishes.
 Retained requests require local transport or the existing explicitly approved
 non-loopback ingress, plus configured Host and mutation-origin checks. Pending
 conversion cannot cut over installed access; missing accounts or an unavailable
-identity store still fail closed. Published conversion uses permission-only
-admission. Other UUID consumers retain their compatibility principal.
+identity store fail closed. Startup defers conversion until replacement admission
+is configured: loopback publication locally, or an approved public URL, trusted
+proxies and a permitted assertion header remotely. Published conversion uses
+permission-only admission. Other UUID consumers retain their compatibility principal.
 Demonstration routers stay unmounted; isolated route evidence does not establish
 deployed access.
 
