@@ -464,7 +464,7 @@ selector, account product, or mandatory service.
 | Deployment | Primitive admission rule |
 | --- | --- |
 | Local (`MOONMIND_PUBLIC_BASE_URL` omitted or explicitly loopback) | Loopback peer and Host. In Docker Compose, the adapter also recognizes the single kernel default gateway as the host publication peer when the deployment publishes loopback. It trusts no other bridge peer or forwarding claim. |
-| Approved publication (non-loopback `MOONMIND_API_PUBLISH_HOST`, `MOONMIND_TRUSTED_INGRESS=1`, no `MOONMIND_TRUSTED_PROXIES`) | Any peer of the approved binding, after Host (against `MOONMIND_PUBLIC_BASE_URL` when set) and mutation-origin checks. The operator's binding approval is the installed network authority; configuring trusted proxies selects the remote rule instead. |
+| Approved publication (non-loopback `MOONMIND_API_PUBLISH_HOST` with `MOONMIND_TRUSTED_INGRESS=1`) | Peers that reached the published port, after Host (against `MOONMIND_PUBLIC_BASE_URL` when set) and mutation-origin checks. The binding approval is the installed network authority. Peers on the API container's own networks other than its default gateway (workers calling the backend directly) never qualify. An explicit loopback operator URL keeps the local rule; a remote URL with any `MOONMIND_TRUSTED_PROXIES` value keeps the remote rule. |
 | Remote (non-loopback `MOONMIND_PUBLIC_BASE_URL`) | Only the deployment's approved trusted ingress: `MOONMIND_TRUSTED_INGRESS=1` with `MOONMIND_TRUSTED_PROXIES` matching the connecting peer, plus a single well-formed proxy identity assertion, admitted as a boolean (no local account mapping, no role/subject import). |
 
 The Compose entrypoint disables Uvicorn forwarding-header rewriting so admission

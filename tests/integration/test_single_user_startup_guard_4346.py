@@ -57,7 +57,7 @@ async def test_startup_keeps_retained_access_until_replacement_is_configured(
         await session.commit()
         owner_id = owner.id
     monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "0.0.0.0")
-    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
+    monkeypatch.delenv("MOONMIND_TRUSTED_INGRESS", raising=False)
     monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", base_url)
     monkeypatch.delenv("MOONMIND_TRUSTED_PROXIES", raising=False)
 
@@ -69,6 +69,26 @@ async def test_startup_keeps_retained_access_until_replacement_is_configured(
         assert (
             await session.execute(select(SingleUserConversionRun))
         ).scalars().all() == []
+
+
+@pytest.mark.parametrize("base_url", ["", "https://operator.example"])
+async def test_startup_converts_under_an_approved_publication(
+    disabled_env_keys, tmp_path, monkeypatch, base_url
+):
+    """The approved binding admits before and after conversion, so it may run."""
+    from api_service.main import _run_guarded_single_user_upgrade
+
+    await _seed_db(tmp_path, "approved-publication.db")
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "0.0.0.0")
+    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", base_url)
+    monkeypatch.delenv("MOONMIND_TRUSTED_PROXIES", raising=False)
+
+    result = await _run_guarded_single_user_upgrade()
+
+    assert not result.get("deferred")
+    async with db_base.async_session_maker() as session:
+        assert (await session.execute(select(SingleUserConversionRun))).scalars().all()
 
 
 @pytest.mark.asyncio

@@ -99,12 +99,23 @@ def test_approved_publication_admits_its_network_peers(base_url):
     assert admission.subject is None
 
 
+def test_approved_publication_without_public_url_ignores_unusable_proxies():
+    """Proxy proof needs a remote URL; without one the binding stays approved."""
+    from moonmind.security import operator_admission as oa
+
+    env = {**_APPROVED_PUBLICATION, "MOONMIND_TRUSTED_PROXIES": "192.0.2.10"}
+    oa.validate_replacement_operator_admission(env)
+    admission = oa.resolve_operator_admission(
+        client_host="192.168.0.4", host_header="192.168.0.20:7000", environ=env
+    )
+    assert admission.via == "approved_publication"
+
+
 @pytest.mark.parametrize(
     "override",
     [
         {"MOONMIND_TRUSTED_INGRESS": ""},
         {"MOONMIND_API_PUBLISH_HOST": "127.0.0.1"},
-        {"MOONMIND_TRUSTED_PROXIES": "192.0.2.10"},
     ],
 )
 def test_approved_publication_needs_its_whole_approval(override):
@@ -115,6 +126,50 @@ def test_approved_publication_needs_its_whole_approval(override):
             client_host="192.168.0.4",
             host_header="192.168.0.20:7000",
             environ={**_APPROVED_PUBLICATION, **override},
+        )
+    assert exc_info.value.http_status == 401
+
+
+@pytest.mark.parametrize("proxies", ["192.0.2.10", "*"])
+def test_remote_url_with_any_configured_proxies_keeps_proxy_proof(proxies):
+    from moonmind.security import operator_admission as oa
+
+    env = {
+        **_APPROVED_PUBLICATION,
+        "MOONMIND_PUBLIC_BASE_URL": "https://operator.example",
+        "MOONMIND_TRUSTED_PROXIES": proxies,
+    }
+    with pytest.raises(oa.OperatorAdmissionError) as exc_info:
+        oa.resolve_operator_admission(
+            client_host="192.168.0.4", host_header="operator.example", environ=env
+        )
+    assert exc_info.value.http_status in (401, 503)
+
+
+def test_approved_publication_does_not_admit_a_direct_backend_peer():
+    from moonmind.security import operator_admission as oa
+
+    with pytest.raises(oa.OperatorAdmissionError) as exc_info:
+        oa.resolve_operator_admission(
+            client_host="172.19.0.7",
+            host_header="api:8000",
+            environ=_APPROVED_PUBLICATION,
+            direct_backend_peer=True,
+        )
+    assert exc_info.value.code == "auth_required"
+
+
+def test_approved_publication_keeps_an_explicit_loopback_operator_url():
+    from moonmind.security import operator_admission as oa
+
+    env = {**_APPROVED_PUBLICATION, "MOONMIND_PUBLIC_BASE_URL": "http://127.0.0.1:7000"}
+    with pytest.raises(oa.OperatorAdmissionError) as exc_info:
+        oa.resolve_operator_admission(
+            client_host="192.168.0.4",
+            host_header="evil.example",
+            method="POST",
+            headers={"origin": "http://evil.example"},
+            environ=env,
         )
     assert exc_info.value.http_status == 401
 
