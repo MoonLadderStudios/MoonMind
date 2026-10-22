@@ -700,3 +700,20 @@ def test_upgrade_routing_failure_stops_candidate_work(journey: Journey) -> None:
     calls = journey.api_calls.read_text()
     assert "after-upgrade" not in calls
     journey.assert_cleaned()
+
+
+def test_upgrade_uses_source_preset_contract_only_before_replacement(
+    journey: Journey,
+) -> None:
+    result = journey.run(upgrade=True, lines=1)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [json.loads(line) for line in journey.api_calls.read_text().splitlines()]
+    preset_checks = [call for call in calls if call[0] in {"populate", "verify"}]
+    assert [(call[0], "--pre-upgrade-release" in call) for call in preset_checks] == [
+        ("populate", True),
+        ("verify", True),
+        ("verify", False),
+        ("populate", False),
+        ("verify", False),
+    ]
+    journey.assert_cleaned()

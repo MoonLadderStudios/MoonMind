@@ -224,3 +224,65 @@ def test_provider_control_adapter_preserves_reads_and_distinct_cleanup_authority
     cleanup = adapt_provider_capabilities({"terminalCleanup": True})
     assert cleanup["cleanupSession"] is True
     assert cleanup["replaceSession"] is False
+
+
+def test_operator_preserves_retained_uuid_grants_without_resolving_a_user():
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    principal = "00000000-0000-0000-0000-000000000123"
+    operator = OperatorAdmission(via="loopback")
+    row = SimpleNamespace(
+        metadata_={
+            "callerAuthorities": {
+                principal: {"viewTranscript": True},
+            }
+        }
+    )
+    grants = caller_capabilities_for_bridge(
+        row, operator, retained_operator_principal=principal
+    )
+    assert grants["viewTranscript"] is True
+    assert all(not value for name, value in grants.items() if name != "viewTranscript")
+    row.metadata_["callerAuthorities"]["operator"] = _all()
+    assert (
+        caller_capabilities_for_bridge(
+            row, operator, retained_operator_principal=principal
+        )
+        == grants
+    )
+
+    row.metadata_["callerAuthorities"] = {
+        "operator": {"viewTranscript": True},
+        principal: _all(),
+    }
+    assert (
+        caller_capabilities_for_bridge(
+            row, operator, retained_operator_principal=principal
+        )
+        == grants
+    )
+    for malformed in (None, False, "invalid", []):
+        row.metadata_["callerAuthorities"] = {"operator": _all(), principal: malformed}
+        assert not any(
+            caller_capabilities_for_bridge(
+                row, operator, retained_operator_principal=principal
+            ).values()
+        )
+
+
+def test_operator_historical_authority_never_falls_back_to_unrestricted():
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    operator = OperatorAdmission(via="loopback")
+    for authorities in (
+        {"foreign-owner": _all()},
+        {"operator": None},
+        {"operator": "invalid"},
+        ["invalid"],
+        None,
+    ):
+        row = SimpleNamespace(metadata_={"callerAuthorities": authorities})
+        assert not any(caller_capabilities_for_bridge(row, operator).values())
+    assert all(
+        caller_capabilities_for_bridge(SimpleNamespace(metadata_={}), operator).values()
+    )

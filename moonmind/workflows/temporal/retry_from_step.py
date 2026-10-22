@@ -17,7 +17,7 @@ workflow code over the kept history before anything is reset.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from temporalio.api.enums.v1 import EventType, WorkflowTaskFailedCause
@@ -25,6 +25,7 @@ from temporalio.api.history.v1 import HistoryEvent
 from temporalio.client import WorkflowHistory
 
 STEP_ORDER_MEMO_KEY = "mm_current_step_order"
+STEP_ID_MEMO_KEY = "mm_current_step_id"
 
 RETRYABLE_CLOSE_STATES = frozenset({"failed", "canceled", "terminated", "timed_out"})
 
@@ -44,6 +45,7 @@ class StepBoundary:
     order: int
     workflow_task_completed_event_id: int
     workflow_task_started_event_id: int
+    logical_step_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,8 +80,15 @@ def _positive_int(value: Any) -> int | None:
 def step_boundaries(
     events: Iterable[HistoryEvent],
     decode_memo_value: Callable[[Any], Any],
+    *,
+    ledger_rows: Sequence[Mapping[str, Any]] = (),
 ) -> dict[int, StepBoundary]:
-    """Return the first workflow task that started each plan step, by order."""
+    """Bind recorded starts to logical steps, including older dynamic plans.
+
+    Execution position can differ from ledger order after loop materialization.
+    New histories name the step in memo; retained histories carry its trusted
+    identity in the AgentRun child request recorded after that start.
+    """
 
     started_by_completed: dict[int, int] = {}
     boundaries: dict[int, StepBoundary] = {}
@@ -88,6 +97,47 @@ def step_boundaries(
         if event.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED:
             attributes = event.workflow_task_completed_event_attributes
             started_by_completed[event.event_id] = int(attributes.started_event_id)
+            continue
+        if (
+            event.event_type
+            == EventType.EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED
+        ):
+            child = event.start_child_workflow_execution_initiated_event_attributes
+            if (
+                child.workflow_type.name == "MoonMind.AgentRun"
+                and current_order in boundaries
+            ):
+                for payload in child.input.payloads:
+                    try:
+                        request = decode_memo_value(payload)
+                    except Exception:
+                        continue
+                    metadata = (
+                        request.get("step_execution") or request.get("stepExecution")
+                        if isinstance(request, Mapping)
+                        else None
+                    )
+                    identity = (
+                        _text(
+                            metadata.get("logical_step_id")
+                            or metadata.get("logicalStepId")
+                        )
+                        if isinstance(metadata, Mapping)
+                        else None
+                    )
+                    if identity:
+                        boundary = boundaries[current_order]
+                        if (
+                            boundary.logical_step_id
+                            and boundary.logical_step_id != identity
+                        ):
+                            raise RetryFromStepUnavailable(
+                                "history_ambiguous",
+                                "The recorded step identities conflict; this run cannot safely restart from a step.",
+                            )
+                        boundaries[current_order] = replace(
+                            boundary, logical_step_id=identity
+                        )
             continue
         if event.event_type != EventType.EVENT_TYPE_WORKFLOW_PROPERTIES_MODIFIED:
             continue
@@ -112,7 +162,26 @@ def step_boundaries(
             order=order,
             workflow_task_completed_event_id=completed_id,
             workflow_task_started_event_id=started_id,
+            logical_step_id=(
+                _text(
+                    decode_memo_value(attributes.upserted_memo.fields[STEP_ID_MEMO_KEY])
+                )
+                if STEP_ID_MEMO_KEY in attributes.upserted_memo.fields
+                else None
+            ),
         )
+    if ledger_rows:
+        orders = {
+            str(row.get("logicalStepId")): order
+            for order, row in _ledger_rows_by_order(ledger_rows).items()
+        }
+        return {
+            orders.get(boundary.logical_step_id, order): replace(
+                boundary, order=orders.get(boundary.logical_step_id, order)
+            )
+            for order, boundary in boundaries.items()
+            if not boundary.logical_step_id or boundary.logical_step_id in orders
+        }
     return boundaries
 
 
@@ -208,7 +277,7 @@ def plan_retry_from_step(
 ) -> RetryFromStepPlan:
     """Choose the reset point for a retry, or explain why there is none."""
 
-    boundaries = step_boundaries(events, decode_memo_value)
+    boundaries = step_boundaries(events, decode_memo_value, ledger_rows=ledger_rows)
     candidates = retry_candidates(
         ledger_rows, boundaries, failed_step_id=failed_step_id
     )
@@ -280,7 +349,9 @@ def accepted_retry_step(
     if reset_task is None or reset_task.base_run_id != source_run_id:
         return None
     rows_by_order = _ledger_rows_by_order(ledger_rows)
-    for order, boundary in step_boundaries(source_events, decode_memo_value).items():
+    for order, boundary in step_boundaries(
+        source_events, decode_memo_value, ledger_rows=ledger_rows
+    ).items():
         row = rows_by_order.get(order)
         if row is None:
             continue

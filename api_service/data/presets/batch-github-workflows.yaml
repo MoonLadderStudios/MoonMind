@@ -3,7 +3,6 @@ title: Batch GitHub Workflows
 description: Resolve an inclusive GitHub issue-number range and queue one GitHub
   Issue Implement or GitHub Issue Orchestrate workflow per open issue in the range
   with inherited runtime settings and a shared publish override.
-scope: global
 tags:
 - batch
 - orchestration

@@ -58,8 +58,6 @@ async def _expand(slug: str, tmp_path, inputs: dict):
             await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
             return await service.expand_template(
                 slug=slug,
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={"repository": "o/r", "branch": "main", "targetRuntime": "codex_cli"},
                 options=ExpandOptions(should_enforce_step_limit=True),

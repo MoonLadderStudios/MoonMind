@@ -1183,7 +1183,6 @@ async def test_goal_preset_submission_expands_before_planner(
 
     assert task_payload["taskTemplate"] == {
         "slug": "jira-implement",
-        "scope": "global",
         "presetDigest": task_payload["appliedStepTemplates"][0]["presetDigest"],
     }
     assert task_payload["inputs"]["jira_issue_key"] == "MM-747"
@@ -1213,7 +1212,6 @@ async def test_explicit_github_issue_template_expands_before_planner(
                 ),
                 "taskTemplate": {
                     "slug": "github-issue-implement",
-                    "scope": "global",
                 },
                 "inputs": {
                     "github_issue": {
@@ -1251,7 +1249,7 @@ async def test_explicit_github_issue_template_expands_before_planner(
 
 
 @pytest.mark.asyncio
-async def test_explicit_template_rejects_another_users_personal_scope() -> None:
+async def test_explicit_template_rejects_unconverted_personal_scope() -> None:
     owner_id = uuid4()
     caller_id = uuid4()
     task_payload = {
@@ -1270,8 +1268,9 @@ async def test_explicit_template_rejects_another_users_personal_scope() -> None:
             user=SimpleNamespace(id=caller_id, is_superuser=False),
         )
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail["code"] == "template_scope_forbidden"
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "invalid_execution_request"
+    assert "reapply the preset" in exc_info.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -1289,7 +1288,6 @@ async def test_explicit_template_maps_missing_preset_to_not_found(tmp_path) -> N
                     task_payload={
                         "taskTemplate": {
                             "slug": "missing-explicit-preset",
-                            "scope": "global",
                         }
                     },
                     request_payload={},
@@ -1301,7 +1299,6 @@ async def test_explicit_template_maps_missing_preset_to_not_found(tmp_path) -> N
                     task_payload={
                         "taskTemplate": {
                             "slug": "github-issue-implement",
-                            "scope": "global",
                         },
                         "inputs": {},
                     },
@@ -1345,7 +1342,7 @@ async def test_explicit_template_preserves_branch_and_checkpoint_overrides(
         FakePresetCatalogService,
     )
     task_payload = {
-        "taskTemplate": {"slug": "branch-aware", "scope": "global"},
+        "taskTemplate": {"slug": "branch-aware"},
         "git": {"branch": "release/next"},
         "checkpointBranching": {"enabled": False},
     }
@@ -1550,6 +1547,7 @@ def _override_user_dependencies(
             "_strict_current_user",
             "_optional_current_user",
             "get_instance_access",
+            "get_instance_operator_access",
             "get_instance_access_optional",
         }
     }
@@ -22426,6 +22424,129 @@ def _provider_profile_app(temporal_client: SimpleNamespace) -> FastAPI:
     _override_user_dependencies(app, is_superuser=False)
     app.dependency_overrides[get_temporal_client] = lambda: temporal_client
     return app
+
+
+@pytest.mark.parametrize(
+    "serializer", [_serialize_execution, _serialize_execution_list_item]
+)
+@pytest.mark.parametrize(
+    ("finish_mode", "step_type", "expected"),
+    [
+        ("review_only", "tool", False),
+        ("merge", "tool", True),
+        ("fix_only", "tool", True),
+        ("review_only", "agent", True),
+    ],
+)
+def test_execution_reports_whether_its_graph_requires_an_agent(
+    serializer, finish_mode, step_type, expected
+) -> None:
+    record = _build_execution_record()
+    record.parameters = {
+        "targetRuntime": "omnigent",
+        "profileId": "opencode-go-default",
+        "workflow": {
+            "steps": [
+                {
+                    "type": step_type,
+                    "tool": {"id": "github.resolve_pull_request_target"},
+                }
+            ],
+            "publish": {
+                "mode": "none",
+                "mergeAutomation": {
+                    "enabled": True,
+                    "finishMode": finish_mode,
+                },
+            },
+        },
+    }
+    payload = serializer(record).model_dump(by_alias=True, mode="json")
+    assert payload.get("agentRequired") is expected
+    # Presentation must not rewrite the admitted profile or its provenance.
+    assert record.parameters["profileId"] == "opencode-go-default"
+
+
+@pytest.mark.parametrize(
+    "serializer", [_serialize_execution, _serialize_execution_list_item]
+)
+@pytest.mark.parametrize("workflow", [None, {"runtime": {"mode": "omnigent"}}])
+def test_missing_workflow_graph_does_not_claim_native_execution(
+    serializer, workflow
+) -> None:
+    record = _build_execution_record()
+    record.parameters = {
+        "targetRuntime": "omnigent",
+        "profileId": "opencode-go-default",
+    }
+    if workflow:
+        record.parameters["workflow"] = workflow
+    assert serializer(record).model_dump(by_alias=True).get("agentRequired") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live_available", [True, False])
+@pytest.mark.parametrize("generic_reason", [None, "external_completion"])
+@pytest.mark.parametrize(
+    "preserve_reason", [None, "operator_paused", "terminal", "provider_profile_slot"]
+)
+async def test_live_external_review_wait_explains_provider_and_preserves_other_states(
+    monkeypatch, preserve_reason, live_available, generic_reason
+) -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.AWAITING_EXTERNAL)
+    record.memo["summary"] = "Waiting for PR merge automation."
+    record.waiting_reason = (
+        preserve_reason or generic_reason or "Waiting for PR merge automation."
+    )
+    record.paused = preserve_reason == "operator_paused"
+    if preserve_reason == "terminal":
+        record.state = MoonMindWorkflowState.COMPLETED
+        record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.memo["merge_automation"] = {
+        "enabled": True,
+        "childWorkflowId": "merge-automation:parent",
+        "finishMode": "review_only",
+        "status": "awaiting_child",
+    }
+    live = {
+        "status": "waiting",
+        "finishMode": "review_only",
+        "prNumber": 4934,
+        "reviewLoop": {
+            "activeRequest": {
+                "provider": "codex",
+                "requestCommentId": 123,
+                "headSha": "current-head",
+                "requestedAt": "2026-10-22T06:20:40Z",
+            }
+        },
+    }
+    monkeypatch.setattr(
+        executions_module,
+        "_query_workflow_for_detail",
+        (
+            AsyncMock(return_value=live)
+            if live_available
+            else AsyncMock(side_effect=TimeoutError)
+        ),
+    )
+    original = _serialize_execution(record)
+    result = await executions_module._enrich_execution_merge_automation(
+        original,
+        temporal_client=Mock(),
+    )
+    if live_available:
+        assert (
+            result.merge_automation.review_loop.active_request["requestCommentId"]
+            == 123
+        )
+    if preserve_reason or not live_available:
+        assert result.summary == original.summary
+        assert result.waiting_reason == original.waiting_reason
+    else:
+        assert result.summary == "Waiting for Codex review of PR #4934."
+        assert result.waiting_reason == result.summary
+        assert result.state == "awaiting_external"
 
 
 def test_list_row_exposes_recorded_provider_profile_summary_4640() -> None:

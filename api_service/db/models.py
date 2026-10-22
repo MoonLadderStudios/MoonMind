@@ -2014,7 +2014,7 @@ class ApproverRoleListType(TypeDecorator):
 
 
 class PresetScopeType(str, enum.Enum):
-    """Scope owner for preset visibility."""
+    """Historical scope retained until the guarded instance conversion."""
 
     GLOBAL = "global"
     PERSONAL = "personal"
@@ -2040,11 +2040,18 @@ class Preset(Base):
         Index("ix_presets_scope", "scope_type", "scope_ref"),
         Index("ix_presets_slug", "slug"),
         Index("ix_presets_active", "is_active"),
+        Index(
+            "uq_presets_instance_slug",
+            "slug",
+            unique=True,
+            postgresql_where=text("scope_type IS NULL"),
+            sqlite_where=text("scope_type IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     slug: Mapped[str] = mapped_column(String(128), nullable=False)
-    scope_type: Mapped[PresetScopeType] = mapped_column(
+    scope_type: Mapped[Optional[PresetScopeType]] = mapped_column(
         Enum(
             PresetScopeType,
             name="presetscopetype",
@@ -2052,7 +2059,7 @@ class Preset(Base):
             validate_strings=True,
             values_callable=_enum_values,
         ),
-        nullable=False,
+        nullable=True,
     )
     scope_ref: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -2108,18 +2115,25 @@ class Preset(Base):
 
 
 class PresetFavorite(Base):
-    """User favorites for quick preset access."""
+    """Instance favorites; non-null legacy user keys await guarded conversion."""
 
     # legacy_run contract: table/index/constraint names rename in WP7
     __tablename__ = "preset_favorites"
     __table_args__ = (
         UniqueConstraint("user_id", "template_id", name="uq_preset_favorite"),
         Index("ix_preset_favorites_user", "user_id"),
+        Index(
+            "uq_preset_favorite_instance",
+            "template_id",
+            unique=True,
+            postgresql_where=text("user_id IS NULL"),
+            sqlite_where=text("user_id IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # Instance preference key, not an account reference (#4350).
-    user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    # Historical attribution only; new instance preferences have no person key.
+    user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     template_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("presets.id", ondelete="CASCADE"), nullable=False
     )
@@ -2131,12 +2145,19 @@ class PresetFavorite(Base):
 
 
 class PresetRecent(Base):
-    """Tracks most recent template applications per user."""
+    """Instance recency; non-null legacy user keys await guarded conversion."""
 
     # legacy_run contract: table/index/constraint names rename in WP7
     __tablename__ = "preset_recents"
     __table_args__ = (
         Index("ix_preset_recents_user", "user_id"),
+        Index(
+            "uq_preset_recent_instance",
+            "template_id",
+            unique=True,
+            postgresql_where=text("user_id IS NULL"),
+            sqlite_where=text("user_id IS NULL"),
+        ),
         UniqueConstraint(
             "user_id",
             "template_id",
@@ -2145,8 +2166,8 @@ class PresetRecent(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # Instance preference key, not an account reference (#4350).
-    user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    # Historical attribution only; new instance preferences have no person key.
+    user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     template_id: Mapped[UUID] = mapped_column(
         Uuid,
         ForeignKey("presets.id", ondelete="CASCADE"),

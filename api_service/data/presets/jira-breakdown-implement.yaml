@@ -1,7 +1,6 @@
 slug: jira-breakdown-implement
 title: Breakdown and Jira Implement
 description: Break a preferred source input into stories, create Jira issues, then create dependent Jira Implement workflow executions for each generated issue.
-scope: global
 tags:
   - jira
   - moonspec

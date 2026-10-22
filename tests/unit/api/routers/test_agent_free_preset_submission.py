@@ -30,8 +30,6 @@ async def test_tool_only_preset_ignores_saved_account(
         slug="native-only-test",
         title="Native tools only",
         description="Discover documents without launching an agent.",
-        scope="global",
-        scope_ref=None,
         tags=[],
         inputs_schema=[],
         steps=[
@@ -51,7 +49,7 @@ async def test_tool_only_preset_ignores_saved_account(
         await context.session.commit()
     task = {
         "instructions": "Find documents in the current workspace.",
-        "taskTemplate": {"slug": "native-only-test", "scope": "global"},
+        "taskTemplate": {"slug": "native-only-test"},
         "publish": {"mode": "none"},
     }
     if runtime is not None:

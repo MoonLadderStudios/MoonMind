@@ -299,8 +299,6 @@ async def test_omitted_blank_and_nonblank_inputs_traverse_compiled_path(
             await catalog.sync_seed_templates(seed_dir=seeds)
             expanded = await catalog.expand_template(
                 slug=PRESET,
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={"repository": REPOSITORY},
             )

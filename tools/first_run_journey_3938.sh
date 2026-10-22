@@ -38,9 +38,10 @@
 # conversion classifying the retained data as one eligible operator, and the
 # deployment controller's own conversion check, run against the live stack,
 # must record it as published (a fresh install must record fresh_init). The
-# saved work, settings, credential binding, and preset version must be
-# readable through the API and dashboard, and a new journey runs on the
-# upgraded instance.
+# saved work, settings, credential binding, and preset content and step IDs
+# must remain readable. Only the precomputed scope-removal catalog digest
+# transition is allowed; saved source evidence stays unchanged. A new journey
+# then runs on the upgraded instance.
 #
 # Controller: the candidate is deployed from a disposable worktree (so its
 # controller state never lands in the operator's checkout) with its own
@@ -742,7 +743,7 @@ else
   checks populate before-upgrade --pre-upgrade-release
   cancel_from_dashboard before-upgrade
   checks credential before-upgrade
-  checks verify before-upgrade
+  checks verify before-upgrade --pre-upgrade-release
 
   echo "Upgrading $PROJECT_NAME in place from $UPGRADE_FROM_REVISION to $CANDIDATE_REVISION ($CANDIDATE_IMAGE)..." | redact
   upgrade_source_to_candidate

@@ -17,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 
 from api_service.api.routers import container_jobs as http_router
 from api_service.api.routers import mcp_tools as mcp_tools_router
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_instance_operator_access
 from api_service.services.container_jobs import (
     ContainerJobAuthorizationError,
     ContainerJobIdempotencyConflictError,
@@ -306,7 +306,9 @@ async def test_authorization_denial_is_permission_denied() -> None:
 def http_app(monkeypatch) -> FastAPI:
     app = FastAPI()
     app.include_router(http_router.router)
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=_OWNER_ID)
+    app.dependency_overrides[get_instance_operator_access] = lambda: SimpleNamespace(
+        id=_OWNER_ID
+    )
     app.dependency_overrides[http_router.get_async_session] = _empty_namespace
     return app
 

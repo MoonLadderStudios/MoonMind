@@ -34,7 +34,7 @@ from api_service.api.routers.omnigent_native_ui import (
     get_native_ui_upstream,
     native_ui_router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.api.workflow_chat_access import get_workflow_chat_access
 from moonmind.omnigent.native_ui import scoped_ui_base
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 
@@ -164,7 +164,7 @@ def _build(
         }
     )
     config = SimpleNamespace(enabled=enabled, host_protocol_mode="upstream")
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_workflow_chat_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_require_bridge_enabled] = lambda: config

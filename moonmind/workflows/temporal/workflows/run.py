@@ -95,8 +95,10 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.executions.preset_readiness import (
         GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH,
+        INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
         github_issue_search_scope_refresh_needed,
+        legacy_saved_preset_capability_check,
         saved_preset_capability_check,
     )
     from moonmind.workflows.executions.prepared_context import (
@@ -1213,6 +1215,11 @@ RUN_TRUSTED_GITHUB_ISSUE_IDENTITY_PATCH = "run-trusted-github-issue-identity-v1"
 RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH = (
     "run-remediation-issue-authority-continuation-v1"
 )
+RUN_REMEDIATION_ISSUE_LEASE_CONTINUATION_PATCH = (
+    "run-remediation-issue-lease-continuation-v1"
+)
+RUN_RESTORE_ISSUE_CLAIM_LEASE_PATCH = "run-restore-issue-claim-lease-v1"
+RUN_STEP_ID_MEMO_PATCH = "run-step-id-memo-v1"
 # Carry only the atomic, accepted publication head into a downstream publisher.
 # Existing histories retain requests without this optional no-commit authority.
 RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
@@ -1912,6 +1919,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Internal state
         self._wait_cycle_count = 0
         self._step_count = 0
+        self._current_step_logical_id: str | None = None
         self._max_wait_cycles = 100
         self._max_steps = 100
 
@@ -4441,6 +4449,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         for field in ("repository", "number", "url", "title")
                         if field in issue
                     }
+            if workflow.patched(RUN_REMEDIATION_ISSUE_LEASE_CONTINUATION_PATCH):
+                lease = trusted_issue.get("issueClaimLease")
+                if isinstance(lease, Mapping):
+                    compact_issue["issueClaimLease"] = dict(lease)
             if compact_issue:
                 continuation["trustedIssueContext"] = compact_issue
         binding = self._codex_session_binding
@@ -12752,8 +12764,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and not getattr(workflow.info(), "continued_run_id", None)
         ):
             try:
-                check = saved_preset_capability_check(
-                    parameters, principal=self._owner_id or ""
+                instance_catalog = workflow.patched(
+                    INSTANCE_PRESET_CAPABILITY_READINESS_PATCH
+                )
+                check = (
+                    saved_preset_capability_check(parameters)
+                    if instance_catalog
+                    else legacy_saved_preset_capability_check(
+                        parameters, principal=self._owner_id or ""
+                    )
                 )
             except (ValueError, TypeError, AttributeError):
                 raise exceptions.ApplicationError(
@@ -12768,7 +12787,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 readiness = await workflow.execute_activity(
                     "plan.check_preset_capabilities",
-                    check.model_dump(),
+                    check.model_dump(exclude_none=instance_catalog),
                     **self._execute_kwargs_for_route(route),
                 )
                 if (
@@ -13514,6 +13533,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 self._record_step_dependency_inputs(node_id)
 
                 self._step_count = index
+                self._current_step_logical_id = node_id
                 self._summary = (
                     f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
                 )
@@ -13677,6 +13697,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
                         try:
+                            await self._restore_issue_claim_lease()
                             resolved_skillset_ref = (
                                 await self._resolve_agent_node_skillset_ref(
                                     task_skills=task_skills,
@@ -21978,6 +21999,32 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ):
             raise ValueError(reason or "merge automation failed")
 
+    async def _restore_issue_claim_lease(self) -> None:
+        """Recover claim identity omitted by older Continue-As-New payloads."""
+        context = self._trusted_issue_context or {}
+        if (
+            context.get("trustedSource") != "moonmind.github.get_issue"
+            or context.get("issueClaimLease")
+            or not workflow.patched(RUN_RESTORE_ISSUE_CLAIM_LEASE_PATCH)
+        ):
+            return
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("github_issue.renew_claim")
+        result = await workflow.execute_activity(
+            "github_issue.renew_claim",
+            {},
+            **self._execute_kwargs_for_route(route),
+        )
+        if result.get("status") == "unclaimed":
+            return
+        lease = result.get("issueClaimLease")
+        if (
+            result.get("status") != "renewed"
+            or not isinstance(lease, Mapping)
+            or not lease
+        ):
+            raise ValueError("GitHub issue claim could not be restored before dispatch")
+        self._trusted_issue_context = {**context, "issueClaimLease": dict(lease)}
+
     async def _resolve_agent_node_skillset_ref(
         self,
         *,
@@ -26703,9 +26750,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "verified": True,
                 }
         if isinstance(self._step_count, int) and self._step_count > 0:
-            # Retry from a step finds each step's start in history by the
-            # first memo change to its order (retry_from_step.py).
             memo_dict["mm_current_step_order"] = self._step_count
+            if self._current_step_logical_id and workflow.patched(
+                RUN_STEP_ID_MEMO_PATCH
+            ):
+                memo_dict["mm_current_step_id"] = self._current_step_logical_id
         if workflow.patched("run-memo-runtime-skill-visibility"):
             if self._target_runtime:
                 memo_dict["targetRuntime"] = self._target_runtime

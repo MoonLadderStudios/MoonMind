@@ -33,8 +33,8 @@ export function ModelSelectionFields({ value, inherited, profile, scope, onChang
     && capabilities.model.options.length > 0;
   const relatedModels = modelUnobserved ? capabilities.model.options.filter((option) => option.status !== "unavailable" && option.value.startsWith(`${display.model}-`)).slice(0, 3) : [];
 
-  const source = inheritedSelection ? "Inherited from workflow" : !hasModelSelection(value) ? "Profile default" : partialSaved ? (inherited != null ? "Saved selection with workflow inheritance" : "Saved selection") : display.mixed ? `Tier ${display.requested ?? profile?.default_model_tier ?? "default"} with saved overrides` : display.selected === "custom" ? "Custom" : null;
-  // An ordinary tier choice needs no source text: the Tier select shows it.
+  const source = inheritedSelection ? "Inherited from workflow" : !hasModelSelection(value) ? null : partialSaved ? (inherited != null ? "Saved selection with workflow inheritance" : "Saved selection") : display.mixed ? `Tier ${display.requested ?? profile?.default_model_tier ?? "default"} with saved overrides` : display.selected === "custom" ? "Custom" : null;
+  // Default and ordinary tier choices need no source text: the Tier select shows them.
   const fallbackNote = display.unavailable && !display.strictUnavailable && display.effective != null ? `Tier ${display.requested} is not configured for this profile. Using Tier ${display.effective}.` : null;
   const strictNote = effective.tierFallback === "strict" ? `This saved request requires Tier ${display.requested}. Choosing a tier or Custom replaces that requirement.${display.strictUnavailable ? " No configured tier satisfies this request." : ""}` : null;
   const status = [source && (fallbackNote || strictNote) ? `${source}.` : source, fallbackNote, strictNote].filter(Boolean).join(" ");

@@ -264,7 +264,9 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
         assert policy["automatedReview"] == "disabled"
         assert workflow["instructions"] == "Resolve PR #2752."
         async with sessions() as session:
-            assert (await session.scalars(select(PresetRecent))).all() == []
+            recents = (await session.scalars(select(PresetRecent))).all()
+            assert len(recents) == 1
+            assert recents[0].user_id is None
     finally:
         app.dependency_overrides.clear()
         await engine.dispose()
