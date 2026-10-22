@@ -525,8 +525,11 @@ def test_task_detail_instructions_include_task_and_step_text() -> None:
         "Step 2\nApply the change."
     )
 
+
+@pytest.mark.parametrize("native_review", [False, True])
 def test_list_executions_source_temporal_merges_canonical_parameters(
     client,
+    native_review,
 ) -> None:
     """Temporal list uses memo-only parameters; merge DB canonical row for Runtime/Skill."""
     from types import SimpleNamespace
@@ -542,6 +545,23 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         "targetRuntime": "codex",
         "task": {"tool": {"name": "fix-ci"}},
     }
+    if native_review:
+        canon.parameters = {
+            "targetRuntime": "omnigent",
+            "profileId": "opencode-go-default",
+            "workflow": {
+                "steps": [
+                    {
+                        "type": "tool",
+                        "tool": {"id": "github.resolve_pull_request_target"},
+                    }
+                ],
+                "publish": {
+                    "mode": "none",
+                    "mergeAutomation": {"enabled": True, "finishMode": "review_only"},
+                },
+            },
+        }
     mock_result = MagicMock()
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = [canon]
@@ -559,6 +579,11 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         from types import SimpleNamespace
 
         memo_data = {"waiting_reason": "external_completion"}
+        if native_review:
+            memo_data["parameters"] = {"workflow": {"runtime": {"mode": "omnigent"}}}
+        mock_client.get_workflow_handle = MagicMock(
+            return_value=SimpleNamespace(query=AsyncMock(return_value=None))
+        )
 
         async def _memo():
             return memo_data
@@ -597,8 +622,13 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
 
         assert response.status_code == 200
         item = response.json()["items"][0]
-        assert item["targetRuntime"] == "codex"
-        assert item["targetSkill"] == "fix-ci"
+        if native_review:
+            assert item["targetRuntime"] == "omnigent"
+            assert item.get("agentRequired") is False
+        else:
+            assert item["targetRuntime"] == "codex"
+            assert item["targetSkill"] == "fix-ci"
+
 
 def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_runs(
     client,
@@ -666,6 +696,7 @@ def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_r
         assert item["targetRuntime"] == "codex_cli"
         assert item["targetSkill"] == "pr-resolver"
         assert item["repository"] == "MoonLadderStudios/Tactics"
+
 
 def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_scheduled_time(
     client,

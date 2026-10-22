@@ -8505,6 +8505,48 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByText('Resolver Children')).toBeNull();
   });
 
+  it.each([
+    { requestId: 12345, prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/4934', linked: true },
+    { requestId: 'unverified-id', prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/4934', linked: false },
+    { requestId: 12345, prUrl: 'https://example.com/MoonLadderStudios/MoonMind/pull/4934', linked: false },
+  ])('explains a native review wait with a validated request link: $requestId $prUrl', async ({ requestId, prUrl, linked }) => {
+    window.history.pushState({}, 'Review', '/workflows/native-review/overview?source=temporal');
+    const execution = {
+      workflowId: 'native-review', runId: 'run-1', namespace: 'default',
+      source: 'temporal', workflowType: 'MoonMind.UserWorkflow',
+      title: 'Review PR', summary: 'Waiting for Codex review of PR #4934.',
+      state: 'awaiting_external', status: 'running', agentRequired: false,
+      targetRuntime: 'omnigent', model: 'opencode-go/muse-spark',
+      profileId: 'opencode-go-default', providerLabel: 'OpenCode Go',
+      mergeAutomation: {
+        enabled: true, status: 'waiting', finishMode: 'review_only',
+        prUrl,
+        reviewLoop: { activeRequest: {
+          provider: 'codex', requestCommentId: requestId,
+          requestedAt: '2026-10-22T06:20:40Z', headSha: 'current-head',
+        } },
+      },
+      createdAt: '2026-10-22T06:20:36Z', updatedAt: '2026-10-22T06:20:40Z',
+      actions: {},
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => Promise.resolve({
+      ok: true,
+      json: async () => String(input).includes('/artifacts') ? { artifacts: [] } : execution,
+    } as Response));
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+    await screen.findByText('No agent harness is used; this workflow runs native tools.');
+    const request = screen.queryByRole('link', { name: 'View review request' });
+    if (linked) {
+      expect(request?.getAttribute('href')).toBe('https://github.com/MoonLadderStudios/MoonMind/pull/4934#issuecomment-12345');
+    } else {
+      expect(request).toBeNull();
+    }
+    expect(screen.getByText('Codex')).toBeTruthy();
+    expect(screen.getByText('No agent harness is used; this workflow runs native tools.')).toBeTruthy();
+    expect(screen.queryByText('opencode-go/muse-spark')).toBeNull();
+    expect(screen.getByText('opencode-go-default')).toBeTruthy();
+  });
+
   it('accepts null merge automation artifact refs from execution detail', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-null-merge-artifact-refs/overview?source=temporal');
     const mockExecution = {
