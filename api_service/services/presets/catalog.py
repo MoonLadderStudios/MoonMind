@@ -1985,14 +1985,34 @@ class PresetCatalogService:
         gaps: list[dict[str, Any]] = []
         for saved in request.presets:
             slug = saved["slug"]
-            if saved.get("scope") or saved.get("scopeRef") or saved.get("scope_ref"):
-                gaps.append({"slug": slug, "reason": "legacy_preset_requires_refresh"})
-                continue
-            try:
-                template = await self._get_instance_template(slug=_normalize_slug(slug))
-            except PresetNotFoundError:
-                gaps.append({"slug": slug, "reason": "preset_unavailable"})
-                continue
+            if request.principal is not None:
+                # Only the retained pre-instance Activity wire shape includes
+                # principal. It identifies historical provenance, not authority.
+                template = await self._legacy_readiness_template(
+                    saved, request.principal
+                )
+                if template is None:
+                    gaps.append(
+                        {"slug": slug, "reason": "legacy_preset_requires_refresh"}
+                    )
+                    continue
+            else:
+                if (
+                    saved.get("scope")
+                    or saved.get("scopeRef")
+                    or saved.get("scope_ref")
+                ):
+                    gaps.append(
+                        {"slug": slug, "reason": "legacy_preset_requires_refresh"}
+                    )
+                    continue
+                try:
+                    template = await self._get_instance_template(
+                        slug=_normalize_slug(slug)
+                    )
+                except PresetNotFoundError:
+                    gaps.append({"slug": slug, "reason": "preset_unavailable"})
+                    continue
             try:
                 required = await self._current_declared_capabilities(
                     template,
@@ -2031,6 +2051,80 @@ class PresetCatalogService:
                 "before admission. Restarting workers does not refresh saved requirements."
             ),
         }
+
+    async def _legacy_readiness_template(
+        self, saved: Mapping[str, str], principal: str
+    ) -> Preset | None:
+        """Resolve a recorded Activity identity through committed conversion proof.
+
+        Never infer identity from the surviving slug or a generated suffix. A
+        collision, deletion or newly authored replacement cannot substitute for
+        the original preset. No user lookup or personal runtime ownership occurs.
+        """
+        from api_service.services.single_user_conversion import (
+            SCHEMA_REVISION,
+            SingleUserConversionRun,
+            _is_production_completion,
+        )
+
+        scope = saved.get("scope", "global")
+        scope_ref = saved.get("scopeRef") or None
+        if scope not in {"global", "personal"} or saved.get("scope_ref"):
+            return None
+        if scope == "personal":
+            scope_ref = scope_ref or principal
+            if scope_ref != principal:
+                return None
+        elif scope_ref is not None:
+            return None
+        slug = _normalize_slug(saved["slug"])
+        identities: set[UUID] = set()
+        receipts = await self._session.scalars(
+            select(SingleUserConversionRun).where(
+                SingleUserConversionRun.status == "complete"
+            )
+        )
+        for receipt in receipts:
+            proof = receipt.result_json
+            if not isinstance(proof, dict):
+                continue
+            revision = proof.get("schema_revision")
+            if not isinstance(revision, str):
+                continue
+            if revision not in {
+                "397_instance_preset_catalog",
+                SCHEMA_REVISION,
+            } or not _is_production_completion(
+                proof,
+                schema_revision=revision,
+                required_transforms=("artifacts", "profile_secrets", "presets"),
+            ):
+                continue
+            entries = proof["transforms"]["presets"].get("legacy_identities")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict) or (
+                    entry.get("scope"),
+                    entry.get("scopeRef"),
+                    entry.get("slug"),
+                ) != (scope, scope_ref, slug):
+                    continue
+                if not {"scope", "scopeRef", "slug", "presetId"}.issubset(entry):
+                    return None
+                try:
+                    identities.add(UUID(entry["presetId"]))
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    return None
+        if len(identities) != 1:
+            return None
+        return await self._session.scalar(
+            select(Preset).where(
+                Preset.id == next(iter(identities)),
+                Preset.scope_type.is_(None),
+                Preset.is_active.is_(True),
+            )
+        )
 
     async def _get_instance_template(
         self,

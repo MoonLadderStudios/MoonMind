@@ -1935,7 +1935,7 @@ async def _has_pending_preset_conversion(session: AsyncSession) -> bool:
 
 async def presets_transform(
     session: AsyncSession, eligible_ids: list[str]
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Reconcile the existing catalog under the shared attribution/writer lock.
 
     Only actual slug collisions change names; stable preset identities preserve
@@ -1984,6 +1984,19 @@ async def presets_transform(
                 raise StaleAttributionError(
                     "personal preset attribution is not proven eligible"
                 )
+
+    # Retained activity inputs still carry the original scoped identity. Store
+    # only its stable-ID mapping in the same production receipt as this rewrite;
+    # scopeRef is historical evidence, never runtime ownership or admission.
+    legacy_identities = [
+        {
+            "scope": row.scope_type.value,
+            "scopeRef": row.scope_ref,
+            "slug": row.slug,
+            "presetId": str(row.id),
+        }
+        for row in sorted(legacy, key=lambda row: str(row.id))
+    ]
 
     # Existing instance names win, then a managed seed's stable public name.
     # No content is merged, even when two definitions happen to be identical.
@@ -2132,6 +2145,7 @@ async def presets_transform(
         "converted": len(legacy),
         "renamed_collisions": len(renamed),
         "deduplicated_preferences": merged,
+        "legacy_identities": legacy_identities,
     }
 
 

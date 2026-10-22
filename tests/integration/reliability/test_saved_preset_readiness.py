@@ -556,3 +556,56 @@ async def test_instance_patch_preserves_retained_activity_command_shape(
             {"slug": "github-issue-search-and-implement", "scope": "global"}
         ]
     assert saved == original
+
+
+async def test_recorded_pre_instance_activity_retry_survives_catalog_conversion(
+    boundary, monkeypatch
+):
+    from api_service.services.single_user_conversion import run_guarded_upgrade
+    from moonmind.workflows.executions.preset_readiness import (
+        INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
+    )
+
+    workflow, calls, sessions = boundary
+    saved = parameters()
+    saved["task"]["appliedStepTemplates"][0]["scope"] = "global"
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": False}
+    async with sessions() as session:
+        for row in (await session.scalars(select(Preset))).all():
+            row.scope_type = PresetScopeType.GLOBAL
+            row.seed_source = f"{row.slug}.yaml"
+        await session.commit()
+        assert (await run_guarded_upgrade(session, operator_authorized=True)).published
+        current = await PresetCatalogService(session).get_template(
+            slug="github-issue-search-and-implement"
+        )
+    saved["requiredCapabilities"] = current["requiredCapabilities"]
+    original = deepcopy(saved)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch: patch != INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
+    )
+    execute = run_module.workflow.execute_activity
+    recorded = []
+
+    async def capture(name, payload, **kwargs):
+        recorded.append(deepcopy(payload))
+        return await execute(name, payload, **kwargs)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", capture)
+    assert (
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="retained-plan"
+        )
+        == "retained-plan"
+    )
+    assert recorded[0]["principal"] == OWNER
+    assert recorded[0]["presets"][0]["scope"] == "global"
+    # The exact recorded wire payload, not a refreshed command, is retried.
+    retry = TemporalPlanActivities(artifact_service=None)
+    assert await retry.plan_check_preset_capabilities(deepcopy(recorded[0])) == {
+        "status": "ready"
+    }
+    assert saved == original
+    assert calls == [ACTIVITY]
