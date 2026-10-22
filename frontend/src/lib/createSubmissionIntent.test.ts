@@ -216,3 +216,58 @@ it('reuses failed-to-persist uploaded metadata across live reconstruction withou
     expect(reconstructed).not.toHaveProperty('secret');
   } finally { set.mockRestore(); }
 });
+
+it('refreshes only a definitively rejected relative time and never resurrects it from stale metadata', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { schedule: { mode: 'deferred_minutes', minutes: 10 } } };
+  const store = new CreateSubmissionIntents(scope);
+  const intent = store.forRequest(body);
+  const first = store.prepareScheduledFor(intent, '2030-01-01T09:10:00Z');
+  const attempt = store.beginSubmission(intent, false)!;
+  const staleStore = new CreateSubmissionIntents(scope);
+  const stale = staleStore.forRequest(body);
+  expect(staleStore.prepareScheduledFor(stale, '2030-01-01T10:10:00Z')).toBe(first);
+  store.rejectSubmission(intent, attempt);
+  staleStore.save(stale);
+  expect(stale.scheduledFor).toBeUndefined();
+  const refreshed = staleStore.prepareScheduledFor(stale, '2030-01-01T10:10:00Z');
+  const next = staleStore.beginSubmission(stale, false)!;
+  store.rejectSubmission(intent, attempt);
+  expect(intent).toMatchObject({ uncertain: true, attempt: next, scheduledFor: refreshed });
+  stale.accepted = { workflowId: 'mm:accepted' };
+  staleStore.save(stale);
+  staleStore.rejectSubmission(stale, next);
+  expect(staleStore.prepareScheduledFor(stale, '2030-01-01T11:10:00Z')).toBe(refreshed);
+  expect(stale.accepted).toEqual({ workflowId: 'mm:accepted' });
+});
+
+it('retains a rejected time reset across live reconstruction when only storage writes fail', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: {} } };
+  const store = new CreateSubmissionIntents(scope);
+  const intent = store.forRequest(body);
+  store.prepareScheduledFor(intent, '2030-01-01T09:10:00Z');
+  const attempt = store.beginSubmission(intent, false)!;
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+  try {
+    store.rejectSubmission(intent, attempt);
+    const returnedStore = new CreateSubmissionIntents(scope);
+    const returned = returnedStore.forRequest(body);
+    expect(returned.scheduledFor).toBeUndefined();
+    expect(returnedStore.prepareScheduledFor(returned, '2030-01-01T10:10:00Z')).toBe('2030-01-01T10:10:00Z');
+  } finally { set.mockRestore(); }
+});
+
+it('does not mistake a rejected replay for rejection of its earlier uncertain admission', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: {} } };
+  const store = new CreateSubmissionIntents(scope);
+  const intent = store.forRequest(body);
+  store.prepareScheduledFor(intent, '2030-01-01T09:10:00Z');
+  store.beginSubmission(intent, false);
+  const replay = store.beginSubmission(intent, false)!;
+  store.rejectSubmission(intent, replay);
+  expect(new CreateSubmissionIntents(scope).forRequest(body)).toMatchObject({
+    uncertain: true, priorUncertain: true, scheduledFor: '2030-01-01T09:10:00Z',
+  });
+});

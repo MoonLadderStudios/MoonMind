@@ -22,10 +22,12 @@ export interface CreateSubmissionIntent {
   key: string;
   uncertain: boolean;
   attempt?: string;
+  priorUncertain?: boolean;
   accepted?: CreateSubmissionResult;
   inputArtifactRef?: string;
   scheduledFor?: string;
-  artifactLinks?: Record<string, 'uncertain' | 'complete'>;
+  artifactLinks?: Record<string, 'uncertain' | 'rejected' | 'complete'>;
+  artifactLinkAttempts?: Record<string, string>;
 }
 
 // Like saved-result continuation identities, this digest works on HTTP LAN
@@ -57,9 +59,14 @@ function attachmentMetadata(value: unknown): CreateAttachmentRef | null {
     ? { artifactId: ref.artifactId, filename: ref.filename, contentType: ref.contentType, sizeBytes: ref.sizeBytes } : null;
 }
 
-function artifactLinkProgress(value: unknown): Record<string, 'uncertain' | 'complete'> {
+function artifactLinkProgress(value: unknown): NonNullable<CreateSubmissionIntent['artifactLinks']> {
   if (!value || typeof value !== 'object') return {};
-  return Object.fromEntries(Object.entries(value).filter(([, status]) => status === 'uncertain' || status === 'complete'));
+  return Object.fromEntries(Object.entries(value).filter(([, status]) => status === 'uncertain' || status === 'rejected' || status === 'complete'));
+}
+
+function artifactLinkAttempts(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).filter(([, attempt]) => typeof attempt === 'string'));
 }
 
 /** Hash bytes, not name/mtime: reselecting different content is a new upload. */
@@ -156,10 +163,12 @@ export class CreateSubmissionIntents {
           key: stored.key,
           uncertain: stored.uncertain,
           ...(typeof stored.attempt === 'string' ? { attempt: stored.attempt } : {}),
+          ...(stored.priorUncertain === true ? { priorUncertain: true } : {}),
           ...(stored.accepted && typeof stored.accepted === 'object' ? { accepted: createSubmissionResult(stored.accepted) } : {}),
           ...(typeof stored.inputArtifactRef === 'string' ? { inputArtifactRef: stored.inputArtifactRef } : {}),
           ...(typeof stored.scheduledFor === 'string' ? { scheduledFor: stored.scheduledFor } : {}),
           ...(stored.artifactLinks ? { artifactLinks: artifactLinkProgress(stored.artifactLinks) } : {}),
+          ...(stored.artifactLinkAttempts ? { artifactLinkAttempts: artifactLinkAttempts(stored.artifactLinkAttempts) } : {}),
         };
       }
     } catch { /* Storage failure must not prevent authoring. */ }
@@ -181,11 +190,36 @@ export class CreateSubmissionIntents {
     this.persist(intent, { rejected: attempt });
   }
 
+  prepareScheduledFor(intent: CreateSubmissionIntent, proposed: string): string {
+    this.persist(intent, { scheduledFor: proposed });
+    return intent.scheduledFor!;
+  }
+
   save(intent: CreateSubmissionIntent): void {
     this.persist(intent);
   }
 
-  private persist(intent: CreateSubmissionIntent, transition?: { begin?: string; rejected?: string }): void {
+  beginArtifactLink(intent: CreateSubmissionIntent, key: string): string | null {
+    this.save(intent);
+    const state = intent.artifactLinks?.[key];
+    if (state === 'complete' || state === 'uncertain') return null;
+    const attempt = newRequestId();
+    this.persist(intent, { link: { key, state: 'uncertain', attempt } });
+    return attempt;
+  }
+
+  rejectArtifactLink(intent: CreateSubmissionIntent, key: string, attempt: string): void {
+    this.persist(intent, { link: { key, state: 'rejected', attempt } });
+  }
+
+  completeArtifactLink(intent: CreateSubmissionIntent, key: string): void {
+    this.persist(intent, { link: { key, state: 'complete' } });
+  }
+
+  private persist(intent: CreateSubmissionIntent, transition?: {
+    begin?: string; rejected?: string; scheduledFor?: string;
+    link?: { key: string; state: 'uncertain' | 'rejected' | 'complete'; attempt?: string };
+  }): void {
     for (const [fingerprint, candidate] of this.intents) {
       if (candidate !== intent) continue;
       let stored: CreateSubmissionIntent | null = null;
@@ -199,30 +233,47 @@ export class CreateSubmissionIntents {
         if (typeof stored.uncertain === 'boolean') intent.uncertain = stored.uncertain;
         if (typeof stored.attempt === 'string') intent.attempt = stored.attempt;
         else delete intent.attempt;
+        intent.priorUncertain = stored.priorUncertain === true;
         if (stored.accepted && typeof stored.accepted === 'object') intent.accepted = createSubmissionResult(stored.accepted);
         if (typeof stored.inputArtifactRef === 'string') intent.inputArtifactRef = stored.inputArtifactRef;
         if (typeof stored.scheduledFor === 'string') intent.scheduledFor = stored.scheduledFor;
+        else delete intent.scheduledFor;
         const links = artifactLinkProgress(stored.artifactLinks);
         for (const [key, state] of Object.entries(artifactLinkProgress(intent.artifactLinks))) {
-          if (links[key] !== 'complete') links[key] = state;
+          // Only an owned transition can reopen a rejected link. Stale saves
+          // cannot resurrect uncertainty or discard a newer in-flight attempt.
+          if (!links[key] || state === 'complete') links[key] = state;
         }
         if (Object.keys(links).length) intent.artifactLinks = links;
+        intent.artifactLinkAttempts = artifactLinkAttempts(stored.artifactLinkAttempts);
+      }
+      const link = transition?.link;
+      if (link && intent.artifactLinks?.[link.key] !== 'complete') {
+        if (link.state !== 'rejected' || intent.artifactLinkAttempts?.[link.key] === link.attempt) {
+          (intent.artifactLinks ??= {})[link.key] = link.state;
+          if (link.attempt) (intent.artifactLinkAttempts ??= {})[link.key] = link.attempt;
+        }
       }
       if (transition?.begin) {
+        intent.priorUncertain = intent.uncertain;
         intent.attempt = transition.begin;
         intent.uncertain = true;
-      } else if (transition?.rejected && intent.attempt === transition.rejected) {
+      } else if (transition?.rejected && intent.attempt === transition.rejected && !intent.accepted && !intent.priorUncertain) {
         intent.uncertain = false;
+        delete intent.scheduledFor;
       }
+      if (transition?.scheduledFor) intent.scheduledFor ??= transition.scheduledFor;
       if (intent.accepted) intent.uncertain = false;
       const metadata: CreateSubmissionIntent = {
         key: intent.key,
         uncertain: intent.uncertain,
         ...(intent.attempt ? { attempt: intent.attempt } : {}),
+        ...(intent.priorUncertain ? { priorUncertain: true } : {}),
         ...(intent.accepted ? { accepted: createSubmissionResult(intent.accepted) } : {}),
         ...(intent.inputArtifactRef ? { inputArtifactRef: intent.inputArtifactRef } : {}),
         ...(intent.scheduledFor ? { scheduledFor: intent.scheduledFor } : {}),
         ...(intent.artifactLinks ? { artifactLinks: artifactLinkProgress(intent.artifactLinks) } : {}),
+        ...(intent.artifactLinkAttempts ? { artifactLinkAttempts: artifactLinkAttempts(intent.artifactLinkAttempts) } : {}),
       };
       const key = this.storageKey(fingerprint);
       try {
