@@ -72,7 +72,13 @@ from api_service.api.routers.omnigent_bridge_composition import (
     rotate_active_host_auth_profile,
     verify_embedded_host_request,
 )
-from api_service.auth_providers import get_current_user
+from api_service.api.workflow_chat_access import (
+    get_workflow_chat_access,
+    revalidate_workflow_chat_access,
+    workflow_chat_actor,
+    workflow_chat_stream_timeout,
+)
+from api_service.auth_providers import get_current_user, instance_operator_principal
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
@@ -149,6 +155,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentIdempotencyError,
 )
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
+from moonmind.security.operator_admission import OperatorAdmission
 # NOTE (#3955): embedded evidence validation and the host-channel registry are
 # launch-only runtime dependencies imported lazily inside the functions that
 # need them, so importing this router never requires the retired embedded
@@ -1843,12 +1850,16 @@ def _projection_capabilities(row: Any) -> dict[str, bool]:
     }
 
 
-def _effective_capabilities(row: Any, user: User) -> EffectiveCapabilitySet:
+def _effective_capabilities(
+    row: Any, user: User | OperatorAdmission
+) -> EffectiveCapabilitySet:
     """Return the canonical decision filtered by actual caller authority."""
 
     return resolve_bridge_row_capabilities(
         row,
-        caller_capabilities=caller_capabilities_for_bridge(row, user),
+        caller_capabilities=caller_capabilities_for_bridge(
+            row, user, retained_operator_principal=instance_operator_principal()
+        ),
     )
 
 
@@ -2310,7 +2321,9 @@ async def post_omnigent_session_event(
         )
 
     required = required_capability_for_event(payload.type)
-    caller_grants = caller_capabilities_for_bridge(row, user)
+    caller_grants = caller_capabilities_for_bridge(
+        row, user, retained_operator_principal=instance_operator_principal()
+    )
     capability_set = resolve_bridge_row_capabilities(
         row, caller_capabilities=caller_grants
     )
@@ -3581,7 +3594,7 @@ def _audit_facade(
         outcome,
         operation,
         chat_binding_id,
-        getattr(user, "id", None),
+        workflow_chat_actor(user),
         f" reason={reason}" if reason else "",
         scan_suffix,
     )
@@ -3607,7 +3620,7 @@ async def _resolve_and_authorize_chat_binding(
     *,
     chat_binding_id: str,
     operation: str,
-    user: User,
+    user: User | OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
 ) -> Any:
@@ -3630,6 +3643,11 @@ async def _resolve_and_authorize_chat_binding(
             reason="binding_unknown",
         )
         raise _binding_unknown_error()
+    # The converted instance operator discovers retained bindings without
+    # resolving their historical human owner. Runtime/session/operation
+    # authority is still checked independently at every handoff.
+    if isinstance(user, OperatorAdmission):
+        return row
     metadata = dict(getattr(row, "metadata_", None) or {})
     caller_authorities = metadata.get("callerAuthorities")
     caller_id = str(getattr(user, "id", "") or "")
@@ -4019,7 +4037,7 @@ async def _revalidate_binding_before_mutation(
     chat_binding_id: str,
     expected_provider_session_id: str,
     expected_authority_digest: str,
-    user: User,
+    user: User | OperatorAdmission,
     expected_session_epoch: Any = None,
     expected_active_turn: Any = None,
     expected_elicitation: Any = None,
@@ -4072,7 +4090,9 @@ async def _revalidate_binding_before_mutation(
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_SESSION_NOT_READY,
         )
-    caller_grants = caller_capabilities_for_bridge(fresh, user)
+    caller_grants = caller_capabilities_for_bridge(
+        fresh, user, retained_operator_principal=instance_operator_principal()
+    )
     current_capabilities = resolve_bridge_row_capabilities(
         fresh, caller_capabilities=caller_grants
     )
@@ -4174,6 +4194,7 @@ async def _claim_facade_message(
     row: Any,
     event_type: str,
     actor: str,
+    operator_admission: OperatorAdmission | None = None,
     idempotency_key: str,
     payload_digest: str,
     turn_source: "TurnSource | None" = None,
@@ -4206,7 +4227,13 @@ async def _claim_facade_message(
                 turn_source=turn_source or _native_turn_source(event_type),
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,
-                actor_principal=str(actor) or None,
+                # Converted-instance admission is independent of retained human
+                # provenance. Keep every canonical scope/fence check, skipping
+                # only the old person match for an actual admitted operator.
+                actor_principal=(
+                    None if isinstance(operator_admission, OperatorAdmission)
+                    else str(actor) or None
+                ),
             )
         except Exception as exc:
             from moonmind.omnigent.control_plane.records import (
@@ -4649,7 +4676,7 @@ async def _stream_workflow_chat_events(
     bridge_session_id: str,
     provider_session_id: str,
     initial_cursor: int,
-    user: User,
+    user: User | OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
 ):
@@ -4674,9 +4701,13 @@ async def _stream_workflow_chat_events(
         if await request.is_disconnected():
             return
         polls_since_reauth += 1
-        if polls_since_reauth >= _FACADE_STREAM_REAUTH_EVERY_POLLS:
-            polls_since_reauth = 0
-            try:
+        try:
+            poll_timeout = workflow_chat_stream_timeout(
+                request, user, _BRIDGE_STREAM_POLL_SECONDS
+            )
+            if polls_since_reauth >= _FACADE_STREAM_REAUTH_EVERY_POLLS:
+                polls_since_reauth = 0
+                await revalidate_workflow_chat_access(request, user)
                 refreshed = await _resolve_and_authorize_chat_binding(
                     chat_binding_id=chat_binding_id,
                     operation="stream_events",
@@ -4699,16 +4730,16 @@ async def _stream_workflow_chat_events(
                         status_code=status.HTTP_403_FORBIDDEN,
                         code=CODE_OPERATION_DENIED,
                     )
-            except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
-                payload = {
-                    "code": CODE_BINDING_UNKNOWN,
-                    "message": "Workflow Chat binding authority is no longer valid.",
-                }
-                yield (
-                    "event: error\n"
-                    f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
-                )
-                return
+        except (WorkflowChatFacadeError, OmnigentBridgeError, HTTPException):
+            payload = {
+                "code": CODE_BINDING_UNKNOWN,
+                "message": "Workflow Chat binding authority is no longer valid.",
+            }
+            yield (
+                "event: error\n"
+                f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            )
+            return
         page = await store.list_event_page(
             bridge_session_id, after=last_sequence, limit=_BRIDGE_STREAM_PAGE_SIZE
         )
@@ -4769,7 +4800,7 @@ async def _stream_workflow_chat_events(
         yield ": keepalive\n\n"
         if idle_polls >= _BRIDGE_STREAM_MAX_IDLE_POLLS:
             return
-        await asyncio.sleep(_BRIDGE_STREAM_POLL_SECONDS)
+        await asyncio.sleep(poll_timeout)
 
 
 def _initial_stream_cursor(
@@ -4797,7 +4828,7 @@ async def workflow_chat_binding_facade(
     omnigent_path: str,
     request: Request,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_workflow_chat_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
@@ -5192,7 +5223,8 @@ async def _dispatch_native_ui_http(
             store=store,
             row=fresh_row,
             event_type=route.name,
-            actor=str(user.id),
+            actor=workflow_chat_actor(user),
+            operator_admission=user if isinstance(user, OperatorAdmission) else None,
             idempotency_key=effective_key,
             payload_digest=scan_evidence.payload_digest,
             scan_evidence=scan_evidence,
@@ -5246,7 +5278,7 @@ async def _dispatch_native_ui_http(
             row=fresh_row,
             control_type=route.name,
             outcome="posted",
-            actor=str(user.id),
+            actor=workflow_chat_actor(user),
             idempotency_key=effective_key,
             scan_evidence=scan_evidence,
             upstream_result=receipt_result,
@@ -5364,7 +5396,7 @@ async def _dispatch_native_ui_http(
                 row=fresh_row,
                 control_type=route.name,
                 outcome="delivery_unknown",
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 idempotency_key=effective_key,
                 scan_evidence=scan_evidence,
                 request_time=request_time,
@@ -5385,7 +5417,7 @@ async def _dispatch_native_ui_http(
                 row=fresh_row,
                 control_type=route.name,
                 outcome="delivery_unknown",
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 idempotency_key=effective_key,
                 scan_evidence=scan_evidence,
                 request_time=request_time,
@@ -5401,7 +5433,7 @@ async def _dispatch_native_ui_http(
                 row=fresh_row,
                 control_type=route.name,
                 outcome="delivery_unknown",
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 idempotency_key=effective_key,
                 scan_evidence=scan_evidence,
                 request_time=request_time,
@@ -5417,7 +5449,7 @@ async def _dispatch_native_ui_http(
             row=fresh_row,
             control_type=route.name,
             outcome="posted",
-            actor=str(user.id),
+            actor=workflow_chat_actor(user),
             idempotency_key=effective_key,
             scan_evidence=scan_evidence,
             upstream_result=receipt_result,
@@ -5458,7 +5490,7 @@ async def _dispatch_workflow_chat_facade(
     omnigent_path: str,
     request: Request,
     config: OmnigentBridgeConfig,
-    user: User,
+    user: User | OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
     proxy: OmnigentBridgeSessionProxy | None,
@@ -5889,7 +5921,8 @@ async def _dispatch_workflow_chat_facade(
             store=store,
             row=fresh_row,
             event_type=event.type,
-            actor=str(user.id),
+            actor=workflow_chat_actor(user),
+            operator_admission=user if isinstance(user, OperatorAdmission) else None,
             idempotency_key=effective_key,
             payload_digest=scan_evidence.payload_digest,
             scan_evidence=scan_evidence,
@@ -5920,7 +5953,7 @@ async def _dispatch_workflow_chat_facade(
                 idempotency_key=effective_key,
                 provider_session_id=fresh_provider,
                 chat_binding_id=chat_binding_id,
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 scan_evidence=scan_evidence,
                 request_preconditions=request_preconditions,
             )
@@ -5940,7 +5973,7 @@ async def _dispatch_workflow_chat_facade(
                 session_id=fresh_provider,
                 payload=event,
                 config=config,
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 proxy=proxy,
                 embedded_facade=embedded_facade,
                 registry=registry,
@@ -5955,7 +5988,7 @@ async def _dispatch_workflow_chat_facade(
                 row=fresh_row,
                 control_type=event.type,
                 outcome="delivery_unknown",
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 idempotency_key=effective_key,
                 scan_evidence=scan_evidence,
                 request_time=request_time,
@@ -5968,7 +6001,7 @@ async def _dispatch_workflow_chat_facade(
             row=fresh_row,
             control_type=event.type,
             outcome="posted",
-            actor=str(user.id),
+            actor=workflow_chat_actor(user),
             idempotency_key=effective_key,
             scan_evidence=scan_evidence,
             upstream_result=result,
@@ -6057,7 +6090,7 @@ async def _dispatch_workflow_chat_facade(
                 status_code=status.HTTP_403_FORBIDDEN,
                 code=CODE_OPERATION_DENIED,
             )
-        actor_kwargs = {"actor": str(user.id)} if facade_embedded else {}
+        actor_kwargs = {"actor": workflow_chat_actor(user)} if facade_embedded else {}
         elicitation_key = _facade_idempotency_key(request) or f"mm-{uuid4().hex}"
         request_time = datetime.now(tz=UTC).isoformat()
         claimed = await _claim_facade_message(
@@ -6065,7 +6098,8 @@ async def _dispatch_workflow_chat_facade(
             row=fresh_row,
             event_type="resolve_elicitation",
             turn_source=TurnSource.APPROVAL_RESPONSE,
-            actor=str(user.id),
+            actor=workflow_chat_actor(user),
+            operator_admission=user if isinstance(user, OperatorAdmission) else None,
             idempotency_key=elicitation_key,
             payload_digest=elicitation_scan_evidence.payload_digest,
             scan_evidence=elicitation_scan_evidence,
@@ -6102,7 +6136,7 @@ async def _dispatch_workflow_chat_facade(
                 row=fresh_row,
                 control_type="resolve_elicitation",
                 outcome="delivery_unknown",
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 idempotency_key=elicitation_key,
                 scan_evidence=elicitation_scan_evidence,
                 request_time=request_time,
@@ -6115,7 +6149,7 @@ async def _dispatch_workflow_chat_facade(
             row=fresh_row,
             control_type="resolve_elicitation",
             outcome="posted",
-            actor=str(user.id),
+            actor=workflow_chat_actor(user),
             idempotency_key=elicitation_key,
             scan_evidence=elicitation_scan_evidence,
             upstream_result=result,
@@ -6258,6 +6292,7 @@ async def _relay_native_websocket(
     upstream_url: str,
     subprotocol: str | None,
     still_authorized: Any,
+    revalidation_timeout: Any | None = None,
     browser_frame_filter: Any | None = None,
     upstream_frame_filter: Any | None = None,
     browser_frame_guard: Any | None = None,
@@ -6387,7 +6422,20 @@ async def _relay_native_websocket(
 
                 async def authority_monitor() -> None:
                     while True:
-                        await asyncio.sleep(_NATIVE_WS_REAUTH_SECONDS)
+                        try:
+                            timeout = (
+                                revalidation_timeout(_NATIVE_WS_REAUTH_SECONDS)
+                                if revalidation_timeout is not None
+                                else _NATIVE_WS_REAUTH_SECONDS
+                            )
+                        except HTTPException:
+                            await browser.close(
+                                code=WS_CLOSE_CAPABILITY_DENIED,
+                                reason=CODE_OPERATION_DENIED,
+                            )
+                            await upstream.close()
+                            return
+                        await asyncio.sleep(timeout)
                         if time.monotonic() - started >= _NATIVE_WS_LIFETIME_SECONDS:
                             await browser.close(
                                 code=1000, reason="omnigent_chat_ws_lifetime"
@@ -6431,6 +6479,11 @@ async def _relay_native_websocket(
         await browser.close(
             code=WS_CLOSE_IDENTITY_SUBSTITUTION,
             reason=CODE_SESSION_SUBSTITUTION,
+        )
+    except HTTPException:
+        await browser.close(
+            code=WS_CLOSE_CAPABILITY_DENIED,
+            reason=CODE_OPERATION_DENIED,
         )
     except WorkflowChatFacadeError as exc:
         await browser.close(
@@ -6515,7 +6568,7 @@ async def workflow_chat_binding_facade_ws(
     chat_binding_id: str,
     omnigent_path: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_workflow_chat_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> None:
@@ -6744,6 +6797,7 @@ async def workflow_chat_binding_facade_ws(
 
     async def still_authorized() -> bool:
         try:
+            await revalidate_workflow_chat_access(websocket, user)
             refreshed = await _resolve_and_authorize_chat_binding(
                 chat_binding_id=chat_binding_id,
                 operation=operation,
@@ -6773,6 +6827,7 @@ async def workflow_chat_binding_facade_ws(
         async def browser_frame_guard(
             payload: str | bytes, is_binary: bool
         ) -> tuple[str | bytes, dict[str, Any]]:
+            await revalidate_workflow_chat_access(websocket, user)
             refreshed = await _resolve_and_authorize_chat_binding(
                 chat_binding_id=chat_binding_id,
                 operation=operation,
@@ -6825,7 +6880,8 @@ async def workflow_chat_binding_facade_ws(
                 # chat instruction text, so each frame is session-directed
                 # steering in the closed #3707 vocabulary.
                 turn_source=TurnSource.STEERING,
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
+                operator_admission=user if isinstance(user, OperatorAdmission) else None,
                 idempotency_key=frame_key,
                 payload_digest=evidence.payload_digest,
                 scan_evidence=evidence,
@@ -6852,7 +6908,7 @@ async def workflow_chat_binding_facade_ws(
                 row=receipt["row"],
                 control_type=f"{operation}_frame",
                 outcome=outcome,
-                actor=str(user.id),
+                actor=workflow_chat_actor(user),
                 idempotency_key=str(receipt["key"]),
                 scan_evidence=receipt["evidence"],
                 upstream_result=({"accepted": True} if outcome == "posted" else None),
@@ -6872,6 +6928,9 @@ async def workflow_chat_binding_facade_ws(
         upstream_url=_upstream_ws_url(upstream_path),
         subprotocol=selected_subprotocol,
         still_authorized=still_authorized,
+        revalidation_timeout=lambda maximum: workflow_chat_stream_timeout(
+            websocket, user, maximum
+        ),
         browser_frame_filter=browser_frame_filter,
         upstream_frame_filter=upstream_frame_filter,
         browser_frame_guard=browser_frame_guard,
@@ -6885,7 +6944,7 @@ async def _stream_workflow_chat_events_websocket(
     websocket: WebSocket,
     chat_binding_id: str,
     match: Any,
-    user: User,
+    user: User | OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
 ) -> None:
@@ -6936,9 +6995,13 @@ async def _stream_workflow_chat_events_websocket(
     polls_since_reauth = 0
     try:
         while True:
+            poll_timeout = workflow_chat_stream_timeout(
+                websocket, user, _BRIDGE_STREAM_POLL_SECONDS
+            )
             polls_since_reauth += 1
             if polls_since_reauth >= _FACADE_STREAM_REAUTH_EVERY_POLLS:
                 polls_since_reauth = 0
+                await revalidate_workflow_chat_access(websocket, user)
                 refreshed = await _resolve_and_authorize_chat_binding(
                     chat_binding_id=chat_binding_id,
                     operation=match.operation.name,
@@ -7020,7 +7083,7 @@ async def _stream_workflow_chat_events_websocket(
                 return
             try:
                 await asyncio.wait_for(
-                    websocket.receive_text(), timeout=_BRIDGE_STREAM_POLL_SECONDS
+                    websocket.receive_text(), timeout=poll_timeout
                 )
             except asyncio.TimeoutError:
                 continue

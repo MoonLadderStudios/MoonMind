@@ -288,20 +288,63 @@ async def _run_guarded_single_user_upgrade() -> dict:
     and startup continues. Returns a metadata-only summary.
     """
     try:
-        from api_service.services.single_user_conversion import run_guarded_upgrade
+        from api_service.services.single_user_conversion import (
+            completed_guarded_upgrade,
+            run_guarded_upgrade,
+        )
+        from moonmind.security.operator_admission import (
+            OperatorAdmissionError,
+            validate_replacement_operator_admission,
+        )
+
+        try:
+            validate_replacement_operator_admission()
+        except OperatorAdmissionError:
+            logger.warning(
+                "Single-user guarded upgrade deferred: replacement_admission_unavailable; "
+                "retaining the installed access boundary."
+            )
+            return {"deferred": True, "reason": "replacement_admission_unavailable"}
 
         async with get_async_session_context() as session:
+            reconciled_after = None
             try:
                 result = await run_guarded_upgrade(
                     session, operator_authorized=True
                 )
             except Exception as exc:
+                original_error = type(exc).__name__
                 logger.warning(
                     "Single-user guarded upgrade deferred: %s",
-                    type(exc).__name__,
+                    original_error,
                 )
-                return {"deferred": True, "reason": type(exc).__name__}
+                # A lost commit acknowledgment is not proof of rollback.
+                # Observe the existing owner's certified completion through a
+                # new session before any future mutation; never replay here.
+                try:
+                    await session.rollback()
+                except Exception as rollback_error:  # noqa: BLE001
+                    logger.warning(
+                        "Single-user upgrade rollback unavailable (%s); original error: %s",
+                        type(rollback_error).__name__,
+                        original_error,
+                    )
+                try:
+                    async with get_async_session_context() as observer:
+                        result = await completed_guarded_upgrade(observer)
+                except Exception as observation_error:  # noqa: BLE001
+                    logger.warning(
+                        "Single-user completion observation unavailable (%s); original error: %s",
+                        type(observation_error).__name__,
+                        original_error,
+                    )
+                    result = None
+                if result is None:
+                    return {"deferred": True, "reason": original_error}
+                reconciled_after = original_error
             summary = result.to_sanitized_dict()
+            if reconciled_after:
+                summary["reconciledAfter"] = reconciled_after
             if result.published:
                 logger.info(
                     "Single-user guarded upgrade published (%s)",
@@ -327,6 +370,32 @@ async def _run_guarded_single_user_upgrade() -> dict:
             type(exc).__name__,
         )
         return {"deferred": True, "reason": type(exc).__name__}
+
+
+def _single_user_conversion_status(summary: Any) -> dict | None:
+    """Compact, redacted startup conversion disposition for ``/healthz``.
+
+    The deployment controller records this as the update's conversion
+    result, so a refusal reaches the deployment record without a database
+    read. Only metadata leaves the process: the sanitized detail (subsystem
+    and settings-key names) stays in the API startup log.
+    """
+    if not isinstance(summary, dict):
+        return None
+    if summary.get("deferred"):
+        return {"deferred": True, "reason": str(summary.get("reason") or "")}
+    decision = summary.get("decision")
+    if not isinstance(decision, dict):
+        return None
+    result = {
+        "published": bool(summary.get("published")),
+        "disposition": str(decision.get("disposition") or ""),
+        "reasonCode": str(decision.get("reason_code") or ""),
+        "personCount": int(decision.get("person_count") or 0),
+    }
+    if summary.get("reconciledAfter"):
+        result["reconciledAfter"] = str(summary["reconciledAfter"])
+    return result
 
 
 async def _sync_omnigent_bootstrap_agent_profile() -> bool:
@@ -1393,6 +1462,11 @@ async def health_check():
     }
     if code_freshness:
         body["workerCodeFreshness"] = code_freshness
+    conversion = _single_user_conversion_status(
+        getattr(app.state, "single_user_conversion", None)
+    )
+    if conversion is not None:
+        body["singleUserConversion"] = conversion
     if not db_reachable or migration_required:
         return JSONResponse(status_code=503, content=body)
     return body
@@ -3195,11 +3269,11 @@ async def startup_event():
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
     _register_settings_change_subscribers()
     # Single-user (#4346): conversion eligibility runs before the
-    # deployment preset seed sync. The sync creates global presets with
+    # deployment preset seed sync. The sync creates instance presets with
     # created_by=None, and evaluating the guard first keeps those
     # deployment-owned rows from ever gating the cutover; the unowned
     # probe additionally excludes seed-stamped rows on later restarts.
-    await _run_guarded_single_user_upgrade()
+    app.state.single_user_conversion = await _run_guarded_single_user_upgrade()
     await _sync_preset_seed_catalog()
     # Provider defaults are input authority for the Omnigent bootstrap. Seed
     # them before the first reconciliation pass so a fresh restart can validate
@@ -3254,8 +3328,6 @@ async def _sync_preset_seed_catalog() -> None:
             result = await service.sync_seed_templates(seed_dir=_PRESET_SEED_DIR)
             deactivated = await service.deactivate_seed_templates(
                 slugs=_LEGACY_PRESET_SLUGS_TO_DEACTIVATE,
-                scope="global",
-                scope_ref=None,
             )
     except (OperationalError, ProgrammingError) as exc:
         logger.warning(

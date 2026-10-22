@@ -3,7 +3,6 @@ title: Batch Jira Workflows
 description: Resolve Jira issues by project, status, and optional JQL, then queue
   one supported Jira workflow per issue with inherited runtime settings and a
   shared advanced publish policy.
-scope: global
 tags:
 - batch
 - orchestration

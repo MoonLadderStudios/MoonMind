@@ -839,8 +839,6 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
             await catalog.sync_seed_templates(seed_dir=seeds)
             expanded = await catalog.expand_template(
                 slug=PRESET,
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={"repository": REPOSITORY},
             )
@@ -941,8 +939,6 @@ async def test_blocked_assessment_stops_preset_before_start_with_original_diagno
     try:
         expanded = await catalog.expand_template(
             slug=PRESET,
-            scope="global",
-            scope_ref=None,
             inputs={},
             context={"repository": REPOSITORY},
         )
@@ -1372,7 +1368,7 @@ async def test_catalog_definition_exposes_all_authors_checkbox_below_search(tmp_
     engine, session, catalog = await _synced_catalog_session(tmp_path)
     try:
         current = await catalog.get_template(
-            slug=PRESET, scope="global", scope_ref=None
+            slug=PRESET,
         )
     finally:
         await session.close()
@@ -1409,8 +1405,6 @@ async def test_catalog_expansion_carries_scope_choice_to_tool_binding(
     try:
         expanded = await catalog.expand_template(
             slug=PRESET,
-            scope="global",
-            scope_ref=None,
             inputs=submitted,
             context={"repository": REPOSITORY},
         )
@@ -1434,8 +1428,6 @@ async def test_catalog_expansion_rejects_malformed_scope_values(tmp_path, malfor
         with pytest.raises(PresetValidationError):
             await catalog.expand_template(
                 slug=PRESET,
-                scope="global",
-                scope_ref=None,
                 inputs={"include_all_authors": malformed},
                 context={"repository": REPOSITORY},
             )
@@ -1449,7 +1441,7 @@ async def test_seed_sync_refreshes_builtin_without_touching_custom_presets(tmp_p
     """Persisted deployments receive the updated built-in definition in place."""
     from sqlalchemy import select
 
-    from api_service.db.models import Preset, PresetScopeType
+    from api_service.db.models import Preset
 
     engine, session, catalog = await _synced_catalog_session(tmp_path)
     try:
@@ -1461,7 +1453,7 @@ async def test_seed_sync_refreshes_builtin_without_touching_custom_presets(tmp_p
             await session.execute(
                 select(Preset).where(
                     Preset.slug == PRESET,
-                    Preset.scope_type == PresetScopeType.GLOBAL,
+                    Preset.scope_type.is_(None),
                 )
             )
         ).scalar_one()
@@ -1469,8 +1461,8 @@ async def test_seed_sync_refreshes_builtin_without_touching_custom_presets(tmp_p
         template.steps = []
         custom = Preset(
             slug="team-triage",
-            scope_type=PresetScopeType.PERSONAL,
-            scope_ref="owner-1",
+            scope_type=None,
+            scope_ref=None,
             title="Team triage",
             description="Custom preset",
             required_capabilities=[],
@@ -1488,7 +1480,7 @@ async def test_seed_sync_refreshes_builtin_without_touching_custom_presets(tmp_p
             await session.execute(
                 select(Preset).where(
                     Preset.slug == PRESET,
-                    Preset.scope_type == PresetScopeType.GLOBAL,
+                    Preset.scope_type.is_(None),
                 )
             )
         ).scalar_one()

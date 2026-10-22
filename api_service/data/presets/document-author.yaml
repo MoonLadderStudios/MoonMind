@@ -1,7 +1,6 @@
 slug: document-author
 title: Document Author
 description: Author a new docs-native document by selecting its document class, location, filename, viewpoint template, metadata, stable claims, and rationale without creating spec.md.
-scope: global
 tags:
   - documentation
   - document-authoring

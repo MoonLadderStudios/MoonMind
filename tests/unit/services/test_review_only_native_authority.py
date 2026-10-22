@@ -157,7 +157,7 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
 
     app.dependency_overrides[get_async_session] = session_dependency
     submitted_workflow = {
-        "taskTemplate": {"slug": "pr-review-resolve", "scope": "global"},
+        "taskTemplate": {"slug": "pr-review-resolve"},
         "inputs": {"pull_request": "350", "review_only": True},
     }
     if snapshot_mutation in {"enabled", "direct_tool"}:
@@ -420,7 +420,6 @@ async def test_review_only_default_codex_admits_native_collaboration_authority(
                         "workflow": {
                             "taskTemplate": {
                                 "slug": "pr-review-resolve",
-                                "scope": "global",
                             },
                             "inputs": {
                                 "pull_request": "350",

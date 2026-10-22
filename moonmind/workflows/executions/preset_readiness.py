@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+INSTANCE_PRESET_CAPABILITY_READINESS_PATCH = "run-instance-preset-readiness-v1"
+
 SAVED_PRESET_CAPABILITY_READINESS_PATCH = "run-saved-preset-capability-readiness-v1"
 
 GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH = "run-github-issue-search-scope-refresh-v1"
@@ -16,14 +18,15 @@ GITHUB_ISSUE_SEARCH_SCOPE_INPUT = "include_all_authors"
 class SavedPresetCapabilitiesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    principal: str = Field(min_length=1)
+    # Decode retained Activity payloads without reintroducing person authority.
+    principal: str | None = Field(default=None, min_length=1)
     definition_id: str = Field(min_length=1)
     presets: list[dict[str, str]]
     required_capabilities: list[str] = Field(default_factory=list)
 
 
-def saved_preset_capability_check(
-    parameters: Mapping[str, Any], *, principal: str
+def _project_saved_preset_capability_check(
+    parameters: Mapping[str, Any], *, principal: str | None = None
 ) -> SavedPresetCapabilitiesInput | None:
     """Project provenance only; never copy prompts, inputs, or runtime secrets."""
     system = parameters.get("system") or {}
@@ -36,13 +39,22 @@ def saved_preset_capability_check(
         task = parameters.get("task") or {}
     presets: list[dict[str, str]] = []
 
-    def add(node: Mapping[str, Any], scope: str = "global") -> None:
-        scope = str(node.get("scope") or scope)
+    def add(node: Mapping[str, Any], scope: str | None = None) -> None:
+        scope = str(
+            node.get("scope") or scope or ("global" if principal is not None else "")
+        )
         slug = node.get("slug")
         if slug:
-            entry = {"slug": str(slug), "scope": scope}
-            if node.get("scopeRef"):
-                entry["scopeRef"] = str(node["scopeRef"])
+            entry = {"slug": str(slug)}
+            # Preserve legacy evidence for an actionable refresh refusal; never
+            # silently reinterpret an old personal slug as an instance slug.
+            if scope:
+                entry["scope"] = scope
+            scope_ref = node.get("scopeRef")
+            if principal is None and not scope_ref:
+                scope_ref = node.get("scope_ref")
+            if scope_ref:
+                entry["scopeRef"] = str(scope_ref)
             if entry not in presets:
                 presets.append(entry)
         for child in node.get("includes") or []:
@@ -50,6 +62,12 @@ def saved_preset_capability_check(
 
     for applied in task.get("appliedStepTemplates") or []:
         composition = applied.get("composition")
+        # Current admissions must retain wrapper provenance even when a
+        # composition root omitted it. Leave retained command shapes alone.
+        if principal is None and any(
+            applied.get(key) is not None for key in ("scope", "scopeRef", "scope_ref")
+        ):
+            add(applied)
         add(
             composition if isinstance(composition, Mapping) and composition else applied
         )
@@ -57,6 +75,12 @@ def saved_preset_capability_check(
         if not isinstance(applied, Mapping):
             continue
         composition = applied.get("composition")
+        # Current admissions must retain wrapper provenance even when a
+        # composition root omitted it. Leave retained command shapes alone.
+        if principal is None and any(
+            applied.get(key) is not None for key in ("scope", "scopeRef", "scope_ref")
+        ):
+            add(applied)
         add(
             composition if isinstance(composition, Mapping) and composition else applied
         )
@@ -68,6 +92,20 @@ def saved_preset_capability_check(
         presets=presets,
         required_capabilities=parameters.get("requiredCapabilities") or [],
     )
+
+
+def saved_preset_capability_check(
+    parameters: Mapping[str, Any],
+) -> SavedPresetCapabilitiesInput | None:
+    """Project instance catalog identities without changing retained snapshots."""
+    return _project_saved_preset_capability_check(parameters)
+
+
+def legacy_saved_preset_capability_check(
+    parameters: Mapping[str, Any], *, principal: str
+) -> SavedPresetCapabilitiesInput | None:
+    """Replay pre-instance Activity commands until their histories retire."""
+    return _project_saved_preset_capability_check(parameters, principal=principal)
 
 
 def _applied_search_templates_missing_scope(

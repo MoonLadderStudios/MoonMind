@@ -46,16 +46,17 @@ def test_list_templates_and_expand(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("moonmind.agents.cli.presets.requests.post", fake_post)
 
     client = PresetClient(base_url="http://localhost:8000", token="token")
-    items = client.list_templates(scope="global", search="demo")
+    items = client.list_templates(search="demo")
     expanded = client.expand_template(
         slug="demo",
-        scope="global",
         inputs={},
     )
 
     assert items[0]["slug"] == "demo"
     assert expanded["appliedTemplate"]["slug"] == "demo"
     assert calls[0][0] == "GET"
+    assert calls[0][2] == {"search": "demo"}
+    assert calls[1][2] == {}
     assert calls[1][0] == "POST"
 
 def test_merge_expanded_steps_modes() -> None:
@@ -85,4 +86,4 @@ def test_cli_raises_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     client = PresetClient(base_url="http://localhost:8000", token="token")
     with pytest.raises(RuntimeError, match="HTTP 422"):
-        client.list_templates(scope="global")
+        client.list_templates()

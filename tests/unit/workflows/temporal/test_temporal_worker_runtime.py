@@ -600,7 +600,6 @@ async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_p
     task = expanded_parameters["task"]
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "scope": "global",
     }
     assert task["presetSchedule"] == {
         "source": "goal",
@@ -637,8 +636,7 @@ async def test_child_run_task_template_without_version_uses_latest_seeded_preset
                         "inputs": {"jira_issue_key": "MM-747"},
                         "taskTemplate": {
                             "slug": "jira-implement",
-                            "scope": "global",
-                        },
+                                            },
                     },
                 },
             )
@@ -646,7 +644,6 @@ async def test_child_run_task_template_without_version_uses_latest_seeded_preset
     task = expanded_parameters["task"]
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "scope": "global",
     }
     assert "version" not in task["appliedStepTemplates"][0]
     assert "presetVersion" not in task["authoredPresets"][0]
@@ -5019,7 +5016,7 @@ async def test_build_runtime_activities_degraded_when_generic_not_ready():
     the agent_runtime worker during a 95-minute profile-bound turn, starving
     heartbeats and producing activity Heartbeat timeout after 2 attempts.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     topology = MagicMock()
     topology.activity_types = ["integration.omnigent.execute"]

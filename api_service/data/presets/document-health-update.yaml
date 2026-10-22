@@ -3,7 +3,6 @@ title: Document Health Update
 description: Review the health of a documentation scope with the dedicated review
   skill, then remediate only still-valid reported findings with the dedicated
   remediate skill through a readable report handoff.
-scope: global
 tags:
 - documentation
 - document-health

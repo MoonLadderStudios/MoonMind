@@ -416,8 +416,9 @@ async def test_postgres_guarded_upgrade_refuses_multi_without_mutation(pg_maker)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preset_scope", [PresetScopeType.GLOBAL, PresetScopeType.PERSONAL])
 async def test_postgres_populated_instance_resources_publish_and_remain_usable(
-    pg_maker, tmp_path,
+    pg_maker, tmp_path, preset_scope,
 ) -> None:
     """Already instance-scoped resources need preservation, not no-op plugins."""
     from api_service.services import single_user_conversion as suc
@@ -439,7 +440,8 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
                                  status=SecretStatus.ACTIVE))
         source.add(SettingsOverride(scope="workspace", key="integrations.github.token_ref",
                                     value_json="db://retained-binding"))
-        preset = Preset(slug="retained-custom", scope_type=PresetScopeType.GLOBAL,
+        preset = Preset(slug="retained-custom", scope_type=preset_scope,
+            scope_ref=str(owner_id) if preset_scope == PresetScopeType.PERSONAL else None,
             title="Retained custom preset", description="Keep explicit inputs",
             created_by=owner_id,
             inputs_schema=[{"name": "audience", "label": "Audience", "type": "text",
@@ -460,7 +462,14 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
         await source.commit()
         schedule_id = schedule.id
         catalog = PresetCatalogService(source)
-        before_preset = await catalog.get_template(slug=preset.slug, scope="global", scope_ref=None)
+        before_preset = {
+            "title": preset.title, "description": preset.description,
+            "inputs": preset.inputs_schema, "steps": preset.steps,
+        }
+        preset_id = preset.id
+        from api_service.services.presets.catalog import PresetNotFoundError
+        with pytest.raises(PresetNotFoundError):
+            await catalog.get_template(slug=preset.slug)
         artifacts = TemporalArtifactService(TemporalArtifactRepository(source), store=store)
         artifact, _ = await artifacts.create(principal=str(owner_id), content_type="text/plain")
         await artifacts.write_complete(artifact_id=artifact.artifact_id, principal=str(owner_id),
@@ -483,9 +492,13 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
         assert value.value == "db://retained-binding"
         assert await SecretsService.get_secret(restarted, "retained-binding") == "synthetic-credential"
         catalog = PresetCatalogService(restarted)
-        assert await catalog.get_template(slug="retained-custom", scope="global", scope_ref=None) == before_preset
-        expanded = await catalog.expand_template(slug="retained-custom", scope="global",
-            scope_ref=None, inputs={"audience": "explicit operator input"})
+        found = await catalog.get_template(slug="retained-custom")
+        assert {key: found[key] for key in before_preset} == before_preset
+        retained_preset = await restarted.get(Preset, preset_id)
+        assert retained_preset.created_by == owner_id
+        assert retained_preset.scope_type is None and retained_preset.scope_ref is None
+        expanded = await catalog.expand_template(slug="retained-custom",
+            inputs={"audience": "explicit operator input"})
         assert expanded["steps"][0]["instructions"] == "Write for explicit operator input."
         schedules = await RecurringWorkflowsService(restarted).list_definitions()
         retained = next(row for row in schedules if row.id == schedule_id)
@@ -504,7 +517,7 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_surface", ["personal_setting", "context_setting", "personal_preset"])
+@pytest.mark.parametrize("legacy_surface", ["personal_setting", "context_setting"])
 async def test_postgres_default_still_refuses_unsupported_personal_data(
     pg_maker, legacy_surface,
 ) -> None:
@@ -512,16 +525,10 @@ async def test_postgres_default_still_refuses_unsupported_personal_data(
 
     async with pg_maker() as source:
         owner = await _mk_user(source)
-        if legacy_surface == "personal_preset":
-            source.add(Preset(slug="retained-personal", scope_type=PresetScopeType.PERSONAL,
-                scope_ref=str(owner.id), created_by=owner.id, title="Keep me",
-                description="Do not publish invisible personal data",
-                steps=[{"instructions": "Preserve this exact content"}]))
-        else:
-            source.add(SettingsOverride(scope="user" if legacy_surface == "personal_setting" else "workspace",
-                workspace_id=uuid.uuid4() if legacy_surface == "context_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
-                user_id=owner.id if legacy_surface == "personal_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
-                key="integrations.github.token_ref", value_json="db://retained-personal"))
+        source.add(SettingsOverride(scope="user" if legacy_surface == "personal_setting" else "workspace",
+            workspace_id=uuid.uuid4() if legacy_surface == "context_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
+            user_id=owner.id if legacy_surface == "personal_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
+            key="integrations.github.token_ref", value_json="db://retained-personal"))
         await source.commit()
         tables = (User.__table__, SettingsOverride.__table__, Preset.__table__)
         before = [(await source.execute(select(table))).all() for table in tables]
@@ -1110,7 +1117,7 @@ async def test_postgres_product_routes_enforce_remote_operator_ingress(pg_maker,
             assert (await db.execute(select(User))).scalars().all() == []
         headers = {"X-Moonmind-User": "trusted-ingress-assertion"}
         body = {"title": "Preserved custom input", "slug": "served-instance-preset",
-                "description": "Actual product route write", "scope": "global",
+                "description": "Actual product route write",
                 "inputs": [{"name": "audience", "label": "Audience", "type": "text",
                             "required": True, "default": "default audience"}],
                 "steps": [{"instructions": "Write for {{ inputs.audience }}."}]}
@@ -1257,14 +1264,14 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
                 "steps": [{"instructions": "Write for {{ inputs.audience }}."}]})
             assert created.status_code == 201, created.text
             saved = created.json()
-            assert saved["scope"] == "global" and saved["scopeRef"] is None
+            assert "scope" not in saved and "scopeRef" not in saved
             from_workflow = await client.post("/api/presets/save-from-workflow", json={
                 "title": "Saved instance draft", "description": "Dashboard draft",
                 "steps": [{"instructions": "Keep this custom step."}]})
             assert from_workflow.status_code == 201, from_workflow.text
-            assert from_workflow.json()["scope"] == "global"
+            assert "scope" not in from_workflow.json()
             favorite = await client.post("/api/presets/instance-authored:favorite",
-                                         json={"scope": "global"})
+                                         json={})
             assert favorite.status_code == 204, favorite.text
         # Replay the production conversion owner and read via new API/DB sessions.
         async with pg_maker() as db:
@@ -1296,6 +1303,10 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
         async with pg_maker() as db:
             assert (await db.execute(select(User))).scalars().all() == []
             assert all(p.created_by is None for p in (await db.execute(select(Preset))).scalars())
+            favorites = (await db.execute(select(PresetFavorite))).scalars().all()
+            recents = (await db.execute(select(PresetRecent))).scalars().all()
+            assert len(favorites) == 2 and all(row.user_id is None for row in favorites)
+            assert len(recents) == 2 and all(row.user_id is None for row in recents)
             assert all(e.actor_user_id is None for e in
                        (await db.execute(select(SettingsAuditEvent))).scalars())
     finally:
@@ -1668,3 +1679,255 @@ async def test_postgres_compose_host_transport_uses_kernel_gateway(pg_maker, mon
     finally:
         main.app.dependency_overrides.clear()
         main.app.dependency_overrides.update(previous)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "fresh",
+        "populated",
+        "refused",
+        "before_mutation",
+        "during_conversion",
+        "after_commit",
+    ],
+)
+async def test_postgres_controller_startup_conversion_recovery(
+    pg_maker,
+    tmp_path,
+    monkeypatch,
+    scenario,
+):
+    """#4355: real startup, transforms, HTTP admission and durable controller state.
+
+    Only the Docker transport is substituted in this managed Python job. The
+    existing disposable Compose upgrade journey qualifies recreation itself.
+    """
+    import asyncio
+    import importlib
+    import json
+    import sys
+    from unittest.mock import AsyncMock
+
+    from api_service import main
+    from api_service.db import base
+    from api_service.services import single_user_conversion as suc
+    from api_service.services.secrets import SecretsService
+    from moonmind.security import auth_modes_4120
+
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[2] / "deploy/controller")
+    )
+    controller = importlib.import_module("server")
+    record = controller.record_mod
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "")
+    monkeypatch.delenv("MOONMIND_CONTROLLER_MANAGED", raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setattr(base, "async_session_maker", pg_maker)
+    for name in (
+        "_initialize_oidc_provider",
+        "_sync_preset_seed_catalog",
+        "_auto_seed_provider_profiles",
+        "_sync_env_managed_secrets",
+        "_sweep_secret_invalidation_outbox",
+    ):
+        monkeypatch.setattr(main, name, AsyncMock())
+    owner_id = None
+    if scenario != "fresh":
+        async with pg_maker() as db:
+            owner_id = (await _mk_user(db)).id
+            db.add(
+                UserProfile(
+                    user_id=owner_id,
+                    openai_api_key_encrypted="retained-test-credential",
+                )
+            )
+            db.add(
+                TemporalArtifact(
+                    artifact_id="controller-retained",
+                    storage_key="retained-key",
+                    created_by_principal=str(owner_id),
+                )
+            )
+            if scenario == "refused":
+                await _mk_user(db)
+            await db.commit()
+
+    transform_calls = []
+    real_transform = suc.artifacts_transform
+
+    async def faulting_transform(db, ids):
+        outcome = await real_transform(db, ids)
+        transform_calls.append(outcome)
+        if scenario == "during_conversion" and len(transform_calls) == 1:
+            raise ConnectionError("interrupted after the real artifact transform")
+        return outcome
+
+    monkeypatch.setitem(
+        suc.DEFAULT_SUBSYSTEM_TRANSFORMS, "artifacts", faulting_transform
+    )
+    real_commit = AsyncSession.commit
+    lost_ack = []
+
+    async def commit(db):
+        await real_commit(db)
+        if scenario == "after_commit" and not lost_ack:
+            lost_ack.append(True)
+            raise ConnectionError("conversion committed; acknowledgment lost")
+
+    monkeypatch.setattr(AsyncSession, "commit", commit)
+    loop = asyncio.get_running_loop()
+    commands = []
+    startup_count = []
+
+    async def startup():
+        startup_count.append(True)
+        await main.startup_event()
+
+    async with _served_product(main.app) as (origin, _):
+
+        class Runner:
+            def run(self, args, timeout_seconds):
+                commands.append(tuple(args))
+                if (
+                    "pull" in args
+                    and scenario == "before_mutation"
+                    and commands.count(tuple(args)) == 1
+                ):
+                    raise controller.engine.StageError(
+                        "pull", 1, "registry unavailable before mutation"
+                    )
+                if "up" in args:
+                    asyncio.run_coroutine_threadsafe(startup(), loop).result(30)
+                if args[:2] == ("docker", "ps"):
+                    return {"exit": 0, "output": ""}
+                if "ps" in args:
+                    return {
+                        "exit": 0,
+                        "output": json.dumps({"Service": "api", "State": "running"}),
+                    }
+                if args[-3:] == ("config", "--format", "json"):
+                    return {
+                        "exit": 0,
+                        "output": json.dumps(
+                            {
+                                "services": {
+                                    "api": {
+                                        "environment": {
+                                            "MOONMIND_PUBLIC_BASE_URL": origin
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                    }
+                if "exec" in args:
+                    script = args[-1].replace("http://localhost:8000", origin)
+                    observed = subprocess.run(
+                        [sys.executable, "-c", script],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_seconds,
+                    )
+                    return {
+                        "exit": observed.returncode,
+                        "stdout": observed.stdout,
+                        "output": observed.stdout + observed.stderr,
+                    }
+                return {"exit": 0, "output": "ok"}
+
+        monkeypatch.setattr(controller.engine, "subprocess_runner", Runner)
+        store = record.OperationStore(tmp_path / "controller-state")
+        target = {
+            "project": "moonmind-test-conversion",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api"],
+        }
+        operation = store.begin(
+            stack=target["project"],
+            desired_image="moonmind:test",
+            source_revision="test-candidate",
+            target=target,
+        )
+        # Simulate observer replacement after the installed checkpoint. It must
+        # resume this operation's verification, never another pull or startup.
+        verify = controller._verify_applied_release
+
+        class ControllerLost(BaseException):
+            pass
+
+        def lose_observer(*args, **kwargs):
+            raise ControllerLost()
+
+        monkeypatch.setattr(controller, "_verify_applied_release", lose_observer)
+        with pytest.raises(ControllerLost):
+            await asyncio.to_thread(
+                controller._apply_with_bounded_retries,
+                store,
+                operation["operationId"],
+                lambda op: controller.production_apply(store, op),
+            )
+        if scenario == "during_conversion":
+            async with pg_maker() as db:
+                assert not (
+                    await db.get(TemporalArtifact, "controller-retained")
+                ).operator_recovery_granted
+                assert (await db.execute(select(ManagedSecret))).scalars().all() == []
+                assert (
+                    await db.execute(select(SingleUserConversionRun))
+                ).scalars().all() == []
+            await startup()  # The interrupted API step restarts from its unchanged source.
+        before_resume = len(commands)
+        monkeypatch.setattr(controller, "_verify_applied_release", verify)
+        restarted = record.OperationStore(store.state_dir)
+        await asyncio.to_thread(
+            controller.resume_open_operations,
+            restarted,
+            lambda op: controller.production_apply(restarted, op),
+            legacy_writer_probe=lambda: False,
+            runner=Runner(),
+        )
+        final = restarted.load(operation["operationId"])
+        assert len(startup_count) == (2 if scenario == "during_conversion" else 1)
+        assert not any("up" in cmd or "pull" in cmd for cmd in commands[before_resume:])
+        checks = {row["name"]: row for row in final["verification"]}
+        assert checks["single-user-conversion"]["status"] == (
+            "failed" if scenario == "refused" else "passed"
+        )
+        assert final["status"] == (
+            "partially_verified" if scenario == "refused" else "succeeded"
+        )
+        if scenario == "before_mutation":
+            assert "registry unavailable before mutation" in final["errorSummary"]
+        if scenario == "after_commit":
+            assert "ConnectionError" in checks["single-user-conversion"]["detail"]
+        async with pg_maker() as db:
+            runs = (await db.execute(select(SingleUserConversionRun))).scalars().all()
+            assert len(runs) == (0 if scenario == "refused" else 1)
+            assert len(transform_calls) == (
+                0
+                if scenario == "refused"
+                else 2 if scenario == "during_conversion" else 1
+            )
+            if owner_id:
+                assert await db.get(User, owner_id) is not None
+                artifact = await db.get(TemporalArtifact, "controller-retained")
+                assert artifact.storage_key == "retained-key"
+                assert artifact.created_by_principal == str(owner_id)
+                assert artifact.operator_recovery_granted is (scenario != "refused")
+                if scenario != "refused":
+                    secret = (await db.execute(select(ManagedSecret))).scalars().one()
+                    assert (
+                        await SecretsService.get_secret(db, secret.slug)
+                        == "retained-test-credential"
+                    )
+                    raw = (
+                        await db.execute(text("SELECT ciphertext FROM managed_secrets"))
+                    ).scalar_one()
+                    assert "retained-test-credential" not in raw
