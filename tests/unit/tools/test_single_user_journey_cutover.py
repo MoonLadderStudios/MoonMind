@@ -44,16 +44,23 @@ def test_upgrade_uses_the_production_apply_owner(checkout, monkeypatch):
     monkeypatch.setattr(controller.engine, "subprocess_runner", Runner)
 
     def apply(store, operation):
-        assert controller.lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
+        assert controller.lock_mod.StackLock(
+            store.state_dir, operation["stack"]
+        ).probe()
         assert operation["target"]["services"] == ["api", "postgres"]
         applied.append(operation["operationId"])
         store.confirm_installed(operation["operationId"], image=IMAGE)
         return {"status": "succeeded"}
 
     monkeypatch.setattr(controller, "production_apply", apply)
-    kwargs = dict(repo=checkout, project="moonmind-test-upgrade", image=IMAGE,
-                  revision="candidate-sha", compose_files=[str(checkout / "docker-compose.yaml")],
-                  controller=controller)
+    kwargs = dict(
+        repo=checkout,
+        project="moonmind-test-upgrade",
+        image=IMAGE,
+        revision="candidate-sha",
+        compose_files=[str(checkout / "docker-compose.yaml")],
+        controller=controller,
+    )
     assert adapter().run_cutover(**kwargs)["passed"]
     assert adapter().run_cutover(**kwargs)["passed"]
     assert len(applied) == 1  # A saved completion is not another image apply.
@@ -68,15 +75,25 @@ def test_upgrade_keeps_the_controller_terminal_verdict(checkout, monkeypatch, co
     monkeypatch.setattr(controller.engine, "subprocess_runner", Runner)
 
     def apply(store, operation):
-        store.confirm_installed(operation["operationId"], image=IMAGE, verification_pending=True)
-        store.record_verification(operation["operationId"], name="single-user-conversion",
-                                  status="passed" if complete else "failed", detail="original refusal")
+        store.confirm_installed(
+            operation["operationId"], image=IMAGE, verification_pending=True
+        )
+        store.record_verification(
+            operation["operationId"],
+            name="single-user-conversion",
+            status="passed" if complete else "failed",
+            detail="original refusal",
+        )
         store.finish_verification(operation["operationId"], complete=complete)
 
     monkeypatch.setattr(controller, "production_apply", apply)
     result = adapter().run_cutover(
-        repo=checkout, project="moonmind-test-upgrade", image=IMAGE,
-        revision="sha", compose_files=[str(checkout / "docker-compose.yaml")], controller=controller,
+        repo=checkout,
+        project="moonmind-test-upgrade",
+        image=IMAGE,
+        revision="sha",
+        compose_files=[str(checkout / "docker-compose.yaml")],
+        controller=controller,
     )
     assert result["passed"] is complete
     assert result["operation"]["verification"][0]["detail"] == "original refusal"
@@ -151,15 +168,36 @@ def test_first_timeout_and_helper_logs_survive_later_ownership_refusals(
     monkeypatch.setattr(controller, "_temporal_worker_images", lambda *a: (["worker"], []))
     evidence = checkout / "evidence/cutover-diagnostics.json"
     store = controller.record_mod.OperationStore(checkout / "controller-state")
-    operation = store.begin(stack="moonmind-test-upgrade", desired_image=IMAGE,
-        source_revision="sha", target={"project": "moonmind-test-upgrade",
-            "projectDir": str(checkout), "composeFiles": [str(checkout / "docker-compose.yaml")]})
-    runner = adapter().DiagnosticRunner(Runner(), controller=controller, path=evidence,
-        project="moonmind-test-upgrade", operation_id=operation["operationId"])
-    check = controller.converge_routing_cutover(store, operation, runner=runner,
-        overlay=controller.write_image_overlay(str(store.state_dir), operation["operationId"], IMAGE))
-    result = {"passed": check["status"] == "passed", "check": check,
-              "operation": store.load(operation["operationId"])}
+    operation = store.begin(
+        stack="moonmind-test-upgrade",
+        desired_image=IMAGE,
+        source_revision="sha",
+        target={
+            "project": "moonmind-test-upgrade",
+            "projectDir": str(checkout),
+            "composeFiles": [str(checkout / "docker-compose.yaml")],
+        },
+    )
+    runner = adapter().DiagnosticRunner(
+        Runner(),
+        controller=controller,
+        path=evidence,
+        project="moonmind-test-upgrade",
+        operation_id=operation["operationId"],
+    )
+    check = controller.converge_routing_cutover(
+        store,
+        operation,
+        runner=runner,
+        overlay=controller.write_image_overlay(
+            str(store.state_dir), operation["operationId"], IMAGE
+        ),
+    )
+    result = {
+        "passed": check["status"] == "passed",
+        "check": check,
+        "operation": store.load(operation["operationId"]),
+    }
     assert not result["passed"]  # A printed receipt is not a verified helper exit.
     assert "still running" in result["check"]["detail"]
     assert len(launches) == 1

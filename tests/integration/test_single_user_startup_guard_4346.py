@@ -67,7 +67,9 @@ async def test_startup_keeps_retained_access_until_replacement_is_configured(
     assert result == {"deferred": True, "reason": "replacement_admission_unavailable"}
     async with db_base.async_session_maker() as session:
         assert await session.get(User, owner_id) is not None
-        assert (await session.execute(select(SingleUserConversionRun))).scalars().all() == []
+        assert (
+            await session.execute(select(SingleUserConversionRun))
+        ).scalars().all() == []
 
 
 @pytest.mark.asyncio

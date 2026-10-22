@@ -46,24 +46,34 @@ def _headers(**extra):
 def test_replacement_ingress_and_requests_accept_the_same_approval(approval):
     from moonmind.security import operator_admission as oa
 
-    env = {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example",
-           "MOONMIND_API_PUBLISH_HOST": "0.0.0.0",
-           "MOONMIND_TRUSTED_INGRESS": approval,
-           "MOONMIND_TRUSTED_PROXIES": "192.0.2.10"}
+    env = {
+        "MOONMIND_PUBLIC_BASE_URL": "https://operator.example",
+        "MOONMIND_API_PUBLISH_HOST": "0.0.0.0",
+        "MOONMIND_TRUSTED_INGRESS": approval,
+        "MOONMIND_TRUSTED_PROXIES": "192.0.2.10",
+    }
     oa.validate_replacement_operator_admission(env)
-    assert oa.resolve_operator_admission(
-        client_host="192.0.2.10", host_header="operator.example",
-        headers={"X-Moonmind-User": "approved-ingress"}, environ=env,
-    ).via == "trusted_ingress"
+    assert (
+        oa.resolve_operator_admission(
+            client_host="192.0.2.10",
+            host_header="operator.example",
+            headers={"X-Moonmind-User": "approved-ingress"},
+            environ=env,
+        ).via
+        == "trusted_ingress"
+    )
 
 
 @pytest.mark.parametrize("header", ["X-Forwarded-For", "X-Moonmind-Execution-Fanout"])
 def test_replacement_cannot_use_a_machine_or_forwarding_header(header):
     from moonmind.security import operator_admission as oa
 
-    env = {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example",
-           "MOONMIND_TRUSTED_INGRESS": "1", "MOONMIND_TRUSTED_PROXIES": "192.0.2.10",
-           "MOONMIND_PROXY_IDENTITY_HEADER": header}
+    env = {
+        "MOONMIND_PUBLIC_BASE_URL": "https://operator.example",
+        "MOONMIND_TRUSTED_INGRESS": "1",
+        "MOONMIND_TRUSTED_PROXIES": "192.0.2.10",
+        "MOONMIND_PROXY_IDENTITY_HEADER": header,
+    }
     with pytest.raises(oa.OperatorAdmissionError):
         oa.validate_replacement_operator_admission(env)
 

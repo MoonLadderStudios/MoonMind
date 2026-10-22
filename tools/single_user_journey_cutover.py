@@ -153,8 +153,12 @@ class DiagnosticRunner:
 def validate_target(*, repo, project, image, compose_files):
     if not re.fullmatch(r"moonmind-test(?:-[a-z0-9][a-z0-9_-]*)?", project):
         raise ValueError("cutover requires an isolated moonmind-test project")
-    if not re.fullmatch(r"(?:sha256:[0-9a-f]{64}|127\.0\.0\.1:[0-9]+/moonmind:journey)", image):
-        raise ValueError("upgrade requires its inspected image ID or isolated registry image")
+    if not re.fullmatch(
+        r"(?:sha256:[0-9a-f]{64}|127\.0\.0\.1:[0-9]+/moonmind:journey)", image
+    ):
+        raise ValueError(
+            "upgrade requires its inspected image ID or isolated registry image"
+        )
     repo = Path(repo).resolve()
     marker = repo / ".first-run-journey-project"
     if (
@@ -198,29 +202,43 @@ def run_cutover(
             operation = store.load(operation_id)
         except KeyError:
             base = controller.engine.compose_base(
-                project=project, project_dir=str(repo), compose_files=compose_files,
+                project=project,
+                project_dir=str(repo),
+                compose_files=compose_files,
             )
             rendered = controller.engine.run_command(
-                runner, (*base, "config", "--services"),
+                runner,
+                (*base, "config", "--services"),
                 timeout_seconds=controller.TARGET_CONFIG_TIMEOUT_SECONDS,
             )
-            services = [name for name in controller.engine.command_stdout(rendered).split()
-                        if name not in controller.DEFAULT_EXCLUDED_SERVICES]
+            services = [
+                name
+                for name in controller.engine.command_stdout(rendered).split()
+                if name not in controller.DEFAULT_EXCLUDED_SERVICES
+            ]
             if int(rendered.get("exit", 0)) or not services:
                 raise RuntimeError("the disposable upgrade renders no services")
             operation = store.begin(
-                stack=project, desired_image=image, source_revision=revision,
+                stack=project,
+                desired_image=image,
+                source_revision=revision,
                 reason="Disposable Compose upgrade through the production controller",
-                target={**target, "services": services}, operation_id=operation_id,
+                target={**target, "services": services},
+                operation_id=operation_id,
             )
-        if (any(operation["target"].get(key) != value for key, value in target.items())
-                or operation["desired"]["image"] != image):
+        if (
+            any(operation["target"].get(key) != value for key, value in target.items())
+            or operation["desired"]["image"] != image
+        ):
             raise ValueError("existing upgrade operation targets another deployment")
         if operation.get("status") not in controller.record_mod.TERMINAL_STATUSES:
             if diagnostics_path is not None:
                 runner = DiagnosticRunner(
-                    runner, controller=controller, path=diagnostics_path,
-                    project=project, operation_id=operation_id,
+                    runner,
+                    controller=controller,
+                    path=diagnostics_path,
+                    project=project,
+                    operation_id=operation_id,
                 )
             # Decorate only Docker diagnostics; the production owner retains
             # its ordinary staging, recreation and verification behavior.
@@ -228,7 +246,8 @@ def run_cutover(
             controller.engine.subprocess_runner = lambda: runner
             try:
                 controller._apply_recording_failure(
-                    store, operation_id,
+                    store,
+                    operation_id,
                     lambda current: controller.production_apply(store, current),
                 )
             finally:

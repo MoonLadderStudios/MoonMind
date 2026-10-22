@@ -324,12 +324,21 @@ async def _run_guarded_single_user_upgrade() -> dict:
                 # new session before any future mutation; never replay here.
                 try:
                     await session.rollback()
-                except Exception:
-                    pass
+                except Exception as rollback_error:  # noqa: BLE001
+                    logger.warning(
+                        "Single-user upgrade rollback unavailable (%s); original error: %s",
+                        type(rollback_error).__name__,
+                        original_error,
+                    )
                 try:
                     async with get_async_session_context() as observer:
                         result = await completed_guarded_upgrade(observer)
-                except Exception:
+                except Exception as observation_error:  # noqa: BLE001
+                    logger.warning(
+                        "Single-user completion observation unavailable (%s); original error: %s",
+                        type(observation_error).__name__,
+                        original_error,
+                    )
                     result = None
                 if result is None:
                     return {"deferred": True, "reason": original_error}

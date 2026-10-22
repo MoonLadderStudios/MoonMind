@@ -337,13 +337,17 @@ def test_upgrade_source_retries_and_controller_failure_keeps_source_evidence(
     )
     assert result.returncode != 0
     assert [(call["phase"], call["status"]) for call in journey.startups()] == [
-        ("source", 7), ("source", 8), ("source", 0),
+        ("source", 7),
+        ("source", 8),
+        ("source", 0),
     ]
     for attempt, status in ((1, 7), (2, 8), (3, 0)):
         output = _startup_log(journey, "upgrade", "source", attempt)
         assert f"phase=source attempt={attempt}" in output
         assert f"exit_status={status}" in output
-    receipt = json.loads((journey.logs / "upgrade/state/routing-cutover.json").read_text())
+    receipt = json.loads(
+        (journey.logs / "upgrade/state/routing-cutover.json").read_text()
+    )
     assert not receipt["passed"]
     journey.assert_cleaned()
 
