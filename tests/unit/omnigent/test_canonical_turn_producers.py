@@ -50,6 +50,9 @@ from moonmind.omnigent.harness_platform.catalog import (
     create_catalog_snapshot,
 )
 from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
+from moonmind.omnigent.harness_platform.execution_plan import (
+    create_execution_plan_envelope,
+)
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
@@ -793,6 +796,41 @@ async def test_escaped_second_attempt_continues_the_head_its_predecessor_publish
     _assert_admitted_model_projection(lifecycles[2].requests[0], original_payload, plan)
     assert second.model_dump(mode="json") == original_payload
     turns, commands, _ = await _turn_journal(session_factory, _session_id_for(second))
+    assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
+    assert len(commands) == 1
+
+
+@pytest.mark.asyncio
+async def test_remediation_uses_its_own_admitted_skill_snapshot(
+    turn_commands, session_factory, plan
+) -> None:
+    realizer, lifecycles = _realizer(turn_commands, session_factory)
+    workflow = _run_workflow(base_step_execution_id=BASE_STEP_EXECUTION_ID)
+    base = _dispatch_request(
+        workflow, _base_node(publish_mode="branch"), plan_ref=plan.planRef
+    )
+    await realizer.execute(base, plan)
+
+    payload = plan.payload.model_dump(by_alias=True, mode="json")
+    payload["resolvedSkills"] = {
+        "resolvedSkillSetRef": "artifact:remediate-issue",
+        "resolvedSkillSetDigest": "sha256:" + "c" * 64,
+        "skillDeliveryRef": "skill-delivery:sha256:" + "d" * 64,
+    }
+    remediation_plan = create_execution_plan_envelope(payload)
+    remediation = _dispatch_request(
+        workflow,
+        _remediation_node(ordinal=1, publish_mode="branch"),
+        plan_ref=remediation_plan.planRef,
+    )
+
+    result = await realizer.execute(remediation, remediation_plan)
+
+    assert result.failure_class is None
+    assert len(lifecycles) == 2
+    turns, commands, _ = await _turn_journal(
+        session_factory, _session_id_for(remediation)
+    )
     assert [turn.lineage_kind for turn in turns] == [TurnSource.REMEDIATION.value]
     assert len(commands) == 1
 
