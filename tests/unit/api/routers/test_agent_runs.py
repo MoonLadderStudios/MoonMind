@@ -17,8 +17,7 @@ from fastapi.testclient import TestClient
 from api_service.api.routers import agent_runs as agent_runs_router
 from api_service.api.routers.agent_runs import router
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
-from api_service.auth_providers import get_current_user
-from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
+from api_service.auth_providers import get_instance_access
 from api_service.db import models as db_models
 from api_service.db.models import User
 from moonmind.schemas.agent_runtime_models import (
@@ -33,24 +32,13 @@ def test_user() -> User:
     return User(id=uuid4(), email="test@example.com", is_superuser=True)
 
 @pytest.fixture
-def test_worker_auth() -> _WorkerRequestAuth:
-    return _WorkerRequestAuth(
-        auth_source="worker_token",
-        worker_id="test-worker-123",
-        allowed_repositories=(),
-        allowed_job_types=(),
-        capabilities=(),
-    )
-
-@pytest.fixture
-def client(test_user: User, test_worker_auth: _WorkerRequestAuth) -> Iterator[tuple[TestClient, AsyncMock]]:
+def client(test_user: User) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router, prefix="/api")
     artifact_service = AsyncMock()
 
-    app.dependency_overrides[get_current_user()] = lambda: test_user
+    app.dependency_overrides[get_instance_access] = lambda: test_user
     app.dependency_overrides[agent_runs_router._resolve_principal] = lambda: str(test_user.id)
-    app.dependency_overrides[_require_worker_auth] = lambda: test_worker_auth
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
 
     with TestClient(app) as test_client:
@@ -588,7 +576,7 @@ def test_get_observability_summary_allows_owner_access() -> None:
     owner_id = uuid4()
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=owner_id,
         email="owner@example.com",
         is_superuser=False,
@@ -624,7 +612,7 @@ def test_observability_summary_allows_parent_workflow_owner() -> None:
     )
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=owner_id,
         email="owner@example.com",
         is_superuser=False,
@@ -677,7 +665,7 @@ def test_observability_summary_allows_operator_despite_owner_mismatch() -> None:
     )
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=owner_id,
         email="owner@example.com",
         is_superuser=False,
@@ -723,7 +711,7 @@ def test_get_observability_summary_allows_operator_cross_owner_access() -> None:
     other_id = uuid4()
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=other_id,
         email="other@example.com",
         is_superuser=False,
@@ -2525,7 +2513,7 @@ def test_get_agent_run_observability_events_allows_owner_access() -> None:
     owner_id = uuid4()
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=owner_id,
         email="owner@example.com",
         is_superuser=False,
@@ -2575,7 +2563,7 @@ def test_get_agent_run_observability_events_allows_operator_cross_owner_access()
     other_id = uuid4()
     app = FastAPI()
     app.include_router(router, prefix="/api")
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=other_id,
         email="other@example.com",
         is_superuser=False,
@@ -2944,7 +2932,7 @@ def _app_with_agent_and_session_routers(user: object, artifact_service: AsyncMoc
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.include_router(agent_runs_router.sessions_router, prefix="/api")
-    app.dependency_overrides[get_current_user()] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: artifact_service
     app.dependency_overrides[agent_runs_router._resolve_principal] = lambda: str(user.id)
     return app
@@ -3373,7 +3361,7 @@ def test_get_agent_run_artifact_session_projection_allows_owner_access() -> None
     app = FastAPI()
     app.include_router(router, prefix="/api")
     artifact_service = AsyncMock()
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=owner_id,
         email="owner@example.com",
         is_superuser=False,
@@ -3419,7 +3407,7 @@ def test_get_agent_run_artifact_session_projection_allows_operator_cross_owner_a
     app = FastAPI()
     app.include_router(router, prefix="/api")
     artifact_service = AsyncMock()
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=other_id,
         email="other@example.com",
         is_superuser=False,

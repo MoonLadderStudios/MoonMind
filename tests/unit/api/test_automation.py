@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.automation import _get_repository, router
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access
 from moonmind.config import settings
 from moonmind.workflows.automation import models
 
@@ -133,17 +133,7 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
         is_superuser=False,
     )
 
-    user_dependencies = {
-        dep.call
-        for route in router.routes
-        if route.dependant is not None
-        for dep in route.dependant.dependencies
-        if dep.call.__name__ in {"_current_user_fallback", "_strict_current_user", "_optional_current_user"}
-    }
-    if not user_dependencies:
-        user_dependencies = {get_current_user(), get_current_user_optional()}
-    for dependency in user_dependencies:
-        app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
+    app.dependency_overrides[get_instance_access] = lambda mock_user=mock_user: mock_user
     with TestClient(app) as test_client:
         yield test_client, mock_repo, mock_user
     app.dependency_overrides.clear()

@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.api.instance_access import access_principal, is_instance_operator
+from api_service.auth_providers import get_instance_access
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
@@ -28,7 +29,6 @@ from api_service.db.models import (
     ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
     SecretStatus,
-    User,
 )
 from api_service.services.profile_execution_selection import (
     ProfileExecutionConfiguration,
@@ -149,7 +149,7 @@ async def _credential_maintenance_guard(
     purpose: str,
     request: Request,
     session: AsyncSession,
-    current_user: User,
+    current_user: Any,
 ) -> AsyncIterator[object]:
     """Hold the shared credential lane through an HTTP maintenance action."""
 
@@ -984,7 +984,7 @@ async def _credential_validation_guard(
     profile_id: str,
     request: Request,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> AsyncIterator[object]:
     async for guard in _credential_maintenance_guard(
         profile_id=profile_id,
@@ -1000,7 +1000,7 @@ async def _credential_disconnect_guard(
     profile_id: str,
     request: Request,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> AsyncIterator[object]:
     async for guard in _credential_maintenance_guard(
         profile_id=profile_id,
@@ -1065,7 +1065,7 @@ async def _validate_imported_credential_volume(
 def _require_privileged_credential_volume_import(user: Any) -> None:
     """Keep arbitrary Docker credential-volume adoption superuser-only."""
 
-    if bool(getattr(user, "is_superuser", False)):
+    if is_instance_operator(user):
         return
     raise HTTPException(
         status_code=403,
@@ -1156,7 +1156,7 @@ async def list_profiles(
     enabled_only: bool = False,
     include_execution: bool = False,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     stmt = select(ManagedAgentProviderProfile)
@@ -1212,7 +1212,7 @@ async def get_creation_preset(
     runtime_id: str,
     provider_id: str,
     authentication_method: ProviderProfileAuthenticationMethod,
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Preview the versioned backend policy used by standard profile creation."""
 
@@ -1231,7 +1231,7 @@ async def get_creation_preset(
 async def get_tier_capabilities_for_draft(
     runtime_id: str,
     provider_id: str,
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Tier editor capabilities for a not-yet-persisted profile — MoonLadderStudios/MoonMind#3815."""
     _require_provider_profile_permission(current_user, "provider_profiles.read")
@@ -1249,7 +1249,7 @@ async def get_tier_capabilities_for_draft(
 async def get_creation_capabilities(
     runtime_id: str,
     provider_id: str,
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     return provider_profile_creation_capabilities(
@@ -1263,7 +1263,7 @@ async def get_creation_capabilities(
     response_model=ProviderProfileCreationChoicesResponse,
 )
 async def get_creation_choices(
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Supported Harness/Provider choices for the creation form (#4001)."""
 
@@ -1281,7 +1281,7 @@ async def get_creation_choices(
 async def get_tier_capabilities_for_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Tier editor capabilities scoped to profile evidence — MoonLadderStudios/MoonMind#3815."""
     _require_provider_profile_permission(current_user, "provider_profiles.read")
@@ -1306,7 +1306,7 @@ async def get_tier_capabilities_for_profile(
 )
 async def validate_imported_credential_volume(
     body: ProviderCredentialVolumeImportRequest,
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, str]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_privileged_credential_volume_import(current_user)
@@ -1327,7 +1327,7 @@ async def validate_imported_credential_volume(
 async def get_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     row = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -1421,7 +1421,7 @@ async def _enforce_scope_compatibility(
 async def create_profile(
     body: ProviderProfileCreate,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
@@ -1648,7 +1648,7 @@ async def update_profile(
     profile_id: str,
     body: ProviderProfileUpdate,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
@@ -1762,7 +1762,7 @@ async def update_profile(
     # the derived value; superusers use the explicit audited override path
     # below. The backend isolation authority owns the value for all
     # supported combinations.
-    if "clear_env_keys" in update_data and not bool(getattr(current_user, "is_superuser", False)):
+    if "clear_env_keys" in update_data and not is_instance_operator(current_user):
         # #3821: derive the prospective contract from update_data so an atomic
         # provider/credential change plus its new backend-derived policy can be
         # validated together. An import flag resolves to the oauth contract it
@@ -1896,7 +1896,7 @@ async def update_profile(
     # redacted through the sensitive-payload redactor before logging; only
     # key names and structured audit metadata reach the log stream.
     _override_branch_rewrote_behavior = False
-    if "clear_env_keys" in update_data and bool(getattr(current_user, "is_superuser", False)):
+    if "clear_env_keys" in update_data and is_instance_operator(current_user):
         from moonmind.provider_profiles.isolation_policy import (
             IsolationPolicyError,
             derive_isolation_policy,
@@ -1953,7 +1953,7 @@ async def update_profile(
             )
         except IsolationPolicyError as exc:
             raise HTTPException(status_code=422, detail=exc.as_detail()) from exc
-        _actor = str(getattr(current_user, "id", "superuser") or "superuser")
+        _actor = access_principal(current_user) or "superuser"
         # Merge only the reserved marker into the persisted behavior: a
         # documented expert-override request supplies just
         # command_behavior._isolation_override, and wholesale assignment
@@ -2317,7 +2317,7 @@ async def preview_model_tiers(
     profile_id: str,
     body: ProviderProfileTierPreviewRequest,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -2380,7 +2380,7 @@ async def credential_maintenance_status(
     profile_id: str,
     idempotency_key: str | None = None,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Report one profile's credential-maintenance queue position.
 
@@ -2424,7 +2424,7 @@ async def setup_provider_api_key(
     profile_id: str,
     body: ProviderApiKeySetupRequest,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     maintenance_guard: object = Depends(_credential_validation_guard),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
@@ -2596,7 +2596,7 @@ async def commit_claude_manual_auth(
     profile_id: str,
     body: ClaudeManualAuthCommitRequest,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
@@ -2718,7 +2718,7 @@ async def commit_claude_manual_auth(
 async def validate_claude_oauth_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     _maintenance_guard: object = Depends(_credential_validation_guard),
 ) -> dict[str, Any]:
     """Validate an OAuth-backed provider profile against its auth volume.
@@ -2835,7 +2835,7 @@ async def validate_claude_oauth_profile(
 async def disconnect_claude_oauth_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     _maintenance_guard: object = Depends(_credential_disconnect_guard),
 ) -> dict[str, Any]:
     """Disconnect an OAuth-backed provider profile and clear its volume fields.
@@ -2887,7 +2887,7 @@ async def disconnect_claude_oauth_profile(
 async def delete_profile(
     profile_id: str,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> None:
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
@@ -2905,13 +2905,6 @@ async def delete_profile(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _user_id(user: Any) -> str | None:
-    raw = getattr(user, "id", None)
-    if raw is None:
-        return None
-    return str(raw)
 
 
 def _require_provider_profile_permission(user: Any, permission: str) -> None:

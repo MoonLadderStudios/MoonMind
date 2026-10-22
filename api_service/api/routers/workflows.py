@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.schemas.workflow_models import (
     CodexPreflightRequest,
@@ -37,13 +37,13 @@ _LEGACY_GONE_ROUTE_KWARGS = {
     "response_description": "Gone",
 }
 
-def _is_workflow_admin(user: User | None) -> bool:
+def _is_workflow_admin(user: Any) -> bool:
     # Single-user (#4351): the admitted operator is admin-equivalent for
     # instance visibility. Retained for call-site compatibility; approval and
     # state validation stay at their owning boundaries.
     return user is not None
 
-def _run_owned_by_user(run: object, user: User | None) -> bool:
+def _run_owned_by_user(run: object, user: Any) -> bool:
     # Single-user (#4351): historical creator metadata is non-authoritative
     # provenance. Retained for compatibility; access no longer gates on it.
     user_id = getattr(user, "id", None)
@@ -62,10 +62,10 @@ def _raise_workflow_not_found(run_id: UUID) -> None:
         },
     )
 
-def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> object:
+def _assert_run_access(run: object | None, run_id: UUID, user: Any) -> object:
     # Single-user (#4351): the admitted operator inspects any instance run
     # without a human-owner lookup. The shared admission boundary
-    # (get_current_user) owns operator access; legacy created_by /
+    # (get_instance_access) owns operator access; legacy created_by /
     # requested_by_user_id values persist as provenance.
     if run is None:
         _raise_workflow_not_found(run_id)
@@ -129,7 +129,7 @@ def _raise_legacy_workflow_runs_gone() -> None:
 @operations_router.get("/shards", response_model=CodexShardListResponse)
 async def list_codex_shards(
     repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ) -> CodexShardListResponse:
     """Return Codex shard health and associated volume metadata."""
 
@@ -163,7 +163,7 @@ async def trigger_codex_preflight(
     run_id: UUID,
     payload: CodexPreflightRequest,
     repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ) -> CodexPreflightResultModel:
     """Run the Codex login status check for the specified workflow run."""
 

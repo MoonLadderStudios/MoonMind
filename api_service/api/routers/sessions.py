@@ -7,13 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
+from api_service.api.instance_access import access_principal
 from api_service.api.routers import agent_runs as agent_runs_router
 from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     _resolve_recovery_principal,
 )
-from api_service.auth_providers import get_current_user
-from api_service.db.models import User
+from api_service.auth_providers import get_instance_access
 from moonmind.config.settings import settings
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.schemas.temporal_artifact_models import ArtifactSessionControlRequest
@@ -48,7 +48,7 @@ def _require_session_api_compat_enabled() -> None:
 
 async def _load_authorized_session_record(
     session_id: str,
-    user: User,
+    user: Any,
 ) -> CodexManagedSessionRecord:
     store = ManagedSessionStore(
         agent_runs_router._get_managed_session_store_root()
@@ -166,13 +166,13 @@ def _artifact_items(projection: object) -> list[dict[str, Any]]:
 async def get_session_snapshot(
     session_id: str,
     _enabled: None = Depends(_require_session_api_compat_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     projection = await _session_projection(
-        record, artifact_service, str(_user.id), recovery_principal
+        record, artifact_service, access_principal(_user), recovery_principal
     )
     run_record = await _load_agent_run_record(record.agent_run_id)
     return {
@@ -194,7 +194,7 @@ async def get_session_items(
     since: int | None = Query(default=None, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
     _enabled: None = Depends(_require_session_api_compat_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:
@@ -229,7 +229,7 @@ async def get_session_items(
     if truncated:
         events = events[:limit]
     projection = await _session_projection(
-        record, artifact_service, str(_user.id), recovery_principal
+        record, artifact_service, access_principal(_user), recovery_principal
     )
     return {
         "items": [_event_item(event) for event in events] + _artifact_items(projection),
@@ -246,7 +246,7 @@ async def stream_session(
     since: int | None = Query(default=None, ge=0),
     format: str = Query(default="sse"),
     _enabled: None = Depends(_require_session_api_compat_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ):
     if format != "sse":
         raise HTTPException(
@@ -267,7 +267,7 @@ async def post_session_event(
     session_id: str,
     payload: dict[str, Any],
     _enabled: None = Depends(_require_session_api_compat_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(
         _get_temporal_artifact_service
     ),
@@ -345,7 +345,7 @@ async def resolve_session_elicitation(
     elicitation_id: str,
     payload: dict[str, Any],
     _enabled: None = Depends(_require_session_api_compat_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:

@@ -505,7 +505,7 @@ Rules:
 
 The page uses MoonMind recurring schedule APIs. The router owns instance-wide
 visibility and action permissions; the dashboard consumes those decisions.
-It still uses the predecessor `get_current_user()` admission dependency. Stored
+It admits requests through `get_instance_access`. Stored
 `ownerUserId`, `scopeType`, and `scopeRef` are legacy provenance, not human
 ownership gates. The deprecated `scope=personal` and `scope=global` query values
 are accepted but ignored; new requests omit them. The dashboard also removes

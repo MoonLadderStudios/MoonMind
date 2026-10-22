@@ -23,7 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.api.instance_access import access_principal
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from moonmind.auth.github_app import GITHUB_REPOSITORY_NAME_PATTERN
 from moonmind.auth.github_app_setup import GitHubAppSetupService, SetupConfiguration
@@ -136,9 +137,9 @@ def _route_error_to_http(exc: RepositoryRouteError) -> HTTPException:
 
 
 def _admitted_principal(user: Any) -> str:
-    """Use the existing authentication result, never browser identity fields."""
+    """Use the existing admission result, never browser identity fields."""
 
-    principal = str(getattr(user, "id", "") or "").strip()
+    principal = access_principal(user).strip()
     if not principal:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="auth_required"
@@ -155,7 +156,7 @@ def _admitted_principal(user: Any) -> str:
 )
 async def begin_github_app_setup(
     request: GitHubAppBeginRequest,
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> GitHubAppBeginResponse:
     """Issue single-use setup state plus the provider install URL."""
 
@@ -239,7 +240,7 @@ async def begin_github_app_setup(
 async def complete_github_app_setup(
     request: GitHubAppCallbackRequest,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> GitHubAppCallbackResponse:
     """Verify the installation with the provider, then persist it."""
 
@@ -581,7 +582,7 @@ async def _stage_pat_secret(
 )
 async def list_repository_connections(
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionListResponse:
     from api_service.services.repository_connections import RepositoryConnectionService
 
@@ -605,7 +606,7 @@ async def list_repository_connections(
 async def get_repository_connection(
     connection_id: str,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
     from api_service.services.repository_connections import RepositoryConnectionService
 
@@ -629,7 +630,7 @@ async def get_connection_update_status(
     connection_id: str,
     request_id: str,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> ConnectionRequestStatus:
     """Read the existing audit receipt instead of inferring commit from revision."""
 
@@ -666,7 +667,7 @@ async def get_connection_update_status(
 async def create_pat_connection(
     request: PatConnectionCreateRequest,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
     """Create once per request identity; a retry returns the committed row."""
 
@@ -740,7 +741,7 @@ async def update_repository_connection(
     connection_id: str,
     request: ConnectionUpdateRequest,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
     """Compare-and-set on ``expectedPolicyRevision``; never a silent overwrite."""
 
@@ -821,7 +822,7 @@ async def disable_repository_connection(
     connection_id: str,
     request: ConnectionActionRequest,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
     from api_service.services.repository_connections import RepositoryConnectionService
 
@@ -852,7 +853,7 @@ async def enable_repository_connection(
     connection_id: str,
     request: ConnectionActionRequest,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
     from api_service.services.repository_connections import RepositoryConnectionService
 
@@ -959,7 +960,7 @@ async def set_repository_assignment(
     connection_id: str,
     request: AssignmentSetRequest,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
     """Assign only a repository this connection itself can read."""
 
@@ -1051,7 +1052,7 @@ async def remove_repository_assignment(
     connection_id: str,
     request: AssignmentRemoveRequest,
     db: Annotated[AsyncSession, Depends(get_async_session)],
-    _user: Annotated[Any, Depends(get_current_user())],
+    _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
     from api_service.services.repository_connections import RepositoryConnectionService
 

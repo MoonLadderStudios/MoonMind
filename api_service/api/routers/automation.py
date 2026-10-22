@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.api.instance_access import is_instance_operator
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from moonmind.config import settings
 from moonmind.schemas.workflow_models import (
     AutomationArtifactDetail,
@@ -131,7 +131,7 @@ def _serialize_run_detail(
         artifacts=artifact_summaries,
     )
 
-def _resolve_allowed_repositories(user: User) -> set[str] | None:
+def _resolve_allowed_repositories(user: Any) -> set[str] | None:
     """Return the repository slugs the user is permitted to access."""
 
     raw_allowed = getattr(user, "allowed_repositories", None)
@@ -164,7 +164,7 @@ def _resolve_allowed_repositories(user: User) -> set[str] | None:
 
     return None
 
-def _ensure_run_access(run: models.AutomationRun, user: User) -> None:
+def _ensure_run_access(run: models.AutomationRun, user: Any) -> None:
     """Guard against users accessing runs outside their allowed repositories."""
 
     allowed = _resolve_allowed_repositories(user)
@@ -172,7 +172,7 @@ def _ensure_run_access(run: models.AutomationRun, user: User) -> None:
         return
 
     repository = (run.repository or "").lower()
-    if repository not in allowed and not getattr(user, "is_superuser", False):
+    if repository not in allowed and not is_instance_operator(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -206,7 +206,7 @@ def _resolve_artifact_file(storage_path: str) -> Path:
 async def get_automation_run(
     run_id: UUID,
     repo: AutomationRepository = Depends(_get_repository),
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> AutomationRunDetail:
     """Return run status, per-phase metadata, and artifact summaries."""
 
@@ -233,7 +233,7 @@ async def get_automation_artifact(
     run_id: UUID,
     artifact_id: UUID,
     repo: AutomationRepository = Depends(_get_repository),
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> AutomationArtifactDetail:
     """Return detailed metadata for a specific automation artifact."""
 
@@ -270,7 +270,7 @@ async def download_automation_artifact(
     run_id: UUID,
     artifact_id: UUID,
     repo: AutomationRepository = Depends(_get_repository),
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> FileResponse:
     """Return the artifact file as a streamed download."""
 

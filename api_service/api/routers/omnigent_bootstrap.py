@@ -8,9 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 
 router = APIRouter(prefix="/api/omnigent/bootstrap", tags=["Omnigent Bootstrap"])
 
@@ -42,7 +41,7 @@ class BootstrapOpencodeResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-def _require_bootstrap_permission(user: User) -> None:
+def _require_bootstrap_permission(user: Any) -> None:
     # Reuse provider_profiles.write or settings
     from api_service.api.routers.provider_profiles import (
         _require_provider_profile_permission,
@@ -54,7 +53,7 @@ def _require_bootstrap_permission(user: User) -> None:
 @router.get("/opencode", response_model=BootstrapOpencodeResponse)
 async def get_bootstrap_state(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_bootstrap_permission(current_user)
     from api_service.db.base import async_session_maker
@@ -77,7 +76,7 @@ async def get_bootstrap_state(
 async def bootstrap_opencode(
     body: BootstrapOpencodeRequest,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_bootstrap_permission(current_user)
     from api_service.db.base import async_session_maker
@@ -117,7 +116,7 @@ async def bootstrap_opencode(
 @router.post("/opencode/retry", response_model=BootstrapOpencodeResponse)
 async def retry_bootstrap(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Re-qualify the deployment's current default support combination.
 
@@ -156,7 +155,7 @@ async def retry_bootstrap(
 @router.get("/readiness")
 async def bootstrap_readiness(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Return computed readiness for OpenCode via Omnigent."""
     import json

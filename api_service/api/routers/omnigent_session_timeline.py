@@ -17,13 +17,14 @@ internal token, raw host path, or unbounded payload is ever surfaced.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from api_service.services.omnigent_session_timeline_service import (
     OmnigentDiagnosticTargetUnavailable,
     OmnigentSessionProjectionNotFound,
@@ -35,7 +36,7 @@ router = APIRouter(prefix="/api/omnigent/sessions", tags=["Omnigent Session Time
 
 _DIAGNOSTIC_PERMISSION = "operations.read"
 
-def _require_diagnostic_read(user: User) -> None:
+def _require_diagnostic_read(user: Any) -> None:
     if not has_settings_permission(user, _DIAGNOSTIC_PERMISSION):
         raise HTTPException(
             403,
@@ -46,7 +47,7 @@ def _require_diagnostic_read(user: User) -> None:
 @router.get("/{session_id}/timeline")
 async def get_session_timeline(
     session_id: str,
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
     db: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Return the machine-readable operator timeline for one canonical session."""
@@ -59,7 +60,7 @@ async def get_session_timeline(
 
 
 async def _diagnostic_redirect(
-    *, session_id: str, kind: str, user: User, db: AsyncSession
+    *, session_id: str, kind: str, user: Any, db: AsyncSession
 ) -> RedirectResponse:
     _require_diagnostic_read(user)
     try:
@@ -76,7 +77,7 @@ async def _diagnostic_redirect(
 @router.get("/{session_id}/trace")
 async def get_session_trace_link(
     session_id: str,
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
     db: AsyncSession = Depends(get_async_session),
 ) -> RedirectResponse:
     return await _diagnostic_redirect(
@@ -87,7 +88,7 @@ async def get_session_trace_link(
 @router.get("/{session_id}/logs")
 async def get_session_log_link(
     session_id: str,
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
     db: AsyncSession = Depends(get_async_session),
 ) -> RedirectResponse:
     return await _diagnostic_redirect(
@@ -98,7 +99,7 @@ async def get_session_log_link(
 @router.get("/{session_id}/stuck-state")
 async def get_session_stuck_state(
     session_id: str,
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
     db: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Return bounded stuck-state findings and the safe automated response.
