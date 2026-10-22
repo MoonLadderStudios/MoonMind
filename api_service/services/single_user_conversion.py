@@ -501,7 +501,7 @@ async def _lock_conversion_evidence(session: AsyncSession) -> None:
 
     connection = await session.connection()
     present = set(await connection.run_sync(lambda c: sa_inspect(c).get_table_names()))
-    names = {"user", "user_profile", "settings_overrides"}
+    names = {"user", "user_profile", "settings_overrides", "single_user_conversion_runs"}
     names.update(t for t, _c, _k in _PRINCIPAL_SURFACES)
     names.update(t for t, _c in _UNOWNED_TRACKED)
     names.update(_UNOWNED_CONJUNCTIONS)
@@ -544,6 +544,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     from api_service.db.models import User
 
     inv = ConversionInventory()
+    # Certificate-dependent exemptions are bound by the unowned-row counts in
+    # the fingerprint. Hashing the ledger itself would invalidate our own
+    # completed conversion's idempotent replay even when no row relies on it.
+    instance_admitted = await _has_certified_instance_admission(session, inv)
     users = (await session.execute(select(User.id))).scalars().all()
     inv.user_ids = sorted(str(u) for u in users)
     user_set = set(inv.user_ids)
@@ -704,25 +708,31 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                             .where(col.is_(None))
                         )
                     ).scalar() or 0
+            elif table_name == "recurring_workflow_definitions" and instance_admitted:
+                # Account-free schedule creation deliberately stores no person.
+                # A certified cutover establishes this deployment provenance;
+                # without it, historical missing owners remain unresolved.
+                nulls = 0
             else:
-                # Deployment-seeded catalog presets carry trusted provenance
-                # (``seed_source`` stamped by the seed sync), so only
-                # ownerless rows *without* that provenance are ambiguous
-                # retained data. Legacy user presets have no seed source and
-                # are still counted here. Startup also evaluates eligibility
-                # before seeding, so its own seeds never gate the cutover.
                 if table_name == "presets" and "seed_source" in table.c:
-                    seed_col = table.c["seed_source"]
+                    predicates = [
+                        col.is_(None), table.c.seed_source.is_(None),
+                        table.c.scope_type.is_not(None),
+                        or_(cast(table.c.scope_type, String) != "personal",
+                            table.c.scope_ref.is_(None)),
+                    ]
+                    if instance_admitted:
+                        # The predecessor OperatorAdmission has no User.id and
+                        # saved custom presets as global with no scope_ref or
+                        # seed_source. Only that exact shape inherits certified
+                        # instance provenance; missing personal scopes do not.
+                        predicates.append(or_(
+                            cast(table.c.scope_type, String) != "global",
+                            table.c.scope_ref.is_not(None),
+                        ))
                     nulls = (
                         await session.execute(
-                            select(func.count())
-                            .select_from(table)
-                            .where(
-                                col.is_(None), seed_col.is_(None),
-                                table.c.scope_type.is_not(None),
-                                or_(cast(table.c.scope_type, String) != "personal",
-                                    table.c.scope_ref.is_(None)),
-                            )
+                            select(func.count()).select_from(table).where(*predicates)
                         )
                     ).scalar() or 0
                 else:
@@ -1239,9 +1249,18 @@ def _replay_stored_result(
     )
 
 
-def _is_production_completion(result: dict[str, Any]) -> bool:
-    """Require current committed production proof, not truthy serialized data."""
-    if result.get("schema_revision") != SCHEMA_REVISION:
+def _is_production_completion(
+    result: dict[str, Any],
+    *,
+    schema_revision: str = SCHEMA_REVISION,
+    required_transforms: tuple[str, ...] | None = None,
+) -> bool:
+    """Require committed production proof, not truthy serialized data.
+
+    Current readiness always uses the defaults. Explicit predecessor arguments
+    qualify historical admission only, never current conversion completion.
+    """
+    if not isinstance(result, dict) or result.get("schema_revision") != schema_revision:
         return False
     decision = result.get("decision")
     if (
@@ -1254,7 +1273,8 @@ def _is_production_completion(result: dict[str, Any]) -> bool:
     outcomes = result.get("transforms")
     if not isinstance(outcomes, dict) or any(
         not isinstance(outcomes.get(name), dict)
-        for name in DEFAULT_SUBSYSTEM_TRANSFORMS
+        for name in (required_transforms if required_transforms is not None
+                     else DEFAULT_SUBSYSTEM_TRANSFORMS)
     ):
         return False
     artifact_outcome = outcomes["artifacts"]
@@ -1267,6 +1287,45 @@ def _is_production_completion(result: dict[str, Any]) -> bool:
         return False
     return (
         0 <= artifact_outcome["recovery_grants"] <= artifact_outcome["preserved"]
+    )
+
+
+async def _has_certified_instance_admission(
+    session: AsyncSession, inventory: ConversionInventory,
+) -> bool:
+    """Recognize account-free rows emitted after a proven instance cutover.
+
+    Revision 396 established operator admission before presets became nullable.
+    Its production certificate can explain predecessor global presets and
+    ownerless schedules, but cannot publish or bypass the current conversion.
+    Uncertified/custom completion and older unknown contracts grant nothing.
+    """
+    predecessor = "396_artifact_operator_recovery"
+    ledger = _ledger_class()
+    try:
+        async with session.begin_nested():
+            results = (
+                await session.execute(
+                    select(ledger.result_json).where(
+                        ledger.status == "complete",
+                        ledger.result_json["schema_revision"].as_string().in_(
+                            (predecessor, SCHEMA_REVISION)
+                        ),
+                    )
+                )
+            ).scalars().all()
+    except Exception as exc:
+        if not _is_absent_table_error(exc):
+            _record_inventory_error(inventory, "instance_admission")
+        return False
+    return any(
+        _is_production_completion(result)
+        or _is_production_completion(
+            result,
+            schema_revision=predecessor,
+            required_transforms=("profile_secrets", "artifacts"),
+        )
+        for result in results
     )
 
 

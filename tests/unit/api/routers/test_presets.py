@@ -13,7 +13,7 @@ from api_service.api.routers.presets import (
     _get_save_service,
     router,
 )
-from api_service.operator_admission import require_operator
+from api_service.auth_providers import get_instance_access
 from moonmind.config.settings import settings
 
 
@@ -24,7 +24,7 @@ def _build_app() -> tuple[TestClient, AsyncMock, AsyncMock]:
     saver = AsyncMock()
     app.dependency_overrides[_get_catalog_service] = lambda: catalog
     app.dependency_overrides[_get_save_service] = lambda: saver
-    app.dependency_overrides[require_operator] = lambda: None
+    app.dependency_overrides[get_instance_access] = lambda: None
     settings.feature_flags.preset_catalog = True
     settings.feature_flags.disable_preset_catalog = False
     return TestClient(app, client=("127.0.0.1", 50000)), catalog, saver
@@ -223,3 +223,88 @@ def test_retired_scope_query_is_rejected_before_catalog_use(key, method, path):
     assert response.json()["detail"]["code"] == "legacy_preset_requires_refresh"
     assert not catalog.mock_calls
     assert not saver.mock_calls
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("mode", ["accounts", "oidc"])
+@pytest.mark.parametrize("session_admitted", [True, False])
+def test_presets_preserve_direct_authenticated_session_admission(
+    monkeypatch, session_admitted, mode, method
+):
+    from fastapi import HTTPException
+
+    from api_service import auth_providers
+    from api_service.db.base import get_async_session
+    from moonmind.security import auth_modes_4120
+
+    monkeypatch.setattr(auth_modes_4120, "get_request_production_mode", lambda: mode)
+    app = FastAPI()
+    app.include_router(router)
+    catalog = AsyncMock()
+    catalog.list_templates.return_value = []
+    app.dependency_overrides[_get_catalog_service] = lambda: catalog
+    session = object()
+    app.dependency_overrides[get_async_session] = lambda: session
+    monkeypatch.setattr(auth_providers, "is_disabled_local_mode", lambda: False)
+    resolver = AsyncMock(return_value=object())
+    if not session_admitted:
+        resolver.side_effect = HTTPException(401, detail={"code": "auth_invalid"})
+    monkeypatch.setattr(
+        auth_providers,
+        "_validate_oidc_cookie_user"
+        if mode == "oidc"
+        else "_resolve_session_principal",
+        resolver,
+    )
+    monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
+    monkeypatch.setattr(settings.feature_flags, "disable_preset_catalog", False)
+
+    # A supported authenticated session may arrive directly, with neither
+    # loopback nor trusted-ingress headers. Its qualified resolver owns access.
+    client = TestClient(app, client=("203.0.113.9", 50000))
+    path = "/api/presets" if method == "GET" else "/api/presets/example:favorite"
+    response = client.request(
+        method, path, headers={"cookie": "session=opaque"}, json={} if method == "POST" else None
+    )
+    expected_status = 200 if method == "GET" else 204
+    assert response.status_code == (expected_status if session_admitted else 401)
+    resolver.assert_awaited_once()
+    assert resolver.await_args.args[1] is session
+    assert resolver.await_args.kwargs == ({} if mode == "oidc" else {"optional": False})
+    operation = catalog.list_templates if method == "GET" else catalog.set_favorite
+    if session_admitted:
+        operation.assert_awaited_once()
+    else:
+        assert not catalog.mock_calls
+
+
+@pytest.mark.parametrize("peer", ["127.0.0.1", "203.0.113.9"])
+def test_presets_keep_account_free_local_admission_without_loading_user(
+    monkeypatch, peer
+):
+    from api_service import auth_providers
+    from api_service.db.base import get_async_session
+
+    app = FastAPI()
+    app.include_router(router)
+    catalog = AsyncMock()
+    catalog.list_templates.return_value = []
+    app.dependency_overrides[_get_catalog_service] = lambda: catalog
+    app.dependency_overrides[get_async_session] = lambda: object()
+    monkeypatch.setattr(auth_providers, "is_disabled_local_mode", lambda: True)
+    monkeypatch.setattr(
+        auth_providers, "_disabled_account_free_allowed", AsyncMock(return_value=True)
+    )
+    load_user = AsyncMock(side_effect=AssertionError("must not load a person"))
+    monkeypatch.setattr(auth_providers, "_load_disabled_user", load_user)
+    monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
+    monkeypatch.setattr(settings.feature_flags, "disable_preset_catalog", False)
+    response = TestClient(app, base_url="http://localhost", client=(peer, 50000)).get(
+        "/api/presets"
+    )
+    assert response.status_code == (200 if peer == "127.0.0.1" else 401)
+    load_user.assert_not_awaited()
+    if peer == "127.0.0.1":
+        catalog.list_templates.assert_awaited_once()
+    else:
+        catalog.list_templates.assert_not_awaited()
