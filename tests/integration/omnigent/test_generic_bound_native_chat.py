@@ -22,6 +22,7 @@ from sqlalchemy import select
 
 from api_service.api.routers import omnigent_bridge as bridge
 from api_service.api.routers import omnigent_native_ui as ui
+from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentBridgeSession,
@@ -32,7 +33,9 @@ from api_service.db.models import (
     OmnigentSession,
     OmnigentTurnAttempt,
     ProviderProfileSlotLease,
+    User,
 )
+from api_service.services.single_user_conversion import SingleUserConversionRun
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
@@ -46,7 +49,7 @@ from tests.integration.omnigent.test_generic_native_durable_journey import (
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
-def _application(store, base_url):
+def _application(store, base_url, *, account_free=False):
     user = SimpleNamespace(id=uuid4(), is_superuser=True)
     proxy = OmnigentBridgeSessionProxy(
         run_store=store,
@@ -58,13 +61,27 @@ def _application(store, base_url):
         bridge.workflow_chat_router, prefix=bridge.WORKFLOW_CHAT_BINDINGS_MOUNT_PATH
     )
     app.include_router(ui.native_ui_router, prefix=ui.NATIVE_UI_MOUNT_PATH)
-    # Override the registered dependency, not a new mode-specific closure.
-    # Artifact authorization below still evaluates the parametrized auth mode.
-    for mounted in (bridge.workflow_chat_router, ui.native_ui_router):
-        for route in mounted.routes:
-            for dependency in route.dependant.dependencies:
-                if dependency.name in {"user", "_user"}:
-                    app.dependency_overrides[dependency.call] = lambda: user
+    if account_free:
+        async def sessions():
+            async with store._session_factory() as session:
+                original_get = session.get
+
+                async def get(model, *args, **kwargs):
+                    assert model is not User, "native chat must not resolve a person"
+                    return await original_get(model, *args, **kwargs)
+
+                session.get = get
+                yield session
+
+        app.dependency_overrides[get_async_session] = sessions
+    else:
+        # These legacy cases isolate post-admission binding behavior. The
+        # account-free journey below does not override admission dependencies.
+        for mounted in (bridge.workflow_chat_router, ui.native_ui_router):
+            for route in mounted.routes:
+                for dependency in route.dependant.dependencies:
+                    if dependency.name in {"user", "_user"}:
+                        app.dependency_overrides[dependency.call] = lambda: user
     app.dependency_overrides[bridge._get_execution_service] = lambda: None
     app.dependency_overrides[bridge._get_bridge_store] = lambda: store
     app.dependency_overrides[bridge._get_bridge_proxy] = lambda: proxy
@@ -141,7 +158,7 @@ async def test_attested_generic_native_binding_reads_and_sends(
     )
 
 
-async def assert_bound_native_round_trip(journey):
+async def assert_bound_native_round_trip(journey, *, account_free=False):
     """Observe a useful response and an idempotent retry on the same live binding."""
     store = OmnigentBridgeSessionStore(journey.session_factory)
     follow_up = _message("Return only the heading of the generated report.")
@@ -158,8 +175,8 @@ async def assert_bound_native_round_trip(journey):
     binding_id = row.chat_binding_id
     base_url = os.environ["OMNIGENT_SERVER_URL"]
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_application(store, base_url)),
-        base_url="http://moonmind.test",
+        transport=httpx.ASGITransport(app=_application(store, base_url, account_free=account_free)),
+        base_url="http://localhost" if account_free else "http://moonmind.test",
     ) as client:
         document = await client.get(
             f"/omnigent-ui/workflow-chat/{binding_id}?embedded=1"
@@ -954,3 +971,72 @@ async def test_generic_native_retry_rejects_changed_snapshot_identity(
         assert after.read_only and after.capabilities == {}
 
     await _during_active_session(journey, active)
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    ["codex-native", "claude-native", "opencode-native"],
+    indirect=True,
+)
+async def test_account_free_operator_uses_live_durable_binding(
+    native_journey, session_factory, monkeypatch
+):
+    from moonmind.security import auth_modes_4120
+
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    for key in (
+        "MOONMIND_PUBLIC_BASE_URL",
+        "MOONMIND_TRUSTED_INGRESS",
+        "MOONMIND_TRUSTED_PROXIES",
+        "MOONMIND_API_PUBLISH_HOST",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    async with session_factory() as session:
+        session.add(
+            SingleUserConversionRun(
+                preflight_digest="native-chat-fresh",
+                status="complete",
+                result_json={
+                    "published": True,
+                    "decision": {"disposition": "fresh_init"},
+                },
+            )
+        )
+        await session.commit()
+    retained_owner = str(uuid4())
+
+    async def active():
+        async with session_factory() as session:
+            canonical = (await session.execute(select(OmnigentSession))).scalar_one()
+            canonical.metadata_ = {
+                **(canonical.metadata_ or {}),
+                "ownerPrincipal": retained_owner,
+            }
+            await session.commit()
+        # Legacy authenticated callers still cannot claim another person's
+        # retained canonical session, even with facade discovery permission.
+        store = OmnigentBridgeSessionStore(session_factory)
+        row = await store.resolve_projection_session(
+            idempotency_key=native_journey.request.idempotency_key
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(
+                app=_application(store, os.environ["OMNIGENT_SERVER_URL"])
+            ),
+            base_url="http://moonmind.test",
+        ) as client:
+            response = await client.post(
+                f"/api/workflow-chat-bindings/{row.chat_binding_id}/omnigent/v1/sessions/{row.chat_binding_id}/events",
+                json=_message("wrong human"),
+                headers={"Idempotency-Key": "wrong-owner"},
+            )
+            assert response.status_code == 409, response.text
+            assert len(native_journey.server.events) == 1
+        await assert_bound_native_round_trip(native_journey, account_free=True)
+        async with session_factory() as session:
+            canonical = (await session.execute(select(OmnigentSession))).scalar_one()
+            assert canonical.metadata_["ownerPrincipal"] == retained_owner
+
+    await _during_active_session(native_journey, active)
+    async with session_factory() as session:
+        assert (await session.execute(select(User))).scalars().all() == []

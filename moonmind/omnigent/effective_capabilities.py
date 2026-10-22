@@ -8,9 +8,12 @@ authority snapshot, upstream evidence, current state, and caller authority.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Mapping
+from typing import Any
+
+from moonmind.security.operator_admission import OperatorAdmission
 
 CAPABILITY_SCHEMA_VERSION = "moonmind.omnigent.effective-capabilities.v1"
 
@@ -357,17 +360,25 @@ def caller_capabilities_for_bridge(row: Any, caller: Any) -> dict[str, bool]:
     itself confer approval or administrative lifecycle authority.  Explicit
     per-principal grants are stored on the binding; absent such a grant an
     owner receives the ordinary presentation-client controls only.  Superusers
-    retain approval/lifecycle authority through their authenticated role.
+    retain approval/lifecycle authority through their authenticated role. An
+    account-free instance operator has the same caller-side control authority,
+    still intersected with immutable policy and current session state.
     """
 
     metadata = dict(getattr(row, "metadata_", None) or {})
-    principal = _text(getattr(caller, "id", None))
+    principal = (
+        "operator" if isinstance(caller, OperatorAdmission)
+        else _text(getattr(caller, "id", None))
+    )
     authorities = metadata.get("callerAuthorities")
     explicit = authorities.get(principal) if isinstance(authorities, Mapping) else None
     if isinstance(explicit, Mapping):
         return {name: explicit.get(name) is True for name in CAPABILITY_NAMES}
 
-    if bool(getattr(caller, "is_superuser", False)):
+    # Account-free admission is the instance operator, not an unprivileged
+    # human substitute. All actions still require the independent immutable
+    # provider, profile, launch-policy, and current-session grants.
+    if isinstance(caller, OperatorAdmission) or bool(getattr(caller, "is_superuser", False)):
         return {name: True for name in CAPABILITY_NAMES}
 
     # The execution owner receives the ordinary presentation-client controls
