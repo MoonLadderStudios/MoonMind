@@ -1,7 +1,5 @@
 """Retry a failed run from a step through the API against a real Temporal server."""
 
-# ruff: noqa: F811 -- imported pytest fixture
-
 import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
@@ -39,7 +37,9 @@ from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from moonmind.workflows.temporal.retry_from_step import STEP_ORDER_MEMO_KEY
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
-from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
+from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
+
+journey = claim_journey.journey
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -174,7 +174,7 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
             workflow_id = f"mm:{uuid4()}"
             user = SimpleNamespace(id=owner, is_superuser=False)
             if expired_claim:
-                _, github, _ = journey
+                state, github, _ = journey
                 claims = IssueClaimStore(
                     async_sessionmaker(engine, expire_on_commit=False)
                 )
@@ -197,6 +197,10 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                         (await claims.get(f"default/{workflow_id}")).comment_body
                     ).handoff
                 )
+                await claim_leases.reconcile_expired_issue(
+                    service=github, repository="example/repo", issue_number=3970
+                )
+                assert state["labels"] == []
             service = TemporalExecutionService(
                 session, client_adapter=TemporalClientAdapter(env.client)
             )
@@ -252,6 +256,8 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                         },
                     )
                     assert response.status_code == 202, response.text
+                    if expired_claim:
+                        assert state["labels"] == ["status: in-progress"]
                     body = response.json()
                     assert body["stepId"] == "step-3"
                     assert body["sourceRunId"] == failed_run_id

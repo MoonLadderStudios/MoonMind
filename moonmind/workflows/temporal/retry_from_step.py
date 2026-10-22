@@ -113,12 +113,15 @@ def step_boundaries(
                     except Exception:
                         continue
                     metadata = (
-                        request.get("stepExecution")
+                        request.get("step_execution") or request.get("stepExecution")
                         if isinstance(request, Mapping)
                         else None
                     )
                     identity = (
-                        _text(metadata.get("logicalStepId"))
+                        _text(
+                            metadata.get("logical_step_id")
+                            or metadata.get("logicalStepId")
+                        )
                         if isinstance(metadata, Mapping)
                         else None
                     )
