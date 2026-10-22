@@ -98,3 +98,121 @@ it('does not let an older store erase accepted identity or completed link progre
   });
   expect(oldIntent.inputArtifactRef).toBe('canonical-input');
 });
+
+it('does not erase newer admission uncertainty when stale artifact preparation saves', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: { instructions: 'Recurring large input' } } };
+  const preparingStore = new CreateSubmissionIntents(scope);
+  const preparing = preparingStore.forRequest(body);
+  const sendingStore = new CreateSubmissionIntents(scope);
+  const sending = sendingStore.forRequest(body);
+  sendingStore.beginSubmission(sending, true);
+  preparing.inputArtifactRef = 'prepared-late';
+  preparingStore.save(preparing);
+  expect(new CreateSubmissionIntents(scope).forRequest(body).uncertain).toBe(true);
+});
+
+it('refreshes admission state at the send boundary and permits only owned rejection retries', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: {} } };
+  const oldStore = new CreateSubmissionIntents(scope);
+  const oldIntent = oldStore.forRequest(body);
+  const currentStore = new CreateSubmissionIntents(scope);
+  const current = currentStore.forRequest(body);
+  const attempt = currentStore.beginSubmission(current, true)!;
+  expect(oldStore.beginSubmission(oldIntent, true)).toBeNull();
+  expect(oldIntent.uncertain).toBe(true);
+
+  currentStore.rejectSubmission(current, attempt);
+  // Late preparation cannot restore the uncertainty that was definitively cleared.
+  oldStore.save(oldIntent);
+  expect(oldIntent.uncertain).toBe(false);
+  const nextAttempt = oldStore.beginSubmission(oldIntent, true)!;
+  expect(nextAttempt).not.toBe(attempt);
+  // An older response cannot clear the newer send's uncertainty.
+  currentStore.rejectSubmission(current, attempt);
+  expect(new CreateSubmissionIntents(scope).forRequest(body)).toMatchObject({ uncertain: true, attempt: nextAttempt });
+  oldStore.rejectSubmission(oldIntent, nextAttempt);
+  expect(new CreateSubmissionIntents(scope).forRequest(body).uncertain).toBe(false);
+});
+
+it('never reopens accepted admission at the send boundary', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: {} } };
+  const oldStore = new CreateSubmissionIntents(scope);
+  const oldIntent = oldStore.forRequest(body);
+  const acceptedStore = new CreateSubmissionIntents(scope);
+  const accepted = acceptedStore.forRequest(body);
+  accepted.accepted = { workflowId: 'mm:accepted' };
+  acceptedStore.save(accepted);
+  expect(oldStore.beginSubmission(oldIntent, false)).toBeNull();
+  expect(oldIntent.accepted).toEqual(accepted.accepted);
+  expect(oldIntent.uncertain).toBe(false);
+});
+
+it('keeps admission transitions safe in memory when session storage is unavailable', () => {
+  const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('disabled'); });
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('disabled'); });
+  try {
+    const store = new CreateSubmissionIntents('offline-storage');
+    const intent = store.forRequest({ payload: { task: {} } });
+    const attempt = store.beginSubmission(intent, true)!;
+    expect(intent.uncertain).toBe(true);
+    expect(store.beginSubmission(intent, true)).toBeNull();
+    store.rejectSubmission(intent, attempt);
+    expect(intent.uncertain).toBe(false);
+    expect(store.beginSubmission(intent, true)).toBeTypeOf('string');
+  } finally { get.mockRestore(); set.mockRestore(); }
+});
+
+it('preserves legacy uncertain entries that predate attempt ownership metadata', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: {} } };
+  new CreateSubmissionIntents(scope).forRequest(body);
+  const key = window.sessionStorage.key(0)!;
+  const legacy = JSON.parse(window.sessionStorage.getItem(key)!);
+  legacy.uncertain = true;
+  delete legacy.attempt;
+  window.sessionStorage.setItem(key, JSON.stringify(legacy));
+  const store = new CreateSubmissionIntents(scope);
+  const intent = store.forRequest(body);
+  expect(store.beginSubmission(intent, true)).toBeNull();
+  expect(intent.uncertain).toBe(true);
+});
+
+it('does not trust older persisted certainty after a quota failure, including a reconstructed store', () => {
+  const scope = createSubmissionScope();
+  const body = { payload: { task: {} } };
+  const store = new CreateSubmissionIntents(scope);
+  const intent = store.forRequest(body);
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+  try {
+    const attempt = store.beginSubmission(intent, true)!;
+    expect(store.beginSubmission(intent, true)).toBeNull();
+    const reconstructed = new CreateSubmissionIntents(scope);
+    const returned = reconstructed.forRequest(body);
+    expect(reconstructed.beginSubmission(returned, true)).toBeNull();
+    reconstructed.rejectSubmission(returned, attempt);
+    store.save(intent);
+    expect(intent.uncertain).toBe(false);
+    expect(store.beginSubmission(intent, true)).toBeTypeOf('string');
+  } finally { set.mockRestore(); }
+  // Once writes recover, the live transition becomes durable, not old false.
+  store.save(intent);
+  expect(new CreateSubmissionIntents(scope).forRequest(body).uncertain).toBe(true);
+});
+
+it('reuses failed-to-persist uploaded metadata across live reconstruction without storing file contents', async () => {
+  const scope = createSubmissionScope();
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+  try {
+    const ref = { artifactId: 'prepared-upload', filename: 'same.png', contentType: 'image/png', sizeBytes: 9, secret: 'PRIVATE_FILE' };
+    const original = await new CreateSubmissionIntents(scope).prepareAttachment('same-bytes', async () => ref);
+    const uploadAgain = vi.fn(async () => ({ ...ref, artifactId: 'duplicate' }));
+    const reconstructed = await new CreateSubmissionIntents(scope).prepareAttachment('same-bytes', uploadAgain);
+    expect(uploadAgain).not.toHaveBeenCalled();
+    expect(original).toMatchObject(reconstructed);
+    expect(reconstructed.artifactId).toBe('prepared-upload');
+    expect(reconstructed).not.toHaveProperty('secret');
+  } finally { set.mockRestore(); }
+});

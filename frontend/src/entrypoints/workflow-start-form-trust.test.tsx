@@ -510,7 +510,7 @@ describe("Workflow Create form trust", () => {
     expect(bodies[2]).toEqual(bodies[0]);
   });
 
-  it("coalesces simultaneous identical-file uploads so lost-ack retry bodies do not drift", async () => {
+  it.each(["Step 1 image file picker", "Step 2 image file picker"])("coalesces identical files into one valid reference for %s across lost-ack retries", async (pickerLabel) => {
     const original = fetchSpy.getMockImplementation()!;
     let artifacts = 0;
     const bodies: unknown[] = [];
@@ -528,13 +528,106 @@ describe("Workflow Create form trust", () => {
     });
     renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
     fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Use both selected files." } });
-    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [100, 200].map((lastModified) => new File(["same content"], "same.png", { type: "image/png", lastModified })) } });
+    if (pickerLabel.startsWith("Step 2")) {
+      fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+      fireEvent.change(within(stepSection(2)).getByLabelText("Instructions"), { target: { value: "Use the files in this step." } });
+    }
+    fireEvent.change(screen.getByLabelText(pickerLabel), { target: { files: [100, 200].map((lastModified) => new File(["same content"], "same.png", { type: "image/png", lastModified })) } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    const task = (bodies[0] as { payload: { task: { inputAttachments?: Array<{ artifactId: string }>; steps?: Array<{ inputAttachments?: Array<{ artifactId: string }> }> } } }).payload.task;
+    const refs = [...(task.inputAttachments || []), ...(task.steps || []).flatMap((step) => step.inputAttachments || [])];
+    // _validate_and_collect_task_input_attachments rejects repeated artifact IDs
+    // globally, even when both declarations belong to the same target.
+    expect(new Set(refs.map((ref) => ref.artifactId)).size).toBe(refs.length);
+    expect(refs).toHaveLength(1);
     await screen.findByText("Lost duplicate-content response 1");
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await screen.findByText("Lost duplicate-content response 2");
     expect(bodies[1]).toEqual(bodies[0]);
     expect(artifacts).toBe(1);
+  });
+
+  it("keeps identical uploaded contents attached to each selected step with distinct artifact IDs", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let artifacts = 0;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/artifacts" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ artifact_ref: { artifact_id: `scoped-${++artifacts}` } }) } as Response;
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Use this image in the first step." } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    fireEvent.change(within(stepSection(2)).getByLabelText("Instructions"), { target: { value: "Use this image in the second step." } });
+    for (const number of [1, 2]) {
+      fireEvent.change(screen.getByLabelText(`Step ${number} image file picker`), {
+        target: { files: [new File(["same content"], "same.png", { type: "image/png", lastModified: 100 })] },
+      });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(createRequests()).toHaveLength(1));
+    const task = (createRequests()[0]!.payload as { task: { steps: Array<{ inputAttachments: Array<{ artifactId: string }> }> } }).task;
+    expect(task.steps.map((step) => step.inputAttachments)).toEqual([
+      [expect.objectContaining({ artifactId: "scoped-1", filename: "same.png" })],
+      [expect.objectContaining({ artifactId: "scoped-2", filename: "same.png" })],
+    ]);
+    expect(artifacts).toBe(2);
+  });
+
+  it.each(["objective", "primary", "additional"])("deduplicates persisted and uploaded refs within the %s target", async (target) => {
+    const attachment = { artifactId: "persisted-attachment", filename: "same.png", contentType: "image/png", sizeBytes: 12 };
+    const record = recordedExecution("mm:attachment-dedup");
+    const workflow = (record.inputParameters as { workflow: Record<string, unknown> }).workflow;
+    workflow.steps = [
+      { instructions: "First recorded step.", ...(target === "primary" ? { inputAttachments: [attachment, attachment] } : {}) },
+      { instructions: "Second recorded step.", ...(target === "additional" ? { inputAttachments: [attachment, attachment] } : {}) },
+    ];
+    if (target === "objective") workflow.inputAttachments = [attachment, attachment];
+    executions["mm:attachment-dedup"] = record;
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/artifacts" && init?.method === "POST") {
+        return { ok: true, json: async () => ({ artifact_ref: { artifact_id: attachment.artifactId } }) } as Response;
+      }
+      return original(input, init);
+    });
+    window.history.pushState({}, "Workflow Edit", "/workflows/new?editExecutionId=mm%3Aattachment-dedup");
+    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    await screen.findByDisplayValue("Second recorded step.");
+    if (target !== "objective") {
+      fireEvent.change(screen.getByLabelText(`Step ${target === "primary" ? 1 : 2} image file picker`), {
+        target: { files: [new File(["same content"], "same.png", { type: "image/png" })] },
+      });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const parameters = updates[0]!.body.parametersPatch as { task?: Record<string, unknown>; workflow?: Record<string, unknown> };
+    const submitted = parameters.workflow || parameters.task!;
+    const refs = target === "objective" ? submitted.inputAttachments :
+      (submitted.steps as Array<Record<string, unknown>>)[target === "primary" ? 0 : 1]!.inputAttachments;
+    expect(refs).toEqual([attachment]);
+  });
+
+  it.each(["objective and step", "two steps"])("rejects a persisted artifact assigned to %s without dropping either association", async (targets) => {
+    const attachment = { artifactId: "shared-attachment", filename: "shared.png", contentType: "image/png", sizeBytes: 12 };
+    const record = recordedExecution("mm:attachment-conflict");
+    const workflow = (record.inputParameters as { workflow: Record<string, unknown> }).workflow;
+    workflow.steps = [
+      { instructions: "First recorded step.", inputAttachments: [attachment] },
+      { instructions: "Second recorded step.", ...(targets === "two steps" ? { inputAttachments: [attachment] } : {}) },
+    ];
+    if (targets === "objective and step") workflow.inputAttachments = [attachment];
+    executions["mm:attachment-conflict"] = record;
+    window.history.pushState({}, "Workflow Edit", "/workflows/new?editExecutionId=mm%3Aattachment-conflict");
+    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    await screen.findByDisplayValue("Second recorded step.");
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await screen.findByText(/shared.png is assigned to both/);
+    expect(updates).toHaveLength(0);
+    expect(createRequests()).toHaveLength(0);
+    expect(screen.getAllByRole("button", { name: /Remove .*attachment shared.png/ })).toHaveLength(2);
   });
 
   it("rejects a fresh past schedule without uploading selected attachments", async () => {
@@ -948,4 +1041,51 @@ describe("Workflow Create form trust", () => {
       expect(confirmSpy).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("preserves recurring uncertainty through late oversized preparation and reload", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let finishOld!: (value: Response) => void;
+    let artifactCreates = 0;
+    let creates = 0;
+    const artifactResponse = (id: string) => ({ ok: true, json: async () => ({
+      artifact_ref: { artifact_id: id }, upload: { upload_url: `/api/artifacts/${id}/content` },
+    }) } as Response);
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/artifacts" && init?.method === "POST") {
+        artifactCreates += 1;
+        if (artifactCreates === 1) return new Promise<Response>((resolve) => { finishOld = resolve; });
+        return artifactResponse("canonical-input");
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        creates += 1;
+        throw new Error("Lost recurring acknowledgment");
+      }
+      return original(input, init);
+    });
+    const submitSameDraft = async () => {
+      fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Large recurring input. ".repeat(10000) } });
+      fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "recurring" } });
+      fireEvent.change(screen.getByLabelText("Cron Expression"), { target: { value: "0 8 * * *" } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    };
+    const old = renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    await submitSameDraft();
+    await waitFor(() => expect(finishOld).toBeDefined());
+    old.unmount();
+    const current = renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    await submitSameDraft();
+    await screen.findByText(/Schedule creation outcome is unknown/);
+    expect(creates).toBe(1);
+    await act(async () => finishOld(artifactResponse("late-orphan")));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/artifacts/late-orphan/complete")).toBe(true));
+    current.unmount();
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    await submitSameDraft();
+    await screen.findByText(/Schedule creation outcome is unknown/);
+    expect(creates).toBe(1);
+    expect(artifactCreates).toBe(2);
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
 });

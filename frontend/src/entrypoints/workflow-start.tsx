@@ -6459,8 +6459,7 @@ function WorkflowStartPageContent({
     const markDraftDirty = (event: Event) => {
       const target = event.target;
       if (target instanceof Element && target.closest("#queue-submit-form")) {
-        routeGuardDirtyRef.current = true;
-        createDraftRevisionRef.current += 1;
+        markDraftEdited();
       }
     };
     const handleRouteChangeRequest = (event: Event) => {
@@ -7626,6 +7625,9 @@ function WorkflowStartPageContent({
     if (submitMessage === limitMessage) {
       setSubmitMessage(null);
     }
+    if (mergedFilesForBinding.length !== previousStepFiles.length) {
+      markDraftEdited();
+    }
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
       delete next[targetKey];
@@ -8470,6 +8472,16 @@ function WorkflowStartPageContent({
     updateStep(localId, { instructions: value });
   }
 
+  function handleStepSkillChange(localId: string, skillId: string) {
+    // Combobox option picks use pointerdown/Enter, not native change events.
+    markDraftEdited();
+    updateStep(localId, {
+      skillId,
+      skillInputContractDigest: skillsQuery.data?.detailsById[skillId]?.contractDigest || "",
+      skillInputContractNotice: null,
+    });
+  }
+
   function selectTrustedTool(localId: string, toolId: string) {
     const tool =
       (trustedToolsQuery.data || []).find(
@@ -8715,20 +8727,21 @@ function WorkflowStartPageContent({
     );
   }
 
-  // Step structure changes come from buttons, which the input/change listener
-  // behind the leave-page guard never sees.
-  function markStepsEdited() {
+  // Custom controls, file drops, and asynchronous authored mutations need the
+  // same draft ownership and leave-page protection as native input/change.
+  function markDraftEdited() {
     routeGuardDirtyRef.current = true;
+    createDraftRevisionRef.current += 1;
   }
 
   function addStep() {
-    markStepsEdited();
+    markDraftEdited();
     setSteps((current) => [...current, createStepStateEntry(nextStepNumber)]);
     setNextStepNumber((current) => current + 1);
   }
 
   function moveStep(index: number, direction: -1 | 1) {
-    markStepsEdited();
+    markDraftEdited();
     setSteps((current) => {
       const nextIndex = index + direction;
       if (
@@ -8752,7 +8765,7 @@ function WorkflowStartPageContent({
   }
 
   function removeStep(index: number) {
-    markStepsEdited();
+    markDraftEdited();
     const removedStep = steps[index];
     if (removedStep) {
       setSelectedStepAttachmentFiles((current) => {
@@ -9112,7 +9125,7 @@ function WorkflowStartPageContent({
     setMessage: (message: string) => void;
     replaceLocalId?: string;
   }) {
-    markStepsEdited();
+    markDraftEdited();
     const expandedSteps = expansion.expandedSteps.map((step, index) =>
       mapExpandedStepToState(nextStepNumber + index, step),
     );
@@ -10801,20 +10814,26 @@ function WorkflowStartPageContent({
       return;
     }
 
+    // Coalesced uploads and persisted refs may identify the same artifact.
+    // Keep one declaration per owning target without discarding another target.
+    const uniqueAttachmentRefs = (refs: StepAttachmentRef[]) =>
+      refs.filter((ref, index) =>
+        refs.findIndex((candidate) => candidate.artifactId === ref.artifactId) === index,
+      );
     const uploadedPrimaryAttachmentRefs = primaryStep
       ? uploadedStepAttachments[primaryStep.localId] || []
       : [];
     const persistedPrimaryStepAttachmentRefs = primaryStep
       ? primaryStep.inputAttachments || []
       : [];
-    const primaryStepAttachmentRefs = [
+    const primaryStepAttachmentRefs = uniqueAttachmentRefs([
       ...persistedPrimaryStepAttachmentRefs,
       ...uploadedPrimaryAttachmentRefs,
-    ];
-    const taskLevelAttachmentRefs = [
+    ]);
+    const taskLevelAttachmentRefs = uniqueAttachmentRefs([
       ...persistedObjectiveAttachments,
       ...uploadedObjectiveAttachments,
-    ];
+    ]);
     const objectiveInstructionsForSubmit = objectiveInstructions.trim();
     const primaryInstructionsForSubmit = primaryInstructions.trim();
 
@@ -10839,10 +10858,10 @@ function WorkflowStartPageContent({
     } of parsedAdditionalStepInputs) {
       const uploadedStepAttachmentsForStep =
         uploadedStepAttachments[step.localId] || [];
-      const stepAttachments = [
+      const stepAttachments = uniqueAttachmentRefs([
         ...(step.inputAttachments || []),
         ...uploadedStepAttachmentsForStep,
-      ];
+      ]);
       const stepInstructions = step.instructions.trim();
       if (!hasPreUploadStepContent && !stepInstructions) {
         continue;
@@ -11078,6 +11097,30 @@ function WorkflowStartPageContent({
           return submittedStep;
         })
       : [];
+
+    // API admission requires artifact IDs to be unique across all targets.
+    // Cross-target reuse is not redundant: dropping it would change which step
+    // receives the file, so leave the draft intact and ask for disambiguation.
+    const attachmentOwners = new Map<string, string>();
+    for (const { label, refs } of [
+      { label: "Instructions", refs: taskLevelAttachmentRefs },
+      { label: "Step 1", refs: primaryStepAttachmentRefs },
+      ...additionalSteps.map(({ sourceIndex, payload }) => ({
+        label: `Step ${sourceIndex + 1}`,
+        refs: (payload.inputAttachments || []) as StepAttachmentRef[],
+      })),
+    ]) {
+      for (const ref of refs) {
+        const owner = attachmentOwners.get(ref.artifactId);
+        if (owner) {
+          rejectSubmit(
+            `Attachment ${ref.filename} is assigned to both ${owner} and ${label}. Remove it from one target or upload a separate copy for each.`,
+          );
+          return;
+        }
+        attachmentOwners.set(ref.artifactId, label);
+      }
+    }
 
     const templateCapabilities = submissionAppliedTemplates.flatMap(
       (entry) => entry.capabilities || [],
@@ -11562,14 +11605,12 @@ function WorkflowStartPageContent({
         return;
       }
 
+      const createAttempt = createIntent
+        ? createIntentStore?.beginSubmission(createIntent, scheduleMode === "recurring") : null;
       let created = createIntent?.accepted;
       if (!created) {
-        if (createIntent?.uncertain && scheduleMode === "recurring") {
+        if (createIntent && !createAttempt && scheduleMode === "recurring") {
           throw new Error("Schedule creation outcome is unknown. Check Schedules before starting another schedule.");
-        }
-        if (createIntent) {
-          createIntent.uncertain = true;
-          createIntentStore?.save(createIntent);
         }
         const response = await fetch(temporalCreateEndpoint, {
           method: "POST",
@@ -11583,8 +11624,7 @@ function WorkflowStartPageContent({
           // routing. Unknown server failures must remain uncertain.
           if (createIntent && ((response.status >= 400 && response.status < 500 && response.status !== 408) ||
             (response.status === 503 && detail.code === "temporal_submit_disabled"))) {
-            createIntent.uncertain = false;
-            createIntentStore?.save(createIntent);
+            if (createAttempt) createIntentStore?.rejectSubmission(createIntent, createAttempt);
           }
           if (detail.code?.startsWith("dependency_")) {
             setDependencyMessage(detail.message);
@@ -12951,13 +12991,7 @@ function WorkflowStartPageContent({
                               : "optional Skill name"
                           }
                           onChange={(nextValue) =>
-                            updateStep(step.localId, {
-                              skillId: nextValue,
-                              skillInputContractDigest:
-                                skillsQuery.data?.detailsById[nextValue]
-                                  ?.contractDigest || "",
-                              skillInputContractNotice: null,
-                            })
+                            handleStepSkillChange(step.localId, nextValue)
                           }
                         />
                       </div>
