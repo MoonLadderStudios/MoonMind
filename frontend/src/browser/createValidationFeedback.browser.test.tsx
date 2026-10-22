@@ -112,6 +112,33 @@ afterEach(async () => {
 });
 
 describe('Create validation feedback', () => {
+  it('retries a lost Create acknowledgment with one admitted execution', async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    const keys: string[] = [];
+    const accepted = new Set<string>();
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/executions' && init?.method === 'POST') {
+        const key = JSON.parse(String(init.body)).payload.task.idempotencyKey as string;
+        keys.push(key);
+        accepted.add(key);
+        if (keys.length === 1) throw new Error('Acknowledgment lost');
+        return jsonResponse({ workflowId: 'mm:accepted-once', runId: 'run-1' }, 201);
+      }
+      return original(input, init);
+    });
+    const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+    cleanupRender = unmount;
+    await userEvent.fill(await screen.findByLabelText('Instructions'), 'Admit this workflow only once.');
+    await userEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+    await screen.findByText('Acknowledgment lost');
+    await userEvent.click(screen.getByRole('button', { name: 'Start Workflow' }));
+    await expect.poll(() => window.location.pathname).toBe('/workflows/mm%3Aaccepted-once');
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toMatch(/^create:/);
+    expect(keys[1]).toBe(keys[0]);
+    expect(accepted.size).toBe(1);
+  });
+
   it('labels the bottom bar and presses Start with a green glow, flash and expanding ring', async () => {
     const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
     cleanupRender = unmount;
