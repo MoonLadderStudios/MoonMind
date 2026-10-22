@@ -682,10 +682,8 @@ async def test_certified_ownerless_schedule_survives_preset_conversion(
     "evidence",
     ["none", "custom", "incomplete", "old", "unpublished", "ineligible", "malformed"],
 )
-async def test_uncertified_null_owner_resources_still_refuse(preset_sessions, evidence):
+async def test_uncertified_null_creator_preset_still_refuses(preset_sessions, evidence):
     from copy import deepcopy
-
-    from api_service.db.models import RecurringWorkflowDefinition
 
     async with preset_sessions() as session:
         if evidence != "none":
@@ -713,16 +711,49 @@ async def test_uncertified_null_owner_resources_still_refuse(preset_sessions, ev
             description="d",
             scope_type=PresetScopeType.GLOBAL,
         )
-        schedule = RecurringWorkflowDefinition(
-            name="unproven", cron="0 * * * *", timezone="UTC", owner_user_id=None
-        )
-        session.add_all([row, schedule])
+        session.add(row)
         await session.commit()
         row_id = row.id
         result = await run_guarded_upgrade(session, operator_authorized=True)
         assert not result.published
         assert result.decision.reason_code == "unowned_rows"
         assert (await session.get(Preset, row_id)).scope_type is PresetScopeType.GLOBAL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_owner", ["unknown", "second_person"])
+async def test_ownerless_schedule_does_not_bypass_human_attribution(
+    preset_sessions, other_owner
+):
+    from api_service.db.models import RecurringWorkflowDefinition
+
+    async with preset_sessions() as session:
+        _, _, custom_id, _ = await seed_collision(session)
+        owner_id = uuid4()
+        if other_owner == "second_person":
+            session.add(User(id=owner_id, email="other@example.invalid"))
+        session.add_all(
+            [
+                RecurringWorkflowDefinition(
+                    name="Instance", cron="0 * * * *", timezone="UTC"
+                ),
+                RecurringWorkflowDefinition(
+                    name="Retained",
+                    cron="0 * * * *",
+                    timezone="UTC",
+                    owner_user_id=owner_id,
+                ),
+            ]
+        )
+        await session.commit()
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+        assert not result.published
+        assert result.decision.reason_code == (
+            "unknown_principal" if other_owner == "unknown" else "multi_person"
+        )
+        assert (
+            await session.get(Preset, custom_id)
+        ).scope_type is PresetScopeType.PERSONAL
 
 
 @pytest.mark.asyncio

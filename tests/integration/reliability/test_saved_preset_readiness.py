@@ -14,12 +14,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from api_service import main as app_main
 from api_service.api.routers.executions import _build_recurring_target
 from api_service.db import base as db_base
-from api_service.db.models import Base, Preset, PresetScopeType
-from api_service.services.presets.catalog import (
-    PresetCatalogService,
+from api_service.db.models import (
+    Base,
+    Preset,
+    PresetScopeType,
+    RecurringWorkflowDefinition,
 )
+from api_service.services.presets.catalog import PresetCatalogService
+from api_service.services.single_user_conversion import SingleUserConversionRun
 from moonmind.workflows.executions.preset_readiness import saved_preset_capability_check
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalog,
@@ -331,7 +336,8 @@ async def test_legacy_personal_provenance_requires_refresh_without_instance_fall
     assert saved == original
 
 
-async def test_instance_readiness_does_not_use_unconverted_legacy_preset(boundary):
+@pytest.mark.parametrize("scope", [PresetScopeType.GLOBAL, PresetScopeType.PERSONAL])
+async def test_instance_readiness_identifies_unconverted_catalog(boundary, scope):
     workflow, _, sessions = boundary
     saved = parameters()
     async with sessions() as session:
@@ -340,14 +346,91 @@ async def test_instance_readiness_does_not_use_unconverted_legacy_preset(boundar
                 select(Preset).where(Preset.slug == "github-issue-search-and-implement")
             )
         ).scalar_one()
-        root.scope_type = PresetScopeType.PERSONAL
-        root.scope_ref = OWNER
+        root.scope_type = scope
+        root.scope_ref = OWNER if scope is PresetScopeType.PERSONAL else None
         await session.commit()
+    original = deepcopy(saved)
     with pytest.raises(ApplicationError) as raised:
         await workflow._run_planning_stage(
             parameters=saved, input_ref=None, plan_ref="art_saved_plan"
         )
-    assert raised.value.details[0]["presets"][0]["reason"] == "preset_unavailable"
+    assert (
+        raised.value.details[0]["presets"][0]["reason"]
+        == "preset_catalog_conversion_required"
+    )
+    assert "guarded single-user conversion" in str(raised.value)
+    assert "/healthz" in str(raised.value)
+    assert "replacement schedule" not in str(raised.value)
+    assert saved == original
+
+
+async def test_approved_startup_restores_saved_search_without_replacement(
+    boundary, monkeypatch
+):
+    workflow, calls, sessions = boundary
+    saved = await _with_current_capabilities(parameters(), sessions)
+    saved["model"] = "claude-opus-5-5"
+    saved["effort"] = "high"
+    saved["task"]["runtime"] = {"mode": "claude_code"}
+    saved["task"]["steps"] = [{"instructions": "Preserve the admitted search"}]
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {
+        "include_all_authors": False,
+        "constraints": "",
+    }
+    target = _build_recurring_target(saved)
+    original = deepcopy(target)
+    async with sessions() as session:
+        for preset in (await session.scalars(select(Preset))).all():
+            preset.scope_type = PresetScopeType.GLOBAL
+            preset.seed_source = f"{preset.slug}.yaml"
+        definition = RecurringWorkflowDefinition(
+            name="Claude MoonMind Search",
+            cron="30 * * * *",
+            timezone="America/Los_Angeles",
+            target=deepcopy(target),
+            version=7,
+        )
+        session.add(definition)
+        await session.commit()
+        definition_id = definition.id
+        assert await PresetCatalogService(session).list_templates() == []
+        assert not (await session.scalars(select(SingleUserConversionRun))).all()
+
+    @asynccontextmanager
+    async def session_context():
+        async with sessions() as session:
+            yield session
+
+    monkeypatch.setattr(app_main, "get_async_session_context", session_context)
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "0.0.0.0")
+    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
+    monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("MOONMIND_TRUSTED_PROXIES", raising=False)
+    # Exercise the startup owners in their production order, including restart.
+    for _ in range(2):
+        conversion = await app_main._run_guarded_single_user_upgrade()
+        assert conversion.get("published"), conversion
+        await app_main._sync_preset_seed_catalog()
+        async with sessions() as session:
+            definition = await session.get(RecurringWorkflowDefinition, definition_id)
+            assert definition.target == original
+            assert definition.version == 7
+            assert definition.enabled
+            assert definition.cron == "30 * * * *"
+            assert definition.timezone == "America/Los_Angeles"
+            assert await PresetCatalogService(session).get_template(
+                slug="github-issue-search-and-implement"
+            )
+            assert (
+                len((await session.scalars(select(SingleUserConversionRun))).all()) == 1
+            )
+        assert (
+            await workflow._run_planning_stage(
+                parameters=deepcopy(saved), input_ref=None, plan_ref="art_saved_plan"
+            )
+            == "art_saved_plan"
+        )
+    assert calls == [ACTIVITY, ACTIVITY]
 
 
 @pytest.mark.parametrize("include_kind", ["include", "preset"])
