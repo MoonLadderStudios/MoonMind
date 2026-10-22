@@ -98,7 +98,15 @@ async def chat(tmp_path, monkeypatch):
     await engine.dispose()
 
 
-async def test_account_free_bootstrap_messages_reconnect_and_interrupt(chat):
+@pytest.mark.parametrize("retained", [False, True])
+async def test_account_free_bootstrap_messages_reconnect_and_interrupt(chat, retained):
+    if retained:
+        from api_service.auth_providers import instance_operator_principal
+        from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+
+        chat.row.metadata_["callerAuthorities"] = {
+            instance_operator_principal(): {name: True for name in CAPABILITY_NAMES}
+        }
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=chat.app), base_url="http://localhost"
     ) as client:
@@ -197,7 +205,9 @@ async def test_operator_keeps_approval_control_under_bound_policy(chat):
         assert len(chat.proxy.resolved) == 1
 
 
-@pytest.mark.parametrize("change", ["stale", "generation", "profile", "operator"])
+@pytest.mark.parametrize(
+    "change", ["stale", "generation", "profile", "operator", "retained-operator"]
+)
 async def test_operator_cannot_bypass_binding_capability_authority(chat, change):
     authority = chat.row.metadata_["capabilityAuthority"]
     if change == "stale":
@@ -207,7 +217,14 @@ async def test_operator_cannot_bypass_binding_capability_authority(chat, change)
     elif change == "profile":
         authority["agentProfile"]["sendMessage"] = False
     else:
-        chat.row.metadata_["callerAuthorities"] = {"operator": {"viewTranscript": True}}
+        from api_service.auth_providers import instance_operator_principal
+
+        principal = (
+            instance_operator_principal()
+            if change == "retained-operator"
+            else "operator"
+        )
+        chat.row.metadata_["callerAuthorities"] = {principal: {"viewTranscript": True}}
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=chat.app), base_url="http://localhost"
     ) as client:
@@ -348,7 +365,16 @@ async def test_actual_binding_discovery_uses_account_free_admission(chat, monkey
 
 @pytest.mark.parametrize(
     "credential",
-    ["valid", "expired", "invalid", "empty", "fanout-marker", "worker-marker"],
+    [
+        "valid",
+        "expired",
+        "invalid",
+        "empty",
+        "fanout-marker",
+        "worker-marker",
+        "integration-token",
+        "empty-integration-token",
+    ],
 )
 async def test_presented_credentials_cannot_fall_back_to_local_operator(
     chat, credential
@@ -385,6 +411,10 @@ async def test_presented_credentials_cannot_fall_back_to_local_operator(
         headers["X-MoonMind-Execution-Fanout"] = "v1"
     elif credential == "worker-marker":
         headers["X-MoonMind-Worker-Token"] = "retired-worker"
+    elif credential in {"integration-token", "empty-integration-token"}:
+        headers["X-MoonMind-Integration-Token"] = (
+            "" if credential == "empty-integration-token" else "synthetic-invalid"
+        )
     else:
         headers["Authorization"] = "" if credential == "empty" else "Bearer invalid"
     with TestClient(
@@ -622,3 +652,28 @@ async def test_cached_revalidation_never_renews_admission_and_caps_wait(
     fresh_scope = {key: value for key, value in scope.items() if key != "state"}
     with pytest.raises(HTTPException):
         workflow_chat_stream_timeout(Request(fresh_scope), admission, 2)
+
+
+async def test_retained_transcript_grant_preserves_reads_and_denies_controls(chat):
+    from api_service.auth_providers import instance_operator_principal
+
+    chat.row.metadata_["callerAuthorities"] = {
+        instance_operator_principal(): {"viewTranscript": True}
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=chat.app), base_url="http://localhost"
+    ) as client:
+        bootstrap = await client.get(f"/omnigent-ui/workflow-chat/{BINDING}?embedded=1")
+        assert bootstrap.status_code == 200, bootstrap.text
+        assert '"viewTranscript":true' in bootstrap.text
+        assert '"sendMessage":false' in bootstrap.text
+        assert (await client.get(BASE)).status_code == 200
+        for suffix, payload in (
+            ("/events", {"type": "message", "data": {"text": "denied"}}),
+            ("/events", {"type": "interrupt"}),
+            ("/elicitations/el-9/resolve", {"decision": "approve"}),
+        ):
+            response = await client.post(BASE + suffix, json=payload)
+            assert response.status_code == 403, response.text
+    assert not chat.proxy.posted and not chat.proxy.resolved and not chat.proxy.stopped
+    assert not chat.store.claimed and not chat.store.lifecycle

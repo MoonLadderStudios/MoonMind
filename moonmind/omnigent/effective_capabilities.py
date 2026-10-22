@@ -353,36 +353,47 @@ def resolve_bridge_row_capabilities(
     return result
 
 
-def caller_capabilities_for_bridge(row: Any, caller: Any) -> dict[str, bool]:
-    """Resolve caller grants from durable sharing/approval authority.
+def caller_capabilities_for_bridge(
+    row: Any,
+    caller: Any,
+    *,
+    retained_operator_principal: str | None = None,
+) -> dict[str, bool]:
+    """Resolve caller grants without widening retained binding restrictions.
 
-    Workflow ownership authorizes discovery of a binding, but it does not by
-    itself confer approval or administrative lifecycle authority.  Explicit
-    per-principal grants are stored on the binding; absent such a grant an
-    owner receives the ordinary presentation-client controls only.  Superusers
-    retain approval/lifecycle authority through their authenticated role. An
-    account-free instance operator has the same caller-side control authority,
-    still intersected with immutable policy and current session state.
+    The transport supplies the canonical retained operator key as provenance,
+    not a User identity. Matching legacy and account-free grants intersect.
+    Unrecognized historical authority fails closed until explicitly migrated.
     """
 
     metadata = dict(getattr(row, "metadata_", None) or {})
-    principal = (
-        "operator" if isinstance(caller, OperatorAdmission)
-        else _text(getattr(caller, "id", None))
-    )
     authorities = metadata.get("callerAuthorities")
+    if isinstance(caller, OperatorAdmission):
+        if "callerAuthorities" not in metadata or authorities == {}:
+            return {name: True for name in CAPABILITY_NAMES}
+        if not isinstance(authorities, Mapping):
+            return {name: False for name in CAPABILITY_NAMES}
+        keys = {"operator"}
+        if retained_operator_principal:
+            keys.add(retained_operator_principal)
+        grants = [authorities[key] for key in keys if key in authorities]
+        # Never select an arbitrary historical principal or silently ignore a
+        # malformed applicable grant. Even an explicit new operator grant must
+        # retain restrictions attached to the canonical compatibility key.
+        if not grants or any(not isinstance(grant, Mapping) for grant in grants):
+            return {name: False for name in CAPABILITY_NAMES}
+        return {
+            name: all(grant.get(name) is True for grant in grants)
+            for name in CAPABILITY_NAMES
+        }
+
+    principal = _text(getattr(caller, "id", None))
     explicit = authorities.get(principal) if isinstance(authorities, Mapping) else None
     if isinstance(explicit, Mapping):
         return {name: explicit.get(name) is True for name in CAPABILITY_NAMES}
-
-    # Account-free admission is the instance operator, not an unprivileged
-    # human substitute. All actions still require the independent immutable
-    # provider, profile, launch-policy, and current-session grants.
-    if isinstance(caller, OperatorAdmission) or bool(getattr(caller, "is_superuser", False)):
+    if bool(getattr(caller, "is_superuser", False)):
         return {name: True for name in CAPABILITY_NAMES}
 
-    # The execution owner receives the ordinary presentation-client controls
-    # needed for a functional chat session. Approval and post-terminal lifecycle
-    # authority remain explicit/superuser-only; the other immutable provider,
-    # profile, launch-policy, and state layers still have to grant every action.
+    # Authenticated owners retain ordinary presentation controls, while
+    # approval and post-terminal lifecycle authority remain explicit-only.
     return {name: name in _OWNER_CAPABILITIES for name in CAPABILITY_NAMES}

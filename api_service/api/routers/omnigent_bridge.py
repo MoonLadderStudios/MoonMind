@@ -78,7 +78,7 @@ from api_service.api.workflow_chat_access import (
     workflow_chat_actor,
     workflow_chat_stream_timeout,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, instance_operator_principal
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
@@ -1857,7 +1857,9 @@ def _effective_capabilities(
 
     return resolve_bridge_row_capabilities(
         row,
-        caller_capabilities=caller_capabilities_for_bridge(row, user),
+        caller_capabilities=caller_capabilities_for_bridge(
+            row, user, retained_operator_principal=instance_operator_principal()
+        ),
     )
 
 
@@ -2319,7 +2321,9 @@ async def post_omnigent_session_event(
         )
 
     required = required_capability_for_event(payload.type)
-    caller_grants = caller_capabilities_for_bridge(row, user)
+    caller_grants = caller_capabilities_for_bridge(
+        row, user, retained_operator_principal=instance_operator_principal()
+    )
     capability_set = resolve_bridge_row_capabilities(
         row, caller_capabilities=caller_grants
     )
@@ -4086,7 +4090,9 @@ async def _revalidate_binding_before_mutation(
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_SESSION_NOT_READY,
         )
-    caller_grants = caller_capabilities_for_bridge(fresh, user)
+    caller_grants = caller_capabilities_for_bridge(
+        fresh, user, retained_operator_principal=instance_operator_principal()
+    )
     current_capabilities = resolve_bridge_row_capabilities(
         fresh, caller_capabilities=caller_grants
     )

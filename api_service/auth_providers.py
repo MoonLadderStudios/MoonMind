@@ -382,7 +382,11 @@ async def get_instance_operator_access(
     """
     if (is_disabled_local_mode() and "authorization" in request.headers) or any(
         name in request.headers
-        for name in ("x-moonmind-execution-fanout", "x-moonmind-worker-token")
+        for name in (
+            "x-moonmind-execution-fanout",
+            "x-moonmind-worker-token",
+            "x-moonmind-integration-token",
+        )
     ):
         raise HTTPException(status_code=401, detail={"code": "auth_invalid"})
     return await get_instance_access(request, session)
