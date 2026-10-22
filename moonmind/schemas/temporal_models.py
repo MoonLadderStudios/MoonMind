@@ -3841,6 +3841,12 @@ class ExecutionModel(BaseModel):
     source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: SkipJsonSchema[str | None] = Field(None, alias="taskId", exclude=True)
     agent_run_id: Optional[str] = Field(None, alias="agentRunId")
+    agent_required: bool | None = Field(
+        None,
+        alias="agentRequired",
+        exclude_if=lambda value: value is None,
+        description="Whether the recorded workflow or its finishing resolver requires an agent; absent when the graph is unavailable.",
+    )
     progress: ExecutionProgressModel | None = Field(None, alias="progress")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
@@ -4105,6 +4111,12 @@ class ExecutionListItemModel(BaseModel):
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     provider_profile: ExecutionProviderProfileSummaryModel | None = Field(
         None, alias="providerProfile"
+    )
+    agent_required: bool | None = Field(
+        None,
+        alias="agentRequired",
+        exclude_if=lambda value: value is None,
+        description="Whether the recorded workflow or its finishing resolver requires an agent; absent when the graph is unavailable.",
     )
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")

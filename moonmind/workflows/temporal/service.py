@@ -12,6 +12,7 @@ import binascii
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -20,7 +21,7 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.service import RPCError, RPCStatusCode
@@ -3528,7 +3529,6 @@ class TemporalExecutionService:
             )
         except RetryFromStepUnavailable as exc:
             raise TemporalExecutionRetryUnavailableError(exc.reason, str(exc)) from exc
-        await self._require_live_issue_claim(record)
         replay_failure = await replay_failure_before_reset(
             history, until_event_id=plan.replay_until_event_id
         )
@@ -3544,13 +3544,16 @@ class TemporalExecutionService:
                 "The installed MoonMind code cannot replay this run's earlier "
                 "steps, so it cannot continue the run; rerun it instead.",
             )
-        new_run_id = await self._client_adapter.reset_workflow_execution(
-            record.workflow_id,
-            run_id=source_run_id,
-            workflow_task_finish_event_id=plan.reset_event_id,
-            reason=retry_reset_reason(plan.logical_step_id, idempotency_key),
-            request_id=idempotency_key,
-        )
+        async with self._issue_claim_for_step_retry(
+            record, source_run_id=source_run_id
+        ):
+            new_run_id = await self._client_adapter.reset_workflow_execution(
+                record.workflow_id,
+                run_id=source_run_id,
+                workflow_task_finish_event_id=plan.reset_event_id,
+                reason=retry_reset_reason(plan.logical_step_id, idempotency_key),
+                request_id=idempotency_key,
+            )
         return await self._save_retry_response(
             record,
             idempotency_key=idempotency_key,
@@ -3587,40 +3590,63 @@ class TemporalExecutionService:
         await self._sync_retried_run_projection(record.workflow_id, new_run_id)
         return response
 
-    async def _require_live_issue_claim(
+    @asynccontextmanager
+    async def _issue_claim_for_step_retry(
         self,
         record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
-    ) -> None:
-        """Refuse a retry whose GitHub issue claim can no longer be renewed.
-
-        The retried steps renew the run's claim. Once its lease expired or the
-        claim was released, that renewal fails and the work would stop, and
-        the issue lifecycle's own continuation owns the issue instead.
-        """
+        *,
+        source_run_id: str,
+    ):
+        """Keep claim recovery and reset serialized against local finalization."""
 
         from api_service.db.models import GitHubIssueClaim
-        from moonmind.workflows.temporal.github_issue_attempts import (
-            parse_attempt_comment,
+        from moonmind.workflows.adapters.github_service import GitHubService
+        from moonmind.workflows.temporal.github_issue_claim_lease import (
+            renew_locked_claim,
         )
-        from moonmind.workflows.temporal.github_issue_claim_lease import expired
+        from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 
         owner = f"{record.namespace or 'default'}/{record.workflow_id}"
         row = await self._session.get(GitHubIssueClaim, owner)
         if row is None:
+            yield
             return
-        if row.released or row.ownership_ended:
-            raise TemporalExecutionRetryUnavailableError(
-                "issue_claim_released",
-                f"The run released its claim on issue #{row.issue_number}; the "
-                "issue lifecycle continues it from the saved work.",
-            )
-        handoff = parse_attempt_comment(row.comment_body or "").handoff
-        if handoff is None or expired(handoff):
-            raise TemporalExecutionRetryUnavailableError(
-                "issue_claim_expired",
-                f"The run's claim on issue #{row.issue_number} expired; the issue "
-                "lifecycle continues it from the saved work.",
-            )
+        store = IssueClaimStore(
+            async_sessionmaker(self._session.bind, expire_on_commit=False)
+        )
+        async with store.locked(owner) as claim:
+            current = await self._client_adapter.describe_workflow(record.workflow_id)
+            if str(current.run_id or "") != source_run_id:
+                raise TemporalExecutionTargetRunChangedError(
+                    "A newer run of this workflow exists; reload the workflow."
+                )
+            if claim.released or claim.ownership_ended:
+                raise TemporalExecutionRetryUnavailableError(
+                    "issue_claim_released",
+                    f"The run relinquished issue #{claim.issue_number}. Continue "
+                    "through the issue's current owner using the saved work.",
+                )
+            if claim.finalization_json:
+                raise TemporalExecutionRetryUnavailableError(
+                    "issue_claim_finalizing",
+                    f"Issue #{claim.issue_number} has pending finalization. "
+                    "Reconcile that outcome before retrying the step.",
+                )
+            try:
+                await asyncio.wait_for(
+                    renew_locked_claim(
+                        row=claim, service=GitHubService(), reacquire_expired=True
+                    ),
+                    timeout=30,
+                )
+            except (ValueError, TimeoutError) as exc:
+                raise TemporalExecutionRetryUnavailableError(
+                    "issue_claim_unavailable",
+                    f"Cannot reacquire issue #{claim.issue_number}: its ownership, "
+                    "status, or GitHub confirmation is unavailable. Check the "
+                    "issue's latest attempt and hold before retrying.",
+                ) from exc
+            yield
 
     async def _sync_retried_run_projection(
         self, workflow_id: str, run_id: str

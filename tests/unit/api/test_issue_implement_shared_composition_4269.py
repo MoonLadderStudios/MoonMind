@@ -65,8 +65,6 @@ async def test_search_composes_shared_assessment_and_work_pr(tmp_path):
     async with catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug=SEARCH,
-            scope="global",
-            scope_ref=None,
             inputs={},
             context={"repository": REPOSITORY},
         )
@@ -97,8 +95,6 @@ async def test_search_keeps_single_typed_existing_pr_resolution(tmp_path):
     async with catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug=SEARCH,
-            scope="global",
-            scope_ref=None,
             inputs={},
             context={"repository": REPOSITORY},
         )
@@ -125,8 +121,6 @@ async def test_explicit_and_search_share_normalized_stage_behavior(tmp_path):
     async with catalog_service(tmp_path) as service:
         explicit = await service.expand_template(
             slug=EXPLICIT,
-            scope="global",
-            scope_ref=None,
             inputs={
                 "github_issue": {"repository": REPOSITORY, "number": 4269},
             },
@@ -134,8 +128,6 @@ async def test_explicit_and_search_share_normalized_stage_behavior(tmp_path):
         )
         search = await service.expand_template(
             slug=SEARCH,
-            scope="global",
-            scope_ref=None,
             inputs={},
             context={"repository": REPOSITORY},
         )
@@ -203,8 +195,6 @@ async def test_original_constraints_reach_trusted_brief_loader(
     async with catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug=slug,
-            scope="global",
-            scope_ref=None,
             inputs={**issue_inputs, "constraints": constraints},
             context={"repository": REPOSITORY},
         )
@@ -241,8 +231,6 @@ async def test_shared_stage_inputs_allow_runtime_bound_identity(tmp_path):
         ):
             expanded = await service.expand_template(
                 slug=slug,
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={},
             )
@@ -291,20 +279,16 @@ async def test_mechanical_reads_are_conditional_on_identity_freshness():
 async def test_self_authored_default_survives_shared_expansion(tmp_path):
     async with catalog_service(tmp_path) as service:
         template = await service.get_template(
-            slug=SEARCH, scope="global", scope_ref=None
+            slug=SEARCH,
         )
         assert template["defaults"]["include_all_authors"] is False
         defaulted = await service.expand_template(
             slug=SEARCH,
-            scope="global",
-            scope_ref=None,
             inputs={},
             context={"repository": REPOSITORY},
         )
         opted_in = await service.expand_template(
             slug=SEARCH,
-            scope="global",
-            scope_ref=None,
             inputs={"include_all_authors": True},
             context={"repository": REPOSITORY},
         )
@@ -425,8 +409,6 @@ async def test_untrusted_identity_cannot_drive_composed_status_step(
     async with catalog_service(tmp_path) as service:
         expanded = await service.expand_template(
             slug=SEARCH,
-            scope="global",
-            scope_ref=None,
             inputs={},
             context={"repository": REPOSITORY},
         )

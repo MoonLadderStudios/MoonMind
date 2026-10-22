@@ -5,7 +5,6 @@ description: Move a Jira issue through implementation by first assessing the cur
   permits advancing directly to Done. Otherwise, finish partial work, create a PR, and
   advance the issue to Review. When PR merge automation is enabled the issue
   advances to Done automatically after merge.
-scope: global
 tags:
 - jira
 - implementation
@@ -134,7 +133,6 @@ steps:
 - kind: include
   slug: issue-implement-assessment
   alias: assess
-  scope: global
   inputMapping:
     issue_provider: jira
     issue_ref: '{{ inputs.jira_issue_key }}'
@@ -196,7 +194,6 @@ steps:
 - kind: include
   slug: issue-implement-work-pr
   alias: work-pr
-  scope: global
   inputMapping:
     issue_provider: jira
     issue_ref: '{{ inputs.jira_issue_key }}'

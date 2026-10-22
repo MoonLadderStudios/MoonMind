@@ -43,7 +43,7 @@ async def test_visible_completion_target_survives_catalog_expansion(
             catalog = PresetCatalogService(session)
             await catalog.sync_seed_templates(seed_dir=ROOT / "api_service/data/presets")
             detail = await catalog.get_template(
-                slug=slug, scope="global", scope_ref=None
+                slug=slug,
             )
             properties = detail["inputSchema"]["properties"]
             assert properties["completion_target_ref"]["type"] == "string"
@@ -75,8 +75,6 @@ async def test_visible_completion_target_survives_catalog_expansion(
                 inputs["completion_target_ref"] = target
             expanded = await catalog.expand_template(
                 slug=slug,
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={"repository": "example/repo"},
             )
