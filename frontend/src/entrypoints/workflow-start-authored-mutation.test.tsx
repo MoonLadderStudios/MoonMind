@@ -83,12 +83,12 @@ describe("Create authored mutations outside native change events", () => {
         });
       }
       if (url === "/api/presets") {
-        return Promise.resolve(response({ items: [{ slug: "example", scope: "global", title: "Example" }] }));
+        return Promise.resolve(response({ items: [{ slug: "example", title: "Example" }] }));
       }
-      if (url.startsWith("/api/presets/example?")) {
-        return Promise.resolve(response({ slug: "example", scope: "global", title: "Example", inputs: [] }));
+      if (url === "/api/presets/example") {
+        return Promise.resolve(response({ slug: "example", title: "Example", inputs: [] }));
       }
-      if (url.startsWith("/api/presets/example:expand?")) {
+      if (url === "/api/presets/example:expand" && init?.method === "POST") {
         return new Promise<Response>((resolve) => expansions.push(resolve));
       }
       return Promise.resolve(response({}));
@@ -197,7 +197,9 @@ describe("Create authored mutations outside native change events", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Expand this intent." } });
     const preset = screen.getByLabelText("Preset Template") as HTMLSelectElement;
     await waitFor(() => expect(preset.options.length).toBeGreaterThan(1));
-    fireEvent.change(preset, { target: { value: "global::::example" } });
+    expect((within(preset).getByRole("option", { name: "Example" }) as HTMLOptionElement).value).toBe("example");
+    fireEvent.change(preset, { target: { value: "example" } });
+    expect(preset.value).toBe("example");
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
     await waitFor(() => expect(expansions).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
