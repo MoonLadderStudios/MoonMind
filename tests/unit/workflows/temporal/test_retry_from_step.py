@@ -6,10 +6,11 @@ import pytest
 from temporalio.api.enums.v1 import EventType, WorkflowTaskFailedCause
 from temporalio.api.history.v1 import HistoryEvent
 
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.retry_from_step import (
-    STEP_ORDER_MEMO_KEY,
     STEP_ID_MEMO_KEY,
+    STEP_ORDER_MEMO_KEY,
     RetryFromStepUnavailable,
     accepted_retry_step,
     plan_retry_from_step,
@@ -144,7 +145,10 @@ def test_default_plan_restarts_the_failed_step() -> None:
     assert plan.replay_until_event_id == wt_by_order[3] - 1
 
 
-@pytest.mark.parametrize("identity_source", ["memo", "child_request"])
+@pytest.mark.parametrize(
+    "identity_source",
+    ["memo", "child_request", "child_request_alias", "child_request_field_names"],
+)
 def test_dynamic_steps_use_recorded_identity_when_execution_and_ledger_order_differ(
     identity_source,
 ):
@@ -164,8 +168,24 @@ def test_dynamic_steps_use_recorded_identity_when_execution_and_ledger_order_dif
     child.start_child_workflow_execution_initiated_event_attributes.workflow_type.name = (
         "MoonMind.AgentRun"
     )
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex",
+        correlationId="test-run",
+        idempotencyKey="test-attempt-6",
+        stepExecution={
+            "logicalStepId": "remediate-6",
+            "stepExecutionId": "test-workflow:test-run:remediate-6:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "executionOrdinal": 1,
+            "runId": "test-run",
+            "workflowId": "test-workflow",
+        },
+    )
+    if identity_source in {"child_request_alias", "child_request_field_names"}:
+        request = request.model_dump(by_alias=identity_source == "child_request_alias")
     child.start_child_workflow_execution_initiated_event_attributes.input.payloads.append(
-        _CONVERTER.to_payload({"stepExecution": {"logicalStepId": "remediate-6"}})
+        _CONVERTER.to_payload(request)
     )
     history.events.append(child)
     rows = [

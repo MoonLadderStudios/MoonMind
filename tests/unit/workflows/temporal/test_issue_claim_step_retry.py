@@ -1,7 +1,5 @@
 """Failed-step retry reconciles the real durable claim before resetting history."""
 
-# ruff: noqa: F811 -- imported pytest fixture
-
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -19,19 +17,23 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionService,
     TemporalExecutionTargetRunChangedError,
 )
-from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
+from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
 from tests.unit.workflows.temporal.test_retry_from_step import (
     _rows,
     _three_step_failure,
 )
+
+# Register the shared fixture without shadowing an unused imported name.
+journey = claim_journey.journey
 
 pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replayable", [True, False])
+@pytest.mark.parametrize("status_fault", [None, "rejected", "readback"])
 async def test_retry_reacquires_only_after_replay_and_keeps_workflow_and_step(
-    journey, monkeypatch, replayable
+    journey, monkeypatch, replayable, status_fault
 ):
     state, github, sessions = journey
     owner = "default/failed-workflow"
@@ -44,6 +46,10 @@ async def test_retry_reacquires_only_after_replay_and_keeps_workflow_and_step(
     original = await store.get(owner)
     clock = leases.utc_now() + timedelta(minutes=31)
     monkeypatch.setattr(leases, "utc_now", lambda: clock)
+    await leases.reconcile_expired_issue(
+        service=github, repository="example/repo", issue_number=3970
+    )
+    assert state["labels"] == []
     monkeypatch.setattr(
         "moonmind.workflows.adapters.github_service.GitHubService", lambda: github
     )
@@ -63,6 +69,7 @@ async def test_retry_reacquires_only_after_replay_and_keeps_workflow_and_step(
     async def reset(*args, **kwargs):
         current = await store.get(owner)
         assert not leases.expired(parse_attempt_comment(current.comment_body).handoff)
+        assert state["labels"] == ["status: in-progress"]
         assert args == ("failed-workflow",)
         assert kwargs["run_id"] == "failed-run"
         assert kwargs["workflow_task_finish_event_id"] == boundaries[3]
@@ -95,6 +102,24 @@ async def test_retry_reacquires_only_after_replay_and_keeps_workflow_and_step(
             adapter.reset_workflow_execution.assert_not_awaited()
             assert (await store.get(owner)).comment_body == original.comment_body
             return
+        if status_fault:
+            add_labels = github.add_issue_labels
+
+            async def unavailable_status(**kwargs):
+                if status_fault == "rejected":
+                    return {"ok": False, "reasonCode": "fixture_rejected"}
+                result = await add_labels(**kwargs)
+                state["failed_read_path"] = "/repos/example/repo/issues/3970"
+                return result
+
+            monkeypatch.setattr(github, "add_issue_labels", unavailable_status)
+            with pytest.raises(TemporalExecutionRetryUnavailableError) as error:
+                await service.retry_execution_from_step(record, **kwargs)
+            assert error.value.reason == "issue_claim_unavailable"
+            adapter.reset_workflow_execution.assert_not_awaited()
+            sync.assert_not_awaited()
+            monkeypatch.setattr(github, "add_issue_labels", add_labels)
+            state.pop("failed_read_path", None)
         response = await service.retry_execution_from_step(record, **kwargs)
         repeated = await service.retry_execution_from_step(record, **kwargs)
 

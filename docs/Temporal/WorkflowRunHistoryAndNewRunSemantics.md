@@ -139,7 +139,7 @@ Before resetting, MoonMind requires that:
 
 - the latest run is the run the operator saw (`sourceRunId`, refused as `run_changed`) and is closed as failed, canceled, terminated, or timed out (`run_not_failed`);
 - the run is not a child owned by a parent workflow (`child_workflow`), because the parent owns its lifecycle;
-- a GitHub issue claim remains unreleased and GitHub confirms uncontested ownership. Explicit retry may reacquire its expired lease only when no later attempt exists and the open issue has no blocking status or hold (`issue_claim_released`, `issue_claim_unavailable`). Reacquisition preserves attempt identity and retry allowance, and holds the local claim lock through reset;
+- a GitHub issue claim remains unreleased and GitHub confirms ownership of an open issue with no blocking status or hold (`issue_claim_released`, `issue_claim_unavailable`). An expired lease additionally requires no later attempt before reacquisition; live claims retain normal contender ordering. Retry confirms `status: in-progress`, restoring it after expiry cleanup if needed, preserves attempt identity and retry allowance, and holds the local claim lock through reset;
 - the history up to the chosen step replays against the installed workflow code (`history_not_replayable`), checked with the Temporal replayer before any reset, so an incompatible code change refuses the retry and leaves the failed run untouched;
 - the history is still retained (`history_unavailable`).
 
