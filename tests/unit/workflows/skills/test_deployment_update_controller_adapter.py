@@ -394,6 +394,10 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
         def run(self, args, timeout_seconds):
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": ""}
+            if args[-3:] == ("config", "--format", "json"):
+                return {"exit": 0, "output": json.dumps({"services": {"api": {
+                    "environment": {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example"}
+                }}})}
             if "--omnigent-select" in args or "--omnigent-migrate" in args:
                 phase = args[-2].removeprefix("--omnigent-")
                 if phase == "select":
@@ -423,12 +427,31 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
                         ]
                     ),
                 }
+            if "exec" in args:
+                # The installed API's reply to the controller's conversion probe.
+                return {
+                    "exit": 0,
+                    "output": "MOONMIND_SINGLE_USER_CONVERSION="
+                    + json.dumps(
+                        {"published": True, "disposition": "eligible_conversion"}
+                    ),
+                }
             return {"exit": 0, "output": "ok"}
 
     def apply(controller, operation):
         return controller.server.production_apply(controller.store, operation)
 
     controller = controller_factory(apply, target=target)
+    operator_origins = []
+
+    def operator_probe(url):
+        operator_origins.append(url)
+        assert url == "https://operator.example"
+        return "ok"
+
+    monkeypatch.setattr(
+        controller.server.operator_access_mod, "check_operator_url", operator_probe
+    )
     # The fixture retains the real endpoint; only daemon/registry/database
     # side effects are replaced. Both release algorithms and state stores run.
     monkeypatch.setattr(
@@ -436,6 +459,7 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     )
     result = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
     assert result.status == "COMPLETED", result
+    assert operator_origins == ["https://operator.example"]
     operation = controller.store.load(result.outputs["operationId"])
     assert operation["omnigentSelection"]["revision"] == 1
     assert phases == ["select", "up", "migrate"]
@@ -452,3 +476,56 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     again = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
     assert again.outputs["operationId"] == result.outputs["operationId"]
     assert phases == ["select", "up", "migrate"]
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_omnigent_helper_refuses_compose_files_outside_checkout(
+    tmp_path, monkeypatch, absolute
+):
+    from deploy.controller.record import OperationStore
+    from moonmind.workflows.skills.deployment_release import (
+        run_controller_omnigent_step,
+    )
+
+    repo = tmp_path / "deployment-checkout"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("services: {}\n")
+    state = repo / "deploy/state"
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(repo))
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(state / ".env.deploy")
+    )
+    store = OperationStore(state / "controller")
+    operation = store.begin(
+        stack="moonmind-test-override-admission",
+        desired_image=IMAGE,
+        source_revision="",
+        target={
+            "project": "moonmind-test-override-admission",
+            "projectDir": str(repo),
+            "composeFiles": [
+                str(repo / "docker-compose.yaml"),
+                str(outside) if absolute else "../outside.yaml",
+            ],
+        },
+    )
+    with pytest.raises(ValueError):
+        asyncio.run(
+            run_controller_omnigent_step(
+                "select",
+                {
+                    "operationId": operation["operationId"],
+                    "target": operation["target"],
+                    "moonmindImage": operation["desired"]["image"],
+                    "controllerCapabilities": [
+                        "controller-handoff",
+                        "active-journal-transition",
+                        "unversioned-routing-cutover",
+                    ],
+                },
+            )
+        )
+    assert not (state / "controller-omnigent-jobs").exists()
+    assert store.load(operation["operationId"]) == operation

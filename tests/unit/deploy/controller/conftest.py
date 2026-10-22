@@ -7,6 +7,7 @@ installed package.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -26,6 +27,11 @@ def load(name):
 
 @pytest.fixture()
 def controller_path(monkeypatch):
+    # The disposable HTTP servers are local even when the managed test image
+    # inherits an outbound proxy. Keep those requests inside the test job.
+    no_proxy = os.environ.get("no_proxy", os.environ.get("NO_PROXY", ""))
+    for key in ("no_proxy", "NO_PROXY"):
+        monkeypatch.setenv(key, no_proxy + ",localhost,127.0.0.1,::1")
     monkeypatch.syspath_prepend(str(CONTROLLER_DIR))
     for name in ("redact", "mounts", "lock", "record", "engine", "server"):
         sys.modules.pop(name, None)

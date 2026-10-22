@@ -30,6 +30,7 @@ from wsgiref.simple_server import WSGIServer, make_server
 
 import engine
 import lock as lock_mod
+import operator_access as operator_access_mod
 import record as record_mod
 from redact import redact_mapping, redact_text
 
@@ -1048,26 +1049,169 @@ OPERATOR_URL_TIMEOUT_SECONDS = 30
 OMNIGENT_CHANNEL_KEYS = ("OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG")
 
 
-def check_operator_url(url: str, *, timeout_seconds: int = OPERATOR_URL_TIMEOUT_SECONDS) -> str:
-    """Probe an operator origin's health endpoint; return "ok" or raise."""
-    import urllib.request
-
-    target = url.rstrip("/") + "/healthz"
-    request = urllib.request.Request(target, method="GET")
+def operator_urls_for_target(target: dict, *, runner, base) -> list[str]:
+    """Use explicit origins or the effective Compose environment and bindings."""
+    if target.get("operatorUrls"):
+        return list(target["operatorUrls"])
+    rendered = engine.run_command(
+        runner,
+        (*base, "config", "--format", "json"),
+        timeout_seconds=TARGET_CONFIG_TIMEOUT_SECONDS,
+    )
+    # Rendered Compose contains secrets. Never attach its bytes to diagnostics.
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            status = response.getcode()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Operator URL {url} failed its health check ({exc}); "
-            "deployment update did not verify"
-        ) from exc
-    if status != 200:
-        raise RuntimeError(
-            f"Operator URL {url} returned HTTP {status} from /healthz; "
-            "deployment update did not verify"
+        if int(rendered.get("exit", 0)):
+            raise ValueError()
+        api = json.loads(engine.command_stdout(rendered))["services"]["api"]
+        public = (
+            api.get("environment", {}).get("MOONMIND_PUBLIC_BASE_URL") or ""
+        ).strip()
+        if public:
+            return [public.rstrip("/")]
+        origins = []
+        for binding in api.get("ports", ()):
+            if int(binding.get("target", 0)) != 8000 or not binding.get("published"):
+                continue
+            host = binding.get("host_ip") or ""
+            if not host or host in {"0.0.0.0", "::"}:
+                continue
+            if ":" in host:
+                host = f"[{host}]"
+            origins.append(f"http://{host}:{binding['published']}")
+        if origins:
+            return list(dict.fromkeys(origins))
+    except (ValueError, KeyError, TypeError):
+        # Suppress parse details because rendered Compose can contain secrets;
+        # report only the generic configuration error below.
+        pass
+    raise RuntimeError(
+        "the effective Compose configuration does not identify an operator origin"
+    )
+
+
+def _check_operator_origin(url, *, runner, image):
+    # The managed controller has its own network namespace. A short-lived,
+    # unprivileged host-network probe reaches the published host loopback,
+    # rather than mistaking the controller's localhost for the operator route.
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and urlsplit(
+        url
+    ).hostname in {"localhost", "127.0.0.1", "::1"}:
+        result = engine.run_command(
+            runner,
+            (
+                "docker",
+                "run",
+                "--rm",
+                "--read-only",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges",
+                "--network=host",
+                "--entrypoint",
+                "python",
+                image,
+                "-c",
+                Path(operator_access_mod.__file__).read_text(),
+                url,
+            ),
+            timeout_seconds=OPERATOR_URL_TIMEOUT_SECONDS + 15,
         )
-    return "ok"
+        if int(result.get("exit", 0)) or engine.command_stdout(result).strip() != "ok":
+            raise RuntimeError(
+                redact_text(
+                    str(result.get("output") or "operator route probe unavailable")
+                )
+            )
+        return "ok"
+    return operator_access_mod.check_operator_url(url)
+
+
+CONVERSION_SERVICE = "api"
+CONVERSION_RESULT_PREFIX = "MOONMIND_SINGLE_USER_CONVERSION="
+CONVERSION_PROBE_TIMEOUT_SECONDS = 60
+# The Compose healthcheck's in-container route: it needs no operator URL and
+# reaches the API that ran the conversion on its own startup.
+CONVERSION_PROBE_SCRIPT = (
+    "import json, urllib.error, urllib.request\n"
+    "try:\n"
+    "    body = urllib.request.urlopen('http://localhost:8000/healthz', timeout=30).read()\n"
+    "except urllib.error.HTTPError as exc:\n"
+    "    body = exc.read()\n"
+    "status = json.loads(body).get('singleUserConversion')\n"
+    f"print({CONVERSION_RESULT_PREFIX!r} + json.dumps(status))\n"
+)
+
+
+def single_user_conversion_check(runner, base, *, api_running: bool) -> dict:
+    """Record the installed API's guarded conversion disposition.
+
+    The API owns conversion and runs it on startup; the controller only
+    carries the outcome into the deployment result. A refusal keeps source
+    data, the serving release, and access protection, but the update has not
+    installed the account-free product, so it is not reported as success.
+    """
+    name = "single-user-conversion"
+    if not api_running:
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": "the API is not running after apply; conversion disposition unknown",
+        }
+    try:
+        result = engine.run_command(
+            runner,
+            (*base, "exec", "-T", CONVERSION_SERVICE, "python", "-c", CONVERSION_PROBE_SCRIPT),
+            timeout_seconds=CONVERSION_PROBE_TIMEOUT_SECONDS,
+        )
+        status = None
+        reported = False
+        for line in engine.command_stdout(result).splitlines():
+            if line.startswith(CONVERSION_RESULT_PREFIX):
+                status = json.loads(line[len(CONVERSION_RESULT_PREFIX):])
+                reported = True
+        if int(result.get("exit", 0)) != 0 or not reported:
+            raise RuntimeError(
+                f"exit {result.get('exit', 0)}: "
+                + redact_text(str(result.get("output", "")))[-300:]
+            )
+    except Exception as exc:
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": redact_text(f"could not read the API conversion status: {exc}"),
+        }
+    if not isinstance(status, dict):
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": "the installed API did not report a single-user conversion disposition",
+        }
+    if status.get("deferred"):
+        return {
+            "name": name,
+            "status": "unavailable",
+            "detail": (
+                f"conversion deferred ({status.get('reason') or 'unknown'}); "
+                "the API retries on its next start"
+            ),
+        }
+    disposition = str(status.get("disposition") or "unknown")
+    if status.get("published"):
+        detail = f"{disposition} published"
+        if status.get("reconciledAfter"):
+            detail += (
+                f"; reconciled committed conversion after {status['reconciledAfter']}"
+            )
+        return {"name": name, "status": "passed", "detail": detail}
+    return {
+        "name": name,
+        "status": "failed",
+        "detail": (
+            f"conversion refused ({disposition}: {status.get('reasonCode') or 'unknown'}, "
+            f"persons={int(status.get('personCount') or 0)}); source data, serving "
+            "release and access protection preserved; account-free access stays "
+            "closed until resolved (detail in the API startup log)"
+        ),
+    }
 
 
 def read_env_file(path: str) -> dict:
@@ -1811,6 +1955,7 @@ def _verify_applied_release(
     completed_services: list = []
     service_health: dict = {}
     recorded: list = []
+    base = None
     try:
         base = engine.compose_base(
             project=project,
@@ -1855,10 +2000,42 @@ def _verify_applied_release(
         )
         if routing_cutover:
             recorded.append(routing_cutover)
+    conversion_check = None
+    if CONVERSION_SERVICE in services and base is not None:
+        conversion_check = single_user_conversion_check(
+            runner, base, api_running=bool(services_running.get(CONVERSION_SERVICE))
+        )
+        # Persist the original disposition before secondary network probes:
+        # observer loss must not erase a refusal already read from the owner.
+        store.record_verification(
+            operation_id,
+            name=conversion_check["name"],
+            status=conversion_check["status"],
+            detail=conversion_check["detail"],
+        )
+        recorded.append(conversion_check)
     operator_access: dict[str, str] = {}
-    for url in target.get("operatorUrls", ()) or ():
+    try:
+        urls = (
+            operator_urls_for_target(target, runner=runner, base=base)
+            if (target.get("operatorUrls") or CONVERSION_SERVICE in services)
+            else []
+        )
+    except Exception as exc:  # noqa: BLE001 - record incomplete verification
+        urls = []
+        recorded.append(
+            {
+                "name": "operator-access",
+                "status": "unavailable",
+                "detail": "could not derive the protected operator route from deployment "
+                f"configuration ({type(exc).__name__})",
+            }
+        )
+    for url in urls:
         try:
-            operator_access[str(url)] = check_operator_url(str(url))
+            operator_access[str(url)] = _check_operator_origin(
+                str(url), runner=runner, image=operation["desired"]["image"]
+            )
         except Exception as exc:
             operator_access[str(url)] = str(exc)
     dispatch_ok: bool | None = None
@@ -1888,6 +2065,8 @@ def _verify_applied_release(
         # of failing every update with an unavailable mandatory check.
         recorded = [c for c in recorded if c["name"] != "dispatch"]
     for check in recorded:
+        if check is conversion_check:
+            continue
         store.record_verification(
             operation_id,
             name=check["name"],

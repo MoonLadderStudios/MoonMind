@@ -1329,7 +1329,7 @@ async def _has_certified_instance_admission(
     )
 
 
-async def _completed_production_result(session: AsyncSession) -> ApplyResult | None:
+async def completed_guarded_upgrade(session: AsyncSession) -> ApplyResult | None:
     """Read one certified current cutover without materializing retained history.
 
     The marker is committed only after the exact production transforms run.
@@ -1691,7 +1691,7 @@ async def startup_guard_decision(
 ) -> ConversionDecision:
     """Read-only guard for startup/upgrade routes: never writes, never seeds."""
     if not (alias_groups or collision_resolutions or deployment_owned_tables):
-        completed = await _completed_production_result(session)
+        completed = await completed_guarded_upgrade(session)
         if completed is not None:
             return completed.decision
     return await evaluate_disposition(
@@ -2190,7 +2190,7 @@ async def run_guarded_upgrade(
     if transforms is None and not (
         alias_groups or collision_resolutions or deployment_owned_tables
     ):
-        completed = await _completed_production_result(session)
+        completed = await completed_guarded_upgrade(session)
         if completed is not None:
             await session.rollback()
             return completed
