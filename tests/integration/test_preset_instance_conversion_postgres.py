@@ -139,9 +139,21 @@ async def test_postgres_certified_predecessor_resources(
     "evidence",
     ["none", "custom", "incomplete", "old", "unpublished", "ineligible", "malformed"],
 )
-async def test_postgres_uncertified_resources_refuse(preset_sessions, evidence):
-    await scenarios.test_uncertified_null_owner_resources_still_refuse(
+async def test_postgres_uncertified_null_creator_preset_refuses(
+    preset_sessions, evidence
+):
+    await scenarios.test_uncertified_null_creator_preset_still_refuses(
         preset_sessions, evidence
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_owner", ["unknown", "second_person"])
+async def test_postgres_ownerless_schedule_preserves_human_attribution(
+    preset_sessions, other_owner
+):
+    await scenarios.test_ownerless_schedule_does_not_bypass_human_attribution(
+        preset_sessions, other_owner
     )
 
 
