@@ -2285,6 +2285,72 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect((readinessCalls[1]?.[1] as RequestInit | undefined)?.cache).toBe("no-store");
   });
 
+  it("shows the Start check once while submit-time readiness refreshes", async () => {
+    let resolveSubmitReadiness: (response: Response) => void = () => {};
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        if (readinessRequests > 1) {
+          return new Promise<Response>((resolve) => {
+            resolveSubmitReadiness = resolve;
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => readyOmnigentCatalog,
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [
+            {
+              profile_id: "oauth-1",
+              account_label: "Codex OAuth",
+              provider_id: "openai",
+              runtime_id: "codex_cli",
+              execution_selection: { profileId: "team-codex", version: 1, digest: `sha256:${"a".repeat(64)}`, launchPolicyRef: "on-demand-v1" },
+            },
+          ],
+        } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), {
+      target: { value: "oauth-1" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Show the check once." },
+    });
+    const start = screen.getByRole("button", { name: "Start Workflow" });
+    fireEvent.click(start);
+
+    await waitFor(() => expect(readinessRequests).toBe(2));
+    expect(start.classList.contains("queue-submit-primary--arrow-exit")).toBe(true);
+
+    resolveSubmitReadiness({
+      ok: false,
+      status: 503,
+      json: async () => ({ detail: "readiness unavailable" }),
+    } as Response);
+    expect(
+      await screen.findByText("Omnigent readiness could not be verified."),
+    ).toBeTruthy();
+    expect(start.classList.contains("queue-submit-primary--arrow-exit")).toBe(false);
+  });
+
   it("fails closed when submit-time Omnigent readiness cannot be refreshed", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -14939,6 +15005,21 @@ describe("Task Create submit arrow animation", () => {
 
 
   it("renders both the create arrow and check glyphs so the click can morph between them", async () => {
+    let scheduledArrowClear: (() => void) | null = null;
+    const originalSetTimeout = window.setTimeout.bind(window);
+    const setTimeoutSpy = vi
+      .spyOn(window, "setTimeout")
+      .mockImplementation((handler: TimerHandler, timeout?: number, ...args) => {
+        if (timeout === 230) {
+          scheduledArrowClear = () => {
+            if (typeof handler === "function") {
+              handler(...args);
+            }
+          };
+          return 1;
+        }
+        return originalSetTimeout(handler, timeout, ...args);
+      });
     const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     try {
@@ -14969,8 +15050,27 @@ describe("Task Create submit arrow animation", () => {
           createButton.classList.contains("queue-submit-primary--arrow-exit"),
         ).toBe(true);
       });
+
+      // A long press keeps the check until release; only a release that
+      // does not submit morphs back to the arrow.
+      act(() => {
+        scheduledArrowClear?.();
+      });
+      expect(
+        createButton.classList.contains("queue-submit-primary--arrow-exit"),
+      ).toBe(true);
+      scheduledArrowClear = null;
+      fireEvent.pointerLeave(createButton);
+      expect(scheduledArrowClear).not.toBeNull();
+      act(() => {
+        scheduledArrowClear?.();
+      });
+      expect(
+        createButton.classList.contains("queue-submit-primary--arrow-exit"),
+      ).toBe(false);
     } finally {
       unmount();
+      setTimeoutSpy.mockRestore();
     }
   });
 
@@ -15075,7 +15175,22 @@ describe("Task Create submit arrow animation", () => {
         ).toBe(true);
       });
 
+      fireEvent.pointerUp(createButton, { button: 0 });
       fireEvent.click(createButton);
+
+      // The release's revert and the morph's end land while submit is still
+      // running its pre-request checks; the check must not flip back to the
+      // arrow and then return.
+      expect(scheduledArrowClear).not.toBeNull();
+      act(() => {
+        scheduledArrowClear?.();
+      });
+      fireEvent.animationEnd(
+        arrow!.querySelector("[data-submit-icon='check']")!,
+      );
+      expect(
+        createButton.classList.contains("queue-submit-primary--arrow-exit"),
+      ).toBe(true);
 
       await waitFor(() => {
         expect(fetchSpy).toHaveBeenCalledWith(
@@ -15089,15 +15204,6 @@ describe("Task Create submit arrow animation", () => {
           createButton.classList.contains("queue-submit-primary--arrow-exit"),
         ).toBe(true);
       });
-
-      expect(scheduledArrowClear).not.toBeNull();
-      act(() => {
-        scheduledArrowClear?.();
-      });
-
-      expect(
-        createButton.classList.contains("queue-submit-primary--arrow-exit"),
-      ).toBe(true);
 
       // The in-flight control is aria-disabled, so another press must not
       // acknowledge a second launch with a fresh ring.
