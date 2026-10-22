@@ -184,15 +184,51 @@ def journey(tmp_path: Path) -> Journey:
     (tools / SCRIPT.name).write_text(SCRIPT.read_text())
     (tools / "single_user_journey_checks.py").write_text(API_COUNTERPART)
     (tools / "single_user_journey_cutover.py").write_text(
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "args = sys.argv[1:]\n"
-        "config = json.loads(Path(os.environ['STARTUP_TEST_CONFIG']).read_text())\n"
-        "calls = Path(os.environ['STARTUP_TEST_API_CALLS']).read_text()\n"
-        "result = {'passed': not config.get('cutover_failure'), 'args': args, "
-        "'candidate_work_started': 'after-upgrade' in calls}\n"
-        "Path(args[args.index('--receipt-file') + 1]).write_text(json.dumps(result))\n"
-        "raise SystemExit(0 if result['passed'] else 1)\n"
+        f"import sys\nsys.path.insert(0, {str(SCRIPT.parents[1])!r})\n"
+        + r"""
+import asyncio, hashlib, json, os
+from pathlib import Path
+from deploy.controller.record import OperationStore
+from moonmind.workflows.skills.deployment_release import run_controller_omnigent_step
+
+args = sys.argv[1:]
+config = json.loads(Path(os.environ['STARTUP_TEST_CONFIG']).read_text())
+calls = Path(os.environ['STARTUP_TEST_API_CALLS']).read_text()
+repo = Path(args[args.index('--repo') + 1])
+files = [args[index + 1] for index, item in enumerate(args) if item == '-f']
+target = {'project': args[args.index('--project') + 1],
+          'projectDir': str(repo), 'composeFiles': files}
+state = repo / 'deploy/state'
+os.environ['MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR'] = str(repo)
+os.environ['MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE'] = str(state / '.env.deploy')
+os.environ['MOONMIND_DEPLOYMENT_LOCK_DIR'] = str(state / 'locks')
+# This boundary check exercises the actual path admission and durable helper
+# handoff with Omnigent disabled. It does not claim an image installation.
+os.environ['OMNIGENT_ENABLED'] = 'false'
+operation = OperationStore(state / 'controller').begin(
+    stack=target['project'], desired_image=args[args.index('--image') + 1],
+    source_revision=args[args.index('--revision') + 1], target=target,
+)
+payload = {'operationId': operation['operationId'], 'target': operation['target'],
+           'moonmindImage': operation['desired']['image'],
+           'controllerCapabilities': ['controller-handoff', 'active-journal-transition',
+                                      'unversioned-routing-cutover']}
+selection = asyncio.run(run_controller_omnigent_step('select', payload))
+key = hashlib.sha256(operation['operationId'].encode()).hexdigest()[:32]
+directory = state / 'controller-omnigent-jobs' / key
+request = json.loads((directory / 'request.json').read_text())
+assert json.loads((directory / 'selection.json').read_text()) == selection
+assert asyncio.run(run_controller_omnigent_step('select', payload)) == selection
+assert asyncio.run(run_controller_omnigent_step(
+    'migrate', {**payload, 'selectedRevision': selection.get('revision')}
+)) == selection
+result = {'passed': not config.get('cutover_failure'), 'args': args,
+          'candidate_work_started': 'after-upgrade' in calls,
+          'helperRequest': request, 'helperSelection': selection,
+          'isolation': json.loads(Path(files[1]).read_text())}
+Path(args[args.index('--receipt-file') + 1]).write_text(json.dumps(result))
+raise SystemExit(0 if result['passed'] else 1)
+"""
     )
     (tools / "single_user_journey_browser.mjs").write_text(
         "// External browser counterpart.\n"
@@ -605,7 +641,7 @@ def test_early_log_setup_failure_restores_callers_environment(journey, blocked):
 
 def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> None:
     result = journey.run(upgrade=True, lines=1)
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     # The controller installs the candidate; the runner boots only the source.
     assert [call["phase"] for call in journey.startups()] == ["source"]
     receipt = json.loads(
@@ -619,6 +655,21 @@ def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> No
     assert len(files) == 2
     assert files[0].endswith("/docker-compose.yaml")
     assert files[1].endswith("/isolation.json")
+    request = receipt["helperRequest"]
+    assert request["target"]["composeFiles"] == files
+    assert all(
+        Path(path).is_relative_to(request["target"]["projectDir"]) for path in files
+    )
+    assert receipt["helperSelection"] == {
+        "status": "skipped",
+        "reason": "omnigent runtime not enabled",
+    }
+    assert (
+        receipt["isolation"]["services"]["api"]["environment"][
+            "MOONMIND_CONTROL_PLANE_NETWORK"
+        ]
+        == "moonmind-test-startup-unit_control-plane-network"
+    )
     assert not receipt["candidate_work_started"]
     phases = [json.loads(line) for line in journey.api_calls.read_text().splitlines()]
     names = [call[0] for call in phases]
