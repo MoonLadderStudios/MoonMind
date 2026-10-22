@@ -8539,6 +8539,11 @@ export interface components {
             /** Targetruntime */
             targetRuntime?: string | null;
             providerProfile?: components["schemas"]["ExecutionProviderProfileSummaryModel"] | null;
+            /**
+             * Agentrequired
+             * @description Whether the recorded workflow or its finishing resolver requires an agent; absent when the graph is unavailable.
+             */
+            agentRequired?: boolean | null;
             /** Targetskill */
             targetSkill?: string | null;
             /** Taskskills */
@@ -8867,6 +8872,11 @@ export interface components {
             source: "temporal";
             /** Agentrunid */
             agentRunId?: string | null;
+            /**
+             * Agentrequired
+             * @description Whether the recorded workflow or its finishing resolver requires an agent; absent when the graph is unavailable.
+             */
+            agentRequired?: boolean | null;
             progress?: components["schemas"]["ExecutionProgressModel"] | null;
             /** Namespace */
             namespace: string;

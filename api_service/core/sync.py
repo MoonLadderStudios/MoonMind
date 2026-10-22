@@ -202,7 +202,15 @@ def merged_parameters_for_projection(
     if canonical is None:
         return dict(synced_params)
     canonical_params = canonical.parameters or {}
-    return {**canonical_params, **synced_params}
+    merged = {**canonical_params, **synced_params}
+    # Runtime visibility is a partial workflow projection. Preserve the saved
+    # graph and finish policy when the memo only repeats its runtime settings.
+    for key in ("workflow", "task"):
+        saved = canonical_params.get(key)
+        observed = synced_params.get(key)
+        if isinstance(saved, dict) and isinstance(observed, dict):
+            merged[key] = {**saved, **observed}
+    return merged
 
 def merged_memo_for_projection(
     payload: dict[str, Any],

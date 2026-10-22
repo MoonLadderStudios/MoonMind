@@ -4570,6 +4570,26 @@ def _bounded_execution_progress_from_sources(
     return None
 
 
+def _execution_agent_required(parameters: Mapping[str, Any]) -> bool | None:
+    task = _workflow_payload_from_parameters(parameters)
+    # Runtime/profile defaults alone cannot prove whether an agent will run.
+    if not any(
+        key in task
+        for key in (
+            "steps",
+            "plan",
+            "tool",
+            "skill",
+            "instructions",
+            "taskTemplate",
+            "task_template",
+            "includes",
+        )
+    ):
+        return None
+    return workflow_requires_agent(task, parameters)
+
+
 def _serialize_execution_list_item(record) -> ExecutionListItemModel:
     close_status = _enum_value(getattr(record, "close_status", None))
     if close_status == TemporalExecutionCloseStatus.COMPLETED.value:
@@ -4768,6 +4788,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
             memo,
             search_value=search_attributes.get(PROVIDER_PROFILE_SEARCH_ATTRIBUTE),
         ),
+        agent_required=_execution_agent_required(params),
         target_skill=target_skill,
         task_skills=task_skills,
         repository=repository,
@@ -5244,6 +5265,7 @@ def _serialize_execution(
         title=title,
         summary=summary,
         task_instructions=_derive_full_workflow_instructions(task_payload),
+        agent_required=_execution_agent_required(params),
         status=dashboard_status,
         dashboard_status=dashboard_status,
         objective_outcome=objective_outcome,
@@ -6395,7 +6417,28 @@ async def _enrich_execution_merge_automation(
             update={"resolver_children": resolver_children}
         )
 
-    return execution.model_copy(update={"merge_automation": normalized})
+    updates: dict[str, Any] = {"merge_automation": normalized}
+    active_request = (
+        normalized.review_loop.active_request if normalized.review_loop else None
+    )
+    if (
+        execution.raw_state == "awaiting_external"
+        and execution.temporal_status == "running"
+        and not execution.paused
+        and execution.waiting_reason
+        in {
+            None,
+            "Waiting for PR merge automation.",
+        }
+        and normalized.status == "waiting"
+        and isinstance(active_request, Mapping)
+    ):
+        provider = _coerce_temporal_scalar(active_request.get("provider"))
+        if provider:
+            target = f" of PR #{normalized.pr_number}" if normalized.pr_number else ""
+            review_wait = f"Waiting for {provider.capitalize()} review{target}."
+            updates.update(summary=review_wait, waiting_reason=review_wait)
+    return execution.model_copy(update=updates)
 
 
 def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:

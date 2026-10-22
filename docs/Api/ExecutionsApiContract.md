@@ -98,6 +98,8 @@ Supported root workflow types are `MoonMind.UserWorkflow` and `MoonMind.MergeAut
 
 Domain states are `scheduled`, `initializing`, `waiting_on_dependencies`, `planning`, `awaiting_slot`, `executing`, `awaiting_external`, `finalizing`, `no_commit`, `completed`, `failed`, and `canceled`.
 
+List and detail responses include `agentRequired` when the recorded workflow is available. The existing planner classifier includes finishing resolver children: native review-only work reports false, while merge/fix-only resolution still requires an agent. This describes execution needs without rewriting admitted profile settings or their filter membership. Missing graph evidence omits the field.
+
 | Close status | `temporalStatus` |
 | --- | --- |
 | null | running |
