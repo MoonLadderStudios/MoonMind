@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.api.instance_access import is_instance_operator
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from api_service.services.deployment_operations import (
     DeploymentControllerObservation,
     DeploymentCurrentImage,
@@ -234,11 +234,11 @@ def _get_temporal_execution_service(
     )
 
 
-def _require_admin(user: User) -> None:
-    # Authorization is checked after identity resolution in every mode:
-    # the disabled local principal resolves with is_superuser, so no
-    # mode-based bypass exists here.
-    if bool(getattr(user, "is_superuser", False)):
+def _require_admin(user: Any) -> None:
+    # Authorization is checked after admission in every mode: operator
+    # admission and the retained local principal are instance operators, so
+    # no mode-based bypass exists here.
+    if is_instance_operator(user):
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -601,7 +601,7 @@ def _stack_state(
 async def submit_deployment_update(
     payload: DeploymentUpdateRequest,
     service: DeploymentOperationsService = Depends(_get_deployment_service),
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> DeploymentUpdateResponse:
     _require_admin(user)
     try:
@@ -637,7 +637,7 @@ async def retry_deployment_operation(
         ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
     ),
     service: DeploymentOperationsService = Depends(_get_deployment_service),
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> DeploymentUpdateResponse:
     """Request the controller's fresh bounded attempt for a failed operation."""
     _require_admin(user)
@@ -655,7 +655,7 @@ async def get_deployment_stack_state(
     execution_service: TemporalExecutionService = Depends(
         _get_temporal_execution_service
     ),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ) -> DeploymentStackStateResponse:
     try:
         policy = service.get_policy(stack)
@@ -675,7 +675,7 @@ async def get_deployment_stack_state(
 async def list_deployment_image_targets(
     stack: str = Query(..., min_length=1),
     service: DeploymentOperationsService = Depends(_get_deployment_service),
-    _user: User = Depends(get_current_user()),
+    _user: Any = Depends(get_instance_access),
 ) -> ImageTargetsResponse:
     try:
         policy = service.get_policy(stack)

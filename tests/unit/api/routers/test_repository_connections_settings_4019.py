@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers import repository_connections as router_module
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
@@ -64,7 +64,7 @@ async def harness(tmp_path, monkeypatch):
         async with maker() as session:
             yield session
 
-    app.dependency_overrides[get_current_user()] = _user
+    app.dependency_overrides[get_instance_access] = _user
     app.dependency_overrides[get_async_session] = _session
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

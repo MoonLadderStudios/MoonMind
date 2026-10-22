@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import repository_connections as router_module
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 
 
 def _client(monkeypatch) -> TestClient:
@@ -20,7 +20,7 @@ def _client(monkeypatch) -> TestClient:
     async def _user():
         return SimpleNamespace(id="principal:alice")
 
-    app.dependency_overrides[get_current_user()] = _user
+    app.dependency_overrides[get_instance_access] = _user
     return TestClient(app)
 
 
@@ -86,7 +86,7 @@ def test_begin_rejects_anonymous_enrollment(monkeypatch) -> None:
     async def _deny():
         raise HTTPException(status_code=401, detail="unauthenticated")
 
-    app.dependency_overrides[get_current_user()] = _deny
+    app.dependency_overrides[get_instance_access] = _deny
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
         "/api/v1/repository-connections/github-app/begin",
@@ -114,7 +114,7 @@ def test_callback_rejects_forged_state_before_touching_writer(monkeypatch) -> No
 
     from api_service.db.base import get_async_session
 
-    app.dependency_overrides[get_current_user()] = _user
+    app.dependency_overrides[get_instance_access] = _user
     app.dependency_overrides[get_async_session] = _session
 
     async def _fetch(*, jwt: str, installation_id: str, api_base: str):

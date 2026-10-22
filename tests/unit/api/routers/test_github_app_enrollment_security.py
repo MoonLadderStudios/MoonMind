@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import repository_connections as routes
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 
 PREFIX = "/api/v1/repository-connections"
@@ -20,7 +20,7 @@ def enrollment(monkeypatch):
     current = SimpleNamespace(id="operator-session")
     app = FastAPI()
     app.include_router(routes.router, prefix=PREFIX)
-    app.dependency_overrides[get_current_user()] = lambda: current
+    app.dependency_overrides[get_instance_access] = lambda: current
 
     def session_stub():
         return object()

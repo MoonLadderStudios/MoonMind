@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers import provider_profiles as provider_profiles_router
 from api_service.api.routers.provider_profiles import ProviderProfileCreate
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -160,15 +160,15 @@ def _default_provider_profile_test_principal():
         settings_permissions={"provider_profiles.read", "provider_profiles.write"},
     )
     missing = object()
-    previous = app.dependency_overrides.get(get_current_user(), missing)
-    app.dependency_overrides[get_current_user()] = lambda user=user: user
+    previous = app.dependency_overrides.get(get_instance_access, missing)
+    app.dependency_overrides[get_instance_access] = lambda user=user: user
     try:
         yield user
     finally:
         if previous is missing:
-            app.dependency_overrides.pop(get_current_user(), None)
+            app.dependency_overrides.pop(get_instance_access, None)
         else:
-            app.dependency_overrides[get_current_user()] = previous
+            app.dependency_overrides[get_instance_access] = previous
 
 
 def _override_current_user(
@@ -188,20 +188,7 @@ def _override_current_user(
             else settings_permissions
         ),
     )
-    dependencies = {
-        dep.call
-        for route in app.routes
-        if getattr(route, "path", "").startswith("/api/v1/provider-profiles")
-        and getattr(route, "dependant", None) is not None
-        for dep in route.dependant.dependencies
-        if getattr(dep.call, "__name__", "") in {
-            "_current_user_fallback",
-            "_strict_current_user",
-            "_optional_current_user",
-        }
-    } or {get_current_user()}
-    for dependency in dependencies:
-        app.dependency_overrides[dependency] = lambda user=user: user
+    app.dependency_overrides[get_instance_access] = lambda user=user: user
     return user
 
 

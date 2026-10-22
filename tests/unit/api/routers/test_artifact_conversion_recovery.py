@@ -13,8 +13,8 @@ from sqlalchemy import select
 from api_service.api.routers import temporal_artifacts
 from api_service.api.routers import agent_runs, sessions
 from api_service.auth_providers import (
-    get_current_user,
     get_current_user_optional,
+    get_instance_access,
     get_instance_access_optional,
 )
 from api_service.db.base import get_async_session
@@ -167,7 +167,7 @@ async def test_session_and_direct_recovery_share_trusted_operator_scope(
             # request admission proof, for either literal or historical owners.
             untrusted = mounted_app(session, tmp_path)
             local_identity = User(id=UUID(DEFAULT_OPERATOR), email="operator@example.invalid")
-            untrusted.dependency_overrides[get_current_user()] = lambda: local_identity
+            untrusted.dependency_overrides[get_instance_access] = lambda: local_identity
             untrusted.dependency_overrides[get_current_user_optional()] = lambda: local_identity
             untrusted.dependency_overrides[get_instance_access_optional] = lambda: local_identity
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=untrusted),

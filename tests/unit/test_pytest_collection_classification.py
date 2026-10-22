@@ -37,7 +37,7 @@ def test_mm849_api_unit_paths_are_component_by_structure() -> None:
 
 
 def test_mm849_api_service_unit_paths_are_component_by_structure() -> None:
-    item = _item_for("tests/unit/api_service/api/test_oauth_terminal_websocket.py")
+    item = _item_for("tests/unit/api_service/api/routers/test_oauth_sessions.py")
 
     conftest.pytest_collection_modifyitems([item])
 

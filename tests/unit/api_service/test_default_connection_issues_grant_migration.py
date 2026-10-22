@@ -305,7 +305,7 @@ def test_settings_assignment_of_an_upgraded_default_admits_issues(
     from sqlalchemy.orm import sessionmaker
 
     from api_service.api.routers import repository_connections as router_module
-    from api_service.auth_providers import get_current_user
+    from api_service.auth_providers import get_instance_access
     from api_service.db.base import get_async_session
 
     _map_default(engine)
@@ -330,7 +330,7 @@ def test_settings_assignment_of_an_upgraded_default_admits_issues(
         async def _observe(connection, repository):
             return {"id": "916785816", "fullName": REPOSITORY}
 
-        app.dependency_overrides[get_current_user()] = _user
+        app.dependency_overrides[get_instance_access] = _user
         app.dependency_overrides[get_async_session] = _session
         original = router_module.observe_github_repository
         router_module.observe_github_repository = _observe
