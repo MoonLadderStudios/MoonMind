@@ -7,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 
 import api_service.auth_providers as providers
-from api_service.auth_providers import get_instance_operator_access
 from moonmind.security import auth_modes_4120 as auth_modes
 from moonmind.security import omnigent_auth_qualification as qual
 from moonmind.security.operator_admission import OperatorAdmission
@@ -44,12 +43,12 @@ async def test_real_session_authority_is_preserved(monkeypatch, transport, state
     session = _db_session_for(user_id, active=state != "inactive", admin=False)
     request = _request(**{transport: token})
     if state == "valid":
-        user = await get_instance_operator_access(request, session)
+        user = await providers.get_instance_operator_access(request, session)
         assert user.id == user_id
         assert user.is_superuser is False
     else:
         with pytest.raises(HTTPException) as exc:
-            await get_instance_operator_access(request, session)
+            await providers.get_instance_operator_access(request, session)
         assert exc.value.status_code == (403 if state == "inactive" else 401)
 
 
@@ -77,7 +76,7 @@ async def test_machine_marker_cannot_fall_back_to_valid_operator_cookie(
     request = _request(cookie=token)
     request.scope["headers"].append(credential)
     with pytest.raises(HTTPException) as exc:
-        await get_instance_operator_access(request, session)
+        await providers.get_instance_operator_access(request, session)
     assert exc.value.status_code == 401
     session.get.assert_not_awaited()
 
@@ -97,7 +96,7 @@ async def test_integration_token_cannot_fall_back_to_valid_session(
         identity, store, config, revocation=revocation
     )
     session = _db_session_for(user_id, active=True, admin=False)
-    allowed = await get_instance_operator_access(
+    allowed = await providers.get_instance_operator_access(
         _request(**{transport: token}), session
     )
     assert allowed.id == user_id
@@ -107,7 +106,7 @@ async def test_integration_token_cannot_fall_back_to_valid_session(
     request = _request(**{transport: token})
     request.scope["headers"].append((b"x-moonmind-integration-token", b"invalid"))
     with pytest.raises(HTTPException) as exc:
-        await get_instance_operator_access(request, session)
+        await providers.get_instance_operator_access(request, session)
     assert exc.value.status_code == 401
     assert exc.value.detail == {"code": "auth_invalid"}
     session.get.assert_not_awaited()
@@ -124,7 +123,7 @@ async def test_integration_header_presence_precedes_every_operator_authority(
     request = _request()
     request.scope["headers"].append((b"x-moonmind-integration-token", token))
     with pytest.raises(HTTPException) as exc:
-        await get_instance_operator_access(request, AsyncMock())
+        await providers.get_instance_operator_access(request, AsyncMock())
     assert exc.value.status_code == 401
     assert exc.value.detail == {"code": "auth_invalid"}
     fallback.assert_not_awaited()
@@ -158,9 +157,9 @@ async def test_integration_token_cannot_fall_back_to_transport_admission(
     session = AsyncMock()
     request = _request()
     request.scope.update(client=("127.0.0.1", 12345), headers=headers)
-    assert await get_instance_operator_access(request, session) == OperatorAdmission(
-        via=via
-    )
+    assert await providers.get_instance_operator_access(
+        request, session
+    ) == OperatorAdmission(via=via)
 
     denied = _request()
     denied.scope.update(
@@ -168,7 +167,7 @@ async def test_integration_token_cannot_fall_back_to_transport_admission(
         headers=[*headers, (b"x-moonmind-integration-token", b"invalid")],
     )
     with pytest.raises(HTTPException) as exc:
-        await get_instance_operator_access(denied, session)
+        await providers.get_instance_operator_access(denied, session)
     assert exc.value.status_code == 401
     assert exc.value.detail == {"code": "auth_invalid"}
     assert providers.get_operator_recovery_principal(denied) is None
