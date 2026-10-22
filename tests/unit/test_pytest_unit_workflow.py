@@ -202,6 +202,8 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
     assert budget_seconds + 30 + 3 * (120 + 10) < int(hermetic["timeout-minutes"]) * 60
     for name in (
         "Install the journey browser's Playwright runtime",
+        "Install the journey browser OS dependencies",
+        "Download the journey Chromium browser",
         "Run hermetic integration CI suite",
         "Run disposable default first-run journey",
         "Run eligible-upgrade journey",
@@ -241,7 +243,7 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
                 _integration_row_timeout_minutes(
                     step["timeout-minutes"], "fresh-journey"
                 )
-                == 30
+                == 2
             )
 
     assert setup_minutes <= 12
@@ -291,9 +293,9 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
         )
     } == {
         "hermetic": 40,
-        "fresh-journey": 30,
-        "upgrade-journey": 30,
-        "controller-journey": 30,
+        "fresh-journey": 85,
+        "upgrade-journey": 85,
+        "controller-journey": 85,
     }
 
     steps = {step["name"]: step for step in job["steps"]}
@@ -323,8 +325,75 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     for name in (
         "Set up Node for the dashboard journey",
         "Install the journey browser's Playwright runtime",
+        "Install the journey browser OS dependencies",
+        "Download the journey Chromium browser",
     ):
         assert steps[name]["if"] == "endsWith(matrix.suite, '-journey')"
+
+
+@pytest.mark.parametrize(
+    ("suite", "execution_minutes"),
+    [("fresh-journey", 20), ("upgrade-journey", 25), ("controller-journey", 20)],
+)
+def test_journey_job_reserves_setup_execution_and_reporting(
+    suite: str, execution_minutes: int
+) -> None:
+    job = _load_workflow()["jobs"]["integration-ci"]
+    steps = job["steps"]
+    first_journey = next(
+        index
+        for index, step in enumerate(steps)
+        if step["name"] == "Run disposable default first-run journey"
+    )
+    setup = [
+        step
+        for step in steps[:first_journey]
+        if step.get("if") != "matrix.suite == 'hermetic'"
+    ]
+    setup_minutes = sum(
+        _integration_row_timeout_minutes(step["timeout-minutes"], suite)
+        for step in setup
+    )
+    by_name = {step["name"]: step for step in setup}
+    npm = by_name["Install the journey browser's Playwright runtime"]
+    system = by_name["Install the journey browser OS dependencies"]
+    browser = by_name["Download the journey Chromium browser"]
+    assert npm["run"].strip() == "npm ci --no-audit --no-fund"
+    assert "install-deps chromium" in system["run"]
+    assert "node node_modules/playwright/cli.js install chromium" in browser["run"]
+    assert [int(step["timeout-minutes"]) for step in (npm, system, browser)] == [
+        5,
+        15,
+        5,
+    ]
+    assert setup.index(npm) < setup.index(system) < setup.index(browser)
+    before = by_name["Inspect journey setup disk capacity"]
+    after = by_name["Inspect journey setup disk capacity after installation"]
+    assert setup.index(before) < setup.index(npm)
+    assert setup.index(after) > setup.index(browser)
+    assert after["if"] == "always() && endsWith(matrix.suite, '-journey')"
+    for diagnostic in (before, after):
+        assert "df -h" in diagnostic["run"]
+        assert "df -i" in diagnostic["run"]
+    execution = [
+        step for step in steps if step.get("if") == f"matrix.suite == '{suite}'"
+    ]
+    assert sum(int(step["timeout-minutes"]) for step in execution) == execution_minutes
+    reporting = steps[
+        next(
+            index
+            for index, step in enumerate(steps)
+            if step["name"]
+            == "Upload redacted journey startup timings and resource footprints"
+        ) :
+    ]
+    reporting_minutes = sum(int(step["timeout-minutes"]) for step in reporting)
+    assert reporting_minutes == 6
+    # Bound every phase, including failure diagnostics; reserve runner/post-action overhead.
+    assert setup_minutes == 50
+    assert setup_minutes + execution_minutes + reporting_minutes + 4 <= (
+        _integration_row_timeout_minutes(job["timeout-minutes"], suite)
+    )
 
 
 def test_preflight_policy_enforces_workflow_display_name_guard() -> None:
