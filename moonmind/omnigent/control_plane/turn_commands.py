@@ -615,7 +615,9 @@ class CanonicalTurnCommandService:
             if bound is None and not bootstrapped_by_this_claim:
                 bound = recorded
             assert_remediation_does_not_broaden(
-                recorded=bound, requested=requested_authority
+                recorded=bound,
+                requested=requested_authority,
+                separate_step=base_authority is not None,
             )
         if recorded is None:
             # First instruction to assert authority for a session that predates
