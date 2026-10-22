@@ -20,7 +20,7 @@ vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
 }));
 
-function payloadWith({ presetSave = true } = {}): BootPayload {
+function payloadWith({ presetSave = true, attachments = false } = {}): BootPayload {
   return {
     page: "workflow-start",
     apiBase: "/api",
@@ -37,6 +37,10 @@ function payloadWith({ presetSave = true } = {}): BootPayload {
         },
         system: {
           defaultRepository: "MoonLadderStudios/MoonMind",
+          attachmentPolicy: {
+            enabled: attachments, maxCount: 4, maxBytes: 1024 * 1024,
+            totalBytes: 2 * 1024 * 1024, allowedContentTypes: ["image/png"],
+          },
           defaultAgentRuntime: "codex_cli",
           defaultTaskModel: "gpt-5.4",
           defaultTaskEffort: "medium",
@@ -289,6 +293,212 @@ describe("Workflow Create form trust", () => {
     expect(screen.getByLabelText("Priority")).toBeTruthy();
   });
 
+
+  it("replays a lost Create acknowledgment and changes keys for new intent", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    const keys: string[] = [];
+    const accepted = new Set<string>();
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        const key = JSON.parse(String(init.body)).payload.task.idempotencyKey;
+        keys.push(key);
+        accepted.add(key || `unkeyed-${keys.length}`);
+        throw new Error(`Lost response ${keys.length}`);
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    const instructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(instructions, { target: { value: "First intent." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost response 1");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost response 2");
+    expect(keys[0]).toEqual(expect.any(String));
+    expect(keys[0]).not.toBe("");
+    expect(keys[1]).toBe(keys[0]);
+    expect(accepted.size).toBe(1);
+    fireEvent.change(instructions, { target: { value: "Second intent." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost response 3");
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("does not let a late Create acknowledgment navigate away from an edited draft", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let finish!: (response: Response) => void;
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        return new Promise<Response>((resolve) => { finish = resolve; });
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    const instructions = await screen.findByLabelText("Instructions");
+    fireEvent.change(instructions, { target: { value: "Submitted intent." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(finish).toBeDefined());
+    fireEvent.change(instructions, { target: { value: "Keep this newer draft." } });
+    await act(async () => finish({ ok: true, json: async () => ({ workflowId: "mm:old-intent" }) } as Response));
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect((instructions as HTMLTextAreaElement).value).toBe("Keep this newer draft.");
+  });
+
+  it("preserves an accepted Create after input artifact linking fails", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let creates = 0;
+    let artifacts = 0;
+    let links = 0;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/executions" && init?.method === "POST") {
+        creates += 1;
+        return { ok: true, json: async () => ({ workflowId: "mm:accepted", runId: "run-1", namespace: "default", task_instructions: "PRIVATE_INSTRUCTIONS", input_parameters: { private: "PRIVATE_PARAMETERS", token: "PRIVATE_SECRET" } }) } as Response;
+      }
+      if (url === "/api/artifacts" && init?.method === "POST") {
+        artifacts += 1;
+        return { ok: true, json: async () => ({ artifact_ref: { artifact_id: "large-input" }, upload: { upload_url: "/api/artifacts/large-input/content" } }) } as Response;
+      }
+      if (url === "/api/artifacts/large-input/links") {
+        links += 1;
+        if (links === 1) throw new Error("Link unavailable");
+        return { ok: true } as Response;
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Large input. ".repeat(10000) } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText(/Workflow was started.*Link unavailable/);
+    expect(screen.getByRole("link", { name: "Open accepted result" }).getAttribute("href")).toBe("/workflows/mm%3Aaccepted?source=temporal");
+    expect(navigateTo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aaccepted?source=temporal"));
+    expect(JSON.stringify(window.sessionStorage)).not.toMatch(/PRIVATE_INSTRUCTIONS|PRIVATE_PARAMETERS|PRIVATE_SECRET|task_instructions|input_parameters/);
+    expect(creates).toBe(1);
+    expect(artifacts).toBe(1);
+    expect(links).toBe(2);
+  });
+
+  it("retains the originally admitted deferred time on a lost-ack retry", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    const bodies: Array<{ payload: { task: { idempotencyKey: string }; schedule: { scheduledFor: string } } }> = [];
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        bodies.push(JSON.parse(String(init.body)));
+        throw new Error(`Lost deferred response ${bodies.length}`);
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this later." } });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "deferred_minutes" } });
+    fireEvent.change(screen.getByLabelText("Minutes from now"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost deferred response 1");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost deferred response 2");
+    expect(bodies[1]?.payload.task.idempotencyKey).toBe(bodies[0]?.payload.task.idempotencyKey);
+    expect(bodies[1]?.payload.schedule.scheduledFor).toBe(bodies[0]?.payload.schedule.scheduledFor);
+  });
+
+  it("does not blindly retry an uncertain recurring definition without a replay contract", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let creates = 0;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        creates += 1;
+        throw new Error("Acknowledgment lost");
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this daily." } });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "recurring" } });
+    fireEvent.change(screen.getByLabelText("Cron Expression"), { target: { value: "0 8 * * *" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText(/Schedule creation outcome is unknown/);
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText(/Schedule creation outcome is unknown/);
+    expect(creates).toBe(1);
+  });
+
+  it("keeps a newer route when the first Create settles late", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let finish!: (response: Response) => void;
+    let navigate!: NavigateFunction;
+    function CaptureNavigation() { navigate = useNavigate(); return null; }
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        return new Promise<Response>((resolve) => { finish = resolve; });
+      }
+      return original(input, init);
+    });
+    renderWithClient(<MemoryRouter initialEntries={["/workflows/new"]}><CaptureNavigation /><WorkflowStartPage payload={payloadWith()} /></MemoryRouter>);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "First draft." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(finish).toBeDefined());
+    await act(async () => navigate("/workflows/new"));
+    await act(async () => finish({ ok: true, json: async () => ({ workflowId: "mm:old-draft" }) } as Response));
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a lost acknowledgment after the absolute scheduled time passes", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    const keys: string[] = [];
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        keys.push(JSON.parse(String(init.body)).payload.task.idempotencyKey);
+        if (keys.length === 1) throw new Error("Lost scheduled response");
+        return { ok: true, json: async () => ({ workflowId: "mm:scheduled" }) } as Response;
+      }
+      return original(input, init);
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2030-01-01T08:00:00"));
+      renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+      fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this at nine." } });
+      fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "once" } });
+      fireEvent.change(screen.getByLabelText("Scheduled For"), { target: { value: "2030-01-01T09:00" } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await screen.findByText("Lost scheduled response");
+      vi.setSystemTime(new Date("2030-01-01T10:00:00"));
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await waitFor(() => expect(keys).toHaveLength(2));
+      expect(keys[1]).toBe(keys[0]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("reuses uploaded attachment refs when the Create acknowledgment is lost", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let artifacts = 0;
+    const bodies: Array<{ payload: { task: { idempotencyKey: string; inputAttachments?: unknown[]; steps?: unknown[] } } }> = [];
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/artifacts" && init?.method === "POST") {
+        artifacts += 1;
+        return { ok: true, json: async () => ({ artifact_ref: { artifact_id: `attachment-${artifacts}` } }) } as Response;
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        bodies.push(JSON.parse(String(init.body)));
+        throw new Error(`Lost attachment response ${bodies.length}`);
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Use the attached design." } });
+    const picker = document.querySelector('input[type="file"]')!;
+    fireEvent.change(picker, { target: { files: [new File(["image"], "design.png", { type: "image/png" })] } });
+    await screen.findByText("design.png");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost attachment response 1");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost attachment response 2");
+    expect(artifacts).toBe(1);
+    expect(bodies[1]).toEqual(bodies[0]);
+  });
+
   it("shows an off-screen validation error in the submit bar and focuses the invalid field", async () => {
     renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
 
@@ -533,6 +743,32 @@ describe("Workflow Create form trust", () => {
       await waitFor(() => expect(instructions.value).toBe("Recorded workflow instructions."));
       fireEvent.change(instructions, { target: { value: "Edited the second workflow." } });
     }
+
+    it("preserves Create retry identity when Back is declined", async () => {
+      const original = fetchSpy.getMockImplementation()!;
+      const keys: string[] = [];
+      fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/executions" && init?.method === "POST") {
+          keys.push(JSON.parse(String(init.body)).payload.task.idempotencyKey);
+          throw new Error(`Lost history response ${keys.length}`);
+        }
+        return original(input, init);
+      });
+      window.history.pushState({ key: "previous-entry" }, "", "/workflows");
+      window.history.pushState({ key: "create-entry" }, "", "/workflows/new");
+      renderWithClient(<BrowserRouter><WorkflowStartPage payload={payloadWith()} /></BrowserRouter>);
+      fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Keep this submitted draft." } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await screen.findByText("Lost history response 1");
+      const originalState = window.history.state;
+      act(() => window.history.back());
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+      await waitFor(() => expect(window.location.pathname).toBe("/workflows/new"));
+      expect(window.history.state).toEqual(originalState);
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await screen.findByText("Lost history response 2");
+      expect(keys[1]).toBe(keys[0]);
+    });
 
     it("keeps an edited draft when the operator declines leaving it through Back", async () => {
       await renderEditedSecondOfTwoHistoryEntries();

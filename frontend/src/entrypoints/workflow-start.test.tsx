@@ -13604,6 +13604,8 @@ describe("Task Create MM-641 authoring validation", () => {
       openView.unmount();
       fetchSpy.mockClear();
       window.localStorage.clear();
+      // This is a separate authoring journey, not a reload/retry of the first.
+      window.history.pushState({}, "", "/workflows/new");
 
       renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
       await fillOptionValues();
@@ -13614,6 +13616,12 @@ describe("Task Create MM-641 authoring validation", () => {
       expect(screen.queryByLabelText("Priority")).toBeNull();
       const closedRequest = await submitAndCapture();
 
+      const openTask = (openRequest.payload as { task: Record<string, unknown> }).task;
+      const closedTask = (closedRequest.payload as { task: Record<string, unknown> }).task;
+      expect(closedTask.idempotencyKey).not.toBe(openTask.idempotencyKey);
+      // Disclosure state changes no authored execution values; only the new
+      // draft's admission identity differs.
+      closedTask.idempotencyKey = openTask.idempotencyKey;
       expect(closedRequest).toEqual(openRequest);
       expect(closedRequest.priority).toBe(7);
       expect(closedRequest.maxAttempts).toBe(5);
@@ -14980,6 +14988,10 @@ describe("Task Create MM-641 authoring validation", () => {
 describe("Task Create submit arrow animation", () => {
   let css: string;
 
+  beforeEach(() => {
+    window.history.pushState({}, "", "/workflows/new");
+  });
+
   beforeAll(async () => {
     const { readFileSync } = await import("node:fs");
     css = readFileSync(
@@ -15316,7 +15328,11 @@ describe("Task Create submit arrow animation", () => {
           createButton.classList.contains("queue-submit-primary--arrow-exit"),
         ).toBe(false);
       });
-      expect(screen.getByText("Navigation blocked.")).toBeTruthy();
+      expect(screen.getByText(/Workflow was started.*Navigation blocked/)).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Open accepted result" }).getAttribute("href")).toBe("/workflows/mm:workflow-123?source=temporal");
+      fireEvent.click(createButton);
+      await waitFor(() => expect(navigateTo).toHaveBeenCalledTimes(2));
+      expect(fetchSpy.mock.calls.filter(([url, init]) => url === "/api/executions" && init?.method === "POST")).toHaveLength(1);
     } finally {
       unmount();
       fetchSpy.mockRestore();

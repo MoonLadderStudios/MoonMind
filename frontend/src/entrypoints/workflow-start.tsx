@@ -33,6 +33,10 @@ import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDet
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
+  CreateSubmissionIntents, createSubmissionScope, createSubmissionDestination, createSubmissionResult,
+  type CreateSubmissionIntent,
+} from "../lib/createSubmissionIntent";
+import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from "../utils/dashboardPreferences";
@@ -6005,9 +6009,11 @@ function StepContextBar({
 function WorkflowStartPageContent({
   payload,
   searchString,
+  navigationKey = "",
 }: {
   payload: BootPayload;
   searchString: string;
+  navigationKey?: string;
 }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
@@ -6289,6 +6295,26 @@ function WorkflowStartPageContent({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
+  const createIntentsRef = useRef<CreateSubmissionIntents | null>(null);
+  const createDraftRevisionRef = useRef(0);
+  const createMountedRef = useRef(true);
+  const [acceptedCreatePath, setAcceptedCreatePath] = useState<string | null>(null);
+  const attachmentUploadsRef = useRef(new WeakMap<File, Map<string, StepAttachmentRef>>());
+  useEffect(() => {
+    createMountedRef.current = true;
+    createIntentsRef.current = new CreateSubmissionIntents(`${createSubmissionScope()}:${navigationKey}`);
+    // Route changes invalidate responses even after Back returns to the old URL.
+    createDraftRevisionRef.current += 1;
+    setAcceptedCreatePath(null);
+    submitExpansionInFlightRef.current = false;
+    setIsSubmitting(false);
+    return () => {
+      createMountedRef.current = false;
+      createDraftRevisionRef.current += 1;
+      submitExpansionRequestIdRef.current += 1;
+    };
+  }, [searchString, navigationKey]);
+
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
   const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
@@ -6373,8 +6399,10 @@ function WorkflowStartPageContent({
   // The URL this page last rendered. A history traversal has already changed
   // window.location when its popstate arrives, so this is what to restore.
   const renderedUrlRef = useRef("");
+  const renderedHistoryStateRef = useRef<unknown>(null);
   useEffect(() => {
     renderedUrlRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    renderedHistoryStateRef.current = window.history.state;
   });
 
   useEffect(() => {
@@ -6382,6 +6410,7 @@ function WorkflowStartPageContent({
       const target = event.target;
       if (target instanceof Element && target.closest("#queue-submit-form")) {
         routeGuardDirtyRef.current = true;
+        createDraftRevisionRef.current += 1;
       }
     };
     const handleRouteChangeRequest = (event: Event) => {
@@ -6450,13 +6479,21 @@ function WorkflowStartPageContent({
         previous.search === window.location.search
       ) return;
       if (confirmDraftNavigation()) return;
-      window.history.pushState(window.history.state, "", rendered);
+      window.history.pushState(renderedHistoryStateRef.current, "", rendered);
       window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
     };
     window.addEventListener(
       WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
       handleRouteChangeRequest,
     );
+    const markCreateInteraction = (event: MouseEvent) => {
+      const target = event.target;
+      const button = target instanceof Element ? target.closest("button") : null;
+      if (button && button.closest("#queue-submit-form") && button.type !== "submit") {
+        createDraftRevisionRef.current += 1;
+      }
+    };
+    document.addEventListener("click", markCreateInteraction);
     document.addEventListener("input", markDraftDirty);
     document.addEventListener("change", markDraftDirty);
     document.addEventListener("click", handleDocumentNavigation);
@@ -6467,6 +6504,7 @@ function WorkflowStartPageContent({
         WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
         handleRouteChangeRequest,
       );
+      document.removeEventListener("click", markCreateInteraction);
       document.removeEventListener("input", markDraftDirty);
       document.removeEventListener("change", markDraftDirty);
       document.removeEventListener("click", handleDocumentNavigation);
@@ -9824,6 +9862,12 @@ function WorkflowStartPageContent({
     const requestSerial = submitExpansionRequestIdRef.current + 1;
     submitExpansionRequestIdRef.current = requestSerial;
     const requestId = `submit-${requestSerial}`;
+    const createRevision = createDraftRevisionRef.current;
+    const submissionHref = window.location.href;
+    const isCurrentCreate = () => pageMode.mode !== "create" || (
+      createMountedRef.current && createDraftRevisionRef.current === createRevision &&
+      window.location.href === submissionHref && submitExpansionRequestIdRef.current === requestSerial
+    );
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
     // Hold the check from the click itself: pre-request checks can await
@@ -9836,6 +9880,7 @@ function WorkflowStartPageContent({
     let submissionAppliedTemplates = appliedTemplates;
     let submitExpandedWorkflowPublish: Record<string, unknown> | null = null;
     const clearSubmitBusy = () => {
+      if (!createMountedRef.current || submitExpansionRequestIdRef.current !== requestSerial) return;
       submitExpansionInFlightRef.current = false;
       setIsSubmitting(false);
       releaseSubmitArrowExit();
@@ -9847,6 +9892,7 @@ function WorkflowStartPageContent({
       message: string,
       target: WorkflowStartFieldTarget | null = null,
     ) => {
+      if (!isCurrentCreate()) { clearSubmitBusy(); return; }
       setSubmitMessage(message);
       if (target) {
         setInvalidFieldTarget(target);
@@ -10510,7 +10556,7 @@ function WorkflowStartPageContent({
         return;
       }
       const scheduleDate = new Date(scheduledFor);
-      if (Number.isNaN(scheduleDate.getTime()) || scheduleDate <= new Date()) {
+      if (Number.isNaN(scheduleDate.getTime()) || (pageMode.mode !== "create" && scheduleDate <= new Date())) {
         rejectSubmit("Scheduled time must be a valid future date.", {
           control: "scheduledFor",
         });
@@ -10560,6 +10606,18 @@ function WorkflowStartPageContent({
       };
     }
 
+    const uploadAttachment = async (
+      file: File, context: { kind: "objective" } | { kind: "step"; stepLabel: string },
+    ) => {
+      const cacheKey = JSON.stringify([artifactCreateEndpoint, normalizedRepository, context]);
+      const cache = attachmentUploadsRef.current.get(file) ?? new Map<string, StepAttachmentRef>();
+      const existing = cache.get(cacheKey);
+      if (existing) return existing;
+      const ref = await createInputAttachmentArtifact(artifactCreateEndpoint, file, normalizedRepository, context);
+      cache.set(cacheKey, ref);
+      attachmentUploadsRef.current.set(file, cache);
+      return ref;
+    };
     const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     let didNavigateAfterSubmit = false;
@@ -10580,12 +10638,7 @@ function WorkflowStartPageContent({
         const uploadPromises: Promise<AttachmentUploadResult>[] =
           selectedObjectiveAttachmentFiles.map(async (file) => {
             try {
-              const ref = await createInputAttachmentArtifact(
-                artifactCreateEndpoint,
-                file,
-                normalizedRepository,
-                { kind: "objective" },
-              );
+              const ref = await uploadAttachment(file, { kind: "objective" });
               return {
                 ok: true,
                 targetKey: objectiveTargetKey,
@@ -10615,12 +10668,7 @@ function WorkflowStartPageContent({
           uploadPromises.push(
             ...files.map(async (file) => {
               try {
-                const ref = await createInputAttachmentArtifact(
-                  artifactCreateEndpoint,
-                  file,
-                  normalizedRepository,
-                  { kind: "step", stepLabel: `Step ${index + 1}` },
-                );
+                const ref = await uploadAttachment(file, { kind: "step", stepLabel: `Step ${index + 1}` });
                 return {
                   ok: true,
                   targetKey,
@@ -11230,8 +11278,35 @@ function WorkflowStartPageContent({
         schedulePayload;
     }
 
+    let createIntent: CreateSubmissionIntent | null = null;
+    if (pageMode.mode === "create") {
+      if (!isCurrentCreate()) { clearSubmitBusy(); return; }
+      createIntentsRef.current ??= new CreateSubmissionIntents(`${createSubmissionScope()}:${navigationKey}`);
+      // Relative scheduling authors a delay, not a fresh timestamp on each retry.
+      const identityBody = scheduleMode === "deferred_minutes" ? {
+        ...requestBody,
+        payload: { ...recordValue(requestBody.payload), schedule: {
+          mode: "deferred_minutes", minutes: Number(scheduleDeferredMinutes.trim()),
+        } },
+      } : requestBody;
+      createIntent = createIntentsRef.current.forRequest(identityBody);
+      // An unchanged uncertain/accepted request must reach admission replay
+      // even when its original scheduled time passed while the response was lost.
+      if (scheduleMode === "once" && new Date(scheduledFor) <= new Date() &&
+        !createIntent.uncertain && !createIntent.accepted) {
+        rejectSubmit("Scheduled time must be a valid future date.", { control: "scheduledFor" });
+        return;
+      }
+      if (scheduleMode === "deferred_minutes" && schedulePayload) {
+        createIntent.scheduledFor ??= String(schedulePayload.scheduledFor);
+        schedulePayload.scheduledFor = createIntent.scheduledFor;
+        createIntentsRef.current.save(createIntent);
+      }
+      taskPayload.idempotencyKey = createIntent.key;
+    }
+    const createIntentStore = createIntentsRef.current;
     try {
-      let inputArtifactRef: string | null = null;
+      let inputArtifactRef: string | null = createIntent?.inputArtifactRef ?? null;
       const submittedPayload = requestBody.payload as Record<string, unknown>;
       const temporalDraftData =
         pageMode.mode !== "create" ? temporalDraftQuery.data : undefined;
@@ -11374,7 +11449,7 @@ function WorkflowStartPageContent({
         !isExactRerun &&
         (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
           (pageMode.mode !== "create" && Boolean(existingInputArtifactRef)));
-      if (shouldCreateInputArtifact) {
+      if (shouldCreateInputArtifact && !inputArtifactRef) {
         const sourceWorkflowId =
           pageMode.mode === "rerun" ? String(pageMode.executionId || "").trim() : null;
         const artifact = await createInputArtifact(
@@ -11384,6 +11459,12 @@ function WorkflowStartPageContent({
           { sourceWorkflowId },
         );
         inputArtifactRef = artifact.artifactId;
+        if (createIntent) {
+          createIntent.inputArtifactRef = inputArtifactRef;
+          createIntentStore?.save(createIntent);
+        }
+      }
+      if (inputArtifactRef) {
         artifactPayload.inputArtifactRef = inputArtifactRef;
         stripOversizedInlineInstructions({ payload: artifactPayload });
       }
@@ -11411,26 +11492,48 @@ function WorkflowStartPageContent({
         return;
       }
 
-      const response = await fetch(temporalCreateEndpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-      if (!response.ok) {
-        const detail = await responseErrorDetail(
-          response,
-          "Failed to start workflow.",
-        );
-        if (detail.code?.startsWith("dependency_")) {
-          setDependencyMessage(detail.message);
-          return;
+      if (!isCurrentCreate()) return;
+      let created = createIntent?.accepted;
+      if (!created) {
+        if (createIntent?.uncertain && scheduleMode === "recurring") {
+          throw new Error("Schedule creation outcome is unknown. Check Schedules before starting another schedule.");
         }
-        throw new Error(detail.message);
+        if (createIntent) {
+          createIntent.uncertain = true;
+          createIntentStore?.save(createIntent);
+        }
+        const response = await fetch(temporalCreateEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+        if (!response.ok) {
+          if (createIntent && response.status >= 400 && response.status < 500 && response.status !== 408) {
+            createIntent.uncertain = false;
+            createIntentStore?.save(createIntent);
+          }
+          const detail = await responseErrorDetail(response, "Failed to start workflow.");
+          if (!isCurrentCreate()) return;
+          if (detail.code?.startsWith("dependency_")) {
+            setDependencyMessage(detail.message);
+            return;
+          }
+          throw new Error(detail.message);
+        }
+        created = createSubmissionResult((await response.json()) as ExecutionCreateResponse);
+        if (createIntent && !createSubmissionDestination(created)) {
+          throw new Error("Start acknowledgment did not identify a result. Retry to reconcile the same request.");
+        }
+        if (createIntent) {
+          // Admission is confirmed before optional artifact bookkeeping. Never
+          // turn a later linking failure into another Create request.
+          createIntent.accepted = created;
+          createIntent.uncertain = false;
+          createIntentStore?.save(createIntent);
+        }
       }
-      const created = (await response.json()) as ExecutionCreateResponse;
+      if (!isCurrentCreate()) return;
+      if (createIntent) setAcceptedCreatePath(createSubmissionDestination(created) || null);
       if (inputArtifactRef) {
         await linkInputArtifact(inputArtifactRef, created);
       }
@@ -11443,17 +11546,12 @@ function WorkflowStartPageContent({
           label: attachment.filename,
         });
       }
+      if (!isCurrentCreate()) return;
       if (remediationDraftIdRef.current) {
         clearRemediationCreateDraft(remediationDraftIdRef.current);
         remediationDraftIdRef.current = null;
       }
-      const redirectPath =
-        String(created.redirectPath || "").trim() ||
-        (created.definitionId
-          ? `/schedules/${encodeURIComponent(created.definitionId)}`
-          : created.workflowId
-            ? `/workflows/${encodeURIComponent(created.workflowId)}?source=temporal`
-            : "");
+      const redirectPath = createSubmissionDestination(created);
       if (!redirectPath) {
         throw new Error(
           "Workflow was started but no redirect path was returned.",
@@ -11467,8 +11565,19 @@ function WorkflowStartPageContent({
       navigateTo(redirectPath);
       didNavigateAfterSubmit = true;
     } catch (error) {
+      if (!isCurrentCreate()) return;
       const failure =
         error instanceof Error ? error : new Error("Failed to start workflow.");
+      if (createIntent?.uncertain && scheduleMode === "recurring") {
+        setSubmitMessage(`Schedule creation outcome is unknown. Check Schedules before starting another schedule. ${failure.message}`);
+        focusSubmitErrorRef.current = true;
+        return;
+      }
+      if (createIntent?.accepted) {
+        setSubmitMessage(`Workflow was started. Follow-up bookkeeping did not finish: ${failure.message} Retry safely or open the accepted result.`);
+        focusSubmitErrorRef.current = true;
+        return;
+      }
       // Detect network-level fetch failures (TypeError: "Failed to fetch")
       // and log additional diagnostics to help troubleshoot.
       if (
@@ -13842,6 +13951,9 @@ function WorkflowStartPageContent({
               {submitMessage}
             </p>
           ) : null}
+          {acceptedCreatePath ? (
+            <a href={acceptedCreatePath}>Open accepted result</a>
+          ) : null}
           {branchStatusMessage ? (
             <p className="queue-authoring-controls-status small">
               {branchStatusMessage}
@@ -14159,16 +14271,18 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 }
 
 function WorkflowStartPageWithRouterLocation({ payload }: { payload: BootPayload }) {
-  const { search: searchString } = useLocation();
-  return <WorkflowStartPageWithSearch payload={payload} searchString={searchString} />;
+  const { search: searchString, key, pathname } = useLocation();
+  return <WorkflowStartPageWithSearch payload={payload} searchString={searchString} navigationKey={`${pathname}:${key}`} />;
 }
 
 function WorkflowStartPageWithSearch({
   payload,
   searchString,
+  navigationKey = "",
 }: {
   payload: BootPayload;
   searchString: string;
+  navigationKey?: string;
 }) {
   const displayMode = readWorkflowListDisplayMode(payload);
   const search = useMemo(
@@ -14176,7 +14290,7 @@ function WorkflowStartPageWithSearch({
     [searchString],
   );
   if (displayMode === "table") {
-    return <WorkflowStartPageContent payload={payload} searchString={searchString} />;
+    return <WorkflowStartPageContent payload={payload} searchString={searchString} navigationKey={navigationKey} />;
   }
   const cfg = readWorkflowStartDashboardConfig(payload);
   const sidebarVisible = displayMode === "sidebar"
@@ -14194,7 +14308,7 @@ function WorkflowStartPageWithSearch({
         <div className="workflow-workspace-sidebar-slot" hidden aria-hidden="true" />
       )}
       <main className="workflow-start-primary" aria-label="Create workflow">
-        <WorkflowStartPageContent payload={payload} searchString={searchString} />
+        <WorkflowStartPageContent payload={payload} searchString={searchString} navigationKey={navigationKey} />
       </main>
     </div>
   );
