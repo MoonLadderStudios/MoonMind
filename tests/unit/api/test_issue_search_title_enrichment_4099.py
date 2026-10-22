@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio import workflow
 
-from api_service.db.models import Base, Preset, PresetScopeType
+from api_service.db.models import Base, Preset
 from api_service.services.presets.catalog import PresetCatalogService
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
@@ -62,7 +62,7 @@ async def _seeded_annotations(session, tmp_path) -> dict[str, dict]:
     await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
     result = await session.execute(
         select(Preset).where(
-            Preset.scope_type == PresetScopeType.GLOBAL,
+            Preset.scope_type.is_(None),
             Preset.scope_ref.is_(None),
         )
     )
@@ -110,8 +110,6 @@ async def test_expansion_preserves_title_enrichment_in_plan_snapshot(
             await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
             expanded = await service.expand_template(
                 slug=_SEARCH_PRESET,
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
             )
@@ -128,7 +126,7 @@ async def test_expansion_preserves_title_enrichment_in_plan_snapshot(
                 session=session,
                 initial_parameters={
                     "workflow": {
-                        "taskTemplate": {"slug": _SEARCH_PRESET, "scope": "global"},
+                        "taskTemplate": {"slug": _SEARCH_PRESET},
                         "inputs": {},
                     }
                 },

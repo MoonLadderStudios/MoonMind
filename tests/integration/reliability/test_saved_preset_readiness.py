@@ -19,7 +19,6 @@ from api_service.db import base as db_base
 from api_service.db.models import Base, Preset, PresetScopeType
 from api_service.services.presets.catalog import (
     PresetCatalogService,
-    PresetValidationError,
 )
 from moonmind.workflows.executions.preset_readiness import saved_preset_capability_check
 from moonmind.workflows.temporal.activity_catalog import (
@@ -54,7 +53,6 @@ async def boundary(tmp_path, monkeypatch):
         session.add(
             Preset(
                 slug=seed["slug"],
-                scope_type=PresetScopeType.GLOBAL,
                 title=seed["title"],
                 description=seed["description"],
                 required_capabilities=seed["requiredCapabilities"],
@@ -73,7 +71,6 @@ async def boundary(tmp_path, monkeypatch):
             session.add(
                 Preset(
                     slug=shared["slug"],
-                    scope_type=PresetScopeType.GLOBAL,
                     title=shared["title"],
                     description=shared["description"],
                     required_capabilities=shared.get("requiredCapabilities", []),
@@ -110,7 +107,11 @@ async def boundary(tmp_path, monkeypatch):
     monkeypatch.setattr(run_module.workflow, "execute_activity", execute)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
     monkeypatch.setattr(
-        run_module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", continued_run_id=None)
+        run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2", continued_run_id=None
+        ),
     )
     workflow = run_module.MoonMindRunWorkflow()
     workflow._owner_id = OWNER
@@ -121,9 +122,13 @@ async def boundary(tmp_path, monkeypatch):
 
 
 def parameters():
-    return load_replay("saved-preset-verification-capabilities", "manifest.json")[
+    saved = load_replay("saved-preset-verification-capabilities", "manifest.json")[
         "initialParameters"
     ]
+    for applied in saved["task"].get("appliedStepTemplates", []):
+        applied.pop("scope", None)
+        applied.pop("scopeRef", None)
+    return saved
 
 
 @pytest.mark.parametrize("plan_ref", [None, "art_saved_plan"])
@@ -163,9 +168,7 @@ async def test_current_preset_requirements_admit_saved_schedule(boundary, runtim
         saved["targetRuntime"] = runtime
     async with sessions() as session:
         catalog = PresetCatalogService(session)
-        current = await catalog.get_template(
-            slug="github-issue-search-and-implement", scope="global", scope_ref=None
-        )
+        current = await catalog.get_template(slug="github-issue-search-and-implement")
     saved["requiredCapabilities"] = current["requiredCapabilities"]
     # Refreshed schedules carry the author-scope choice (MoonLadderStudios/MoonMind#4257).
     saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": False}
@@ -218,7 +221,9 @@ async def test_existing_history_and_continuation_keep_admitted_progress(
         monkeypatch.setattr(
             run_module.workflow,
             "info",
-            lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", continued_run_id="old-run"),
+            lambda: SimpleNamespace(
+                task_queue="mm.workflow.user.v2", continued_run_id="old-run"
+            ),
         )
     else:
         saved.pop("system")
@@ -277,7 +282,7 @@ async def test_missing_definition_is_actionable_without_source_substitution(boun
     assert raised.value.details[0]["presets"][0]["reason"] == "preset_unavailable"
 
 
-async def test_projection_excludes_large_inputs_and_keeps_included_scope():
+async def test_projection_excludes_large_inputs_and_preserves_legacy_scope_evidence():
     saved = parameters()
     saved["task"]["appliedStepTemplates"] = [
         {
@@ -289,7 +294,7 @@ async def test_projection_excludes_large_inputs_and_keeps_included_scope():
             }
         }
     ]
-    check = saved_preset_capability_check(saved, principal=OWNER)
+    check = saved_preset_capability_check(saved)
     assert check.presets == [
         {"slug": "root", "scope": "personal"},
         {"slug": "child", "scope": "global"},
@@ -297,11 +302,13 @@ async def test_projection_excludes_large_inputs_and_keeps_included_scope():
     assert "private" not in check.model_dump_json()
 
 
-async def test_personal_preset_uses_execution_owner_without_global_fallback(boundary):
+async def test_legacy_personal_provenance_requires_refresh_without_instance_fallback(
+    boundary,
+):
     workflow, _, sessions = boundary
     saved = parameters()
     saved["task"]["appliedStepTemplates"][0]["scope"] = "personal"
-    # Refreshed personal schedule carries the author-scope choice (#4257).
+    saved["task"]["appliedStepTemplates"][0]["scopeRef"] = OWNER
     saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": False}
     async with sessions() as session:
         session.add(
@@ -309,23 +316,38 @@ async def test_personal_preset_uses_execution_owner_without_global_fallback(boun
                 slug="github-issue-search-and-implement",
                 scope_type=PresetScopeType.PERSONAL,
                 scope_ref=OWNER,
-                title="Personal implementation",
-                description="Owner's contract",
+                title="Retained legacy contents",
+                description="Not converted",
                 required_capabilities=["git", "gh"],
             )
         )
         await session.commit()
-    assert (
+    original = deepcopy(saved)
+    with pytest.raises(ApplicationError) as raised:
         await workflow._run_planning_stage(
             parameters=saved, input_ref=None, plan_ref="art_saved_plan"
         )
-        == "art_saved_plan"
-    )
-    saved["task"]["appliedStepTemplates"][0]["scopeRef"] = "another-owner"
-    with pytest.raises(PresetValidationError, match="owner does not match"):
+    assert raised.value.type == "saved_preset_capabilities_stale"
+    assert saved == original
+
+
+async def test_instance_readiness_does_not_use_unconverted_legacy_preset(boundary):
+    workflow, _, sessions = boundary
+    saved = parameters()
+    async with sessions() as session:
+        root = (
+            await session.execute(
+                select(Preset).where(Preset.slug == "github-issue-search-and-implement")
+            )
+        ).scalar_one()
+        root.scope_type = PresetScopeType.PERSONAL
+        root.scope_ref = OWNER
+        await session.commit()
+    with pytest.raises(ApplicationError) as raised:
         await workflow._run_planning_stage(
             parameters=saved, input_ref=None, plan_ref="art_saved_plan"
         )
+    assert raised.value.details[0]["presets"][0]["reason"] == "preset_unavailable"
 
 
 @pytest.mark.parametrize("include_kind", ["include", "preset"])
@@ -335,9 +357,7 @@ async def test_new_current_include_capabilities_require_refresh(boundary, includ
     async with sessions() as session:
         root = (
             await session.execute(
-                select(Preset).where(
-                    Preset.slug == "github-issue-search-and-implement"
-                )
+                select(Preset).where(Preset.slug == "github-issue-search-and-implement")
             )
         ).scalar_one()
         root.required_capabilities = ["git", "gh"]
@@ -349,7 +369,6 @@ async def test_new_current_include_capabilities_require_refresh(boundary, includ
         session.add(
             Preset(
                 slug="new-child",
-                scope_type=PresetScopeType.GLOBAL,
                 title="New child",
                 description="Added after this schedule was saved",
                 steps=[{"kind": "include", "slug": "test-runner", "alias": "tests"}],
@@ -358,7 +377,6 @@ async def test_new_current_include_capabilities_require_refresh(boundary, includ
         session.add(
             Preset(
                 slug="test-runner",
-                scope_type=PresetScopeType.GLOBAL,
                 title="Test runner",
                 description="Required verification capability",
                 required_capabilities=["docker"],
@@ -388,9 +406,7 @@ async def test_invalid_current_include_graph_never_launches_work(boundary, inval
     async with sessions() as session:
         root = (
             await session.execute(
-                select(Preset).where(
-                    Preset.slug == "github-issue-search-and-implement"
-                )
+                select(Preset).where(Preset.slug == "github-issue-search-and-implement")
             )
         ).scalar_one()
         root.required_capabilities = ["git", "gh"]
@@ -399,14 +415,13 @@ async def test_invalid_current_include_graph_never_launches_work(boundary, inval
                 "kind": "include",
                 "alias": "new-child",
                 "slug": root.slug if invalid == "cycle" else "new-child",
-                "scope": "personal" if invalid == "personal" else "global",
+                **({"scope": "personal"} if invalid == "personal" else {}),
             }
         ]
         if invalid == "inactive":
             session.add(
                 Preset(
                     slug="new-child",
-                    scope_type=PresetScopeType.GLOBAL,
                     title="Inactive child",
                     description="Unavailable requirement source",
                     is_active=False,
@@ -432,9 +447,7 @@ async def test_invalid_current_include_graph_never_launches_work(boundary, inval
 async def _with_current_capabilities(saved, sessions):
     async with sessions() as session:
         catalog = PresetCatalogService(session)
-        current = await catalog.get_template(
-            slug="github-issue-search-and-implement", scope="global", scope_ref=None
-        )
+        current = await catalog.get_template(slug="github-issue-search-and-implement")
     saved["requiredCapabilities"] = current["requiredCapabilities"]
     return saved
 
@@ -489,7 +502,9 @@ async def test_continued_run_keeps_pinned_search_behavior(boundary, monkeypatch)
     monkeypatch.setattr(
         run_module.workflow,
         "info",
-        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", continued_run_id="old-run"),
+        lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2", continued_run_id="old-run"
+        ),
     )
     assert (
         await workflow._run_planning_stage(
@@ -498,3 +513,99 @@ async def test_continued_run_keeps_pinned_search_behavior(boundary, monkeypatch)
         == "art_saved_plan"
     )
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "instance_marker", [False, True], ids=["retained-command", "instance-command"]
+)
+async def test_instance_patch_preserves_retained_activity_command_shape(
+    boundary, monkeypatch, instance_marker
+):
+    from moonmind.workflows.executions.preset_readiness import (
+        INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
+    )
+
+    workflow, _, _ = boundary
+    saved = parameters()
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": False}
+    original = deepcopy(saved)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda marker: (
+            instance_marker
+            if marker == INSTANCE_PRESET_CAPABILITY_READINESS_PATCH
+            else True
+        ),
+    )
+    execute = AsyncMock(return_value={"status": "ready"})
+    monkeypatch.setattr(run_module.workflow, "execute_activity", execute)
+    assert (
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+        )
+        == "art_saved_plan"
+    )
+    payload = execute.await_args.args[1]
+    if instance_marker:
+        assert "principal" not in payload
+        assert payload["presets"] == [{"slug": "github-issue-search-and-implement"}]
+    else:
+        assert payload["principal"] == OWNER
+        assert payload["presets"] == [
+            {"slug": "github-issue-search-and-implement", "scope": "global"}
+        ]
+    assert saved == original
+
+
+async def test_recorded_pre_instance_activity_retry_survives_catalog_conversion(
+    boundary, monkeypatch
+):
+    from api_service.services.single_user_conversion import run_guarded_upgrade
+    from moonmind.workflows.executions.preset_readiness import (
+        INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
+    )
+
+    workflow, calls, sessions = boundary
+    saved = parameters()
+    saved["task"]["appliedStepTemplates"][0]["scope"] = "global"
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": False}
+    async with sessions() as session:
+        for row in (await session.scalars(select(Preset))).all():
+            row.scope_type = PresetScopeType.GLOBAL
+            row.seed_source = f"{row.slug}.yaml"
+        await session.commit()
+        assert (await run_guarded_upgrade(session, operator_authorized=True)).published
+        current = await PresetCatalogService(session).get_template(
+            slug="github-issue-search-and-implement"
+        )
+    saved["requiredCapabilities"] = current["requiredCapabilities"]
+    original = deepcopy(saved)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch: patch != INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
+    )
+    execute = run_module.workflow.execute_activity
+    recorded = []
+
+    async def capture(name, payload, **kwargs):
+        recorded.append(deepcopy(payload))
+        return await execute(name, payload, **kwargs)
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", capture)
+    assert (
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="retained-plan"
+        )
+        == "retained-plan"
+    )
+    assert recorded[0]["principal"] == OWNER
+    assert recorded[0]["presets"][0]["scope"] == "global"
+    # The exact recorded wire payload, not a refreshed command, is retried.
+    retry = TemporalPlanActivities(artifact_service=None)
+    assert await retry.plan_check_preset_capabilities(deepcopy(recorded[0])) == {
+        "status": "ready"
+    }
+    assert saved == original
+    assert calls == [ACTIVITY]

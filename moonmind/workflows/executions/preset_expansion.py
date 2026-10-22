@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 from moonmind.config.settings import settings
 from moonmind.workflows.executions.preset_goal_scheduler import (
@@ -62,7 +61,6 @@ async def expand_preset_for_child_run(
     session: Any,
     initial_parameters: Mapping[str, Any] | None,
     allow_goal_schedule: bool = True,
-    user_id: Any | None = None,
 ) -> dict[str, Any]:
     """Expand stored preset provenance into executable workflow steps."""
 
@@ -101,7 +99,6 @@ async def expand_preset_for_child_run(
         template_slug = schedule.slug
         template_payload = {
             "slug": schedule.slug,
-            "scope": "global",
         }
         existing_inputs = _coerce_mapping(task_payload.get("inputs"))
         task_payload["inputs"] = {**schedule.inputs, **existing_inputs}
@@ -119,15 +116,18 @@ async def expand_preset_for_child_run(
         ExpandOptions,
         PresetCatalogService,
         PresetNotFoundError,
+        PresetValidationError,
     )
 
-    template_scope = str(template_payload.get("scope") or "global").strip() or "global"
-    template_scope_ref = (
-        str(
-            template_payload.get("scopeRef") or template_payload.get("scope_ref") or ""
-        ).strip()
-        or None
-    )
+    if any(
+        template_payload.get(key) is not None
+        for key in ("scope", "scopeRef", "scope_ref")
+    ):
+        raise PresetValidationError(
+            "Saved preset uses legacy catalog scope; reapply the preset from "
+            "the instance catalog before starting new work."
+        )
+
     template_inputs = _coerce_mapping(task_payload.get("inputs"))
     repository = (
         task_payload.get("repository")
@@ -167,22 +167,10 @@ async def expand_preset_for_child_run(
     catalog = PresetCatalogService(session)
     expand_kwargs = {
         "slug": template_slug,
-        "scope": template_scope,
-        "scope_ref": template_scope_ref,
         "inputs": template_inputs,
         "context": template_context,
         "options": ExpandOptions(should_enforce_step_limit=True),
     }
-    # Recent catalog choices retain UUID attribution during the account-free
-    # transition. Execution principals such as "system" carry machine authority
-    # and must never be coerced into an account for this optional UI metadata.
-    if user_id is not None:
-        try:
-            catalog_subject = UUID(str(user_id))
-        except ValueError:
-            catalog_subject = None
-        if catalog_subject is not None:
-            expand_kwargs["user_id"] = catalog_subject
     try:
         expanded = await catalog.expand_template(**expand_kwargs)
     except PresetNotFoundError:
@@ -247,9 +235,12 @@ async def expand_preset_for_child_run(
         task_payload["checkpointBranching"] = dict(expanded_checkpoint_branching)
     task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {
-        **template_payload,
+        **{
+            key: value
+            for key, value in template_payload.items()
+            if key not in {"scope", "scopeRef", "scope_ref"}
+        },
         "slug": str(applied_template.get("slug") or template_slug),
-        "scope": template_scope,
     }
     parameters[payload_key] = task_payload
     parameters["stepCount"] = len(expanded_steps)

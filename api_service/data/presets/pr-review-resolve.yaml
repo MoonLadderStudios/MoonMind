@@ -4,7 +4,6 @@ description: Fix comments, CI, or conflicts on an existing pull request and wait
   durably for external checks. By default, request an automated review for every
   new head. Optionally finish with a final pr-resolver pass that merges the pull
   request.
-scope: global
 tags:
 - github
 - pull-request

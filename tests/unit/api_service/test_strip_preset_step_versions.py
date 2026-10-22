@@ -18,7 +18,6 @@ from api_service.db.models import (
     Base,
     Preset,
     PresetReleaseStatus,
-    PresetScopeType,
 )
 from api_service.services.presets.catalog import (
     ExpandOptions,
@@ -154,15 +153,14 @@ async def test_expansion_repaired_after_stripping_persisted_versions(tmp_path) -
         await conn.run_sync(Base.metadata.create_all)
 
     try:
-        # Persisted definitions exactly as the 327 copy would have left them:
-        # the include still carries the now-forbidden version field.
+        # Instance definitions can retain the historical include version field.
+        # Scope conversion is covered by the shared guarded-conversion tests.
         parent_steps = [
             {"type": "Skill", "instructions": "parent step", "skill": {"name": "demo"}},
             {
                 "kind": "include",
                 "slug": "child-preset",
                 "alias": "child",
-                "scope": "global",
                 "version": "1.0.0",
                 "inputMapping": {},
             },
@@ -171,7 +169,7 @@ async def test_expansion_repaired_after_stripping_persisted_versions(tmp_path) -
             session.add(
                 Preset(
                     slug="child-preset",
-                    scope_type=PresetScopeType.GLOBAL,
+                    scope_type=None,
                     scope_ref=None,
                     title="Child",
                     description="child",
@@ -194,7 +192,7 @@ async def test_expansion_repaired_after_stripping_persisted_versions(tmp_path) -
             session.add(
                 Preset(
                     slug="parent-preset",
-                    scope_type=PresetScopeType.GLOBAL,
+                    scope_type=None,
                     scope_ref=None,
                     title="Parent",
                     description="parent",
@@ -214,8 +212,6 @@ async def test_expansion_repaired_after_stripping_persisted_versions(tmp_path) -
         async with maker() as session:
             expanded = await PresetCatalogService(session).expand_template(
                 slug="parent-preset",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
@@ -225,8 +221,8 @@ async def test_expansion_repaired_after_stripping_persisted_versions(tmp_path) -
 
         # Apply the migration's sanitization to the persisted steps.
         async with maker() as session:
-            parent = await PresetCatalogService(session)._get_template_for_scope(
-                slug="parent-preset", scope=PresetScopeType.GLOBAL, scope_ref=None
+            parent = await PresetCatalogService(session)._get_instance_template(
+                slug="parent-preset"
             )
             sanitized, changed = strip_step_versions(list(parent.steps or []))
             assert changed is True
@@ -237,8 +233,6 @@ async def test_expansion_repaired_after_stripping_persisted_versions(tmp_path) -
         async with maker() as session:
             expanded = await PresetCatalogService(session).expand_template(
                 slug="parent-preset",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
