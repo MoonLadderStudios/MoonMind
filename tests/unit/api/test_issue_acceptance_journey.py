@@ -189,8 +189,6 @@ async def test_expanded_preset_requires_pr_for_candidate_and_closes_verified_tar
             )
             expanded = await catalog.expand_template(
                 slug="github-issue-implement",
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={},
             )

@@ -3271,7 +3271,7 @@ async def startup_event():
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
     _register_settings_change_subscribers()
     # Single-user (#4346): conversion eligibility runs before the
-    # deployment preset seed sync. The sync creates global presets with
+    # deployment preset seed sync. The sync creates instance presets with
     # created_by=None, and evaluating the guard first keeps those
     # deployment-owned rows from ever gating the cutover; the unowned
     # probe additionally excludes seed-stamped rows on later restarts.
@@ -3330,8 +3330,6 @@ async def _sync_preset_seed_catalog() -> None:
             result = await service.sync_seed_templates(seed_dir=_PRESET_SEED_DIR)
             deactivated = await service.deactivate_seed_templates(
                 slugs=_LEGACY_PRESET_SLUGS_TO_DEACTIVATE,
-                scope="global",
-                scope_ref=None,
             )
     except (OperationalError, ProgrammingError) as exc:
         logger.warning(

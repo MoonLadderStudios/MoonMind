@@ -51,8 +51,6 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
 
             expanded = await service.expand_template(
                 slug="batch-github-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "issue_range": "3142-3150",
                     "run_ref": "preset:github-issue-orchestrate",
@@ -120,14 +118,10 @@ async def test_batch_github_workflows_exposes_constraints_input(tmp_path):
             await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
             template = await service.get_template(
                 slug="batch-github-workflows",
-                scope="global",
-                scope_ref=None,
             )
 
             expanded = await service.expand_template(
                 slug="batch-github-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "issue_range": "3142-3150",
                     "run_ref": "preset:github-issue-implement",
@@ -177,8 +171,6 @@ async def test_batch_github_workflows_materializes_constraints_via_file(tmp_path
 
             expanded = await service.expand_template(
                 slug="batch-github-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "issue_range": "3142-3150",
                     "run_ref": "preset:github-issue-implement",
@@ -206,8 +198,6 @@ async def test_batch_github_workflows_uses_repository_context(tmp_path):
 
             expanded = await service.expand_template(
                 slug="batch-github-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "issue_range": "3142-3150",
                     "run_ref": "preset:github-issue-implement",
@@ -236,14 +226,10 @@ async def test_batch_github_workflows_defaults_child_publish_to_pr(tmp_path):
             await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
             template = await service.get_template(
                 slug="batch-github-workflows",
-                scope="global",
-                scope_ref=None,
             )
 
             expanded = await service.expand_template(
                 slug="batch-github-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "issue_range": "3142-3150",
                     "repository": "MoonLadderStudios/MoonMind",

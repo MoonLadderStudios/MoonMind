@@ -5606,6 +5606,13 @@ def test_continue_as_new_carries_only_compact_issue_authority(
         "presetBrief": "Large issue content belongs in artifacts.",
     }
     if provider == "github":
+        context["issueClaimLease"] = {
+            "owner": "default/issue-workflow",
+            "attemptId": "attempt-1",
+            "repository": "org/repo",
+            "issueNumber": 3963,
+            "commentId": "123",
+        }
         context["issue"] = {
             "repository": "org/repo",
             "number": 3963,
@@ -5627,7 +5634,11 @@ def test_continue_as_new_carries_only_compact_issue_authority(
         run_workflow_module.workflow,
         "patched",
         lambda patch_id: patch_enabled
-        and patch_id == RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
+        and patch_id
+        in {
+            RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
+            "run-remediation-issue-lease-continuation-v1",
+        },
     )
     carried = mock_run_workflow._build_remediation_loop_continue_as_new_input(
         ordered_nodes=[]
@@ -5645,6 +5656,11 @@ def test_continue_as_new_carries_only_compact_issue_authority(
     assert restored._assessment_context == (assessment if patch_enabled else {})
     if patch_enabled:
         assert restored._trusted_issue_context == carried["trustedIssueContext"]
+        if provider == "github":
+            assert (
+                restored._trusted_issue_context["issueClaimLease"]
+                == context["issueClaimLease"]
+            )
     else:
         assert restored._trusted_issue_context is None
 

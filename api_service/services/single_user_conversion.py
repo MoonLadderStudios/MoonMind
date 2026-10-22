@@ -49,7 +49,7 @@ from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from sqlalchemy import String, UniqueConstraint, and_, cast, func, or_, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,7 +57,7 @@ from api_service.db.models import Base, Uuid, mutable_json_dict
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_REVISION = "396_artifact_operator_recovery"
+SCHEMA_REVISION = "397_instance_preset_catalog"
 
 DEPLOYMENT_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -278,6 +278,7 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
     ("workflow_runs", "created_by", "uuid_fk"),
     ("preset_versions", "reviewed_by", "uuid_fk"),
     ("presets", "created_by", "uuid_fk"),
+    ("presets", "scope_ref", "preset_scope"),
     ("preset_favorites", "user_id", "uuid_fk"),
     ("preset_recents", "user_id", "uuid_fk"),
     ("settings_overrides", "user_id", "uuid_fk"),
@@ -500,7 +501,7 @@ async def _lock_conversion_evidence(session: AsyncSession) -> None:
 
     connection = await session.connection()
     present = set(await connection.run_sync(lambda c: sa_inspect(c).get_table_names()))
-    names = {"user", "user_profile", "settings_overrides"}
+    names = {"user", "user_profile", "settings_overrides", "single_user_conversion_runs"}
     names.update(t for t, _c, _k in _PRINCIPAL_SURFACES)
     names.update(t for t, _c in _UNOWNED_TRACKED)
     names.update(_UNOWNED_CONJUNCTIONS)
@@ -543,6 +544,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     from api_service.db.models import User
 
     inv = ConversionInventory()
+    # Certificate-dependent exemptions are bound by the unowned-row counts in
+    # the fingerprint. Hashing the ledger itself would invalidate our own
+    # completed conversion's idempotent replay even when no row relies on it.
+    instance_admitted = await _has_certified_instance_admission(session, inv)
     users = (await session.execute(select(User.id))).scalars().all()
     inv.user_ids = sorted(str(u) for u in users)
     user_set = set(inv.user_ids)
@@ -567,6 +572,11 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         # each identity. Keep millions of repeated artifact creators in SQL;
         # the separate count below still binds retained row counts.
         stmt = select(col).where(col.is_not(None)).distinct()
+        if table_name == "presets":
+            # Creator UUID on an admitted instance preset is preserved history.
+            stmt = stmt.where(table.c.scope_type.is_not(None))
+        if kind == "preset_scope":
+            stmt = stmt.where(cast(table.c.scope_type, String) == "personal")
         if kind == "active_artifact_claim":
             # Expired claims no longer protect retention or count quota. Their
             # owner, like pin/deletion actors, is preserved provenance only.
@@ -590,8 +600,16 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                 # A persisted zero User disables this classification entirely.
                 continue
             norm = _looks_like_uuid(raw)
+            if (
+                kind == "preset_scope"
+                and norm == DEPLOYMENT_SUBJECT_ID
+                and norm not in user_set
+            ):
+                continue  # retained synthetic local scope, not a real User
             if norm and not (kind == "uuid_fk" and norm == DEPLOYMENT_SUBJECT_ID):
                 principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
+            elif kind == "preset_scope" and not norm:
+                _record_inventory_error(inv, "principal:presets.scope_ref")
             elif kind in {"artifact_principal", "active_artifact_claim"} and not _is_artifact_machine_principal(raw):
                 # Unknown text is not proof of a machine or a person.
                 _record_inventory_error(inv, f"principal:{table_name}.{column_name}")
@@ -690,20 +708,31 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                             .where(col.is_(None))
                         )
                     ).scalar() or 0
+            elif table_name == "recurring_workflow_definitions" and instance_admitted:
+                # Account-free schedule creation deliberately stores no person.
+                # A certified cutover establishes this deployment provenance;
+                # without it, historical missing owners remain unresolved.
+                nulls = 0
             else:
-                # Deployment-seeded catalog presets carry trusted provenance
-                # (``seed_source`` stamped by the seed sync), so only
-                # ownerless rows *without* that provenance are ambiguous
-                # retained data. Legacy user presets have no seed source and
-                # are still counted here. Startup also evaluates eligibility
-                # before seeding, so its own seeds never gate the cutover.
                 if table_name == "presets" and "seed_source" in table.c:
-                    seed_col = table.c["seed_source"]
+                    predicates = [
+                        col.is_(None), table.c.seed_source.is_(None),
+                        table.c.scope_type.is_not(None),
+                        or_(cast(table.c.scope_type, String) != "personal",
+                            table.c.scope_ref.is_(None)),
+                    ]
+                    if instance_admitted:
+                        # The predecessor OperatorAdmission has no User.id and
+                        # saved custom presets as global with no scope_ref or
+                        # seed_source. Only that exact shape inherits certified
+                        # instance provenance; missing personal scopes do not.
+                        predicates.append(or_(
+                            cast(table.c.scope_type, String) != "global",
+                            table.c.scope_ref.is_not(None),
+                        ))
                     nulls = (
                         await session.execute(
-                            select(func.count())
-                            .select_from(table)
-                            .where(col.is_(None), seed_col.is_(None))
+                            select(func.count()).select_from(table).where(*predicates)
                         )
                     ).scalar() or 0
                 else:
@@ -862,6 +891,30 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         if not _is_absent_table_error(exc):
             _record_inventory_error(inv, "settings")
 
+    # Preset definitions, preference timestamps and future schedule targets
+    # participate in stale-preflight fencing, not only their row counts.
+    preset_content_entries: list[str] = []
+    for table_name in (
+        "presets",
+        "preset_favorites",
+        "preset_recents",
+        "recurring_workflow_definitions",
+    ):
+        if inv.inventory_errors:
+            # Refused attribution cannot be repaired by hashing more content.
+            # Preserve the same bounded startup path as artifact inventory.
+            break
+        table = metadata.tables.get(table_name)
+        if table is None:
+            continue
+        try:
+            async with session.begin_nested():
+                _count, digest = await _table_content_digest(session, table, list(table.c))
+            preset_content_entries.append(f"{table_name}:{digest}")
+        except SQLAlchemyError as exc:
+            if not _is_absent_table_error(exc):
+                _record_inventory_error(inv, f"preset_evidence:{table_name}")
+
     inv.source_content_hash = hashlib.sha256(
         (
             hashlib.sha256(
@@ -871,7 +924,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             + hashlib.sha256("\n".join(sorted(artifact_content_entries)).encode()).hexdigest()
             + "|"
             + hashlib.sha256(
-                "\n".join(sorted(profile_content_entries)).encode()
+                "\n".join(sorted(profile_content_entries + preset_content_entries)).encode()
             ).hexdigest()
         ).encode()
     ).hexdigest()
@@ -1196,9 +1249,18 @@ def _replay_stored_result(
     )
 
 
-def _is_production_completion(result: dict[str, Any]) -> bool:
-    """Require current committed production proof, not truthy serialized data."""
-    if result.get("schema_revision") != SCHEMA_REVISION:
+def _is_production_completion(
+    result: dict[str, Any],
+    *,
+    schema_revision: str = SCHEMA_REVISION,
+    required_transforms: tuple[str, ...] | None = None,
+) -> bool:
+    """Require committed production proof, not truthy serialized data.
+
+    Current readiness always uses the defaults. Explicit predecessor arguments
+    qualify historical admission only, never current conversion completion.
+    """
+    if not isinstance(result, dict) or result.get("schema_revision") != schema_revision:
         return False
     decision = result.get("decision")
     if (
@@ -1211,7 +1273,8 @@ def _is_production_completion(result: dict[str, Any]) -> bool:
     outcomes = result.get("transforms")
     if not isinstance(outcomes, dict) or any(
         not isinstance(outcomes.get(name), dict)
-        for name in DEFAULT_SUBSYSTEM_TRANSFORMS
+        for name in (required_transforms if required_transforms is not None
+                     else DEFAULT_SUBSYSTEM_TRANSFORMS)
     ):
         return False
     artifact_outcome = outcomes["artifacts"]
@@ -1224,6 +1287,45 @@ def _is_production_completion(result: dict[str, Any]) -> bool:
         return False
     return (
         0 <= artifact_outcome["recovery_grants"] <= artifact_outcome["preserved"]
+    )
+
+
+async def _has_certified_instance_admission(
+    session: AsyncSession, inventory: ConversionInventory,
+) -> bool:
+    """Recognize account-free rows emitted after a proven instance cutover.
+
+    Revision 396 established operator admission before presets became nullable.
+    Its production certificate can explain predecessor global presets and
+    ownerless schedules, but cannot publish or bypass the current conversion.
+    Uncertified/custom completion and older unknown contracts grant nothing.
+    """
+    predecessor = "396_artifact_operator_recovery"
+    ledger = _ledger_class()
+    try:
+        async with session.begin_nested():
+            results = (
+                await session.execute(
+                    select(ledger.result_json).where(
+                        ledger.status == "complete",
+                        ledger.result_json["schema_revision"].as_string().in_(
+                            (predecessor, SCHEMA_REVISION)
+                        ),
+                    )
+                )
+            ).scalars().all()
+    except Exception as exc:
+        if not _is_absent_table_error(exc):
+            _record_inventory_error(inventory, "instance_admission")
+        return False
+    return any(
+        _is_production_completion(result)
+        or _is_production_completion(
+            result,
+            schema_revision=predecessor,
+            required_transforms=("profile_secrets", "artifacts"),
+        )
+        for result in results
     )
 
 
@@ -1269,7 +1371,8 @@ async def completed_guarded_upgrade(session: AsyncSession) -> ApplyResult | None
     result = dict(row.result_json)
     if not _is_production_completion(result):
         return None
-    if await _has_pending_artifact_recovery(session):
+    if (await _has_pending_artifact_recovery(session)
+            or await _has_pending_preset_conversion(session)):
         return None
     return _replay_stored_result(
         row.preflight_digest,
@@ -1320,18 +1423,13 @@ async def _preserved_instance_subsystems(session: AsyncSession) -> set[str]:
 
     Schedule and execution owners already treat historical human fields as
     provenance. Rewriting those rows would change accepted work needlessly.
-    Workspace settings and global presets likewise need no data conversion.
-    Legacy personal data still needs its owning conversion; the existence of
-    a single person alone does not make it visible to instance consumers.
+    Workspace settings likewise need no data conversion. Presets have their
+    own concrete transform, including retained global rows and preferences.
+    Legacy personal settings still need their owning conversion; a single
+    person alone does not make those settings visible to instance consumers.
     Called only under the guarded apply's inventory locks with real defaults.
     """
-    from api_service.db.models import (
-        Preset,
-        PresetFavorite,
-        PresetRecent,
-        PresetScopeType,
-        SettingsOverride,
-    )
+    from api_service.db.models import SettingsOverride
 
     async def has_rows(model, predicate) -> bool:
         try:
@@ -1357,14 +1455,6 @@ async def _preserved_instance_subsystems(session: AsyncSession) -> set[str]:
         ),
     ):
         preserved.add("settings")
-    personal_catalog = await has_rows(
-        Preset,
-        or_(Preset.scope_type != PresetScopeType.GLOBAL, Preset.scope_ref.is_not(None)),
-    )
-    personal_favorites = await has_rows(PresetFavorite, PresetFavorite.user_id != zero)
-    personal_recents = await has_rows(PresetRecent, PresetRecent.user_id != zero)
-    if not (personal_catalog or personal_favorites or personal_recents):
-        preserved.add("presets")
     return preserved
 
 
@@ -1479,6 +1569,7 @@ async def apply_conversion(
                     if not production_transforms or (
                         _is_production_completion(stored)
                         and not await _has_pending_artifact_recovery(session)
+                        and not await _has_pending_preset_conversion(session)
                     ):
                         return _replay_stored_result(
                             preflight_result.digest, decision, stored
@@ -1568,6 +1659,7 @@ async def apply_conversion(
                     if not production_transforms or (
                         _is_production_completion(stored)
                         and not await _has_pending_artifact_recovery(session)
+                        and not await _has_pending_preset_conversion(session)
                     ):
                         return _replay_stored_result(
                             preflight_result.digest, decision, stored
@@ -1808,14 +1900,264 @@ async def artifacts_transform(
     return {"recovery_grants": granted, "preserved": len(rows)}
 
 
+async def _preset_rows(session: AsyncSession, model):
+    """Read an existing conversion surface, tolerating only absent tables."""
+    try:
+        async with session.begin_nested():
+            return list((await session.execute(select(model))).scalars())
+    except SQLAlchemyError as exc:
+        if _is_absent_table_error(exc):
+            return []
+        raise
+
+
+async def _has_pending_preset_conversion(session: AsyncSession) -> bool:
+    from api_service.db.models import Preset, PresetFavorite, PresetRecent
+
+    for model, column in (
+        (Preset, Preset.scope_type),
+        (PresetFavorite, PresetFavorite.user_id),
+        (PresetRecent, PresetRecent.user_id),
+    ):
+        try:
+            async with session.begin_nested():
+                if (
+                    await session.execute(
+                        select(model.id).where(column.is_not(None)).limit(1)
+                    )
+                ).first() is not None:
+                    return True
+        except SQLAlchemyError as exc:
+            if not _is_absent_table_error(exc):
+                raise
+    return False
+
+
+async def presets_transform(
+    session: AsyncSession, eligible_ids: list[str]
+) -> dict[str, Any]:
+    """Reconcile the existing catalog under the shared attribution/writer lock.
+
+    Only actual slug collisions change names; stable preset identities preserve
+    preferences and other ID references. Mutable future composition references
+    are rebound by their original identity, never by newest-row wins. Recorded
+    execution snapshots and historical receipts are deliberately not rewritten.
+    """
+    from copy import deepcopy
+    from datetime import UTC
+
+    from api_service.db.models import (
+        Preset,
+        PresetFavorite,
+        PresetRecent,
+        PresetScopeType,
+        RecurringWorkflowDefinition,
+        User,
+    )
+
+    rows = await _preset_rows(session, Preset)
+    eligible = set(eligible_ids)
+    # The old disabled local operator has no stored User. A real zero User
+    # remains a person and must have passed the same attribution boundary.
+    zero_user = (
+        await session.execute(
+            select(User.id).where(User.id == UUID(DEPLOYMENT_SUBJECT_ID)).limit(1)
+        )
+    ).scalar_one_or_none()
+    if zero_user is None:
+        eligible.add(DEPLOYMENT_SUBJECT_ID)
+    legacy = [row for row in rows if row.scope_type is not None]
+    original = {}
+    for row in rows:
+        scope = row.scope_type.value if row.scope_type is not None else None
+        key = (scope, row.scope_ref, row.slug)
+        if key in original:
+            raise StaleAttributionError("ambiguous legacy preset identity")
+        original[key] = row
+        if row.scope_type is not None:
+            if row.created_by is not None and str(row.created_by) not in eligible:
+                raise StaleAttributionError("preset creator is not proven eligible")
+            if (
+                row.scope_type is PresetScopeType.PERSONAL
+                and _looks_like_uuid(row.scope_ref) not in eligible
+            ):
+                raise StaleAttributionError(
+                    "personal preset attribution is not proven eligible"
+                )
+
+    # Retained activity inputs still carry the original scoped identity. Store
+    # only its stable-ID mapping in the same production receipt as this rewrite;
+    # scopeRef is historical evidence, never runtime ownership or admission.
+    legacy_identities = [
+        {
+            "scope": row.scope_type.value,
+            "scopeRef": row.scope_ref,
+            "slug": row.slug,
+            "presetId": str(row.id),
+        }
+        for row in sorted(legacy, key=lambda row: str(row.id))
+    ]
+
+    # Existing instance names win, then a managed seed's stable public name.
+    # No content is merged, even when two definitions happen to be identical.
+    by_slug: dict[str, list] = {}
+    for row in rows:
+        by_slug.setdefault(row.slug, []).append(row)
+    occupied = set(by_slug)
+    renamed: dict[UUID, str] = {}
+    for slug, group in sorted(by_slug.items()):
+        group.sort(
+            key=lambda r: (
+                r.scope_type is not None,
+                not bool(r.seed_source and r.created_by is None),
+                str(r.id),
+            )
+        )
+        for row in group[1:]:
+            suffix = row.id.hex
+            # Full stable ID makes collisions bounded and deterministic. A
+            # literal existing name can still conflict, so suffix only this
+            # row again rather than renaming an unrelated catalog entry.
+            candidate = f"{slug[:95]}-{suffix}"
+            counter = 1
+            while candidate in occupied:
+                counter += 1
+                tail = f"-{suffix}-{counter}"
+                candidate = f"{slug[:128-len(tail)]}{tail}"
+            occupied.add(candidate)
+            renamed[row.id] = candidate
+
+    def convert_ref(ref: dict, default_scope, default_ref):
+        old_scope = ref.get("scope", default_scope)
+        old_ref = ref.get("scopeRef", ref.get("scope_ref", default_ref))
+        if old_scope in (None, "global"):
+            old_ref = None
+        key = (old_scope, old_ref, str(ref.get("slug", "")))
+        target = original.get(key)
+        # A known unavailable reference must remain an actionable failure;
+        # never accidentally bind it to a different collision winner.
+        if target is None:
+            raise StaleAttributionError(
+                "preset reference cannot be resolved without substitution"
+            )
+        ref["slug"] = renamed.get(target.id, target.slug)
+        ref.pop("scope", None)
+        ref.pop("scopeRef", None)
+        ref.pop("scope_ref", None)
+
+    def convert_steps(steps, scope, scope_ref):
+        result = deepcopy(steps)
+        for step in result:
+            if not isinstance(step, dict):
+                continue
+            if step.get("kind") == "include":
+                convert_ref(step, scope, scope_ref)
+            elif step.get("type") == "preset" and isinstance(step.get("preset"), dict):
+                convert_ref(step["preset"], scope, scope_ref)
+        return result
+
+    # Convert references before changing their lookup identities.
+    for row in rows:
+        scope = row.scope_type.value if row.scope_type is not None else None
+        row.steps = convert_steps(row.steps or [], scope, row.scope_ref)
+    for schedule in await _preset_rows(session, RecurringWorkflowDefinition):
+        target = deepcopy(schedule.target or {})
+        parameters = target.get("initialParameters", target.get("initial_parameters"))
+        if not isinstance(parameters, dict):
+            continue
+        task = parameters.get("workflow", parameters.get("task"))
+        if not isinstance(task, dict):
+            continue
+        owner_ref = str(schedule.owner_user_id) if schedule.owner_user_id else None
+
+        def convert_saved(node, inherited_scope=None, inherited_ref=owner_ref):
+            if not isinstance(node, dict):
+                return
+            scope = node.get("scope", inherited_scope)
+            slug = str(node.get("slug", ""))
+            if (
+                scope is None
+                and (None, None, slug) in original
+                and ("global", None, slug) in original
+            ):
+                # Old omitted scopes meant global; new omitted scopes mean
+                # instance. A mixed catalog cannot establish which was saved.
+                raise StaleAttributionError("ambiguous omitted preset scope")
+            if (
+                scope is None
+                and (None, None, str(node.get("slug", ""))) not in original
+            ):
+                scope = "global"  # legacy omitted-scope authoring default
+            old_ref = node.get("scopeRef", node.get("scope_ref", inherited_ref))
+            if node.get("slug"):
+                convert_ref(node, scope, old_ref)
+            for child in node.get("includes") or []:
+                convert_saved(child, scope, old_ref)
+            if isinstance(node.get("composition"), dict):
+                convert_saved(node["composition"], scope, old_ref)
+
+        for key in ("taskTemplate", "task_template"):
+            convert_saved(task.get(key))
+        for key in ("appliedStepTemplates", "applied_step_templates"):
+            for applied in task.get(key) or []:
+                convert_saved(applied)
+        # Only provenance references changed. Saved inputs, capabilities and
+        # expanded steps remain exactly as admitted; no re-expansion occurs.
+        schedule.target = target
+    for row in legacy:
+        row.slug = renamed.get(row.id, row.slug)
+        row.scope_type = None
+        row.scope_ref = None
+    await session.flush()
+
+    merged = 0
+    for model, timestamp in (
+        (PresetFavorite, "created_at"),
+        (PresetRecent, "applied_at"),
+    ):
+        groups: dict[UUID, list] = {}
+        for item in await _preset_rows(session, model):
+            if item.user_id is not None and str(item.user_id) not in eligible:
+                raise StaleAttributionError(
+                    "preset preference owner is not proven eligible"
+                )
+            if item.template_id not in {row.id for row in rows}:
+                raise StaleAttributionError("preset preference target is missing")
+            groups.setdefault(item.template_id, []).append(item)
+        for group in groups.values():
+            group.sort(key=lambda item: (item.user_id is not None, item.id))
+            survivor = group[0]
+            dates = [getattr(item, timestamp) for item in group]
+
+            def aware(value):
+                return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+            # A favorite keeps its earliest creation; recents retain last use.
+            chosen = (max if model is PresetRecent else min)(dates, key=aware)
+            for duplicate in group[1:]:
+                await session.delete(duplicate)
+                merged += 1
+            await session.flush()
+            survivor.user_id = None
+            setattr(survivor, timestamp, chosen)
+    await session.flush()
+    return {
+        "converted": len(legacy),
+        "renamed_collisions": len(renamed),
+        "deduplicated_preferences": merged,
+        "legacy_identities": legacy_identities,
+    }
+
+
 #: Production subsystem transforms registered into the shared entrypoint.
 #: Only subsystems that mutate data need transforms. Existing instance-scoped
-#: settings/presets and owner-independent schedules/executions are preserved by
-#: the guarded entrypoint. Personal settings/presets and legacy workflow data
-#: still refuse until their owning conversion is available.
+#: workspace settings and owner-independent schedules/executions are preserved
+#: by the guarded entrypoint. All retained preset scopes use the real transform;
+#: personal settings and legacy workflow data still require their own conversion.
 DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
     "profile_secrets": profile_secrets_transform,
     "artifacts": artifacts_transform,
+    "presets": presets_transform,
 }
 
 

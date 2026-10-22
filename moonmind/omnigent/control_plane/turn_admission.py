@@ -168,15 +168,14 @@ def assert_remediation_does_not_broaden(
     *,
     recorded: ImmutableTurnAuthority | None,
     requested: ImmutableTurnAuthority | None,
+    separate_step: bool = False,
 ) -> None:
     """Fail closed when a remediation turn changes bounded execution authority.
 
-    MoonLadderStudios/MoonMind#3707 AC6 bounds a remediation attempt by the
-    authority of the attempt it repairs, so *every* immutable dimension is
-    off-limits -- a remediation may not raise model effort, adopt a rotated
-    Provider Profile generation, or retarget another repository or branch any
-    more than it may change harness, model, workspace, Skill, launch, or
-    publication authority.
+    A separate remediation step has its own admitted Skill snapshot, which
+    can differ from the implementation or verification step it repairs.
+    Execution authority remains bounded by the repaired step; same-session
+    turns also retain their recorded Skill snapshot.
 
     Dimensions the remediation does not assert are left to the session's
     recorded authority; only an asserted *different* value is a broadening.
@@ -187,7 +186,8 @@ def assert_remediation_does_not_broaden(
     broadened = tuple(
         name
         for name in IMMUTABLE_TURN_AUTHORITY_DIMENSIONS
-        if requested.dimensions.get(name) is not None
+        if not (separate_step and name == "resolvedSkillsRef")
+        and requested.dimensions.get(name) is not None
         and recorded.dimensions.get(name) is not None
         and requested.dimensions.get(name) != recorded.dimensions.get(name)
     )

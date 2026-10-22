@@ -2,7 +2,6 @@ slug: github-issue-implement
 title: GitHub Issue Implement
 description: Implement a GitHub issue by assessing repository state, completing missing
   work, creating a pull request, and updating the issue.
-scope: global
 tags:
 - github
 - implementation
@@ -139,7 +138,6 @@ steps:
 - kind: include
   slug: issue-implement-assessment
   alias: assess
-  scope: global
   inputMapping:
     issue_provider: github
     issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
@@ -197,7 +195,6 @@ steps:
 - kind: include
   slug: issue-implement-work-pr
   alias: work-pr
-  scope: global
   inputMapping:
     issue_provider: github
     issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
