@@ -292,11 +292,13 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
     ("temporal_artifact_use_claims", "owner_principal", "active_artifact_claim"),
 )
 
+# Schedules are already instance resources: their supported producer stores
+# no human owner, and conversion preserves them. Non-null schedule references
+# still participate in the principal inventory above.
 # Null-owner rows in these tables are ambiguous retained data, not
 # deployment-owned by assumption. Each entry names a single owner
 # column whose null (on a non-empty table) refuses conversion.
 _UNOWNED_TRACKED: tuple[tuple[str, str], ...] = (
-    ("recurring_workflow_definitions", "owner_user_id"),
     ("presets", "created_by"),
     ("temporal_executions", "owner_id"),
     ("temporal_artifacts", "created_by_principal"),
@@ -708,11 +710,6 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                             .where(col.is_(None))
                         )
                     ).scalar() or 0
-            elif table_name == "recurring_workflow_definitions" and instance_admitted:
-                # Account-free schedule creation deliberately stores no person.
-                # A certified cutover establishes this deployment provenance;
-                # without it, historical missing owners remain unresolved.
-                nulls = 0
             else:
                 if table_name == "presets" and "seed_source" in table.c:
                     predicates = [
@@ -1296,8 +1293,8 @@ async def _has_certified_instance_admission(
     """Recognize account-free rows emitted after a proven instance cutover.
 
     Revision 396 established operator admission before presets became nullable.
-    Its production certificate can explain predecessor global presets and
-    ownerless schedules, but cannot publish or bypass the current conversion.
+    Its production certificate can explain predecessor global presets,
+    but cannot publish or bypass the current conversion.
     Uncertified/custom completion and older unknown contracts grant nothing.
     """
     predecessor = "396_artifact_operator_recovery"

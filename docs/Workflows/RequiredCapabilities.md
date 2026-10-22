@@ -180,15 +180,19 @@ New recurring executions check the current declared requirements of their saved
 presets and their current include graphs before planning or agent launch,
 including executions with a saved plan. Both canonical `workflow` parameters and
 persisted `task` parameters carry this provenance.
-`plan.check_preset_capabilities` reads the scoped catalog at an Activity boundary;
+`plan.check_preset_capabilities` reads the instance catalog at an Activity boundary;
 the workflow carries only compact preset provenance and admitted requirements.
 A missing capability or unavailable source returns `saved_preset_capabilities_stale`
 with the affected presets and a plan-refresh path. Unknown readiness never
 authorizes launch. A preset content change that adds no unmet requirement does
-not block an otherwise valid schedule. The check covers newly included presets
-using the catalog's normal scope, availability, and cycle rules. It reads declared
-requirements without rendering a new plan; conditional include requirements
-remain conservative until the operator reapplies the preset with its inputs.
+not block an otherwise valid schedule. An active definition retained in the old
+scoped catalog instead reports a conversion blocker: inspect `singleUserConversion`
+in `/healthz` and API startup logs. Complete guarded conversion and seed sync
+before retrying; recreating the schedule cannot repair an unavailable catalog.
+The check covers newly included presets using the catalog's availability and
+cycle rules. It reads declared requirements without rendering a new plan;
+conditional include requirements remain conservative until the operator
+reapplies the preset with its inputs.
 
 Saved schedules do not inherit new capabilities merely because a deployment
 updated its presets. Reapply the current presets in Workflow Create and admit a
@@ -196,10 +200,11 @@ replacement schedule, preserving authored inputs, repository, provider profile,
 model, effort, publication policy, and cadence; retire the previous schedule
 after the replacement is verified. Refreshing admission evidence or restarting
 workers does not rewrite the saved task. The check does not grant permissions,
-edit steps, or change runtime selection. Historical provenance without a scope
-uses the preset catalog's global default; personal presets use the execution
-owner and cannot substitute another owner's definition. Recorded pre-check
-histories and Continue-As-New executions retain their admitted progress.
+edit steps, or change runtime selection. Recorded pre-instance Activity inputs
+resolve scoped provenance through committed conversion identity evidence;
+unresolved scoped references require explicit refresh, never substitution by
+the current slug winner. Recorded pre-check histories and Continue-As-New
+executions retain their admitted progress.
 
 ## 9. Authorization and policy boundary
 

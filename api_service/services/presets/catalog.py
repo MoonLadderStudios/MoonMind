@@ -2011,7 +2011,25 @@ class PresetCatalogService:
                         slug=_normalize_slug(slug)
                     )
                 except PresetNotFoundError:
-                    gaps.append({"slug": slug, "reason": "preset_unavailable"})
+                    retained = await self._session.scalar(
+                        select(Preset.id)
+                        .where(
+                            Preset.slug == _normalize_slug(slug),
+                            Preset.scope_type.is_not(None),
+                            Preset.is_active.is_(True),
+                        )
+                        .limit(1)
+                    )
+                    gaps.append(
+                        {
+                            "slug": slug,
+                            "reason": (
+                                "preset_catalog_conversion_required"
+                                if retained is not None
+                                else "preset_unavailable"
+                            ),
+                        }
+                    )
                     continue
             try:
                 required = await self._current_declared_capabilities(
@@ -2036,6 +2054,9 @@ class PresetCatalogService:
         missing = sorted(
             {cap for gap in gaps for cap in gap.get("missingCapabilities", [])}
         )
+        conversion_required = any(
+            gap.get("reason") == "preset_catalog_conversion_required" for gap in gaps
+        )
         detail = ", ".join(missing) if missing else "an available preset definition"
         return {
             "status": "refresh_required",
@@ -2044,11 +2065,20 @@ class PresetCatalogService:
             "missingCapabilities": missing,
             "presets": gaps,
             "message": (
-                f"Saved schedule requires a plan refresh: missing {detail}. "
-                "In Workflow Create, reapply the listed presets and save a replacement "
-                "schedule with the same repository, runtime, model, effort, and cadence; "
-                "then retire the old schedule. Review the newly required capabilities "
-                "before admission. Restarting workers does not refresh saved requirements."
+                "Saved schedule is blocked because its preset catalog requires "
+                "guarded single-user conversion. Inspect singleUserConversion in "
+                "/healthz and the API startup logs, resolve the reported conversion "
+                "blocker, then restart the API to complete conversion and seed "
+                "synchronization. The saved schedule and its admitted requirements "
+                "are preserved; readiness will be checked again on its next launch."
+                if conversion_required
+                else (
+                    f"Saved schedule requires a plan refresh: missing {detail}. "
+                    "In Workflow Create, reapply the listed presets and save a replacement "
+                    "schedule with the same repository, runtime, model, effort, and cadence; "
+                    "then retire the old schedule. Review the newly required capabilities "
+                    "before admission. Restarting workers does not refresh saved requirements."
+                )
             ),
         }
 
