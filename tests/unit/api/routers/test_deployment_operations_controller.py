@@ -23,7 +23,7 @@ from api_service.api.routers.deployment_operations import (
     _get_temporal_execution_service,
     router,
 )
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access
 from moonmind.workflows.skills import deployment_controller as controller_client
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -104,16 +104,7 @@ def _override_user(app: FastAPI, *, is_superuser: bool) -> None:
         is_active=True,
         is_superuser=is_superuser,
     )
-    for dependency in {get_current_user(), get_current_user_optional()}:
-        app.dependency_overrides[dependency] = lambda user=user: user
-    for route in router.routes:
-        for dep in getattr(route, "dependant", None).dependencies:
-            if getattr(dep.call, "__name__", "") in {
-                "_current_user_fallback",
-                "_strict_current_user",
-                "_optional_current_user",
-            }:
-                app.dependency_overrides[dep.call] = lambda user=user: user
+    app.dependency_overrides[get_instance_access] = lambda user=user: user
 
 
 def _client(*, is_superuser: bool = True) -> tuple[TestClient, _TemporalStopped]:

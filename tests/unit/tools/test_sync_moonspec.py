@@ -70,6 +70,122 @@ def _run(root: Path, *flags: str) -> int:
     )
 
 
+def _add_preset(source_root: Path, content: str, *, target: str | None = None) -> Path:
+    bundle = source_root / "bundle"
+    preset = bundle / "presets" / "moonspec-orchestrate.yaml"
+    preset.parent.mkdir()
+    preset.write_text(content, encoding="utf-8")
+    recipe = bundle / "projections" / "moonmind.yaml"
+    target = target or "api_service/data/presets/moonspec-orchestrate.yaml"
+    recipe.write_text(
+        recipe.read_text(encoding="utf-8").replace(
+            "unexpectedLegacy:\n",
+            "  - from: presets/moonspec-orchestrate.yaml\n"
+            f"    to: {target}\n"
+            "    mode: file\n"
+            "unexpectedLegacy:\n",
+        ),
+        encoding="utf-8",
+    )
+    return preset
+
+
+@pytest.mark.parametrize(
+    "scope_line", ["scope: global\n", '"scope": "global" # legacy\n', ""]
+)
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_preset_projection_removes_only_legacy_global_scope(tmp_path, scope_line, newline):
+    source_root = _make_bundle(tmp_path)
+    prefix = "# Canonical workflow instructions stay unchanged.\nslug: moonspec-orchestrate\n"
+    suffix = "steps:\n  - title: Preserve nested scope\n    scope: execution\n"
+    source_bytes = (prefix + scope_line + suffix).replace("\n", newline).encode("utf-8")
+    source = _add_preset(source_root, "")
+    source.write_bytes(source_bytes)
+    target = tmp_path / "api_service/data/presets/moonspec-orchestrate.yaml"
+
+    assert _run(tmp_path, "--write") == 0
+    assert target.read_bytes() == (prefix + suffix).replace("\n", newline).encode("utf-8")
+    assert source.read_bytes() == source_bytes
+    assert _run(tmp_path, "--check") == 0
+    modified_at = target.stat().st_mtime_ns
+    assert _run(tmp_path, "--write") == 0
+    assert target.stat().st_mtime_ns == modified_at
+
+
+@pytest.mark.parametrize(
+    "edit",
+    ["scope: global\n", "scope: personal\n", "title: Hand-edited workflow\n"],
+)
+def test_preset_projection_still_checks_all_generated_bytes(tmp_path, capsys, edit):
+    source_root = _make_bundle(tmp_path)
+    _add_preset(source_root, "slug: moonspec-orchestrate\nscope: global\n")
+    assert _run(tmp_path, "--write") == 0
+    target = tmp_path / "api_service/data/presets/moonspec-orchestrate.yaml"
+    target.write_text(target.read_text(encoding="utf-8") + edit, encoding="utf-8")
+
+    assert _run(tmp_path, "--check") == 1
+    assert "content differs from moonspec/bundle" in capsys.readouterr().err
+    assert _run(tmp_path, "--write") == 0
+    assert target.read_text(encoding="utf-8") == "slug: moonspec-orchestrate\n"
+
+
+@pytest.mark.parametrize(
+    "scope", ["personal", "workspace", "null", "[global]", "!!int global"]
+)
+def test_preset_projection_rejects_unsupported_source_scope(tmp_path, capsys, scope):
+    source_root = _make_bundle(tmp_path)
+    _add_preset(source_root, f"slug: moonspec-orchestrate\nscope: {scope}\n")
+
+    assert _run(tmp_path, "--write") == 1
+    assert "unsupported preset scope" in capsys.readouterr().err
+    assert not (tmp_path / "api_service/data/presets/moonspec-orchestrate.yaml").exists()
+    assert not (tmp_path / ".agents").exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "scope: global\nscope: global\n",
+        "{scope: global, slug: moonspec-orchestrate}\n",
+        "scope: >-\n  global\n",
+    ],
+)
+def test_preset_projection_rejects_ambiguous_scope_syntax(tmp_path, capsys, content):
+    source_root = _make_bundle(tmp_path)
+    _add_preset(source_root, content)
+
+    assert _run(tmp_path, "--write") == 1
+    assert "unsupported preset scope" in capsys.readouterr().err
+    assert not (tmp_path / ".agents").exists()
+
+
+def test_preset_projection_tracks_upstream_changes(tmp_path, capsys):
+    source_root = _make_bundle(tmp_path)
+    source = _add_preset(source_root, "slug: moonspec-orchestrate\nscope: global\n")
+    assert _run(tmp_path, "--write") == 0
+    source.write_text(
+        source.read_text(encoding="utf-8") + "title: Canonical upstream update\n",
+        encoding="utf-8",
+    )
+
+    assert _run(tmp_path, "--check") == 1
+    assert "content differs from moonspec/bundle" in capsys.readouterr().err
+    assert _run(tmp_path, "--write") == 0
+    target = tmp_path / "api_service/data/presets/moonspec-orchestrate.yaml"
+    assert target.read_text(encoding="utf-8") == (
+        "slug: moonspec-orchestrate\ntitle: Canonical upstream update\n"
+    )
+
+
+def test_other_projection_targets_remain_byte_identical(tmp_path):
+    source_root = _make_bundle(tmp_path)
+    content = "slug: moonspec-orchestrate\nscope: global\n"
+    _add_preset(source_root, content, target="docs/preset-example.yaml")
+
+    assert _run(tmp_path, "--write") == 0
+    assert (tmp_path / "docs/preset-example.yaml").read_text(encoding="utf-8") == content
+
+
 def test_write_vendors_real_files_and_check_passes(tmp_path, capsys):
     _make_bundle(tmp_path)
 

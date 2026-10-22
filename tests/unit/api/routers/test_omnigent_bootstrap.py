@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import omnigent_bootstrap as bootstrap_router
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from moonmind.omnigent.bootstrap.models import (
     BootstrapDesired,
@@ -66,7 +66,7 @@ def client(monkeypatch):
         yield SimpleNamespace()
 
     app.dependency_overrides[get_async_session] = _session
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id="user-1", is_superuser=True
     )
     monkeypatch.setattr(

@@ -3079,6 +3079,24 @@ describe('Workflows Entrypoint', () => {
       });
     };
 
+    it('shows recorded profiles as unused for native workflows on desktop and mobile', async () => {
+      mockListAndFacets([profileRow('native-review', 'Review PR', {
+        selectionState: 'recorded',
+        profiles: [{ id: 'opencode-go-default', label: 'OpenCode Go', harness: 'opencode-native' }],
+        profileCount: 1,
+      }, { agentRequired: false })]);
+      const viewport = stubViewport(true);
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      await screen.findAllByText('Review PR');
+      expect(screen.getAllByText('Not used · native tools').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Harness: opencode-native')).toBeNull();
+      expect(screen.getAllByText('OpenCode Go').length).toBeGreaterThan(0);
+      act(() => viewport.setDesktop(false));
+      await waitFor(() => {
+        expect(document.querySelector('.queue-card')?.textContent).toContain('Not used · native tools');
+      });
+    });
+
     it('renders every recorded identity state from parsed rows on desktop and mobile', async () => {
       mockListAndFacets([
         profileRow('wf-single', 'Single profile', {

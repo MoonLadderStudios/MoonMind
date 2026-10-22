@@ -950,8 +950,9 @@ jobs:
       - name: Install the journey browser's Playwright runtime
         # The journeys open the dashboard compiled into the candidate image
         # from the job host, so Playwright belongs here and not in the image.
+        # Allow slow dependency mirrors to finish before running the journey.
         if: endsWith(matrix.suite, '-journey')
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium

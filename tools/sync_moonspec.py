@@ -3,13 +3,14 @@
 
 This is the canonical MoonSpec projection tool. It reads the bundle manifest
 (``moonspec/bundle/moonspec.bundle.yaml``) and the consumer projection recipe
-it names (``projections/moonmind.yaml``), then copies every mapped bundle file
-into the repository as a plain, byte-identical file.
+it names (``projections/moonmind.yaml``), then vendors every mapped bundle file
+as a real file. Files are byte-identical except for the MoonMind preset
+adapter, which removes the obsolete top-level ``scope: global`` field.
 
 Vendored copies are committed. Provenance is the ``moonspec`` submodule
 gitlink: the pinned submodule commit records exactly which bundle version the
 vendored files came from, and ``--check`` (run in CI) fails when the vendored
-files drift from the pinned bundle in either direction.
+files drift from the pinned bundle's MoonMind projection in either direction.
 
 Do not hand-edit vendored files; change the MoonSpec repo, bump the
 submodule, and re-run ``--write``.
@@ -58,6 +59,7 @@ class PlannedFile:
     source: Path
     source_rel: Path
     target: Path
+    content: bytes
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,49 @@ def _identity_prefixes(manifest: dict[str, Any]) -> tuple[str, str]:
     return skill_prefix, command_prefix.lstrip("/")
 
 
+def _projected_content(source: Path, target_rel: Path) -> bytes:
+    content = source.read_bytes()
+    if target_rel.parent != Path("api_service/data/presets") or target_rel.suffix not in {
+        ".yaml",
+        ".yml",
+    }:
+        return content
+
+    # MoonMind owns an instance catalog, not the upstream human-scope model.
+    # Adapt that consumer boundary without reserializing workflow instructions,
+    # changing the canonical bundle, or ignoring any generated-file drift.
+    text = content.decode("utf-8")
+    document = yaml.compose(text, Loader=yaml.SafeLoader)
+    if not isinstance(document, yaml.MappingNode):
+        raise TypeError(f"{source} must contain a preset YAML mapping")
+    scopes = [
+        (key, value)
+        for key, value in document.value
+        if isinstance(key, yaml.ScalarNode) and key.value == "scope"
+    ]
+    if not scopes:
+        return content
+    if len(scopes) != 1:
+        raise ValueError(f"unsupported preset scope in {source}: duplicate fields")
+    key, value = scopes[0]
+    if (
+        not isinstance(value, yaml.ScalarNode)
+        or value.tag != "tag:yaml.org,2002:str"
+        or value.value != "global"
+    ):
+        raise ValueError(f"unsupported preset scope in {source}: expected global")
+    if document.flow_style or key.start_mark.line != value.end_mark.line:
+        raise ValueError(
+            f"unsupported preset scope syntax in {source}: expected one block line"
+        )
+    lines = text.splitlines(keepends=True)
+    del lines[key.start_mark.line]
+    projected = "".join(lines)
+    # Removing an anchored field must not leave dangling YAML references.
+    yaml.safe_load(projected)
+    return projected.encode("utf-8")
+
+
 def _plan(source_root: Path, projection_name: str, repo_root: Path) -> Projection:
     bundle_root = _resolve_inside(source_root / "bundle", source_root, "bundle root")
     recipe = _projection_recipe(source_root, projection_name)
@@ -156,6 +201,7 @@ def _plan(source_root: Path, projection_name: str, repo_root: Path) -> Projectio
                     source=source,
                     source_rel=source.relative_to(bundle_root),
                     target=target,
+                    content=_projected_content(source, target.relative_to(repo_root)),
                 )
             )
         elif mode == "directory":
@@ -184,6 +230,9 @@ def _plan(source_root: Path, projection_name: str, repo_root: Path) -> Projectio
                         source=child,
                         source_rel=child.relative_to(bundle_root),
                         target=target_file,
+                        content=_projected_content(
+                            child, target_file.relative_to(repo_root)
+                        ),
                     )
                 )
         else:
@@ -276,7 +325,7 @@ def _target_matches(item: PlannedFile) -> bool:
         return False
     target_mode = stat.S_IMODE(item.target.stat().st_mode)
     return (
-        item.target.read_bytes() == item.source.read_bytes()
+        item.target.read_bytes() == item.content
         and _canonical_mode(target_mode) == _expected_mode(item)
     )
 
@@ -296,7 +345,7 @@ def _drift(plan: Projection, repo_root: Path) -> list[str]:
         elif not item.target.is_file():
             drift.append(f"missing: {rel}")
         else:
-            if item.target.read_bytes() != item.source.read_bytes():
+            if item.target.read_bytes() != item.content:
                 drift.append(f"content differs from moonspec/bundle: {rel}")
             target_mode = _canonical_mode(
                 stat.S_IMODE(item.target.stat().st_mode)
@@ -323,7 +372,7 @@ def _write(plan: Projection, repo_root: Path) -> tuple[list[str], list[str]]:
         item.target.parent.mkdir(parents=True, exist_ok=True)
         if item.target.is_symlink() or item.target.exists():
             item.target.unlink()
-        item.target.write_bytes(item.source.read_bytes())
+        item.target.write_bytes(item.content)
         item.target.chmod(_expected_mode(item))
         written.append(rel)
 

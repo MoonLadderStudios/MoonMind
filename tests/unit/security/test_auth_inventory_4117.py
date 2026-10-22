@@ -19,11 +19,9 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 
 from api_service import auth as auth_module
 from api_service import auth_providers as auth_providers_module
-from api_service.api.routers import worker_auth as worker_auth_module
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal import artifacts as artifact_module
@@ -138,39 +136,6 @@ def test_enabled_mode_service_principal_passes_owner_checks(monkeypatch):
         admitted_principal=OWNER_PRINCIPAL,
     )
     service._assert_mutation_access(artifact, principal=SERVICE_PRINCIPAL)
-
-
-# ---------------------------------------------------------------------------
-# Sanitized pre-change baseline: worker-auth gate error semantics
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_worker_auth_rejects_legacy_token_with_gone(monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
-    with pytest.raises(HTTPException) as exc_info:
-        await worker_auth_module._require_worker_auth(
-            worker_token="legacy-token", user=_user(OWNER_PRINCIPAL)
-        )
-    assert exc_info.value.status_code == 410
-    assert exc_info.value.detail["code"] == "worker_token_deprecated"
-
-
-@pytest.mark.asyncio
-async def test_worker_auth_resolves_oidc_principal(monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
-    resolved = await worker_auth_module._require_worker_auth(
-        worker_token=None, user=_user(OWNER_PRINCIPAL)
-    )
-    assert resolved.auth_source == "oidc"
-
-
-@pytest.mark.asyncio
-async def test_worker_auth_missing_credential_is_unauthorized(monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
-    with pytest.raises(HTTPException) as exc_info:
-        await worker_auth_module._require_worker_auth(worker_token=None, user=None)
-    assert exc_info.value.status_code == 401
 
 
 # ---------------------------------------------------------------------------

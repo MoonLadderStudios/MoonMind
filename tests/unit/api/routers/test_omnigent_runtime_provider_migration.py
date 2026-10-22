@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from api_service.api.routers import (
     omnigent_runtime_provider_migration as migration_router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 
 _CODEX_GATE = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
 _ROLLBACK_ENV = "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK"
@@ -24,7 +24,7 @@ _ROLLBACK_ENV = "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK"
 def _client(*, superuser: bool = True) -> TestClient:
     app = FastAPI()
     app.include_router(migration_router.router)
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=None, is_superuser=superuser
     )
     return TestClient(app)

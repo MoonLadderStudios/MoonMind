@@ -64,8 +64,6 @@ async def _expand(tmp_path, slug: str, **overrides: Any) -> list[dict[str, Any]]
         await service.sync_seed_templates(seed_dir=_SEED_DIR)
         expanded = await service.expand_template(
             slug=slug,
-            scope="global",
-            scope_ref=None,
             inputs=inputs,
             context={},
         )

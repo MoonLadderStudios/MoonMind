@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.instance_access import access_principal
 from api_service.api.schemas import WorkerPauseSnapshotResponse
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from api_service.services.system_operations import (
     SystemOperationUnavailableError,
     SystemOperationValidationError,
@@ -44,10 +46,10 @@ def _get_temporal_execution_service(
     )
 
 
-def _require_operation_permission(user: User, permission: str) -> None:
-    # Authorization is checked after identity resolution in every mode:
-    # the disabled local principal resolves with full local-administrator
-    # flags, so no mode-based bypass exists here.
+def _require_operation_permission(user: Any, permission: str) -> None:
+    # Authorization is checked after admission in every mode: operator
+    # admission and the retained local principal hold every operations
+    # permission, so no mode-based bypass exists here.
     if has_settings_permission(user, permission):
         return
     raise HTTPException(
@@ -72,7 +74,7 @@ def _validation_error(exc: SystemOperationValidationError) -> HTTPException:
 async def get_worker_pause_snapshot(
     session: AsyncSession = Depends(get_async_session),
     temporal_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> WorkerPauseSnapshotResponse:
     _require_operation_permission(user, "operations.read")
     return await SystemOperationsService(
@@ -85,12 +87,14 @@ async def submit_worker_pause_operation(
     payload: WorkerOperationCommand,
     session: AsyncSession = Depends(get_async_session),
     temporal_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> WorkerPauseSnapshotResponse:
     _require_operation_permission(user, "operations.invoke")
     service = SystemOperationsService(session, temporal_service=temporal_service)
     try:
-        return await service.submit(payload, actor_user_id=getattr(user, "id", None))
+        return await service.submit(
+            payload, actor_user_id=access_principal(user) or None
+        )
     except SystemOperationValidationError as exc:
         raise _validation_error(exc) from exc
     except SystemOperationUnavailableError as exc:

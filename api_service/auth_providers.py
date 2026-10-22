@@ -353,19 +353,40 @@ async def get_instance_access(
     until their owning conversion completes; no virtual person is made here.
     """
     if is_disabled_local_mode():
-        if not await _disabled_account_free_allowed(session):
-            from api_service.operator_admission import require_retained_operator_request
-
-            # An incomplete conversion cannot cut over the installed access
-            # authority. Require the retained real account; never invent one.
-            await require_retained_operator_request(request)
-            return await _load_disabled_user(session, allow_transient=False)
         from api_service.operator_admission import require_operator
 
         admission = await require_operator(request)
+        if not await _disabled_account_free_allowed(session):
+            # An incomplete conversion cannot cut over the installed access
+            # authority. Require the retained real account; never invent one.
+            return await _load_disabled_user(session, allow_transient=False)
         request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
         return admission
     return await get_current_user()(request, session)
+
+
+async def get_instance_operator_access(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),  # noqa: B008 - FastAPI injection
+) -> User | OperatorAdmission:
+    """Operator-only consumer with explicit credential precedence.
+
+    Disabled-mode operator admission is transport-based, not a bearer verifier.
+    A presented machine credential must therefore fail closed on this surface,
+    even when its peer could otherwise use local/ingress admission. Machine
+    protocols verify their own credentials at their separate scoped endpoints.
+    Authenticated deployments retain normal MoonMind session verification.
+    """
+    if (is_disabled_local_mode() and "authorization" in request.headers) or any(
+        name in request.headers
+        for name in (
+            "x-moonmind-execution-fanout",
+            "x-moonmind-worker-token",
+            "x-moonmind-integration-token",
+        )
+    ):
+        raise HTTPException(status_code=401, detail={"code": "auth_invalid"})
+    return await get_instance_access(request, session)
 
 
 async def get_instance_access_optional(

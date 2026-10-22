@@ -152,9 +152,11 @@ Through `deployment_release --omnigent-journal-prepare`, the bridge store replac
 
 ### 10.7 Verify desired state
 
-The controller observes installed services and concrete images, required health, ordinary workflow dispatch, and the operator access path. A running container does not prove that work can execute or that the dashboard serves the intended release. Post-apply verification accepts a run-to-completion service (such as `init-db`) that exited 0; any other non-running service fails its check.
+The controller observes installed services and concrete images, required health, ordinary workflow dispatch, and the operator access path; a running container does not prove that work can execute or that the dashboard serves the intended release. A run-to-completion service (such as `init-db`) passes when it exited 0; any other non-running service fails.
 
-An unavailable optional integration is reported separately, and missing mandatory verification is not converted to success. Verification is bounded and uses existing health/functional boundaries.
+Startup checks replacement admission before guarded conversion. Incomplete remote ingress keeps retained access. After an uncertain commit, the conversion owner reads certified completion through a new session without repeating transforms. The controller records the disposition and original error type as `single-user-conversion`; refused, deferred or unreported conversion leaves the installed image `partially_verified`. Observer replacement resumes verification from the installation checkpoint.
+
+Unavailable optional integrations are reported separately; mandatory verification is never converted to success.
 
 ### 10.8 Migrate the singular Omnigent release
 
@@ -224,15 +226,15 @@ A provider-manager fault is diagnosed as its own fault and does not block instal
 
 ### 12.1 Compose-level verification
 
-Verification renders and compares the selected project's actual settings, bindings, mounts, networks, and service identities. Deployment-owned ports, external ingress networks, authentication settings, and data mounts are preserved; fresh-install defaults do not replace installed choices.
+Compose preserves deployment-owned settings, bindings, networks and mounts. Disposable journeys keep overrides inside their checkout so controller helpers receive the same files. Verification observes actual service readiness and conversion.
 
 Observation distinguishes the controller's own one-off container from ordinary services, and all observation and cleanup is scoped to the owned project. There is no global prune or broad name-prefix deletion.
 
 ### 12.2 Application-level verification
 
-Operator URLs are derived from the configured public origin and actual bindings where possible. An explicit `--operator-url` supplies a non-derivable target or overrides/adds one; it is not needed for an address the controller can determine.
+Operator origins come from effective Compose settings and bindings. An explicit `--operator-url` overrides them or supplies a non-derivable target.
 
-Verification uses the real configured ingress and a protected read-only application path, preserving TLS and authentication. It does not forge identity headers, mint sessions, or treat a container-internal or loopback probe as proof of an external route. Missing credentials or unreachable client networks limit what can be verified and are reported as such; healthy pre-update browser access is not a prerequisite to repair.
+Verification requests the protected settings catalog, preserving TLS and ingress authentication; login redirects and public health cannot pass. A managed controller probes host loopback from an unprivileged host-network container. This never proves an external route or supplies identity headers or sessions. Missing credentials or unreachable networks remain incomplete verification; pre-update application health never gates repair.
 
 CI qualifies a candidate implementation; deployment observations identify the artifact actually installed. Updates do not run full CI or paid-provider qualification.
 

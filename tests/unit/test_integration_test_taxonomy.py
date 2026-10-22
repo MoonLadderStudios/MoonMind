@@ -304,7 +304,6 @@ def test_keycloak_removal_auth_boundaries_select_integration_ci() -> None:
         "api_service/auth.py",
         "api_service/auth_providers.py",
         "api_service/main.py",
-        "api_service/api/routers/worker_auth.py",
         "moonmind/config/settings.py",
         "docker-compose.yaml",
     ):

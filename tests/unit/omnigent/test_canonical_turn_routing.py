@@ -66,7 +66,6 @@ from moonmind.workflows.temporal.activities.omnigent_session_activities import (
     _SESSION_SUPERVISOR_CLEANUP_OWNER,
 )
 
-
 WORKFLOW_ID = "wf-3707"
 CHAT_BINDING = "chat-3707"
 AGENT_RUN_ID = "agent-3707"
@@ -909,8 +908,17 @@ async def _bootstrapping_remediation_claim(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dimension",
+    [
+        name
+        for name in IMMUTABLE_TURN_AUTHORITY_DIMENSIONS
+        if name != "resolvedSkillsRef"
+    ],
+)
 async def test_bootstrapping_remediation_is_bounded_by_the_named_base(
     service,
+    dimension,
 ) -> None:
     """AC6 compares against the repaired Step Execution's durable record."""
 
@@ -926,10 +934,10 @@ async def test_bootstrapping_remediation_is_bounded_by_the_named_base(
         await _bootstrapping_remediation_claim(
             service,
             base_step_execution_id=STEP_EXECUTION_ID,
-            requested_authority=_authority(dimensions={"publishMode": "broadened"}),
+            requested_authority=_authority(dimensions={dimension: "broadened"}),
         )
 
-    assert "publishMode" in excinfo.value.broadened
+    assert dimension in excinfo.value.broadened
 
 
 @pytest.mark.asyncio

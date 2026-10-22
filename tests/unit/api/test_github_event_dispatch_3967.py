@@ -213,6 +213,7 @@ def test_dispatcher_expands_preset_steps_not_prose(
     # "workflow" key; the preset's authored steps must survive admission.
     workflow = params.get("workflow") or {}
     assert isinstance(workflow.get("steps"), list) and workflow["steps"]
+    assert "scope" not in workflow["taskTemplate"]
     assert (workflow.get("taskTemplate") or {}).get("slug") == (
         "github-issue-search-and-implement"
     )

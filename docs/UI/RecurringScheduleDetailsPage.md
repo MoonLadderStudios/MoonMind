@@ -229,9 +229,8 @@ This keeps the recurring schedule page focused on controlling the cadence and re
 
 ## 12. Authorization Rules
 
-The recurring router owns instance visibility and action permissions. It still
-admits requests through the predecessor `get_current_user()` dependency; this
-does not imply migration to the account-free admission primitive.
+The recurring router owns instance visibility and action permissions. It admits
+requests through `get_instance_access`.
 
 - After admission, the operator can view and manage every instance schedule.
   Stored `ownerUserId`, `scopeType`, and `scopeRef` are legacy provenance, not

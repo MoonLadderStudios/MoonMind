@@ -18,7 +18,7 @@ from httpx import ASGITransport, AsyncClient
 
 import api_service.api.routers.omnigent_session_timeline as timeline_api
 import api_service.services.omnigent_session_timeline_service as timeline_service
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from moonmind.omnigent.control_plane.records import (
     DecisionRecord,
@@ -132,15 +132,7 @@ class _FakeRepos:
 def _build_app(session_record, user):
     app = FastAPI()
     app.include_router(timeline_api.router)
-    # Support both Depends(get_current_user) and Depends(get_current_user())
-    # by overriding the factory and the cached inner dependency.
-    app.dependency_overrides[get_current_user] = lambda: user
-
-    try:
-        inner = get_current_user()
-        app.dependency_overrides[inner] = lambda: user
-    except Exception:
-        pass  # get_current_user may fail when auth settings are not configured in test
+    app.dependency_overrides[get_instance_access] = lambda: user
     app.dependency_overrides[get_async_session] = lambda: iter([object()])
     return app
 

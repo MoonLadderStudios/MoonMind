@@ -366,7 +366,7 @@ def build_execution_payload(
     if title and title.strip():
         task["title"] = title.strip()
     if preset_slug:
-        task["taskTemplate"] = {"slug": preset_slug, "scope": "global"}
+        task["taskTemplate"] = {"slug": preset_slug}
     if skill_name:
         task["steps"] = [{"skill": {"name": skill_name}}]
     if provider_profile and provider_profile.strip():

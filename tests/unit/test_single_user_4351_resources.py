@@ -569,7 +569,7 @@ def test_r1_preserved_restrictions_boundary_assignment():
     Credential-volume import stays superuser-only (machine-child credential
     transport), settings keep their permission gates, and private agent
     profiles keep owner checks. The shared admission boundary
-    (get_current_user) still owns operator access.
+    (get_instance_access) still owns operator access.
     """
     from fastapi import HTTPException
 

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 
+from api_service.api.instance_access import access_principal
 from api_service.api.schemas import GitHubTokenProbeRequest
 from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
@@ -97,7 +98,7 @@ async def _selected_probe_connection(connection_id: str, *, user: Any) -> Any | 
         RepositoryConnectionService,
     )
 
-    principal = str(getattr(user, "id", "") or "").strip()
+    principal = access_principal(user).strip()
     if not principal:
         return None
     async with db_base.async_session_maker() as session:

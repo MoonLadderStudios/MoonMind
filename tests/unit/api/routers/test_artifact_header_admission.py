@@ -9,7 +9,6 @@ import pytest
 from fastapi import Depends, FastAPI, Request
 
 from api_service import auth_providers
-from api_service.api.routers.worker_auth import _require_worker_auth
 from api_service.db import base as db_base
 from api_service.db.models import (
     TemporalArtifact,
@@ -137,10 +136,6 @@ async def test_trusted_header_artifact_and_session_admission(
             ):
                 return {"id": str(user.id) if user else None}
 
-            @app.get("/test/worker-admission")
-            async def worker_admission(_auth=Depends(_require_worker_auth)):
-                return {"admitted": True}
-
             transport = httpx.ASGITransport(app=app, client=("10.20.0.5", 1234))
             async with httpx.AsyncClient(
                 transport=transport, base_url="http://moonmind.test"
@@ -219,11 +214,6 @@ async def test_trusted_header_artifact_and_session_admission(
                     assert response.status_code == 401, response.text
                 response = await client.get("/test/optional-admission")
                 assert response.json() == {"id": None}
-                response = await client.get(
-                    "/test/worker-admission",
-                    headers={"X-MoonMind-Worker-Token": "retired-token"},
-                )
-                assert response.status_code == 410, response.text
                 response = await client.get(
                     "/test/optional-admission",
                     headers={"Authorization": "Bearer invalid"},

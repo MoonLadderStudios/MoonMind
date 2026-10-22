@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import issue_lifecycle as issue_lifecycle_router
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -60,7 +60,7 @@ def _issue(*labels: str) -> dict:
 def _client(user: SimpleNamespace, github_service: _FakeGithubService) -> TestClient:
     app = FastAPI()
     app.include_router(issue_lifecycle_router.router)
-    app.dependency_overrides[get_current_user()] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
     app.dependency_overrides[issue_lifecycle_router.get_github_service] = lambda: github_service
     return TestClient(app, raise_server_exceptions=False)
 

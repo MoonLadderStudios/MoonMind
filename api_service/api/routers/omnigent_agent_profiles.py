@@ -13,6 +13,11 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.instance_access import (
+    access_principal,
+    access_user_id,
+    is_instance_operator,
+)
 from api_service.api.routers.omnigent_bridge import (
     _get_bridge_proxy,
     _require_bridge_enabled,
@@ -24,7 +29,7 @@ from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     _resolve_recovery_principal,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
@@ -36,7 +41,6 @@ from api_service.db.models import (
     OmnigentUpstreamAgentProjection,
     RecurringWorkflowDefinition,
     TemporalExecutionCanonicalRecord,
-    User,
     WorkflowCheckpointBranch,
 )
 from api_service.services.omnigent_agent_bundle_service import (
@@ -69,6 +73,7 @@ from moonmind.omnigent.harness_platform import (
     assert_catalog_refresh_attests,
 )
 from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
@@ -634,20 +639,28 @@ async def ensure_builtin_opencode_agent_profile(
     }
 
 
-def _assert_owner(profile: OmnigentAgentProfile, user: User) -> None:
+def _owns_profile(profile: Any, user: Any) -> bool:
+    # Operator admission is the instance's only operator, so it owns every
+    # profile, including private ones its retained account created.
+    if isinstance(user, OperatorAdmission):
+        return True
+    return profile.owner_id == user.id
+
+
+def _assert_owner(profile: OmnigentAgentProfile, user: Any) -> None:
     # Ownerless workspace profiles are bootstrap/operator-managed resources.
     # Callers have already enforced provider_profiles.write before reaching
     # lifecycle mutations.
     if profile.owner_id is None and profile.visibility == "workspace":
         return
-    if profile.owner_id != user.id and not user.is_superuser:
+    if not _owns_profile(profile, user) and not is_instance_operator(user):
         raise HTTPException(403, "profile owner permission required")
 
 
 def _audit(
     profile_id: str,
     action: str,
-    user: User,
+    user: Any,
     *,
     version: int | None = None,
     metadata: dict[str, Any] | None = None,
@@ -656,7 +669,7 @@ def _audit(
         profile_id=profile_id,
         action=action,
         version=version,
-        actor_id=user.id,
+        actor_id=access_user_id(user),
         metadata_json=metadata or {},
     )
 
@@ -759,14 +772,14 @@ def _bridge_refresh(
 
 
 def _artifact_bundle_reader(
-    artifact_service: TemporalArtifactService, current_user: User,
+    artifact_service: TemporalArtifactService, current_user: Any,
     recovery_principal: str | None = None,
 ):
     """Bind artifact-boundary bundle reads to the readiness-check core."""
 
     async def _read(artifact_id: str) -> bytes:
         _stored_artifact, bundle_bytes = await artifact_service.read(
-            artifact_id=artifact_id, principal=str(current_user.id),
+            artifact_id=artifact_id, principal=access_principal(current_user),
             recovery_principal=recovery_principal,
         )
         return bundle_bytes
@@ -777,7 +790,7 @@ def _artifact_bundle_reader(
 @router.get("")
 async def list_profiles(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     profiles = list(
@@ -790,7 +803,7 @@ async def list_profiles(
     visible_profiles = [
         profile
         for profile in profiles
-        if profile.visibility != "private" or profile.owner_id == current_user.id
+        if profile.visibility != "private" or _owns_profile(profile, current_user)
     ]
     visible_ids = [profile.profile_id for profile in visible_profiles]
     versions_by_profile: dict[str, list[OmnigentAgentProfileVersion]] = {
@@ -821,7 +834,7 @@ async def list_profiles(
 async def create_profile(
     body: ProfileCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     if not _ID.fullmatch(body.profile_id):
@@ -833,7 +846,7 @@ async def create_profile(
         profile_id=body.profile_id,
         display_name=body.display_name,
         description=body.description,
-        owner_id=current_user.id,
+        owner_id=access_user_id(current_user),
         visibility=body.visibility,
     )
     version = OmnigentAgentProfileVersion(
@@ -841,7 +854,7 @@ async def create_profile(
         version=1,
         digest=_digest(document),
         document=document,
-        created_by=current_user.id,
+        created_by=access_user_id(current_user),
     )
     session.add_all(
         [profile, version, _audit(body.profile_id, "created", current_user, version=1)]
@@ -859,7 +872,7 @@ async def create_profile(
 async def create_guided_profile(
     body: GuidedProfileCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Create an activated v2 profile from live catalog authority."""
 
@@ -1013,7 +1026,7 @@ async def create_guided_profile(
         profile_id=body.profile_id,
         display_name=body.display_name,
         description=body.description,
-        owner_id=current_user.id,
+        owner_id=access_user_id(current_user),
         visibility="private",
         state="active",
         active_version=1,
@@ -1034,7 +1047,7 @@ async def create_guided_profile(
                 {"name": "upstream-source", "ready": True},
             ],
         },
-        created_by=current_user.id,
+        created_by=access_user_id(current_user),
     )
     session.add_all(
         [
@@ -1052,11 +1065,11 @@ async def create_guided_profile(
 async def get_profile(
     profile_id: str,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile, versions = await _load(session, profile_id)
-    if profile.visibility == "private" and profile.owner_id != current_user.id:
+    if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
     return _response(profile, versions)
 
@@ -1066,7 +1079,7 @@ async def create_version(
     profile_id: str,
     body: VersionCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
@@ -1097,7 +1110,7 @@ async def create_version(
         digest=digest,
         document=document,
         parent_version=latest_number or None,
-        created_by=current_user.id,
+        created_by=access_user_id(current_user),
     )
     session.add_all(
         [version, _audit(profile_id, "version_created", current_user, version=number)]
@@ -1116,11 +1129,11 @@ async def clone_profile(
     profile_id: str,
     body: CloneCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     source, versions = await _load(session, profile_id)
-    if source.visibility == "private" and source.owner_id != current_user.id:
+    if source.visibility == "private" and not _owns_profile(source, current_user):
         raise HTTPException(404, "agent profile not found")
     if not _ID.fullmatch(body.profile_id):
         raise HTTPException(422, "profileId must be a stable lowercase identifier")
@@ -1136,7 +1149,7 @@ async def clone_profile(
         profile_id=body.profile_id,
         display_name=body.display_name,
         description=source.description,
-        owner_id=current_user.id,
+        owner_id=access_user_id(current_user),
         visibility="private",
     )
     document = without_retired_profile_sections(target.document)
@@ -1147,7 +1160,7 @@ async def clone_profile(
         document=document,
         cloned_from_profile_id=profile_id,
         cloned_from_version=target.version,
-        created_by=current_user.id,
+        created_by=access_user_id(current_user),
     )
     session.add_all(
         [
@@ -1174,7 +1187,7 @@ async def activate(
     profile_id: str,
     version: int,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
@@ -1201,7 +1214,7 @@ async def validate_profile(
     profile_id: str,
     body: ValidateCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
@@ -1260,7 +1273,7 @@ async def smoke_validate_profile(
     profile_id: str,
     body: SmokeCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
@@ -1354,7 +1367,7 @@ async def import_profile_bundle(
     profile_id: str,
     body: BundleImportCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
@@ -1428,7 +1441,7 @@ async def import_profile_bundle(
 
     artifact_id = artifact_ref.removeprefix("artifact:")
     stored_artifact, bundle_bytes = await artifact_service.read(
-        artifact_id=artifact_id, principal=str(current_user.id),
+        artifact_id=artifact_id, principal=access_principal(current_user),
         recovery_principal=recovery_principal,
     )
     filename = f"{profile_id}-v{target.version}.bundle"
@@ -1493,7 +1506,7 @@ async def import_profile_bundle(
 async def make_default(
     profile_id: str,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
@@ -1515,11 +1528,11 @@ async def make_default(
 async def audit_history(
     profile_id: str,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile, _ = await _load(session, profile_id)
-    if profile.visibility == "private" and profile.owner_id != current_user.id:
+    if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
     rows = list(
         (
@@ -1546,11 +1559,11 @@ async def audit_history(
 async def profile_usage(
     profile_id: str,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
     _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile, _ = await _load(session, profile_id)
-    if profile.visibility == "private" and profile.owner_id != current_user.id:
+    if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
     rows = list(
         (
@@ -1578,16 +1591,16 @@ async def resolve_snapshot(
     profile_id: str,
     body: SnapshotCreate,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
 ) -> dict[str, Any]:
     """Resolve and persist the exact immutable selection at an authoring boundary."""
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
-    if profile.visibility == "private" and profile.owner_id != current_user.id:
+    if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
-    if not current_user.is_superuser:
+    if not is_instance_operator(current_user):
         authorized = False
         if body.consumer_type in {"workflow", "remediation"}:
             consumer = await session.get(
@@ -1751,7 +1764,7 @@ async def resolve_snapshot(
 async def delete_profile(
     profile_id: str,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> None:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, _ = await _load(session, profile_id)
@@ -1785,7 +1798,7 @@ async def lifecycle(
     profile_id: str,
     action: Literal["disable", "deprecate"],
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)

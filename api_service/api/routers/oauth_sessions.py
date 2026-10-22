@@ -6,6 +6,7 @@ import hashlib
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -27,7 +28,7 @@ from api_service.api.schemas_oauth_sessions import (
     OAuthSessionResponse,
     ProviderProfileSummary,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session, get_async_session_context
 from api_service.services.provider_profile_service import (
     apply_oauth_connected_state,
@@ -39,7 +40,6 @@ from api_service.services.provider_profile_service import (
 from api_service.db.models import (
     ManagedAgentOAuthSession,
     OAuthSessionStatus,
-    User,
     ManagedAgentProviderProfile,
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
@@ -284,7 +284,7 @@ async def _get_profile_for_session(
     db: AsyncSession,
     session: ManagedAgentOAuthSession,
     *,
-    current_user: User | None = None,
+    current_user: Any = None,
 ) -> ManagedAgentProviderProfile | None:
     # Single-user (#4349): provider profiles are instance resources.
     # ``current_user`` is accepted for caller compatibility but never used
@@ -352,7 +352,7 @@ async def create_oauth_session(
     request: CreateOAuthSessionRequest,
     response: Response,
     db: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ):
     volume_ref = request.volume_ref or _oauth_default(request.runtime_id, "volume_ref")
     volume_mount_path = request.volume_mount_path or _oauth_default(
@@ -499,7 +499,7 @@ async def create_oauth_session(
 async def get_oauth_session(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ):
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
@@ -520,7 +520,7 @@ async def get_oauth_session(
 async def cancel_oauth_session(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ):
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
@@ -563,7 +563,7 @@ async def cancel_oauth_session(
 async def attach_oauth_terminal(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ):
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
@@ -771,7 +771,7 @@ async def _reconcile_registered_credential_generation(
 async def finalize_oauth_session(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ):
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
@@ -1045,7 +1045,7 @@ async def _disable_profile_after_failed_verification(
     session_obj: ManagedAgentOAuthSession,
     *,
     reason: str | None,
-    current_user: User | None = None,
+    current_user: Any = None,
 ) -> None:
     """Leave the OAuth profile visibly disabled after failed verification.
 
@@ -1119,7 +1119,7 @@ async def _fail_oauth_session_workflow(session_id: str, reason: str) -> None:
 async def get_session_history(
     profile_id: str,
     db: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
     limit: int = 20,
 ):
     """Return the session history for a given profile."""
@@ -1157,7 +1157,7 @@ async def get_session_history(
 async def reconnect_oauth_session(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ):
     """Create a new session from an expired, failed, or cancelled predecessor.
 

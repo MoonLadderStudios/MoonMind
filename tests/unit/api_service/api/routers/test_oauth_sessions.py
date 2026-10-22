@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.future import select
 from sqlalchemy.orm import sessionmaker
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -85,15 +85,15 @@ def _default_oauth_test_principal():
         is_superuser=True,
     )
     missing = object()
-    previous = app.dependency_overrides.get(get_current_user(), missing)
-    app.dependency_overrides[get_current_user()] = lambda user=user: user
+    previous = app.dependency_overrides.get(get_instance_access, missing)
+    app.dependency_overrides[get_instance_access] = lambda user=user: user
     try:
         yield user
     finally:
         if previous is missing:
-            app.dependency_overrides.pop(get_current_user(), None)
+            app.dependency_overrides.pop(get_instance_access, None)
         else:
-            app.dependency_overrides[get_current_user()] = previous
+            app.dependency_overrides[get_instance_access] = previous
 
 def _oauth_payload(profile_id: str) -> dict[str, object]:
     return {

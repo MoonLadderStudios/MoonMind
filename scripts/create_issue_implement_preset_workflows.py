@@ -82,7 +82,7 @@ def build_payload(*, provider: str, issue_ref: str, repository: str, runtime: st
         "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
         "inputs": normalize_issue_ref(provider=provider, issue=issue_ref, repository=repository)[1],
         "steps": expanded_steps,
-        "taskTemplate": {"slug": preset_slug, "scope": "global"},
+        "taskTemplate": {"slug": preset_slug},
         "presetSchedule": {
             "source": "batch",
             "reason": f"{provider}_issue_batch",
@@ -139,7 +139,7 @@ def expand_issue_implement(*, base_url: str, provider: str, issue: str, reposito
     preset_slug = PROVIDER_PRESETS[provider]
     payload = build_expand_payload(provider=provider, issue=issue, repository=repository, runtime=runtime)
     data = json.dumps(payload).encode("utf-8")
-    req = request.Request(f"{base_url.rstrip('/')}/api/presets/{preset_slug}:expand?scope=global", data=data, headers={"Content-Type": "application/json"}, method="POST")
+    req = request.Request(f"{base_url.rstrip('/')}/api/presets/{preset_slug}:expand", data=data, headers={"Content-Type": "application/json"}, method="POST")
     with request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 

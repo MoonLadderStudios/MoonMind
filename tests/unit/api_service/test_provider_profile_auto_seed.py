@@ -13,7 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -617,20 +617,7 @@ async def _operator_client():
             "provider_profiles.write",
         },
     )
-    dependencies = {
-        dep.call
-        for route in app.routes
-        if getattr(route, "path", "").startswith("/api/v1/provider-profiles")
-        and getattr(route, "dependant", None) is not None
-        for dep in route.dependant.dependencies
-        if getattr(dep.call, "__name__", "") in {
-            "_current_user_fallback",
-            "_strict_current_user",
-            "_optional_current_user",
-        }
-    } or {get_current_user(), get_current_user_optional()}
-    for dependency in dependencies:
-        app.dependency_overrides[dependency] = lambda user=user: user
+    app.dependency_overrides[get_instance_access] = lambda user=user: user
     try:
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://testserver"

@@ -20,7 +20,7 @@ from uuid import uuid4
 
 import pytest
 import aiohttp
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -42,7 +42,7 @@ from api_service.api.routers.omnigent_bridge import (
     _virtualize_session_updates_frame,
     workflow_chat_router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.api.workflow_chat_access import get_workflow_chat_access
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 
@@ -159,7 +159,7 @@ def _build(
     app.include_router(workflow_chat_router, prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH)
     store = store or _FakeStore()
     config = SimpleNamespace(host_protocol_mode=HOST_PROTOCOL_MODE_PROXY)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_workflow_chat_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: (
         service or _FakeService(owner_id)
     )
@@ -542,7 +542,8 @@ def test_terminal_view_passes_capability_then_relays(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("frame", [{"text": "echo injected"}, {"bytes": b"echo injected"}])
-def test_read_only_relay_never_forwards_browser_frames(monkeypatch, frame):
+@pytest.mark.parametrize("denial", ["read-only", "admission"])
+def test_relay_never_forwards_denied_browser_frames(monkeypatch, frame, denial):
     from unittest.mock import AsyncMock
 
     received_output = asyncio.Event()
@@ -593,17 +594,21 @@ def test_read_only_relay_never_forwards_browser_frames(monkeypatch, frame):
             return upstream
 
     monkeypatch.setattr("api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", lambda **kwargs: Client())
-    guard = AsyncMock()
+    guard = AsyncMock(side_effect=HTTPException(status_code=403, detail={"code": "origin_forbidden"}))
     asyncio.run(_relay_native_websocket(
         browser=browser, upstream_url="ws://upstream.invalid/terminal", subprotocol=None,
         still_authorized=AsyncMock(return_value=True), browser_frame_guard=guard,
-        browser_read_only=True,
+        browser_read_only=denial == "read-only",
     ))
     browser.send_text.assert_awaited_once_with("terminal output")
     upstream.send_str.assert_not_awaited()
     upstream.send_bytes.assert_not_awaited()
-    guard.assert_not_awaited()
-    assert any(call.kwargs["code"] == WS_CLOSE_READ_ONLY for call in browser.close.await_args_list)
+    if denial == "read-only":
+        guard.assert_not_awaited()
+    else:
+        guard.assert_awaited_once()
+    expected = WS_CLOSE_READ_ONLY if denial == "read-only" else WS_CLOSE_CAPABILITY_DENIED
+    assert any(call.kwargs["code"] == expected for call in browser.close.await_args_list)
 
 
 def test_unknown_browser_websocket_is_not_proxied() -> None:

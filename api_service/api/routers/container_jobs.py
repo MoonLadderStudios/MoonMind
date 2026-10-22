@@ -17,7 +17,10 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import (
+    get_instance_operator_access,
+    instance_operator_principal,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.container_jobs import ContainerJobService
@@ -39,6 +42,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobSubmitRequest,
     OwnerIdentity,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows import get_temporal_artifact_service
 
 logger = logging.getLogger(__name__)
@@ -106,8 +110,19 @@ def _require_ready() -> None:
         )
 
 
-def _owner(user: User) -> OwnerIdentity:
-    return OwnerIdentity(principalId=str(user.id), principalType="user")
+def container_job_owner(access: User | OperatorAdmission) -> OwnerIdentity:
+    """Keep durable owner/idempotency namespaces, not person-based permission.
+
+    Converted local installations retain the instance's historical owner key.
+    Admission, not that key, grants access; no User is synthesized or resolved.
+    Retained deployments continue using their authenticated account's own key.
+    """
+    principal = (
+        instance_operator_principal()
+        if isinstance(access, OperatorAdmission)
+        else str(access.id)
+    )
+    return OwnerIdentity(principalId=principal, principalType="user")
 
 
 def _build_service(session: AsyncSession) -> ContainerJobService:
@@ -124,12 +139,15 @@ def _raise_from(exc: Exception) -> HTTPException:
     )
 
 
-def _audit(request: Request, user: User, action: str, job_id: str | None) -> None:
+def _audit(
+    request: Request, user: User | OperatorAdmission, action: str, job_id: str | None
+) -> None:
     logger.info(
-        "container_job_http action=%s transport=http principal=user:%s "
+        "container_job_http action=%s transport=http actor=%s owner=user:%s "
         "request_id=%s job_id=%s",
         action,
-        getattr(user, "id", None),
+        "operator" if isinstance(user, OperatorAdmission) else f"user:{user.id}",
+        container_job_owner(user).principal_id,
         request.headers.get("x-request-id"),
         job_id,
     )
@@ -139,7 +157,7 @@ def _audit(request: Request, user: User, action: str, job_id: str | None) -> Non
 async def submit_container_job(
     payload: ContainerJobSubmitRequest,
     request: Request,
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_operator_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobAccepted:
     """Create-or-replay a durable container job and start its Temporal workflow."""
@@ -147,7 +165,7 @@ async def submit_container_job(
     try:
         _require_ready()
         service = _build_service(session)
-        accepted = await service.submit(owner=_owner(user), request=payload)
+        accepted = await service.submit(owner=container_job_owner(user), request=payload)
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
         raise _raise_from(exc) from exc
     _audit(request, user, "submit", accepted.job_id)
@@ -160,13 +178,13 @@ async def submit_container_job(
 async def get_container_job_status(
     job_id: str,
     request: Request,
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_operator_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobStatus:
     _require_ready()
     service = _build_service(session)
     try:
-        snapshot = await service.status(owner=_owner(user), job_id=job_id)
+        snapshot = await service.status(owner=container_job_owner(user), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
         raise _raise_from(exc) from exc
     _audit(request, user, "status", job_id)
@@ -181,14 +199,14 @@ async def get_container_job_logs(
     request: Request,
     cursor: str | None = Query(None, max_length=512),
     limit: int = Query(100, ge=1, le=MAX_LOG_PAGE_ENTRIES),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_operator_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobLogPage:
     _require_ready()
     service = _build_service(session)
     try:
         page = await service.logs(
-            owner=_owner(user),
+            owner=container_job_owner(user),
             job_id=job_id,
             query=ContainerJobLogQuery(cursor=cursor, limit=limit),
         )
@@ -208,14 +226,14 @@ async def get_container_job_artifacts(
     request: Request,
     cursor: str | None = Query(None, max_length=512),
     limit: int = Query(MAX_ARTIFACT_PAGE_ENTRIES, ge=1, le=MAX_ARTIFACT_PAGE_ENTRIES),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_operator_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobArtifactPage:
     _require_ready()
     service = _build_service(session)
     try:
         page = await service.artifacts(
-            owner=_owner(user), job_id=job_id, cursor=cursor, limit=limit
+            owner=container_job_owner(user), job_id=job_id, cursor=cursor, limit=limit
         )
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
         raise _raise_from(exc) from exc
@@ -232,14 +250,14 @@ async def cancel_container_job(
     job_id: str,
     payload: ContainerJobCancelRequest,
     request: Request,
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_operator_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobCancelResult:
     _require_ready()
     service = _build_service(session)
     try:
         result = await service.cancel(
-            owner=_owner(user), job_id=job_id, request=payload
+            owner=container_job_owner(user), job_id=job_id, request=payload
         )
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
         raise _raise_from(exc) from exc

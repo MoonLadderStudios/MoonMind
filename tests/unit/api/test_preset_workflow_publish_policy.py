@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, Preset, PresetScopeType
+from api_service.db.models import Base, Preset
 from api_service.services.presets.catalog import (
     PresetCatalogService,
     PresetValidationError,
@@ -94,7 +94,7 @@ async def _seeded_annotations(session, tmp_path) -> dict[str, dict]:
     await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
     result = await session.execute(
         select(Preset).where(
-            Preset.scope_type == PresetScopeType.GLOBAL,
+            Preset.scope_type.is_(None),
             Preset.scope_ref.is_(None),
         )
     )
@@ -220,8 +220,6 @@ async def test_publish_nothing_presets_expand_with_publish_none(
 
             expanded = await service.expand_template(
                 slug=slug,
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={
                     "repository": "MoonLadderStudios/MoonMind",
@@ -248,8 +246,6 @@ async def test_included_assessment_preset_does_not_disable_parent_publishing(
 
             expanded = await service.expand_template(
                 slug="github-issue-implement",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
@@ -483,8 +479,6 @@ async def test_valid_dependent_default_reference_seeds_and_expands(tmp_path):
             await service.sync_seed_templates(seed_dir=seed_dir)
             expanded = await service.expand_template(
                 slug="dependent-default-preset",
-                scope="global",
-                scope_ref=None,
                 inputs={"run_ref": "preset:implement"},
                 context=None,
             )

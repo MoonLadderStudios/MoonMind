@@ -42,7 +42,9 @@ recreated stack, can verify what an earlier phase saved):
     setting binding and its redacted usage, the recurring definition and its
     dispatched run, each execution's retained terminal state, the attached
     artifact bytes, and the saved instance preset's input contract and explicit
-    input expansion.
+    input expansion and stable expanded step IDs. Before image replacement,
+    ``--pre-upgrade-release`` selects the source API; afterward only the bound
+    scope-removal digest transition is allowed, without rewriting saved evidence.
 ``release``
     Remove the setting override so later work does not use the synthetic
     token.
@@ -63,6 +65,14 @@ recreated stack, can verify what an earlier phase saved):
     (``--api-log``) and require a published eligible single-operator conversion.
     Refusal is preserved in the state for diagnostics and fails this eligible
     upgrade lane; protected refusal has separate PostgreSQL coverage.
+``controller_conversion``
+    Run the deployment controller's own update-result check
+    (``single_user_conversion_check`` from ``--repo``'s ``deploy/controller``)
+    against the live Compose stack and require ``<--expect> published``:
+    ``fresh_init`` on a fresh install, ``eligible_conversion`` after an
+    account-era upgrade. The controller observes ``api`` with ``compose ps``
+    and reads its startup disposition with ``compose exec``, exactly as it
+    does after an update.
 ``controller_absent``
     MoonLadderStudios/MoonMind#4502, before a deployment controller is
     installed: Settings Operations reports it not installed, and one update
@@ -208,7 +218,7 @@ def direct_backend_access(api: Api, state: dict[str, Any], *, operator_host: str
         for method, path, body in (
             ("GET", "/api/v1/settings/catalog", None),
             ("POST", "/api/presets", {"slug": "denied-backend-probe", "title": "Denied probe",
-                                     "description": "Must not be persisted", "scope": "global",
+                                     "description": "Must not be persisted",
                                      "steps": [{"instructions": "Must not run."}]}),
         ):
             result = api.json(method, path, headers=headers, body=body, expect=(401,))
@@ -549,32 +559,38 @@ def populate(
     }
 
     audience = f"operator-selected audience for {label}"
-    preset = api.json(
-        "POST",
-        "/api/presets",
-        body={
-            "slug": f"single-user-journey-{label}-{uuid.uuid4().hex[:8]}",
-            "title": f"single-user journey preset {label}",
-            "description": "Single-user journey preset read back after restarts.",
-            "scope": "global",
-            "inputs": [
-                {
-                    "name": "audience",
-                    "label": "Audience",
-                    "type": "text",
-                    "required": True,
-                    "default": "default audience",
-                }
-            ],
-            "steps": [{"instructions": "Write a report for {{ inputs.audience }}."}],
-        },
-        expect=(201,),
+    preset_request = {
+        "slug": f"single-user-journey-{label}-{uuid.uuid4().hex[:8]}",
+        "title": f"single-user journey preset {label}",
+        "description": "Single-user journey preset read back after restarts.",
+        "inputs": [
+            {
+                "name": "audience",
+                "label": "Audience",
+                "type": "text",
+                "required": True,
+                "default": "default audience",
+            }
+        ],
+        "steps": [{"instructions": "Write a report for {{ inputs.audience }}."}],
+        **({"scope": "global"} if pre_upgrade_release else {}),
+    }
+    preset = api.json("POST", "/api/presets", body=preset_request, expect=(201,))
+    if preset.get("slug") != preset_request["slug"]:
+        raise JourneyFailure(f"preset creation changed its slug: {preset}")
+    require_preset_scope(preset, pre_upgrade_release=pre_upgrade_release)
+    expected_digest = journey_preset_digest(
+        preset_request, pre_upgrade_release=pre_upgrade_release
     )
-    if not preset.get("slug"):
-        raise JourneyFailure(f"preset creation returned no slug: {preset}")
-    if preset.get("scope") != "global" or preset.get("scopeRef") is not None:
-        raise JourneyFailure("instance preset was saved with personal scope")
+    if preset.get("presetDigest") != expected_digest:
+        raise JourneyFailure(
+            "created preset differs from the submitted journey contract"
+        )
     state["preset"] = preset_identity(preset)
+    if pre_upgrade_release:
+        # Bind the one expected representation change before replacing the source.
+        # Never rebaseline to whatever content/digest the candidate returns.
+        state["presetInstanceDigest"] = journey_preset_digest(preset_request)
     state["presetApplication"] = {
         "inputs": {"audience": audience},
         "instructions": [f"Write a report for {audience}."],
@@ -591,41 +607,119 @@ def populate(
         # dispatched run cannot complete, so it is observed, not canceled.
         {"workflowId": dispatched, "title": name, "cancel": False},
     ]
-    verify_preset(api, state)
+    verify_preset(
+        api, state, pre_upgrade_release=pre_upgrade_release, record_step_ids=True
+    )
+
+
+def journey_preset_digest(
+    request: dict[str, Any], *, pre_upgrade_release: bool = False
+) -> str:
+    """Bind this fixed one-step fixture to the source and instance digest contracts.
+
+    The 2c67aeb9 source and candidate both normalize the omitted skill to auto,
+    save an empty step annotation, and set maxStepCount=25. The source additionally
+    hashes global/null scope. Production catalog/migration tests verify this
+    narrow witness; the CI-host checker must remain stdlib-only.
+    """
+
+    payload = {
+        "slug": request["slug"],
+        "inputs": request["inputs"],
+        "steps": [
+            {
+                "type": "skill",
+                "instructions": request["steps"][0]["instructions"],
+                "skill": {"id": "auto", "args": {}},
+                "annotations": {},
+            }
+        ],
+        "annotations": {},
+        "requiredCapabilities": [],
+        "maxStepCount": 25,
+        **({"scope": "global", "scopeRef": None} if pre_upgrade_release else {}),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:16]
+
+
+def require_preset_scope(
+    preset: dict[str, Any], *, pre_upgrade_release: bool = False
+) -> None:
+    if pre_upgrade_release:
+        if (
+            preset.get("scope") != "global"
+            or preset.get("scopeRef") is not None
+            or preset.get("scope_ref") is not None
+            or any(step.get("scope") is not None for step in preset.get("steps") or [])
+        ):
+            raise JourneyFailure("pre-upgrade preset was not saved with global scope")
+        return
+
+    def has_scope(value: Any) -> bool:
+        if isinstance(value, dict):
+            return any(
+                key in {"scope", "scopeRef", "scope_ref"} or has_scope(item)
+                for key, item in value.items()
+            )
+        return isinstance(value, list) and any(has_scope(item) for item in value)
+
+    if has_scope(preset):
+        raise JourneyFailure("instance preset exposes retired human scope")
 
 
 def preset_identity(preset: dict[str, Any]) -> dict[str, Any]:
-    """The saved preset version the read-back must find unchanged."""
+    """Authored content, excluding changing recency and derived UI metadata."""
 
     return {
-        "slug": preset.get("slug"),
-        "scope": preset.get("scope"),
-        "scopeRef": preset.get("scopeRef"),
-        "title": preset.get("title"),
-        "presetDigest": preset.get("presetDigest"),
-        "inputs": preset.get("inputs") or [],
-        "steps": [step.get("instructions") for step in preset.get("steps") or []],
+        key: preset.get(key)
+        for key in (
+            "slug",
+            "title",
+            "description",
+            "presetDigest",
+            "inputs",
+            "annotations",
+            "requiredCapabilities",
+            "tags",
+            "releaseStatus",
+            "reviewedBy",
+            "reviewedAt",
+        )
+    } | {
+        # The source response schema adds scope=null to a non-include step;
+        # removing only that serialized field preserves the entire step contract.
+        "steps": [
+            {
+                key: value
+                for key, value in step.items()
+                if key != "scope" or value is not None
+            }
+            for step in preset.get("steps") or []
+        ],
     }
 
 
-def verify_preset(api: Api, state: dict[str, Any]) -> None:
+def verify_preset(
+    api: Api,
+    state: dict[str, Any],
+    *,
+    pre_upgrade_release: bool = False,
+    record_step_ids: bool = False,
+) -> None:
     saved = state.get("preset")
     if not saved:
         raise JourneyFailure("no preset recorded to verify")
-    query = urllib.parse.urlencode(
-        {
-            key: value
-            for key, value in (
-                ("scope", saved["scope"]),
-                ("scopeRef", saved["scopeRef"]),
-            )
-            if value
-        }
-    )
-    found = api.json("GET", f"/api/presets/{quote(saved['slug'])}?{query}")
-    if preset_identity(found) != saved:
+    query = "?scope=global" if pre_upgrade_release else ""
+    found = api.json("GET", f"/api/presets/{quote(saved['slug'])}{query}")
+    require_preset_scope(found, pre_upgrade_release=pre_upgrade_release)
+    expected = dict(saved)
+    if not pre_upgrade_release and "presetInstanceDigest" in state:
+        expected["presetDigest"] = state["presetInstanceDigest"]
+    if preset_identity(found) != expected:
         raise JourneyFailure(
-            f"preset {saved['slug']} changed: saved {saved}, found "
+            f"preset {saved['slug']} changed: expected {expected}, found "
             f"{preset_identity(found)}"
         )
     application = state.get("presetApplication")
@@ -633,19 +727,32 @@ def verify_preset(api: Api, state: dict[str, Any]) -> None:
         raise JourneyFailure("no explicit preset application recorded to verify")
     expanded = api.json(
         "POST",
-        f"/api/presets/{quote(saved['slug'])}:expand?{query}",
+        f"/api/presets/{quote(saved['slug'])}:expand{query}",
         body={"inputs": application["inputs"]},
     )
+    if not pre_upgrade_release:
+        require_preset_scope(expanded)
     applied = expanded.get("appliedTemplate") or {}
-    instructions = [step.get("instructions") for step in expanded.get("steps") or []]
+    steps = expanded.get("steps") or []
+    instructions = [step.get("instructions") for step in steps]
+    step_ids = [step.get("id") for step in steps]
     if (
         applied.get("slug") != saved["slug"]
-        or applied.get("presetDigest") != saved["presetDigest"]
+        or applied.get("presetDigest") != expected["presetDigest"]
         or applied.get("inputs") != application["inputs"]
         or instructions != application["instructions"]
+        or not step_ids
+        or not all(isinstance(step_id, str) and step_id for step_id in step_ids)
+        or len(set(step_ids)) != len(step_ids)
+        or applied.get("stepIds") != step_ids
+        or (not record_step_ids and application.get("stepIds") != step_ids)
     ):
         raise JourneyFailure(f"preset {saved['slug']} expansion changed")
-    log(f"preset {saved['slug']} retained at {saved['presetDigest']} with explicit inputs")
+    if record_step_ids:
+        application["stepIds"] = step_ids
+    log(
+        f"preset {saved['slug']} retained at {expected['presetDigest']} with explicit inputs"
+    )
 
 
 def credential(api: Api, state: dict[str, Any], *, label: str) -> None:
@@ -754,6 +861,46 @@ def conversion(state: dict[str, Any], *, api_log: Path) -> None:
         f"but subsystems {','.join(names)} have no registered transform; "
         "source data and operator access are preserved"
     )
+
+
+def controller_conversion(
+    state: dict[str, Any],
+    *,
+    repo: Path,
+    project: str,
+    compose_files: list[str],
+    expected: str,
+    timeout: float,
+) -> None:
+    """Require the controller's conversion check to pass on the running stack."""
+
+    # Resolve the deployed checkout's controller, never the caller's.
+    sys.path.insert(0, str(repo.resolve() / "deploy/controller"))
+    import server as controller
+
+    runner = controller.engine.subprocess_runner()
+    base = controller.engine.compose_base(
+        project=project,
+        project_dir=str(repo.resolve()),
+        compose_files=[str(Path(path).resolve()) for path in compose_files],
+    )
+    service = controller.CONVERSION_SERVICE
+    observed = controller.engine.wait_for_services(
+        runner, base, (service,), timeout_seconds=timeout
+    )
+    check = controller.single_user_conversion_check(
+        runner, base, api_running=bool(observed["services"].get(service))
+    )
+    state["controllerConversion"] = check
+    if (
+        check.get("status") != "passed"
+        or check.get("detail") != f"{expected} published"
+    ):
+        raise JourneyFailure(
+            f"controller conversion check reported {check.get('status')}: "
+            f"{check.get('detail')} (expected {expected} published)"
+        )
+    log(f"controller conversion check passed: {check['detail']}")
 
 
 def generate_output(
@@ -981,7 +1128,9 @@ def verify_generated_output(
     )
 
 
-def verify(api: Api, state: dict[str, Any]) -> None:
+def verify(
+    api: Api, state: dict[str, Any], *, pre_upgrade_release: bool = False
+) -> None:
     credential = state.get("credential")
     if not credential:
         raise JourneyFailure("no credential recorded to verify")
@@ -1031,7 +1180,7 @@ def verify(api: Api, state: dict[str, Any]) -> None:
     if hashlib.sha256(content).hexdigest() != artifact["sha256"]:
         raise JourneyFailure(f"artifact {artifact['artifactId']} bytes changed")
     log(f"artifact {artifact['artifactId']} bytes retained")
-    verify_preset(api, state)
+    verify_preset(api, state, pre_upgrade_release=pre_upgrade_release)
 
 
 _VECTOR_SERVICE_NAME_RE = re.compile(
@@ -1433,6 +1582,7 @@ def main(argv: list[str] | None = None) -> int:
             "release",
             "vector_free",
             "conversion",
+            "controller_conversion",
             "controller_absent",
             "controller_ready",
             "controller",
@@ -1447,9 +1597,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cleanup-receipt", type=Path)
     parser.add_argument("--operator-host", help="published Host for direct-backend probes")
     parser.add_argument(
+        "--repo", type=Path, help="deployed checkout (controller_conversion)"
+    )
+    parser.add_argument("--project", help="Compose project (controller_conversion)")
+    parser.add_argument(
+        "--compose-file",
+        action="append",
+        default=[],
+        help="selected Compose file, repeated in order (controller_conversion)",
+    )
+    parser.add_argument(
+        "--expect", help="published disposition (controller_conversion)"
+    )
+    parser.add_argument(
         "--pre-upgrade-release",
         action="store_true",
-        help="populate the release an upgrade starts from with its own request",
+        help="populate or verify the source release before the upgrade replaces it",
     )
     args = parser.parse_args(argv)
 
@@ -1457,7 +1620,9 @@ def main(argv: list[str] | None = None) -> int:
     state: dict[str, Any] = {}
     # These phases start a journey's state; every later phase reads it.
     if args.phase not in {"populate", "controller_absent", "access_denied"}:
-        state = json.loads(args.state_file.read_text())
+        # A fresh install checks its controller result before populating.
+        if args.phase != "controller_conversion" or args.state_file.exists():
+            state = json.loads(args.state_file.read_text())
     try:
         if args.phase == "populate":
             populate(
@@ -1486,10 +1651,24 @@ def main(argv: list[str] | None = None) -> int:
             if args.api_log is None:
                 raise JourneyFailure("conversion needs --api-log")
             conversion(state, api_log=args.api_log)
+        elif args.phase == "controller_conversion":
+            if not (args.repo and args.project and args.compose_file and args.expect):
+                raise JourneyFailure(
+                    "controller_conversion needs --repo, --project, --compose-file "
+                    "and --expect"
+                )
+            controller_conversion(
+                state,
+                repo=args.repo,
+                project=args.project,
+                compose_files=args.compose_file,
+                expected=args.expect,
+                timeout=args.timeout,
+            )
         elif args.phase == "credential":
             credential(api, state, label=args.label)
         elif args.phase == "verify":
-            verify(api, state)
+            verify(api, state, pre_upgrade_release=args.pre_upgrade_release)
         elif args.phase == "vector_free":
             vector_free(api, state)
         elif args.phase == "controller_absent":
