@@ -542,8 +542,13 @@ def _verification_runner(
 
     server = sys.modules["server"]
     actual_probe = server._check_operator_origin
-    monkeypatch.setattr(server, "_check_operator_origin", lambda url, **kw:
-        "ok" if url == "https://operator.example" else actual_probe(url, **kw))
+    monkeypatch.setattr(
+        server,
+        "_check_operator_origin",
+        lambda url, **kw: (
+            "ok" if url == "https://operator.example" else actual_probe(url, **kw)
+        ),
+    )
 
     class _Runner:
         def __init__(self):
@@ -554,9 +559,20 @@ def _verification_runner(
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": ""}
             if args[-3:] == ("config", "--format", "json"):
-                return {"exit": 0, "output": _json.dumps({"services": {"api": {
-                    "environment": {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example"}
-                }}})}
+                return {
+                    "exit": 0,
+                    "output": _json.dumps(
+                        {
+                            "services": {
+                                "api": {
+                                    "environment": {
+                                        "MOONMIND_PUBLIC_BASE_URL": "https://operator.example"
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                }
             if "exec" in args:
                 return _conversion_reply(conversion)
             if "ps" in args:
@@ -1184,10 +1200,16 @@ def test_observer_loss_after_refusal_keeps_the_original_evidence(
     server = load("server")
     store = record.OperationStore(tmp_path / "state")
     operation = _begin_op(record, store, _api_target(tmp_path))
-    runner = _verification_runner(server.engine, monkeypatch, conversion={
-        "published": False, "disposition": "multi_person_refusal",
-        "reasonCode": "multi_person", "personCount": 2,
-    })
+    runner = _verification_runner(
+        server.engine,
+        monkeypatch,
+        conversion={
+            "published": False,
+            "disposition": "multi_person_refusal",
+            "reasonCode": "multi_person",
+            "personCount": 2,
+        },
+    )
     monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
 
     class ObserverLost(BaseException):
@@ -1217,11 +1239,16 @@ def _api_target(tmp_path):
 @pytest.mark.parametrize(
     "environment,ports,expected",
     [
-        ({}, [{"target": 8000, "published": "8123", "host_ip": "127.0.0.1"}],
-         ["http://127.0.0.1:8123"]),
-        ({"MOONMIND_PUBLIC_BASE_URL": "https://operator.example:9443"},
-         [{"target": 8000, "published": "8123", "host_ip": "127.0.0.1"}],
-         ["https://operator.example:9443"]),
+        (
+            {},
+            [{"target": 8000, "published": "8123", "host_ip": "127.0.0.1"}],
+            ["http://127.0.0.1:8123"],
+        ),
+        (
+            {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example:9443"},
+            [{"target": 8000, "published": "8123", "host_ip": "127.0.0.1"}],
+            ["https://operator.example:9443"],
+        ),
     ],
 )
 def test_operator_route_uses_rendered_deployment_origin(
@@ -1232,14 +1259,25 @@ def test_operator_route_uses_rendered_deployment_origin(
     class Runner:
         def run(self, args, timeout_seconds):
             assert args[-3:] == ("config", "--format", "json")
-            return {"exit": 0, "stdout": json.dumps({"services": {
-                "api": {"environment": environment, "ports": ports}
-            }})}
+            return {
+                "exit": 0,
+                "stdout": json.dumps(
+                    {"services": {"api": {"environment": environment, "ports": ports}}}
+                ),
+            }
 
     target = _api_target(tmp_path)
-    assert server.operator_urls_for_target(target, runner=Runner(), base=("docker", "compose")) == expected
+    assert (
+        server.operator_urls_for_target(
+            target, runner=Runner(), base=("docker", "compose")
+        )
+        == expected
+    )
     target["operatorUrls"] = ["https://override.example"]
-    assert server.operator_urls_for_target(target, runner=Runner(), base=()) == target["operatorUrls"]
+    assert (
+        server.operator_urls_for_target(target, runner=Runner(), base=())
+        == target["operatorUrls"]
+    )
 
 
 def test_public_health_cannot_substitute_for_protected_operator_access(controller_path):
@@ -1249,8 +1287,10 @@ def test_public_health_cannot_substitute_for_protected_operator_access(controlle
     def app(environ, start_response):
         path = environ["PATH_INFO"]
         paths.append(path)
-        start_response("200 OK" if path == "/healthz" else "403 Forbidden",
-                       [("Content-Type", "application/json")])
+        start_response(
+            "200 OK" if path == "/healthz" else "403 Forbidden",
+            [("Content-Type", "application/json")],
+        )
         return [b"{}"]
 
     httpd = make_server("127.0.0.1", 0, app)
@@ -1288,19 +1328,34 @@ def test_managed_controller_executes_the_protected_probe_from_host_network(
         def run(self, args, timeout_seconds):
             assert args[:2] == ("docker", "run")
             assert "--network=host" in args and "--read-only" in args
-            assert "--cap-drop=ALL" in args and "--security-opt=no-new-privileges" in args
+            assert (
+                "--cap-drop=ALL" in args and "--security-opt=no-new-privileges" in args
+            )
             assert "--mount" not in args and "--volume" not in args
             # Execute the shipped stdlib-only source, substituting only the
-            # Docker transport. Actual host networking is covered by Compose CI.
-            observed = subprocess.run([sys.executable, *args[args.index("-c"):]],
-                capture_output=True, text=True, timeout=timeout_seconds)
-            return {"exit": observed.returncode, "stdout": observed.stdout,
-                    "output": observed.stdout + observed.stderr}
+            # Docker transport. Host-network reachability requires Compose CI.
+            observed = subprocess.run(
+                [sys.executable, *args[args.index("-c") :]],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+            return {
+                "exit": observed.returncode,
+                "stdout": observed.stdout,
+                "output": observed.stdout + observed.stderr,
+            }
 
     try:
-        assert server._check_operator_origin(
-            f"http://127.0.0.1:{httpd.server_port}", runner=Runner(), image="moonmind:test"
-        ) == "ok"
+        assert (
+            server._check_operator_origin(
+                f"http://127.0.0.1:{httpd.server_port}",
+                runner=Runner(),
+                image="moonmind:test",
+            )
+            == "ok"
+        )
         assert paths == ["/api/v1/settings/catalog"]
     finally:
         httpd.shutdown()
@@ -1316,9 +1371,14 @@ def test_update_records_published_conversion_from_the_installed_api(
     store = record.OperationStore(tmp_path / "state")
     op = _begin_op(record, store, _api_target(tmp_path))
     runner = _verification_runner(
-        server_mod.engine, monkeypatch,
-        conversion={"published": True, "disposition": "fresh_init",
-                    "reasonCode": "empty_source", "personCount": 0},
+        server_mod.engine,
+        monkeypatch,
+        conversion={
+            "published": True,
+            "disposition": "fresh_init",
+            "reasonCode": "empty_source",
+            "personCount": 0,
+        },
     )
     monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: runner)
 
@@ -1342,9 +1402,14 @@ def test_update_carries_conversion_refusal_into_the_deployment_result(
     store = record.OperationStore(tmp_path / "state")
     op = _begin_op(record, store, _api_target(tmp_path))
     runner = _verification_runner(
-        server_mod.engine, monkeypatch,
-        conversion={"published": False, "disposition": "multi_person_refusal",
-                    "reasonCode": "multi_person", "personCount": 2},
+        server_mod.engine,
+        monkeypatch,
+        conversion={
+            "published": False,
+            "disposition": "multi_person_refusal",
+            "reasonCode": "multi_person",
+            "personCount": 2,
+        },
     )
     monkeypatch.setattr(server_mod.engine, "subprocess_runner", lambda: runner)
 
@@ -1569,7 +1634,11 @@ def test_production_apply_accepts_completed_one_shot_services(
 
     record = load("record")
     server_mod = load("server")
-    monkeypatch.setattr(server_mod, "operator_urls_for_target", lambda *a, **kw: ["https://operator.example"])
+    monkeypatch.setattr(
+        server_mod,
+        "operator_urls_for_target",
+        lambda *a, **kw: ["https://operator.example"],
+    )
     monkeypatch.setattr(server_mod, "_check_operator_origin", lambda *a, **kw: "ok")
     store = record.OperationStore(tmp_path / "state")
     target = {
@@ -1652,7 +1721,9 @@ def test_restart_resumes_installed_verification_without_reapplying(
         "project": "moonmind-test", "projectDir": str(tmp_path),
         "composeFiles": ["docker-compose.yaml"], "services": ["api"],
     })
-    runner = _verification_runner(server.engine, monkeypatch, ps_state=service_state, health=health)
+    runner = _verification_runner(
+        server.engine, monkeypatch, ps_state=service_state, health=health
+    )
     monkeypatch.setattr(server.engine, "subprocess_runner", lambda: runner)
     verify = server._verify_applied_release
 
@@ -1727,7 +1798,11 @@ def test_unavailable_service_observation_never_finishes_as_success(
         "project": "moonmind-test", "projectDir": str(tmp_path),
         "composeFiles": ["docker-compose.yaml"], "services": ["api"],
     })
-    monkeypatch.setattr(server.engine, "subprocess_runner", lambda: _verification_runner(server.engine, monkeypatch))
+    monkeypatch.setattr(
+        server.engine,
+        "subprocess_runner",
+        lambda: _verification_runner(server.engine, monkeypatch),
+    )
 
     def unavailable(*args, **kwargs):
         raise OSError("service observation unavailable")
@@ -1822,7 +1897,11 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
 ):
     record = load("record")
     server_mod = load("server")
-    monkeypatch.setattr(server_mod, "operator_urls_for_target", lambda *a, **kw: ["https://operator.example"])
+    monkeypatch.setattr(
+        server_mod,
+        "operator_urls_for_target",
+        lambda *a, **kw: ["https://operator.example"],
+    )
     monkeypatch.setattr(server_mod, "_check_operator_origin", lambda *a, **kw: "ok")
     (tmp_path / ".env").write_text("OMNIGENT_IMAGE_TAG=latest\n", encoding="utf-8")
     store = record.OperationStore(tmp_path / "controller-state")

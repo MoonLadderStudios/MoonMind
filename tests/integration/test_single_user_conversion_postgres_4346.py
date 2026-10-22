@@ -1671,11 +1671,22 @@ async def test_postgres_compose_host_transport_uses_kernel_gateway(pg_maker, mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", [
-    "fresh", "populated", "refused", "before_mutation", "during_conversion", "after_commit",
-])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "fresh",
+        "populated",
+        "refused",
+        "before_mutation",
+        "during_conversion",
+        "after_commit",
+    ],
+)
 async def test_postgres_controller_startup_conversion_recovery(
-    pg_maker, tmp_path, monkeypatch, scenario,
+    pg_maker,
+    tmp_path,
+    monkeypatch,
+    scenario,
 ):
     """#4355: real startup, transforms, HTTP admission and durable controller state.
 
@@ -1688,13 +1699,15 @@ async def test_postgres_controller_startup_conversion_recovery(
     import sys
     from unittest.mock import AsyncMock
 
-    import api_service.main as main
+    from api_service import main
     from api_service.db import base
     from api_service.services import single_user_conversion as suc
     from api_service.services.secrets import SecretsService
     from moonmind.security import auth_modes_4120
 
-    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "deploy/controller"))
+    monkeypatch.syspath_prepend(
+        str(Path(__file__).resolve().parents[2] / "deploy/controller")
+    )
     controller = importlib.import_module("server")
     record = controller.record_mod
     monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
@@ -1704,17 +1717,31 @@ async def test_postgres_controller_startup_conversion_recovery(
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setattr(base, "async_session_maker", pg_maker)
-    for name in ("_initialize_oidc_provider", "_sync_preset_seed_catalog",
-                 "_auto_seed_provider_profiles", "_sync_env_managed_secrets",
-                 "_sweep_secret_invalidation_outbox"):
+    for name in (
+        "_initialize_oidc_provider",
+        "_sync_preset_seed_catalog",
+        "_auto_seed_provider_profiles",
+        "_sync_env_managed_secrets",
+        "_sweep_secret_invalidation_outbox",
+    ):
         monkeypatch.setattr(main, name, AsyncMock())
     owner_id = None
     if scenario != "fresh":
         async with pg_maker() as db:
             owner_id = (await _mk_user(db)).id
-            db.add(UserProfile(user_id=owner_id, openai_api_key_encrypted="retained-test-credential"))
-            db.add(TemporalArtifact(artifact_id="controller-retained", storage_key="retained-key",
-                                   created_by_principal=str(owner_id)))
+            db.add(
+                UserProfile(
+                    user_id=owner_id,
+                    openai_api_key_encrypted="retained-test-credential",
+                )
+            )
+            db.add(
+                TemporalArtifact(
+                    artifact_id="controller-retained",
+                    storage_key="retained-key",
+                    created_by_principal=str(owner_id),
+                )
+            )
             if scenario == "refused":
                 await _mk_user(db)
             await db.commit()
@@ -1729,7 +1756,9 @@ async def test_postgres_controller_startup_conversion_recovery(
             raise ConnectionError("interrupted after the real artifact transform")
         return outcome
 
-    monkeypatch.setitem(suc.DEFAULT_SUBSYSTEM_TRANSFORMS, "artifacts", faulting_transform)
+    monkeypatch.setitem(
+        suc.DEFAULT_SUBSYSTEM_TRANSFORMS, "artifacts", faulting_transform
+    )
     real_commit = AsyncSession.commit
     lost_ack = []
 
@@ -1749,34 +1778,72 @@ async def test_postgres_controller_startup_conversion_recovery(
         await main.startup_event()
 
     async with _served_product(main.app) as (origin, _):
+
         class Runner:
             def run(self, args, timeout_seconds):
                 commands.append(tuple(args))
-                if "pull" in args and scenario == "before_mutation" and commands.count(tuple(args)) == 1:
-                    raise controller.engine.StageError("pull", 1, "registry unavailable before mutation")
+                if (
+                    "pull" in args
+                    and scenario == "before_mutation"
+                    and commands.count(tuple(args)) == 1
+                ):
+                    raise controller.engine.StageError(
+                        "pull", 1, "registry unavailable before mutation"
+                    )
                 if "up" in args:
                     asyncio.run_coroutine_threadsafe(startup(), loop).result(30)
                 if args[:2] == ("docker", "ps"):
                     return {"exit": 0, "output": ""}
                 if "ps" in args:
-                    return {"exit": 0, "output": json.dumps({"Service": "api", "State": "running"})}
+                    return {
+                        "exit": 0,
+                        "output": json.dumps({"Service": "api", "State": "running"}),
+                    }
                 if args[-3:] == ("config", "--format", "json"):
-                    return {"exit": 0, "output": json.dumps({"services": {"api": {
-                        "environment": {"MOONMIND_PUBLIC_BASE_URL": origin}}}})}
+                    return {
+                        "exit": 0,
+                        "output": json.dumps(
+                            {
+                                "services": {
+                                    "api": {
+                                        "environment": {
+                                            "MOONMIND_PUBLIC_BASE_URL": origin
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                    }
                 if "exec" in args:
                     script = args[-1].replace("http://localhost:8000", origin)
-                    observed = subprocess.run([sys.executable, "-c", script],
-                        capture_output=True, text=True, timeout=timeout_seconds)
-                    return {"exit": observed.returncode, "stdout": observed.stdout,
-                            "output": observed.stdout + observed.stderr}
+                    observed = subprocess.run(
+                        [sys.executable, "-c", script],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_seconds,
+                    )
+                    return {
+                        "exit": observed.returncode,
+                        "stdout": observed.stdout,
+                        "output": observed.stdout + observed.stderr,
+                    }
                 return {"exit": 0, "output": "ok"}
 
         monkeypatch.setattr(controller.engine, "subprocess_runner", Runner)
         store = record.OperationStore(tmp_path / "controller-state")
-        target = {"project": "moonmind-test-conversion", "projectDir": str(tmp_path),
-                  "composeFiles": ["docker-compose.yaml"], "services": ["api"]}
-        operation = store.begin(stack=target["project"], desired_image="moonmind:test",
-                                source_revision="test-candidate", target=target)
+        target = {
+            "project": "moonmind-test-conversion",
+            "projectDir": str(tmp_path),
+            "composeFiles": ["docker-compose.yaml"],
+            "services": ["api"],
+        }
+        operation = store.begin(
+            stack=target["project"],
+            desired_image="moonmind:test",
+            source_revision="test-candidate",
+            target=target,
+        )
         # Simulate observer replacement after the installed checkpoint. It must
         # resume this operation's verification, never another pull or startup.
         verify = controller._verify_applied_release
@@ -1789,26 +1856,42 @@ async def test_postgres_controller_startup_conversion_recovery(
 
         monkeypatch.setattr(controller, "_verify_applied_release", lose_observer)
         with pytest.raises(ControllerLost):
-            await asyncio.to_thread(controller._apply_with_bounded_retries, store,
-                operation["operationId"], lambda op: controller.production_apply(store, op))
+            await asyncio.to_thread(
+                controller._apply_with_bounded_retries,
+                store,
+                operation["operationId"],
+                lambda op: controller.production_apply(store, op),
+            )
         if scenario == "during_conversion":
             async with pg_maker() as db:
-                assert not (await db.get(TemporalArtifact, "controller-retained")).operator_recovery_granted
+                assert not (
+                    await db.get(TemporalArtifact, "controller-retained")
+                ).operator_recovery_granted
                 assert (await db.execute(select(ManagedSecret))).scalars().all() == []
-                assert (await db.execute(select(SingleUserConversionRun))).scalars().all() == []
+                assert (
+                    await db.execute(select(SingleUserConversionRun))
+                ).scalars().all() == []
             await startup()  # The interrupted API step restarts from its unchanged source.
         before_resume = len(commands)
         monkeypatch.setattr(controller, "_verify_applied_release", verify)
         restarted = record.OperationStore(store.state_dir)
-        await asyncio.to_thread(controller.resume_open_operations, restarted,
+        await asyncio.to_thread(
+            controller.resume_open_operations,
+            restarted,
             lambda op: controller.production_apply(restarted, op),
-            legacy_writer_probe=lambda: False, runner=Runner())
+            legacy_writer_probe=lambda: False,
+            runner=Runner(),
+        )
         final = restarted.load(operation["operationId"])
         assert len(startup_count) == (2 if scenario == "during_conversion" else 1)
         assert not any("up" in cmd or "pull" in cmd for cmd in commands[before_resume:])
         checks = {row["name"]: row for row in final["verification"]}
-        assert checks["single-user-conversion"]["status"] == ("failed" if scenario == "refused" else "passed")
-        assert final["status"] == ("partially_verified" if scenario == "refused" else "succeeded")
+        assert checks["single-user-conversion"]["status"] == (
+            "failed" if scenario == "refused" else "passed"
+        )
+        assert final["status"] == (
+            "partially_verified" if scenario == "refused" else "succeeded"
+        )
         if scenario == "before_mutation":
             assert "registry unavailable before mutation" in final["errorSummary"]
         if scenario == "after_commit":
@@ -1816,7 +1899,11 @@ async def test_postgres_controller_startup_conversion_recovery(
         async with pg_maker() as db:
             runs = (await db.execute(select(SingleUserConversionRun))).scalars().all()
             assert len(runs) == (0 if scenario == "refused" else 1)
-            assert len(transform_calls) == (0 if scenario == "refused" else 2 if scenario == "during_conversion" else 1)
+            assert len(transform_calls) == (
+                0
+                if scenario == "refused"
+                else 2 if scenario == "during_conversion" else 1
+            )
             if owner_id:
                 assert await db.get(User, owner_id) is not None
                 artifact = await db.get(TemporalArtifact, "controller-retained")
@@ -1825,6 +1912,11 @@ async def test_postgres_controller_startup_conversion_recovery(
                 assert artifact.operator_recovery_granted is (scenario != "refused")
                 if scenario != "refused":
                     secret = (await db.execute(select(ManagedSecret))).scalars().one()
-                    assert await SecretsService.get_secret(db, secret.slug) == "retained-test-credential"
-                    raw = (await db.execute(text("SELECT ciphertext FROM managed_secrets"))).scalar_one()
+                    assert (
+                        await SecretsService.get_secret(db, secret.slug)
+                        == "retained-test-credential"
+                    )
+                    raw = (
+                        await db.execute(text("SELECT ciphertext FROM managed_secrets"))
+                    ).scalar_one()
                     assert "retained-test-credential" not in raw
