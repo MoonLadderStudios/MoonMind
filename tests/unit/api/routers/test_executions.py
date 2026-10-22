@@ -1547,6 +1547,7 @@ def _override_user_dependencies(
             "_strict_current_user",
             "_optional_current_user",
             "get_instance_access",
+            "get_instance_operator_access",
             "get_instance_access_optional",
         }
     }

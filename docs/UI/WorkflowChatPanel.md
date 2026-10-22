@@ -185,12 +185,12 @@ Every native application request that crosses the MoonMind origin—HTML/bootstr
 
 For every request and reconnect, the bridge must:
 
-1. authenticate the MoonMind caller,
+1. admit the MoonMind operator through the installed transport boundary,
 2. resolve `chatBindingId` from durable state,
 3. authorize the caller against the bound Workflow Execution and requested operation,
 4. verify that any route, payload, or query session reference maps to the one bound provider session,
 5. reject caller-supplied upstream endpoints, alternate session ids, host ids, runner ids, workspace roots, and provider identities,
-6. recompute effective capabilities from the immutable Agent Profile snapshot, Provider Profile and launch policy, workflow/session state, and caller role,
+6. recompute effective capabilities from the immutable Agent Profile snapshot, Provider Profile and launch policy, workflow/session state, and admitted caller authority,
 7. validate expected workflow, run, Step Execution, bridge session, provider session, session epoch, and active turn where the operation can race,
 8. apply required security scans and policy checks before forwarding,
 9. record durable mutation audit evidence,
@@ -198,7 +198,9 @@ For every request and reconnect, the bridge must:
 
 The proxy strips MoonMind cookies, bearer tokens, CSRF tokens, internal authorization headers, and other MoonMind credentials before forwarding upstream. It injects only server-side Omnigent credentials and an allowlisted set of transport headers. No deployment option may turn browser-supplied upstream authorization into provider authority.
 
-SSE and WebSocket upgrades receive the same authorization and binding validation before connection, and reconnects repeat the check rather than relying on the authorization that opened an earlier stream.
+After published account-free conversion, bootstrap, binding discovery, HTTP and WebSocket requests use operator admission without resolving a person. Retained account deployments keep their installed authority until conversion. Operator admission preserves supported controls, but never bypasses the binding’s immutable policy, current session state, or explicit operator capability restrictions. Matching grants under the retained instance-operator UUID and the operator key intersect without resolving a User; unresolved historical authority or malformed matching grants fail closed. Presented machine credentials cannot fall back to operator admission, even on an otherwise admitted local connection. Native control audit records identify the operator without rewriting retained person provenance.
+
+SSE and WebSocket upgrades receive the same authorization and binding validation before connection. Operator SSE, transcript sockets, and native relays expire after the shared five-minute admission lifetime, even while active. Live configuration checks never renew that lifetime: cached trusted-ingress headers cannot reveal an upstream logout or identity revocation. Reconnecting requires fresh ingress proof and revalidates the binding. Expiry or browser loss closes only the transport, preserving journal cursors, accepted-message idempotency, and independently admitted work.
 
 ## 7. Native control policy
 

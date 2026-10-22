@@ -77,6 +77,7 @@ from api_service.auth_providers import (
     get_current_user,
     get_instance_access,
     get_instance_access_optional,
+    get_instance_operator_access,
     instance_operator_principal,
 )
 from api_service.core import sync as execution_sync
@@ -18314,7 +18315,7 @@ async def resolve_workflow_chat_binding(
     workflow_id: str,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_instance_operator_access),
 ) -> WorkflowChatBinding:
     """Resolve the authorized, browser-safe native Workflow Chat binding.
 
