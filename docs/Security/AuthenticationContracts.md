@@ -54,7 +54,7 @@ are retained predecessor interfaces, not an account-enrollment target.
 
 | Mode | Current use and limits |
 | --- | --- |
-| `disabled` | Default Compose local path, restricted to loopback or an approved ingress boundary. Settings, presets, secrets and dashboard consumers use permission admission after guarded conversion; retained UUID consumers still resolve their compatibility principal. Never an error fallback. |
+| `disabled` | Default Compose local path, restricted to loopback or an approved ingress boundary. Shared product routes use permission admission after guarded conversion; the remaining execution, container-job, chat and MCP consumers still resolve their compatibility principal. Never an error fallback. |
 | `accounts` | Retained predecessor built-in accounts with protected first-owner setup and invite-only enrollment. No Keycloak or mandatory SMTP service. |
 | `oidc` | Advanced external identity-provider integration through a qualified generic OIDC flow (authorization code + PKCE). |
 | `header` | Advanced authenticated ingress. Only a trusted proxy may assert identity; direct API connections never accept user-controlled identity headers. |
@@ -63,10 +63,10 @@ When no default user exists, `api_service/auth_providers.py` admits that transie
 principal only after the conversion ledger records completed, published
 `fresh_init` or `eligible_conversion`. Missing or unreadable conversion evidence
 fails closed with `503 setup_required`; an identity-store failure returns
-`503 unavailable`. Instance settings, presets, secrets and dashboard routes instead
-consume permission-only admission after the same published conversion; they never call
-the transient-person factory. Other UUID consumers retain this compatibility
-path until their owning migration replaces it.
+`503 unavailable`. Shared product routes instead consume permission-only admission
+(`get_instance_access`) after the same published conversion; they never call the
+transient-person factory. Execution, container-job, chat and MCP consumers retain
+this compatibility path until their owning migration replaces it.
 
 Unknown or retired selectors fail startup with migration guidance. `keycloak`
 must not translate to `disabled`, `default` is not an undocumented alias, and
@@ -432,13 +432,17 @@ Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/operator_admission.py` (FastAPI adapter),
 `api_service/api/routers/operator_boundary_4347.py` (test-only demonstration).
 
-Settings, presets, secrets, dashboard, execution, recurrence and artifact routes
+Shared product routes (settings, presets, secrets, dashboard, recurrence,
+artifacts, provider and agent profiles, policies, repository connections,
+agent runs and sessions, operations, issue lifecycle and Omnigent diagnostics)
 retain their real predecessor principal until guarded conversion publishes.
 Retained requests require local transport or the existing explicitly approved
 non-loopback ingress, plus configured Host and mutation-origin checks. Pending
 conversion cannot cut over installed access; missing accounts or an unavailable
 identity store still fail closed. Published conversion uses permission-only
-admission. Other UUID consumers retain their compatibility principal.
+admission; person foreign keys written by those routes stay null and artifact,
+audit and claim scope keep the retained local-operator UUID. Other UUID consumers
+retain their compatibility principal.
 Demonstration routers stay unmounted; isolated route evidence does not establish
 deployed access.
 

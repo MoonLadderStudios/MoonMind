@@ -16,8 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api_service.auth_providers import get_current_user
-from api_service.db.models import User
+from api_service.auth_providers import get_instance_access
 from api_service.services.settings_catalog import has_settings_permission
 from moonmind.omnigent.runtime_provider_migration_status import (
     RuntimeProviderMigrationStatus,
@@ -30,7 +29,7 @@ router = APIRouter(
 )
 
 
-def _require_read(user: User) -> None:
+def _require_read(user: Any) -> None:
     if not has_settings_permission(user, "settings.catalog.read"):
         raise HTTPException(
             403,
@@ -45,7 +44,7 @@ def _require_read(user: User) -> None:
     response_model_by_alias=True,
 )
 async def get_runtime_provider_migration_status(
-    user: User = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> Any:
     """Return the current runtime-provider migration state per combination."""
 

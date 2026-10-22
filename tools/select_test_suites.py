@@ -193,7 +193,6 @@ INTEGRATION_CI_EXACT = {
     "api_service/auth.py",
     "api_service/auth_providers.py",
     "api_service/main.py",
-    "api_service/api/routers/worker_auth.py",
     "api_service/api/routers/advanced_auth_4124.py",
     "moonmind/security/advanced_identity_4124.py",
     "moonmind/config/settings.py",

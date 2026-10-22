@@ -104,7 +104,6 @@ from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
 from api_service.api.routers.accounts_4122 import router as accounts_4122_router
 from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
-from api_service.api.websockets import router as websockets_router
 # NOTE (#4347, #4455 review): the operator-boundary demonstration routers
 # (api_service.api.routers.operator_boundary_4347) are intentionally NOT
 # mounted in production. They are test scaffolding exercising the shared
@@ -1455,7 +1454,6 @@ app.include_router(omnigent_bootstrap_router)
 app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
-app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 # Single-user operator-admission boundary (#4347): the shared primitive lives
 # in moonmind.security.operator_admission with its FastAPI adapter in
 # api_service.operator_admission. Demonstration routers are test-only (see
