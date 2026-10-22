@@ -8230,6 +8230,20 @@ async def test_generic_omnigent_publication_materializes_resolved_github_auth(
         / manifest["workspaceRelativePath"]
     )
     workspace.mkdir(parents=True)
+    # Publication scopes the credential to the checkout's own origin.
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "remote",
+            "add",
+            "origin",
+            f"https://github.com/{manifest['repository']}.git",
+        ],
+        check=True,
+    )
     SandboxWorkspaceRecordStore(workspace_root).ensure(
         SandboxWorkspaceRecord(
             workspace_id=workspace_id,
@@ -8323,15 +8337,22 @@ async def test_generic_omnigent_publication_materializes_resolved_github_auth(
     assert credential_repositories == [manifest["repository"]]
     assert len(push_environments) == 1
     push_environment = push_environments[0]
-    assert push_environment["GITHUB_TOKEN"] == credential_token
+    assert push_environment["GH_TOKEN"] == credential_token
     assert push_environment["GIT_TERMINAL_PROMPT"] == "0"
-    assert push_environment["GIT_CONFIG_COUNT"] == "2"
-    assert "credential.https://github.com.helper" in {
-        push_environment["GIT_CONFIG_KEY_0"],
-        push_environment["GIT_CONFIG_KEY_1"],
-    }
-    assert '$GITHUB_TOKEN' in push_environment["GIT_CONFIG_VALUE_1"]
-    assert credential_token not in push_environment["GIT_CONFIG_VALUE_1"]
+    assert not any(
+        credential_token in push_environment[f"GIT_CONFIG_VALUE_{index}"]
+        for index in range(int(push_environment["GIT_CONFIG_COUNT"]))
+    )
+    from tests.helpers.git_transport import git_credential_for
+
+    probe_env = {**push_environment, "PATH": os.environ["PATH"]}
+    assert (
+        git_credential_for(
+            probe_env, f"https://github.com/{manifest['repository']}.git"
+        )
+        == credential_token
+    )
+    assert git_credential_for(probe_env, "https://github.com/other/repo.git") is None
 
 
 @pytest.mark.parametrize("authored_base", [None, "main", "release/main"])

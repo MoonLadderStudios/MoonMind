@@ -233,12 +233,30 @@ def build_bare_repository(root: Path, *, name: str = "owner/repo.git") -> Path:
 
 
 def start_synthetic_github(
-    directory: Path, *, required_token: str | None
+    directory: Path,
+    *,
+    required_token: str | None,
+    source_repository: Path | None = None,
+    name: str = "owner/repo.git",
 ) -> Iterator[SyntheticGithubTransport]:
-    """Serve a synthetic ``https://github.com/owner/repo.git`` until closed."""
+    """Serve a synthetic ``https://github.com/<name>`` until closed.
+
+    ``source_repository`` serves an existing repository's history instead of
+    the one-commit fixture.
+    """
 
     directory.mkdir(parents=True, exist_ok=True)
-    served = build_bare_repository(directory / "repository")
+    if source_repository is None:
+        served = build_bare_repository(directory / "repository", name=name)
+    else:
+        served = directory / "repository" / "served"
+        bare = served / name
+        bare.parent.mkdir(parents=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--bare", str(source_repository), str(bare)],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(bare), "update-server-info"], check=True)
     ca_path, cert_path, key_path = _write_certificates(directory, "github.com")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert_path, key_path)
@@ -288,11 +306,67 @@ def write_proxy_git_shim(directory: Path, transport: SyntheticGithubTransport) -
     return shim_dir
 
 
+def git_credential_for(env: dict[str, str], url: str) -> str | None:
+    """Return the password real ``git credential fill`` answers for ``url``."""
+
+    result = subprocess.run(
+        ["git", "credential", "fill"],
+        input=f"url={url}\n\n",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith("password="):
+            return line.removeprefix("password=")
+    return None
+
+
+def ambient_credential_environment(directory: Path, token: str) -> dict[str, str]:
+    """Return a worker environment whose every ambient route offers ``token``.
+
+    A global helper and ``http.extraHeader`` in ``HOME``, ``~/.netrc``, injected
+    ``GIT_CONFIG_PARAMETERS``, ``GIT_ASKPASS`` and gh token/config variables
+    all answer with the ambient credential, so a consumer that is not isolated
+    sends it.
+    """
+
+    home = directory / "ambient-home"
+    (home / ".config" / "gh").mkdir(parents=True, exist_ok=True)
+    header = f"Authorization: {basic_authorization(token)}"
+    (home / ".gitconfig").write_text(
+        f"[http]\n\textraHeader = {header}\n"
+        f'[credential]\n\thelper = "!f() {{ echo username=x-access-token; '
+        f'echo password={token}; }}; f"\n'
+    )
+    (home / ".netrc").write_text(
+        f"machine github.com login x-access-token password {token}\n"
+    )
+    (home / ".config" / "gh" / "hosts.yml").write_text(
+        f"github.com:\n    oauth_token: {token}\n    user: ambient\n"
+    )
+    askpass = home / "askpass"
+    askpass.write_text(f"#!/bin/sh\necho {token}\n")
+    askpass.chmod(0o755)
+    return {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "GITHUB_TOKEN": token,
+        "GH_TOKEN": token,
+        "GIT_ASKPASS": str(askpass),
+        "SSH_ASKPASS": str(askpass),
+        "GIT_CONFIG_PARAMETERS": f"'http.extraheader'='{header}'",
+    }
+
+
 __all__ = [
     "RecordedRequest",
+    "ambient_credential_environment",
     "SyntheticGithubTransport",
     "basic_authorization",
     "build_bare_repository",
+    "git_credential_for",
     "start_synthetic_github",
     "write_proxy_git_shim",
 ]

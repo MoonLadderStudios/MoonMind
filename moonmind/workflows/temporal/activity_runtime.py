@@ -14696,23 +14696,20 @@ class TemporalAgentRuntimeActivities:
         github_token: str | None = None,
         publication_git_identity: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
-        """Build host Git authentication in memory without workload-owned shims."""
+        """Build host Git/gh authentication in memory without workload-owned shims.
+
+        Only ``github_token``, the run's selected push credential, reaches Git
+        (scoped to the workspace's ``origin``) and gh. An unavailable selection
+        means no credential, never the worker's ambient GitHub login.
+        """
         from moonmind.omnigent.git_identity import resolve_publication_git_identity
         from moonmind.workflows.temporal.runtime.git_auth import (
-            build_github_token_git_environment,
+            build_workspace_git_environment,
         )
 
-        del workspace  # Authentication never writes into an agent-owned path.
-        env = dict(os.environ)
-        for key in tuple(env):
-            if key.startswith("GIT_CONFIG_"):
-                env.pop(key)
-        env["GIT_CONFIG_GLOBAL"] = os.devnull
-        env["GIT_CONFIG_NOSYSTEM"] = "1"
-        token = str(github_token or env.get("GITHUB_TOKEN") or "").strip()
-        env = build_github_token_git_environment(token, base_env=env)
-        if token:
-            env["GH_TOKEN"] = token
+        env = build_workspace_git_environment(
+            github_token, base_env=os.environ, workspace=workspace
+        )
         git_name, git_email = resolve_publication_git_identity(publication_git_identity)
         env.update(
             GIT_AUTHOR_NAME=git_name,

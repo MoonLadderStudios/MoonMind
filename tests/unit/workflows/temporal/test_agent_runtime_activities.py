@@ -8005,7 +8005,15 @@ async def test_launch_session_authenticates_as_the_selected_connection_among_sev
     # The clone, the session's git/gh broker, and the container all carry the
     # selected account's token; the other account and ambient token never.
     assert host.git_envs
-    assert {env.get("GITHUB_TOKEN") for env in host.git_envs} == {selected_token}
+    from tests.helpers.git_transport import git_credential_for
+
+    assert {
+        git_credential_for(
+            {**env, "PATH": os.environ["PATH"]},
+            "https://github.com/MoonLadderStudios/private-repo.git",
+        )
+        for env in host.git_envs
+    } == {selected_token}
     assert host.broker_tokens == [selected_token]
     assert [env.get("GITHUB_TOKEN") for env in host.docker_run_envs] == [
         selected_token
