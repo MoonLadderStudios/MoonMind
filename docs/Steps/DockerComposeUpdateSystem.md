@@ -226,7 +226,7 @@ A provider-manager fault is diagnosed as its own fault and does not block instal
 
 ### 12.1 Compose-level verification
 
-Compose reuses deployment-owned settings, bindings, networks and mounts; the controller's image overlay does not replace them with fresh-install defaults. Verification observes the selected project's actual service readiness and conversion outcome.
+Compose preserves deployment-owned settings, bindings, networks and mounts. Disposable journeys keep overrides inside their checkout so controller helpers receive the same files. Verification observes actual service readiness and conversion.
 
 Observation distinguishes the controller's own one-off container from ordinary services, and all observation and cleanup is scoped to the owned project. There is no global prune or broad name-prefix deletion.
 

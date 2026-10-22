@@ -245,10 +245,14 @@ done
 mkdir -p "$LOG_DIR/state"
 LOG_DIR="$(cd "$LOG_DIR" && pwd)"
 STATE_DIR="$LOG_DIR/state"
-ISOLATION_OVERRIDE="$STATE_DIR/isolation.json"
-# Compose creates the scoped networks above; their consumers must receive the
-# same names rather than resolve production defaults inside their containers.
-python3 - "$ISOLATION_OVERRIDE" <<'EOF'
+prepare_isolation_override() {
+  # The controller remaps every Compose file from this checkout into its helper.
+  # Keep the override on that mount and outside Git so the upgrade preserves it.
+  ISOLATION_OVERRIDE="$DEPLOY_DIR/var/first-run-journey/isolation.json"
+  mkdir -p "$(dirname "$ISOLATION_OVERRIDE")"
+  # Compose creates the scoped networks above; their consumers must receive the
+  # same names rather than resolve production defaults inside their containers.
+  python3 - "$ISOLATION_OVERRIDE" <<'EOF'
 import json, os, sys
 from pathlib import Path
 keys = (
@@ -265,6 +269,7 @@ Path(sys.argv[1]).write_text(json.dumps({"services": {
     name: {"environment": environment} for name in services
 }}))
 EOF
+}
 
 record_provenance() {
   {
@@ -712,17 +717,20 @@ fresh_journey() {
 
 if [[ "$MODE" == "fresh" ]]; then
   prepare_disposable_source
+  prepare_isolation_override
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
   bring_up
   require_controller_conversion fresh fresh_init
   fresh_journey fresh
 elif [[ "$MODE" == "controller" ]]; then
   prepare_disposable_source
+  prepare_isolation_override
   export MOONMIND_IMAGE="$CANDIDATE_IMAGE"
   bring_up
   controller_journey controller
 else
   prepare_upgrade_source
+  prepare_isolation_override
   export MOONMIND_IMAGE="$UPGRADE_FROM"
   # The old release predates #4483: a transient Temporal RESOURCE_EXHAUSTED
   # during release-routing startup restarts its workflow worker group once,

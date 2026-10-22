@@ -474,3 +474,56 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     again = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
     assert again.outputs["operationId"] == result.outputs["operationId"]
     assert phases == ["select", "up", "migrate"]
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_omnigent_helper_refuses_compose_files_outside_checkout(
+    tmp_path, monkeypatch, absolute
+):
+    from deploy.controller.record import OperationStore
+    from moonmind.workflows.skills.deployment_release import (
+        run_controller_omnigent_step,
+    )
+
+    repo = tmp_path / "deployment-checkout"
+    repo.mkdir()
+    (repo / "docker-compose.yaml").write_text("services: {}\n")
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("services: {}\n")
+    state = repo / "deploy/state"
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(repo))
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", str(state / ".env.deploy")
+    )
+    store = OperationStore(state / "controller")
+    operation = store.begin(
+        stack="moonmind-test-override-admission",
+        desired_image=IMAGE,
+        source_revision="",
+        target={
+            "project": "moonmind-test-override-admission",
+            "projectDir": str(repo),
+            "composeFiles": [
+                str(repo / "docker-compose.yaml"),
+                str(outside) if absolute else "../outside.yaml",
+            ],
+        },
+    )
+    with pytest.raises(ValueError):
+        asyncio.run(
+            run_controller_omnigent_step(
+                "select",
+                {
+                    "operationId": operation["operationId"],
+                    "target": operation["target"],
+                    "moonmindImage": operation["desired"]["image"],
+                    "controllerCapabilities": [
+                        "controller-handoff",
+                        "active-journal-transition",
+                        "unversioned-routing-cutover",
+                    ],
+                },
+            )
+        )
+    assert not (state / "controller-omnigent-jobs").exists()
+    assert store.load(operation["operationId"]) == operation
