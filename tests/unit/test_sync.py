@@ -775,8 +775,17 @@ def test_merged_parameters_for_projection_combines_canonical_with_memo_payload()
     assert merged["model"] == "gpt-5"
 
 
-@pytest.mark.parametrize("key", ["workflow", "task"])
-def test_memo_runtime_projection_preserves_saved_graph_and_finish_mode(key):
+@pytest.mark.parametrize(
+    ("saved_key", "observed_key"),
+    [
+        ("workflow", "workflow"),
+        ("task", "task"),
+        ("task", "workflow"),
+    ],
+)
+def test_memo_runtime_projection_preserves_saved_graph_and_finish_mode(
+    saved_key, observed_key
+):
     from types import SimpleNamespace
 
     graph = {
@@ -788,19 +797,21 @@ def test_memo_runtime_projection_preserves_saved_graph_and_finish_mode(key):
             "mergeAutomation": {"enabled": True, "finishMode": "review_only"},
         },
     }
-    canonical = SimpleNamespace(parameters={key: graph})
+    canonical = SimpleNamespace(parameters={saved_key: graph})
     runtime = {"runtime": {"mode": "omnigent"}}
-    merged = merged_parameters_for_projection({"parameters": {key: runtime}}, canonical)
+    merged = merged_parameters_for_projection(
+        {"parameters": {observed_key: runtime}}, canonical
+    )
 
-    assert merged[key] == {**graph, **runtime}
+    assert merged[observed_key] == {**graph, **runtime}
     assert "runtime" not in graph
     # A recorded replacement still wins; this fills omissions, not old values.
     replacement = {"steps": [{"type": "agent"}]}
     merged = merged_parameters_for_projection(
-        {"parameters": {key: replacement}}, canonical
+        {"parameters": {observed_key: replacement}}, canonical
     )
-    assert merged[key]["steps"] == replacement["steps"]
-    assert merged[key]["publish"] == graph["publish"]
+    assert merged[observed_key]["steps"] == replacement["steps"]
+    assert merged[observed_key]["publish"] == graph["publish"]
 
 
 def test_merged_parameters_for_projection_without_canonical_returns_memo_only():

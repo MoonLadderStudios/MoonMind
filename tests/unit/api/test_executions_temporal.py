@@ -526,10 +526,14 @@ def test_task_detail_instructions_include_task_and_step_text() -> None:
     )
 
 
-@pytest.mark.parametrize("native_review", [False, True])
+@pytest.mark.parametrize(
+    ("native_review", "graph_key"),
+    [(False, "task"), (True, "workflow"), (True, "task")],
+)
 def test_list_executions_source_temporal_merges_canonical_parameters(
     client,
     native_review,
+    graph_key,
 ) -> None:
     """Temporal list uses memo-only parameters; merge DB canonical row for Runtime/Skill."""
     from types import SimpleNamespace
@@ -549,7 +553,7 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
         canon.parameters = {
             "targetRuntime": "omnigent",
             "profileId": "opencode-go-default",
-            "workflow": {
+            graph_key: {
                 "steps": [
                     {
                         "type": "tool",

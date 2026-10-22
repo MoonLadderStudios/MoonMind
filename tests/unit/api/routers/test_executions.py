@@ -22488,15 +22488,18 @@ def test_missing_workflow_graph_does_not_claim_native_execution(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("live_available", [True, False])
+@pytest.mark.parametrize("generic_reason", [None, "external_completion"])
 @pytest.mark.parametrize(
     "preserve_reason", [None, "operator_paused", "terminal", "provider_profile_slot"]
 )
 async def test_live_external_review_wait_explains_provider_and_preserves_other_states(
-    monkeypatch, preserve_reason, live_available
+    monkeypatch, preserve_reason, live_available, generic_reason
 ) -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.AWAITING_EXTERNAL)
     record.memo["summary"] = "Waiting for PR merge automation."
-    record.waiting_reason = preserve_reason or "Waiting for PR merge automation."
+    record.waiting_reason = (
+        preserve_reason or generic_reason or "Waiting for PR merge automation."
+    )
     record.paused = preserve_reason == "operator_paused"
     if preserve_reason == "terminal":
         record.state = MoonMindWorkflowState.COMPLETED
