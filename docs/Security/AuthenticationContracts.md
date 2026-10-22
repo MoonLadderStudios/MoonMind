@@ -432,10 +432,13 @@ Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/operator_admission.py` (FastAPI adapter),
 `api_service/api/routers/operator_boundary_4347.py` (test-only demonstration).
 
-Disabled-mode product routes share peer, Host and Origin enforcement. Settings,
-presets, secrets, dashboard, execution submission/list/detail/cancellation,
-recurrence and artifact routes consume permission-only admission after published
-guarded conversion. Other UUID consumers retain their compatibility principal.
+Settings, presets, secrets, dashboard, execution, recurrence and artifact routes
+retain their real predecessor principal until guarded conversion publishes.
+Retained requests require local transport or the existing explicitly approved
+non-loopback ingress, plus configured Host and mutation-origin checks. Pending
+conversion cannot cut over installed access; missing accounts or an unavailable
+identity store still fail closed. Published conversion uses permission-only
+admission. Other UUID consumers retain their compatibility principal.
 Demonstration routers stay unmounted; isolated route evidence does not establish
 deployed access.
 
