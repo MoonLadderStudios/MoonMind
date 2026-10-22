@@ -6428,6 +6428,7 @@ async def _enrich_execution_merge_automation(
         and execution.waiting_reason
         in {
             None,
+            "external_completion",
             "Waiting for PR merge automation.",
         }
         and normalized.status == "waiting"

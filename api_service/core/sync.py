@@ -207,6 +207,8 @@ def merged_parameters_for_projection(
     # graph and finish policy when the memo only repeats its runtime settings.
     for key in ("workflow", "task"):
         saved = canonical_params.get(key)
+        if key == "workflow" and not saved:
+            saved = canonical_params.get("task")
         observed = synced_params.get(key)
         if isinstance(saved, dict) and isinstance(observed, dict):
             merged[key] = {**saved, **observed}
