@@ -24,6 +24,11 @@ Boundary rules (exact, see ``docs/Security/AuthenticationContracts.md``
   identity is never mapped to a local account, and upstream subjects,
   roles, and membership are never imported. Container-local loopback
   without that proof never admits once a remote URL is configured.
+* Approved publication (``MOONMIND_API_PUBLISH_HOST`` non-loopback with
+  ``MOONMIND_TRUSTED_INGRESS=1`` and no ``MOONMIND_TRUSTED_PROXIES``)
+  admits peers of the operator-approved binding itself, local or remote,
+  after the same Host/origin checks. This is the installed network
+  authority, so account-free conversion never revokes it.
 * Caller-controlled forwarding/identity headers (``X-Forwarded-*``,
   ``X-Real-IP``, untrusted ``X-Moonmind-User``), worker credentials
   (execution-fanout markers, worker bearer material), and query-string
@@ -134,7 +139,7 @@ class OperatorAdmissionError(Exception):
 class OperatorAdmission:
     """Permission to use the operator interface (no person identity)."""
 
-    via: str  # "loopback" | "host_publish" | "trusted_ingress"
+    via: str  # "loopback" | "host_publish" | "approved_publication" | "trusted_ingress"
     subject: None = None  # Always None: no persisted person is resolved.
 
     def describe(self) -> str:
@@ -388,6 +393,25 @@ def _trusted_proxies(environ: Mapping | None = None) -> tuple[str, ...]:
         return ()
 
 
+def _approved_publication(source: Mapping) -> bool:
+    """Whether the operator approved the non-loopback binding as the ingress.
+
+    Configured trusted proxies mean the operator chose proxy proof instead.
+    """
+    try:
+        host = (source.get("MOONMIND_API_PUBLISH_HOST", "") or "").strip()
+        trusted = (source.get("MOONMIND_TRUSTED_INGRESS", "") or "").strip().lower()
+    except Exception:
+        return False
+    return (
+        bool(host)
+        and host != "localhost"
+        and not _is_loopback_ip(host)
+        and trusted in {"1", "true", "yes"}
+        and not _trusted_proxies(source)
+    )
+
+
 def _client_matches_proxies(client_host: str | None, proxies: tuple[str, ...]) -> bool:
     """Whether a connecting peer matches the configured trusted proxies.
 
@@ -541,6 +565,8 @@ def validate_replacement_operator_admission(environ: Mapping | None = None) -> N
             validate_public_base_url(base_url)
         except ValueError as exc:
             raise OperatorAdmissionError("misconfigured", str(exc)) from exc
+    if _approved_publication(source):
+        return
     if not base_url or _is_loopback_base_url(base_url):
         if publish_host == "localhost" or _is_loopback_ip(publish_host):
             return
@@ -606,6 +632,12 @@ def resolve_operator_admission(
         referer=str(referer) if referer is not None else None,
         base_url="" if loopback_base else base_url,
     )
+
+    if _approved_publication(source if isinstance(source, Mapping) else {}):
+        logger.info(
+            "auth_event boundary=operator reason=admitted via=approved_publication"
+        )
+        return OperatorAdmission(via="approved_publication")
 
     if not base_url or loopback_base:
         # Fresh local operation: loopback transport plus a loopback Host is

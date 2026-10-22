@@ -99,6 +99,24 @@ async def test_only_published_conversion_switches_admission(
     if not published:
         assert await auth.get_instance_access(request(), session) is user
         return
+    # Publishing conversion must not revoke the approved non-loopback ingress.
+    assert isinstance(
+        await auth.get_instance_access(request(), session), OperatorAdmission
+    )
+    session.get.assert_not_awaited()
+
+
+async def test_published_conversion_keeps_loopback_publication_local(
+    retained_instance, monkeypatch
+):
+    session, _user, result = retained_instance
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
+    result.scalars.return_value.all.return_value = [
+        SimpleNamespace(
+            status="complete",
+            result_json={"published": True, "decision": {"disposition": "fresh_init"}},
+        )
+    ]
     with pytest.raises(HTTPException) as exc:
         await auth.get_instance_access(request(), session)
     assert exc.value.status_code == 401
