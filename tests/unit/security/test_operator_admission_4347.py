@@ -19,6 +19,7 @@ import pytest
 
 def _local_env(monkeypatch):
     monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("MOONMIND_API_PUBLISH_HOST", raising=False)
     monkeypatch.delenv("MOONMIND_TRUSTED_INGRESS", raising=False)
     monkeypatch.delenv("MOONMIND_TRUSTED_PROXIES", raising=False)
     monkeypatch.delenv("MOONMIND_PROXY_IDENTITY_NAMESPACE", raising=False)
@@ -76,6 +77,60 @@ def test_replacement_cannot_use_a_machine_or_forwarding_header(header):
     }
     with pytest.raises(oa.OperatorAdmissionError):
         oa.validate_replacement_operator_admission(env)
+
+
+_APPROVED_PUBLICATION = {
+    "MOONMIND_API_PUBLISH_HOST": "0.0.0.0",
+    "MOONMIND_TRUSTED_INGRESS": "1",
+}
+
+
+@pytest.mark.parametrize("base_url", ["", "https://operator.example"])
+def test_approved_publication_admits_its_network_peers(base_url):
+    from moonmind.security import operator_admission as oa
+
+    env = {**_APPROVED_PUBLICATION, "MOONMIND_PUBLIC_BASE_URL": base_url}
+    oa.validate_replacement_operator_admission(env)
+    host = "operator.example" if base_url else "192.168.0.20:7000"
+    admission = oa.resolve_operator_admission(
+        client_host="192.168.0.4", host_header=host, environ=env
+    )
+    assert admission.via == "approved_publication"
+    assert admission.subject is None
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"MOONMIND_TRUSTED_INGRESS": ""},
+        {"MOONMIND_API_PUBLISH_HOST": "127.0.0.1"},
+        {"MOONMIND_TRUSTED_PROXIES": "192.0.2.10"},
+    ],
+)
+def test_approved_publication_needs_its_whole_approval(override):
+    from moonmind.security import operator_admission as oa
+
+    with pytest.raises(oa.OperatorAdmissionError) as exc_info:
+        oa.resolve_operator_admission(
+            client_host="192.168.0.4",
+            host_header="192.168.0.20:7000",
+            environ={**_APPROVED_PUBLICATION, **override},
+        )
+    assert exc_info.value.http_status == 401
+
+
+def test_approved_publication_still_denies_foreign_mutation_origin():
+    from moonmind.security import operator_admission as oa
+
+    with pytest.raises(oa.OperatorAdmissionError) as exc_info:
+        oa.resolve_operator_admission(
+            client_host="192.168.0.4",
+            host_header="192.168.0.20:7000",
+            method="POST",
+            headers={"origin": "https://foreign.example"},
+            environ=_APPROVED_PUBLICATION,
+        )
+    assert exc_info.value.code == "origin_forbidden"
 
 
 def test_local_loopback_admits_without_user_table(monkeypatch):
