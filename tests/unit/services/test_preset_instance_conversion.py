@@ -732,6 +732,12 @@ async def test_ownerless_schedule_does_not_bypass_human_attribution(
         owner_id = uuid4()
         if other_owner == "second_person":
             session.add(User(id=owner_id, email="other@example.invalid"))
+            await session.flush()
+        else:
+            # Unknown principals can persist in text scope references; schedule
+            # owners are foreign-keyed to real users on PostgreSQL.
+            preset = await session.get(Preset, custom_id)
+            preset.scope_ref = str(owner_id)
         session.add_all(
             [
                 RecurringWorkflowDefinition(
@@ -741,7 +747,9 @@ async def test_ownerless_schedule_does_not_bypass_human_attribution(
                     name="Retained",
                     cron="0 * * * *",
                     timezone="UTC",
-                    owner_user_id=owner_id,
+                    owner_user_id=(
+                        owner_id if other_owner == "second_person" else None
+                    ),
                 ),
             ]
         )
@@ -754,6 +762,8 @@ async def test_ownerless_schedule_does_not_bypass_human_attribution(
         assert (
             await session.get(Preset, custom_id)
         ).scope_type is PresetScopeType.PERSONAL
+        if other_owner == "unknown":
+            assert (await session.get(Preset, custom_id)).scope_ref == str(owner_id)
 
 
 @pytest.mark.asyncio
