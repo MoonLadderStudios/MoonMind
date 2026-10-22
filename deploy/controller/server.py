@@ -32,7 +32,6 @@ import engine
 import lock as lock_mod
 import operator_access as operator_access_mod
 import record as record_mod
-from operator_access import check_operator_url
 from redact import redact_mapping, redact_text
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
@@ -1082,6 +1081,8 @@ def operator_urls_for_target(target: dict, *, runner, base) -> list[str]:
         if origins:
             return list(dict.fromkeys(origins))
     except (ValueError, KeyError, TypeError):
+        # Suppress parse details because rendered Compose can contain secrets;
+        # report only the generic configuration error below.
         pass
     raise RuntimeError(
         "the effective Compose configuration does not identify an operator origin"
@@ -1121,7 +1122,7 @@ def _check_operator_origin(url, *, runner, image):
                 )
             )
         return "ok"
-    return check_operator_url(url)
+    return operator_access_mod.check_operator_url(url)
 
 
 CONVERSION_SERVICE = "api"

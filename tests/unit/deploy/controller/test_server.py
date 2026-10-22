@@ -1298,7 +1298,9 @@ def test_public_health_cannot_substitute_for_protected_operator_access(controlle
     thread.start()
     try:
         with pytest.raises(RuntimeError, match="403"):
-            server.check_operator_url(f"http://127.0.0.1:{httpd.server_port}")
+            server.operator_access_mod.check_operator_url(
+                f"http://127.0.0.1:{httpd.server_port}"
+            )
         assert paths == ["/api/v1/settings/catalog"]
     finally:
         httpd.shutdown()

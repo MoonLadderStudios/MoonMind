@@ -449,7 +449,9 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
         assert url == "https://operator.example"
         return "ok"
 
-    monkeypatch.setattr(controller.server, "check_operator_url", operator_probe)
+    monkeypatch.setattr(
+        controller.server.operator_access_mod, "check_operator_url", operator_probe
+    )
     # The fixture retains the real endpoint; only daemon/registry/database
     # side effects are replaced. Both release algorithms and state stores run.
     monkeypatch.setattr(

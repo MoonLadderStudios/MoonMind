@@ -21,7 +21,7 @@ from api_service.main import health_check, startup_event
 
 # Registers the conversion ledger on ``Base.metadata`` (Alembic 386 creates it
 # in production); without it a fresh process defers conversion on startup.
-from api_service.services import single_user_conversion  # noqa: F401
+from api_service.services.single_user_conversion import SingleUserConversionRun
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -49,7 +49,6 @@ async def test_startup_keeps_retained_access_until_replacement_is_configured(
     disabled_env_keys, tmp_path, monkeypatch, base_url
 ):
     from api_service.main import _run_guarded_single_user_upgrade
-    from api_service.services.single_user_conversion import SingleUserConversionRun
 
     await _seed_db(tmp_path, "replacement-admission.db")
     async with db_base.async_session_maker() as session:
