@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import io
 import json
+import os
 import subprocess
 import shutil
 import tarfile
@@ -499,10 +500,7 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
     """
 
     from moonmind.auth import github_credentials
-    from moonmind.workflows.temporal.runtime import (
-        checkpoint_restore,
-        managed_api_key_resolve,
-    )
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
     from tests.unit.workflows.adapters.test_github_service_admitted_operations import (
         _record_authority,
     )
@@ -528,24 +526,28 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
             "acme/other" if authority == "conflicting_target" else "acme/repo"
         ),
     )
-    # The admitted remote is GitHub; route it to the local origin so the test
-    # observes which credential the clone receives without network access.
+    # The admitted remote is GitHub; serve the local origin there over real
+    # HTTPS while every ambient worker route offers credential A.
+    from tests.helpers import git_transport
+
     remote, base = _repo(tmp_path / "origin")
-    gitconfig = tmp_path / "gitconfig"
-    gitconfig.write_text(
-        f'[url "{remote}"]\n\tinsteadOf = https://github.com/acme/repo.git\n'
+    for key in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_COUNT"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in git_transport.ambient_credential_environment(
+        tmp_path, "syntheticAmbientA"
+    ).items():
+        monkeypatch.setenv(key, value)
+    generator = git_transport.start_synthetic_github(
+        tmp_path / "transport",
+        required_token=(
+            expected_token if expected_token not in {None, "unavailable"} else None
+        ),
+        source_repository=remote,
+        name="acme/repo.git",
     )
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
-    clone_tokens: list[tuple[str | None, str]] = []
-    real_environment = checkpoint_restore.build_github_token_git_environment
-
-    def record_environment(token, **kwargs):
-        clone_tokens.append((token, kwargs.get("host", "github.com")))
-        return real_environment(token, **kwargs)
-
-    monkeypatch.setattr(
-        checkpoint_restore, "build_github_token_git_environment", record_environment
-    )
+    transport = next(generator)
+    shim = git_transport.write_proxy_git_shim(tmp_path, transport)
+    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
     store = InMemoryArtifactStore()
     source = tmp_path / "temporal_sandbox" / "source"
     source.parent.mkdir()
@@ -600,19 +602,29 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
                 CheckpointRestoreError, match="CHECKPOINT_REPOSITORY_UNAVAILABLE"
             ):
                 await service.restore(request)
-            assert reads == [] and clone_tokens == []
+            assert reads == [] and transport.requests == []
             return
         await service.restore(request)
     finally:
+        generator.close()
         await engine.dispose()
 
     restored = tmp_path / "authority" / "new-run" / "repo"
     assert (restored / "tracked.txt").read_text() == "saved edit\n"
+    assert transport.requests
+    assert not any(
+        "syntheticAmbientA" in value or value == git_transport.basic_authorization(
+            "syntheticAmbientA"
+        )
+        for value in transport.header_values()
+    )
     if expected_token is None:
-        assert reads == [] and clone_tokens == []
+        assert reads == [] and transport.sent_authorizations() == []
     else:
         assert reads == ["env://SYNTHETIC_PAT"]
-        assert clone_tokens == [(expected_token, "github.com")]
+        assert set(transport.sent_authorizations()) == {
+            git_transport.basic_authorization(expected_token)
+        }
 
 
 def test_restore_contract_rejects_reused_identity_and_arbitrary_destination_path() -> (

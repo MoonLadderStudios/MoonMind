@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
@@ -46,6 +47,7 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
+from tests.helpers.git_transport import git_credential_for
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
@@ -606,8 +608,15 @@ async def test_production_publisher_uses_destination_connection_before_remote_co
 
     async def run_with_evidence(*argv, **kwargs):
         if any(operation in argv for operation in ("fetch", "push", "ls-remote")):
-            assert kwargs["env"]["GITHUB_TOKEN"] == "selected-credential-canary"
-            assert kwargs["env"].get("GH_TOKEN") != "other-ambient-credential-canary"
+            env = kwargs["env"]
+            assert env["GH_TOKEN"] == "selected-credential-canary"
+            assert "other-ambient-credential-canary" not in env.values()
+            assert (
+                git_credential_for(
+                    {**env, "PATH": os.environ["PATH"]}, canonical_remote
+                )
+                == "selected-credential-canary"
+            )
             observed.append(argv)
         return await run(*argv, **kwargs)
 

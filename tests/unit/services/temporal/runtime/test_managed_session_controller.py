@@ -56,6 +56,24 @@ _production_connection_loader = (
 )
 
 
+def _isolated_git_credential(
+    env: dict[str, str] | None, repository: str = "MoonLadderStudios/MoonMind"
+) -> str | None:
+    """Return what real Git answers for ``repository`` under an isolated env."""
+
+    from tests.helpers.git_transport import git_credential_for
+
+    assert env is not None
+    assert env["LC_ALL"] == "C"
+    assert env["HOME"] == "/nonexistent"
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert env["GIT_CONFIG_PARAMETERS"] == ""
+    assert env["GITHUB_TOKEN"] == env["GH_TOKEN"] == ""
+    return git_credential_for(
+        {**env, "PATH": os.environ["PATH"]}, f"https://github.com/{repository}.git"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _no_recorded_repository_connections(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unit tests have no database: no connection or GitHub secret is recorded."""
@@ -1400,12 +1418,8 @@ async def test_controller_launch_clones_workspace_before_starting_container(
         "codex/session-fix",
         "origin/codex/session-fix",
     )
-    assert git_envs == [
-        {"LC_ALL": "C", "LANG": "C"},
-        {"LC_ALL": "C", "LANG": "C"},
-        {"LC_ALL": "C", "LANG": "C"},
-        {"LC_ALL": "C", "LANG": "C"},
-    ]
+    assert len(git_envs) == 4
+    assert all(_isolated_git_credential(env) is None for env in git_envs)
     assert Path(request.workspace_path).exists()
     assert Path(request.session_workspace_path).exists()
     assert Path(request.artifact_spool_path).exists()
@@ -1484,12 +1498,9 @@ async def test_controller_clone_uses_launch_scoped_github_token_for_git_auth(
     assert len(git_envs) == 1
     git_env = git_envs[0]
     assert git_env is not None
-    assert git_env["GITHUB_TOKEN"] == token
     assert git_env["GIT_TERMINAL_PROMPT"] == "0"
-    assert git_env["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
-    assert git_env["GIT_CONFIG_VALUE_0"] == ""
-    assert git_env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
-    assert 'password="$GITHUB_TOKEN"' in git_env["GIT_CONFIG_VALUE_1"]
+    assert _isolated_git_credential(git_env, "g3-qrtr/crash_server_main") == token
+    assert _isolated_git_credential(git_env, "other/repo") is None
     message = str(exc_info.value)
     assert token not in message
     assert "[REDACTED]" in message
@@ -1593,9 +1604,11 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
 
     assert git_envs
     assert git_envs[0] is not None
-    assert git_envs[0]["GITHUB_TOKEN"] == token
     assert git_envs[0]["GIT_TERMINAL_PROMPT"] == "0"
-    assert 'password="$GITHUB_TOKEN"' in git_envs[0]["GIT_CONFIG_VALUE_1"]
+    assert (
+        _isolated_git_credential(git_envs[0], "MoonLadderStudios/private-repo")
+        == token
+    )
     assert github_auth_brokers.starts == [
         {
             "run_id": request.session_id,
@@ -1806,12 +1819,12 @@ async def test_controller_reuses_resolved_git_environment_for_target_branch(
     await controller._ensure_workspace_paths(request)
 
     assert len(resolve_calls) == 1
-    assert git_envs[0] == {"LC_ALL": "C", "LANG": "C"}
+    assert _isolated_git_credential(git_envs[0]) is None
     assert len(git_envs) == 4
     for env in git_envs[1:]:
         assert env is not None
-        assert env["GITHUB_TOKEN"] == token
         assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert _isolated_git_credential(env, "MoonLadderStudios/private-repo") == token
 
 @pytest.mark.asyncio
 async def test_controller_required_github_descriptor_fails_before_clone(
@@ -7833,7 +7846,7 @@ async def test_scratch_session_receives_no_github_credential(
         request, session_environment
     )
 
-    assert "GITHUB_TOKEN" not in git_env
+    assert _isolated_git_credential(git_env) is None
     assert secret_env == {}
     assert "GIT_CONFIG_GLOBAL" not in session_environment
 
@@ -7941,7 +7954,7 @@ async def test_unconfigured_deployment_session_still_clones_anonymously(
     finally:
         await engine.dispose()
 
-    assert "GITHUB_TOKEN" not in git_env
+    assert _isolated_git_credential(git_env) is None
     assert secret_env == {}
 
 

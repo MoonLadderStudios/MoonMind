@@ -20,6 +20,7 @@ from tests.unit.omnigent.test_oauth_profile_lifecycle import _runtime_for, _sand
         ("https://github.com/owner/repo.git", True),
         ("https://GITHUB.COM/owner/repo.git/", True),
         ("https://github.com/owner/repo.git/info/lfs", True),
+        ("https://github.com/owner/repo", True),
         ("https://github.com/other/repo.git", False),
         ("https://github.com/owner/repo.git-extra", False),
         ("https://github.com/owner/repo.git/other", False),

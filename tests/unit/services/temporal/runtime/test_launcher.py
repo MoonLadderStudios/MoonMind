@@ -36,6 +36,7 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
     LoreCliReadinessAdapter,
 )
+from tests.helpers.git_transport import git_credential_for
 from tests.helpers.repository_connections import (
     github_app_provider_edge as _app_provider_edge,
     serve_repository_connections as _record_connections,
@@ -1695,14 +1696,23 @@ async def test_launch_seeds_github_git_auth_before_initial_clone(
     assert len(clone_commands) == 1
     assert token not in " ".join(str(part) for part in clone_commands[0])
     clone_env = clone_envs[0]
-    assert clone_env["GITHUB_TOKEN"] == token
     assert clone_env["GIT_TERMINAL_PROMPT"] == "0"
-    assert clone_env["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
-    assert clone_env["GIT_CONFIG_VALUE_0"] == ""
-    assert clone_env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
     assert clone_env["HTTPS_PROXY"] == "http://proxy.example"
-    assert "$GITHUB_TOKEN" in clone_env["GIT_CONFIG_VALUE_1"]
-    assert token not in clone_env["GIT_CONFIG_VALUE_1"]
+    # The ambient copy is the deployment declaration the default connection
+    # read; Git receives it only through the repository-scoped helper.
+    assert clone_env["GITHUB_TOKEN"] == clone_env["GH_TOKEN"] == ""
+    assert not any(
+        token in clone_env[f"GIT_CONFIG_VALUE_{index}"]
+        for index in range(int(clone_env["GIT_CONFIG_COUNT"]))
+    )
+    probe_env = {**clone_env, "PATH": os.environ["PATH"]}
+    assert (
+        git_credential_for(
+            probe_env, "https://github.com/MoonLadderStudios/Tactics.git"
+        )
+        == token
+    )
+    assert git_credential_for(probe_env, "https://github.com/other/repo.git") is None
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,7 @@ from moonmind.schemas.checkpoint_restore_models import (
 )
 from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
 
-from .git_auth import build_github_token_git_environment
+from .git_auth import build_remote_git_environment
 from .managed_api_key_resolve import AdmittedGitRead, resolve_admitted_git_read
 
 
@@ -658,27 +658,27 @@ class ManagedCheckpointRestoreService:
                 else:
                     repo_url = f"https://github.com/{req.destination.repository}.git"
                 history = manifest.get("gitHistory")
+                clone_env: Mapping[str, str] | None = None
                 if history and history.get("requiresSourceObjects") is False:
                     # The bundle carries every object: no clone, so no
                     # repository credential is looked up for this restore.
                     self._git(["init", str(staging)])
                     self._git(["remote", "add", "origin", repo_url], staging)
                 else:
-                    clone_env: Mapping[str, str] | None = None
                     if self.repository_source_root is None:
                         # Origin objects come through the repository access the
                         # source run admitted (its selected connection or explicit
                         # anonymous intent), never another connection or an
-                        # ambient token. The credential reaches Git only through
-                        # an in-memory helper, not disk or argv.
+                        # ambient token. Git sees no worker credential or config;
+                        # the admitted one reaches it only through an in-memory
+                        # helper scoped to this repository, not disk or argv.
                         admitted = await self._admitted_git_read(req)
                         repo_url = admitted.remote
-                        if admitted.token:
-                            clone_env = build_github_token_git_environment(
-                                admitted.token,
-                                base_env=dict(os.environ),
-                                host=admitted.host,
-                            )
+                        clone_env = build_remote_git_environment(
+                            admitted.token or None,
+                            base_env=os.environ,
+                            remote_url=admitted.remote,
+                        )
                     self._git(
                         ["clone", "--no-checkout", repo_url, str(staging)],
                         code="CHECKPOINT_REPOSITORY_UNAVAILABLE", env=clone_env,
@@ -697,7 +697,12 @@ class ManagedCheckpointRestoreService:
                 self._git(
                     ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
                 )
-                self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
+                # Checkout can fetch Git LFS objects from the same origin.
+                self._git(
+                    ["checkout", "--detach", req.checkpoint.base_commit],
+                    staging,
+                    env=clone_env,
+                )
                 count, size = self._extract(
                     archive, staging, manifest,
                     max_entries=req.max_entry_count, max_bytes=req.max_restored_bytes,

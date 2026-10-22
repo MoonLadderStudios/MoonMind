@@ -98,13 +98,13 @@ def test_detect_pr_url_avoids_workspace_command_shims_and_uses_resolved_token(tm
         )
 
     assert pr_url == "https://github.com/o/r/pull/1"
-    assert len(calls) == 3
-    gh_call = calls[2]
+    gh_call = calls[-1]
+    assert gh_call["args"][0][:3] == ["gh", "pr", "list"]
     gh_env = gh_call["kwargs"]["env"]
     assert isinstance(gh_env, dict)
     assert str(workspace.parent / ".moonmind" / "bin") not in gh_env["PATH"]
-    assert gh_env["GITHUB_TOKEN"] == "resolved-token"
     assert gh_env["GH_TOKEN"] == "resolved-token"
+    assert gh_env["GITHUB_TOKEN"] == ""
 
 
 def test_parse_git_status_paths_handles_nul_delimited_non_ascii_and_renames() -> None:
@@ -2168,7 +2168,7 @@ class TestPushWorkspaceBranch:
         assert env["GIT_AUTHOR_EMAIL"] == "moonmind@example.com"
         assert env["GIT_COMMITTER_EMAIL"] == "moonmind@example.com"
 
-    def test_workspace_command_env_uses_in_memory_git_helper_without_writing_files(
+    def test_workspace_command_env_never_falls_back_to_ambient_github_token(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -2187,22 +2187,23 @@ class TestPushWorkspaceBranch:
         assert not support_root.exists()
         assert env["PATH"] == "/usr/bin"
         assert env["GIT_CONFIG_GLOBAL"] == os.devnull
-        assert env["GITHUB_TOKEN"] == "ghp_test_token_value"
-        assert env["GH_TOKEN"] == "ghp_test_token_value"
         assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert env["GITHUB_TOKEN"] == env["GH_TOKEN"] == ""
+        assert "ghp_test_token_value" not in env.values()
 
-        assert env["GIT_CONFIG_COUNT"] == "2"
-        assert env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
-        assert "ghp_test_token_value" not in env["GIT_CONFIG_VALUE_1"]
-        assert "$GITHUB_TOKEN" in env["GIT_CONFIG_VALUE_1"]
-
-    def test_workspace_command_env_uses_resolved_github_token(
+    def test_workspace_command_env_scopes_resolved_github_token_to_origin(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ) -> None:
         workspace = tmp_path / "run-1" / "repo"
+        subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(workspace), "remote", "add", "origin",
+                "https://github.com/owner/repo.git",
+            ],
+            check=True,
+        )
         support_root = workspace.parent / ".moonmind"
-        support_bin = support_root / "bin"
-        gitconfig = support_root / "gitconfig"
         monkeypatch.setenv("PATH", "/usr/bin")
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("GH_TOKEN", raising=False)
@@ -2212,14 +2213,28 @@ class TestPushWorkspaceBranch:
             github_token="resolved-token",
         )
 
-        helper_path = support_bin / "git-credential-moonmind"
-        assert env["GITHUB_TOKEN"] == "resolved-token"
         assert env["GH_TOKEN"] == "resolved-token"
         assert env["GIT_TERMINAL_PROMPT"] == "0"
         assert env["GIT_CONFIG_GLOBAL"] == os.devnull
-        assert not helper_path.exists()
-        assert not gitconfig.exists()
-        assert "resolved-token" not in env["GIT_CONFIG_VALUE_1"]
+        assert not support_root.exists()
+        values = [
+            env[f"GIT_CONFIG_VALUE_{index}"]
+            for index in range(int(env["GIT_CONFIG_COUNT"]))
+        ]
+        assert not any("resolved-token" in value for value in values)
+        for url, allowed in (
+            ("https://github.com/owner/repo.git", True),
+            ("https://github.com/other/repo.git", False),
+        ):
+            result = subprocess.run(
+                ["git", "credential", "fill"],
+                input=f"url={url}\n\n",
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert ("password=resolved-token" in result.stdout) is allowed
 
     def test_workspace_command_env_works_with_read_only_workspace(
         self,
@@ -2343,8 +2358,8 @@ class TestPushWorkspaceBranch:
         )
         assert result["push_status"] == "pushed"
         assert captured_push_env is not None
-        assert captured_push_env["GITHUB_TOKEN"] == "resolved-push-token"
         assert captured_push_env["GH_TOKEN"] == "resolved-push-token"
+        assert captured_push_env["GITHUB_TOKEN"] == ""
         assert captured_push_env["GIT_TERMINAL_PROMPT"] == "0"
 
     @pytest.mark.asyncio
@@ -2422,10 +2437,8 @@ class TestPushWorkspaceBranch:
 
         assert result["push_status"] == "pushed"
         assert captured_commit_env is not None
-        assert "GITHUB_TOKEN" not in captured_commit_env
-        assert "GH_TOKEN" not in captured_commit_env
+        assert "resolved-push-token" not in captured_commit_env.values()
         assert captured_push_env is not None
-        assert captured_push_env["GITHUB_TOKEN"] == "resolved-push-token"
         assert captured_push_env["GH_TOKEN"] == "resolved-push-token"
 
     @pytest.mark.asyncio

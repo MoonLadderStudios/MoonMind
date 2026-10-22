@@ -38,7 +38,7 @@ from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.git_auth import (
-    build_github_token_git_environment,
+    build_workspace_git_environment,
 )
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
@@ -720,16 +720,14 @@ class OmnigentWorkspacePublicationService:
         safe_workspace = workspace.resolve(strict=True)
         token = str(github_token or "").strip()
         from moonmind.omnigent.host_services.github_credentials import (
-            github_host_from_endpoint,
             normalize_github_repository_remote,
         )
 
-        github_host = github_host_from_endpoint(github_endpoint)
-        command_env = build_github_token_git_environment(
-            token, base_env=os.environ, host=github_host
+        # Git and gh see only the publication's selected credential, scoped to
+        # the workspace origin, never the worker's own GitHub login or config.
+        command_env = build_workspace_git_environment(
+            token, base_env=os.environ, workspace=safe_workspace
         )
-        if token:
-            command_env["GH_TOKEN"] = token
         git_user_name, git_user_email = resolve_publication_git_identity(
             publication_git_identity
         )
@@ -759,13 +757,15 @@ class OmnigentWorkspacePublicationService:
                     "-C",
                     str((cwd or safe_workspace).resolve()),
                 ]
-            selected_env = build_github_token_git_environment(
-                token,
-                base_env=(dict(env) if env is not None else command_env),
-                host=github_host,
+            # An environment the publisher hands over derives from the worker's
+            # own; only this publication's selected credential survives it.
+            selected_env = (
+                command_env
+                if env is None
+                else build_workspace_git_environment(
+                    token, base_env=env, workspace=safe_workspace
+                )
             )
-            if token:
-                selected_env["GH_TOKEN"] = token
             # Retry the read in place, never the agent turn or publication as a
             # whole. Pushes and local mutations retain their existing authority.
             for attempt in range(1, _REMOTE_READ_ATTEMPTS + 1):

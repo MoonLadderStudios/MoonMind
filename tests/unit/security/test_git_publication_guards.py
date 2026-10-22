@@ -125,7 +125,19 @@ def test_workspace_auth_does_not_write_or_execute_workload_support(
     tmp_path, monkeypatch
 ):
     workspace = tmp_path / "run" / "repo"
-    workspace.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/repo.git",
+        ],
+        check=True,
+    )
     outside = tmp_path / "outside"
     outside.mkdir()
     (workspace.parent / ".moonmind").symlink_to(outside, target_is_directory=True)
@@ -135,8 +147,11 @@ def test_workspace_auth_does_not_write_or_execute_workload_support(
     )
     assert not list(outside.iterdir())
     assert env["PATH"] == "/usr/bin"
-    assert env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
-    assert env["GITHUB_TOKEN"] == "fixture-token"
+    keys = {
+        env[f"GIT_CONFIG_KEY_{index}"] for index in range(int(env["GIT_CONFIG_COUNT"]))
+    }
+    assert "credential.https://github.com.helper" in keys
+    assert env["GH_TOKEN"] == "fixture-token"
 
 
 @pytest.mark.asyncio
@@ -174,14 +189,28 @@ async def test_default_verification_does_not_receive_publish_credentials(
 
 
 def test_in_memory_auth_preserves_github_host_scope(tmp_path):
+    workspace = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/repo.git",
+        ],
+        check=True,
+    )
     env = TemporalAgentRuntimeActivities._workspace_command_env(
-        str(tmp_path / "repo"), github_token="fixture-token"
+        str(workspace), github_token="fixture-token"
     )
     for host in ("github.com", "unrelated.example"):
         result = subprocess.run(
             ["git", "credential", "fill"],
             cwd=tmp_path,
-            input=f"protocol=https\nhost={host}\n\n",
+            input=f"url=https://{host}/owner/repo.git\n\n",
             env=env,
             check=False,
             capture_output=True,

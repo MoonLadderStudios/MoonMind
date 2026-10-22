@@ -77,7 +77,7 @@ from .github_auth_broker import (
     render_gh_wrapper_script,
     render_git_credential_helper_script,
 )
-from .git_auth import build_github_token_git_environment
+from .git_auth import build_remote_git_environment
 from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
 from .managed_api_key_resolve import (
@@ -905,6 +905,32 @@ class ManagedRuntimeLauncher:
                 "https://www.github.com/",
                 "http://www.github.com/",
             )
+        )
+
+    @classmethod
+    def _launch_git_environment(
+        cls, request: AgentExecutionRequest, token: str | None
+    ) -> dict[str, str] | None:
+        """Isolate the launch's GitHub Git commands from worker credentials.
+
+        Clone and remote reads see only ``token``, scoped to the requested
+        repository, or no credential at all; never the worker's ambient
+        GitHub login. Non-GitHub sources keep their existing environment.
+        """
+
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        repo_ref = workspace_spec.get("repository") or workspace_spec.get("repo")
+        source = (
+            cls._normalize_clone_source(repo_ref) if isinstance(repo_ref, str) else None
+        )
+        if not cls._source_uses_github_https(source):
+            return None
+        return build_remote_git_environment(
+            token,
+            base_env=cls._build_managed_runtime_base_env(),
+            remote_url=source,
         )
 
     @classmethod
@@ -2414,14 +2440,7 @@ class ManagedRuntimeLauncher:
             if needs_github_https_auth
             else None
         )
-        git_host_env = (
-            build_github_token_git_environment(
-                launch_github_token,
-                base_env=self._build_managed_runtime_base_env(),
-            )
-            if launch_github_token
-            else None
-        )
+        git_host_env = self._launch_git_environment(request, launch_github_token)
         resolved_repository = await self._repository_readiness_boundary(
             request, git_host_env, selected_github_access
         )

@@ -87,7 +87,7 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     select_github_access_for_launch,
 )
 
-from .git_auth import build_github_token_git_environment
+from .git_auth import build_remote_git_environment
 from .github_auth_broker import (
     GitHubAuthBrokerManager,
     build_github_socket_path,
@@ -1635,7 +1635,6 @@ class DockerCodexManagedSessionController:
     async def _git_host_environment(
         request: LaunchCodexManagedSessionRequest | None = None,
     ) -> dict[str, str]:
-        env = dict(_GIT_COMMAND_LOCALE)
         request_env = request.environment if request is not None else {}
         try:
             token = (
@@ -1645,15 +1644,34 @@ class DockerCodexManagedSessionController:
             )
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
-        if token:
-            # Avoid depending on persistent per-user gh setup in the worker. The
-            # clone happens before the managed agent container starts.
-            return build_github_token_git_environment(
-                token,
-                base_env=env,
-                terminal_prompt=str(request_env.get("GIT_TERMINAL_PROMPT") or "0"),
-            )
+        repository = (
+            str(
+                request.workspace_spec.get("repository")
+                or request.workspace_spec.get("repo")
+                or ""
+            ).strip()
+            if request is not None
+            else ""
+        )
+        from .launcher import ManagedRuntimeLauncher
 
+        try:
+            remote_url = (
+                ManagedRuntimeLauncher._resolve_repository_source(repository)
+                if repository
+                else None
+            )
+        except RuntimeError:
+            remote_url = None
+        # The command runner overlays this on the worker environment; the
+        # isolated values keep the worker's own GitHub login, helpers and
+        # injected config out of these host Git commands, which run before
+        # the managed agent container starts.
+        env = build_remote_git_environment(
+            token,
+            base_env=_GIT_COMMAND_LOCALE,
+            remote_url=remote_url,
+        )
         terminal_prompt = str(request_env.get("GIT_TERMINAL_PROMPT") or "").strip()
         if terminal_prompt:
             env["GIT_TERMINAL_PROMPT"] = terminal_prompt
