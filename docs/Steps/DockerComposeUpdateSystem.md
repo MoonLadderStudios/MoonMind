@@ -154,7 +154,7 @@ Through `deployment_release --omnigent-journal-prepare`, the bridge store replac
 
 The controller observes installed services and concrete images, required health, ordinary workflow dispatch, and the operator access path; a running container does not prove that work can execute or that the dashboard serves the intended release. A run-to-completion service (such as `init-db`) passes when it exited 0; any other non-running service fails.
 
-The API runs guarded single-user conversion on startup; the controller records that disposition, read through the API container's healthcheck route, as `single-user-conversion`. A refusal keeps the installation, source data, and access protection but leaves the operation `partially_verified`; deferred or unreported results are unavailable. The fresh and upgrade Compose journeys run this same check against their live stacks and require `fresh_init` or `eligible_conversion` to be published.
+Startup checks replacement admission before guarded conversion. Incomplete remote ingress keeps retained access. After an uncertain commit, the conversion owner reads certified completion through a new session without repeating transforms. The controller records the disposition and original error type as `single-user-conversion`; refused, deferred or unreported conversion leaves the installed image `partially_verified`. Observer replacement resumes verification from the installation checkpoint.
 
 Unavailable optional integrations are reported separately; mandatory verification is never converted to success.
 
@@ -226,15 +226,15 @@ A provider-manager fault is diagnosed as its own fault and does not block instal
 
 ### 12.1 Compose-level verification
 
-Verification renders and compares the selected project's actual settings, bindings, mounts, networks, and service identities. Deployment-owned ports, external ingress networks, authentication settings, and data mounts are preserved; fresh-install defaults do not replace installed choices.
+Compose reuses deployment-owned settings, bindings, networks and mounts; the controller's image overlay does not replace them with fresh-install defaults. Verification observes the selected project's actual service readiness and conversion outcome.
 
 Observation distinguishes the controller's own one-off container from ordinary services, and all observation and cleanup is scoped to the owned project. There is no global prune or broad name-prefix deletion.
 
 ### 12.2 Application-level verification
 
-Operator URLs are derived from the configured public origin and actual bindings where possible. An explicit `--operator-url` supplies a non-derivable target or overrides/adds one; it is not needed for an address the controller can determine.
+Operator origins come from effective Compose settings and bindings. An explicit `--operator-url` overrides them or supplies a non-derivable target.
 
-Verification uses the real configured ingress and a protected read-only application path, preserving TLS and authentication. It does not forge identity headers, mint sessions, or treat a container-internal or loopback probe as proof of an external route. Missing credentials or unreachable client networks limit what can be verified and are reported as such; healthy pre-update browser access is not a prerequisite to repair.
+Verification requests the protected settings catalog, preserving TLS and ingress authentication; login redirects and public health cannot pass. A managed controller probes host loopback from an unprivileged host-network container. This never proves an external route or supplies identity headers or sessions. Missing credentials or unreachable networks remain incomplete verification; pre-update application health never gates repair.
 
 CI qualifies a candidate implementation; deployment observations identify the artifact actually installed. Updates do not run full CI or paid-provider qualification.
 

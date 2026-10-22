@@ -44,6 +44,32 @@ async def _reported_conversion():
     return body.get("singleUserConversion")
 
 
+@pytest.mark.parametrize("base_url", ["", "https://operator.example"])
+async def test_startup_keeps_retained_access_until_replacement_is_configured(
+    disabled_env_keys, tmp_path, monkeypatch, base_url
+):
+    from api_service.main import _run_guarded_single_user_upgrade
+    from api_service.services.single_user_conversion import SingleUserConversionRun
+
+    await _seed_db(tmp_path, "replacement-admission.db")
+    async with db_base.async_session_maker() as session:
+        owner = User(id=uuid.uuid4(), email="retained@example.invalid")
+        session.add(owner)
+        await session.commit()
+        owner_id = owner.id
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "0.0.0.0")
+    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", base_url)
+    monkeypatch.delenv("MOONMIND_TRUSTED_PROXIES", raising=False)
+
+    result = await _run_guarded_single_user_upgrade()
+
+    assert result == {"deferred": True, "reason": "replacement_admission_unavailable"}
+    async with db_base.async_session_maker() as session:
+        assert await session.get(User, owner_id) is not None
+        assert (await session.execute(select(SingleUserConversionRun))).scalars().all() == []
+
+
 @pytest.mark.asyncio
 async def test_startup_seeds_no_default_user_on_fresh_database(
     disabled_env_keys, tmp_path

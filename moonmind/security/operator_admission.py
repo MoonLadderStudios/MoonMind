@@ -521,6 +521,39 @@ def _well_formed_proxy_identity(value: str | None) -> bool:
     return bool(_STABLE_ID_RE.fullmatch(value))
 
 
+def validate_replacement_operator_admission(environ: Mapping | None = None) -> None:
+    """Check the existing admission configuration before retiring retained access.
+
+    This establishes configuration readiness, not proof of an external login or
+    MFA. Those remain owned by the deployment's ingress and protected requests.
+    """
+    from moonmind.security.auth_modes_4120 import validate_public_base_url
+
+    source = environ if environ is not None else os.environ
+    base_url = _public_base_url(source)
+    publish_host = (source.get("MOONMIND_API_PUBLISH_HOST")
+                    or source.get("MOONMIND_API_HOST") or "127.0.0.1").strip()
+    if base_url:
+        try:
+            validate_public_base_url(base_url)
+        except ValueError as exc:
+            raise OperatorAdmissionError("misconfigured", str(exc)) from exc
+    if not base_url or _is_loopback_base_url(base_url):
+        if publish_host == "localhost" or _is_loopback_ip(publish_host):
+            return
+        raise OperatorAdmissionError(
+            "unavailable", "A non-loopback publication requires its approved operator URL "
+            "and trusted ingress before account-free conversion."
+        )
+    if (str(source.get("MOONMIND_TRUSTED_INGRESS", "")).strip().lower()
+            not in {"1", "true", "yes"} or not _trusted_proxies(source)):
+        raise OperatorAdmissionError(
+            "unavailable", "Remote operator admission requires trusted ingress and "
+            "MOONMIND_TRUSTED_PROXIES before account-free conversion."
+        )
+    _ensure_allowed_proxy_identity_header(_proxy_identity_header_name(source))
+
+
 def resolve_operator_admission(
     *,
     client_host: str | None,
@@ -539,7 +572,7 @@ def resolve_operator_admission(
     """
     source = environ if environ is not None else os.environ
     try:
-        trusted_ingress = (source.get("MOONMIND_TRUSTED_INGRESS", "") or "").strip() == "1"
+        trusted_ingress = (source.get("MOONMIND_TRUSTED_INGRESS", "") or "").strip().lower() in {"1", "true", "yes"}
     except Exception:
         trusted_ingress = False
     base_url = _public_base_url(source if isinstance(source, Mapping) else None)
