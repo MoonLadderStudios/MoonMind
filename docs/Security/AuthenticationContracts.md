@@ -436,12 +436,11 @@ Shared product routes (settings, presets, secrets, dashboard, recurrence,
 artifacts, provider and agent profiles, policies, repository connections,
 agent runs and sessions, operations, issue lifecycle and Omnigent diagnostics)
 retain their real predecessor principal until guarded conversion publishes.
-Retained requests require local transport or the existing explicitly approved
-non-loopback ingress, plus configured Host and mutation-origin checks. Pending
-conversion cannot cut over installed access; missing accounts or an unavailable
-identity store fail closed. Startup defers conversion until replacement admission
-is configured: loopback publication locally, or an approved public URL, trusted
-proxies and a permitted assertion header remotely. Published conversion uses
+Before and after conversion they pass the same admission below, so conversion
+changes only whether a predecessor principal is resolved, never which network
+peers are admitted. Pending conversion cannot cut over installed access; missing
+accounts or an unavailable identity store fail closed. Startup defers conversion
+until replacement admission is configured. Published conversion uses
 permission-only admission; person foreign keys written by those routes stay null
 and artifact, audit and claim scope keep the retained local-operator UUID. Other
 UUID consumers retain their compatibility principal.
@@ -465,6 +464,7 @@ selector, account product, or mandatory service.
 | Deployment | Primitive admission rule |
 | --- | --- |
 | Local (`MOONMIND_PUBLIC_BASE_URL` omitted or explicitly loopback) | Loopback peer and Host. In Docker Compose, the adapter also recognizes the single kernel default gateway as the host publication peer when the deployment publishes loopback. It trusts no other bridge peer or forwarding claim. |
+| Approved publication (non-loopback `MOONMIND_API_PUBLISH_HOST` with `MOONMIND_TRUSTED_INGRESS=1`) | Peers that reached the published port, after Host (against `MOONMIND_PUBLIC_BASE_URL` when set) and mutation-origin checks. The binding approval is the installed network authority. Peers on the API container's own networks other than its default gateway (workers calling the backend directly) never qualify. An explicit loopback operator URL keeps the local rule; a remote URL with any `MOONMIND_TRUSTED_PROXIES` value keeps the remote rule. |
 | Remote (non-loopback `MOONMIND_PUBLIC_BASE_URL`) | Only the deployment's approved trusted ingress: `MOONMIND_TRUSTED_INGRESS=1` with `MOONMIND_TRUSTED_PROXIES` matching the connecting peer, plus a single well-formed proxy identity assertion, admitted as a boolean (no local account mapping, no role/subject import). |
 
 The Compose entrypoint disables Uvicorn forwarding-header rewriting so admission
