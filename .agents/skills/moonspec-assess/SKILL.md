@@ -67,10 +67,14 @@ constraints; free-form suggestions stay advisory. Follow the shared policy's
 exact field contract. Match mandatory IDs to the independently captured source
 scope, not a prior report or inherited epic checklist.
 
-Use cheap actual owner probes for capability/prerequisite readiness. Preserve
-independent ready rows while routing busy or unavailable rows to their existing
-owners. Run `acceptance.py admission` before a repeated setup/implementation
-attempt. An unchanged unavailable capability is not new implementation work;
+Use cheap code and owner probes for capability/prerequisite readiness. Apply the
+shared policy's prerequisite classification before marking repository work
+unavailable: a related issue's open state is not an active-writer or capability
+probe. Keep authorized missing implementation in `boundedBacklog`, with its
+concrete next change; record an explicit scope exclusion or confirmed conflicting
+writer with evidence and a resume check. Preserve independent ready rows while
+routing busy work to its existing owner. Run `acceptance.py admission` before a
+repeated setup/implementation attempt. An unchanged unavailable capability is not new implementation work;
 missing local tools, a different report ID, or a refreshed timestamp do not
 justify repeating the same setup. Never turn missing optional browser proof or
 a separately owned physical event into mandatory child acceptance.

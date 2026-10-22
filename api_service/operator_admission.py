@@ -27,6 +27,7 @@ from moonmind.security.operator_admission import (
     OperatorAdmission,
     OperatorAdmissionError,
     resolve_operator_admission,
+    validate_browser_host_and_origin,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,14 @@ def _request_inputs(request: Request) -> dict:
     }
 
 
+def _is_loopback_publish_host(publish_host: str) -> bool:
+    host = publish_host.strip().strip("[]")
+    try:
+        return host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _local_compose_host_gateway() -> str | None:
     """Identify the Docker host peer for this instance's loopback publication.
 
@@ -71,15 +80,7 @@ def _local_compose_host_gateway() -> str | None:
         or not Path("/.dockerenv").is_file()
     ):
         return None
-    publish_host = os.environ.get("MOONMIND_API_PUBLISH_HOST", "").strip().strip("[]")
-    try:
-        loopback_publish = (
-            publish_host == "localhost"
-            or ipaddress.ip_address(publish_host).is_loopback
-        )
-    except ValueError:
-        loopback_publish = False
-    if not loopback_publish:
+    if not _is_loopback_publish_host(os.environ.get("MOONMIND_API_PUBLISH_HOST", "")):
         return None
     try:
         gateways = {
@@ -102,6 +103,40 @@ async def require_operator(request: Request) -> OperatorAdmission:
     """Strict operator boundary: every operator-facing path resolves here."""
     try:
         return resolve_operator_admission(**_request_inputs(request))
+    except OperatorAdmissionError as exc:
+        raise _http_exception(exc) from exc
+
+
+async def require_retained_operator_request(request: Request) -> None:
+    """Validate a request under the retained disabled-mode deployment boundary.
+
+    Before account-free conversion, an explicitly approved non-loopback ingress
+    remains the installed network authority. It still validates browser Host and
+    mutation origins; it neither resolves a person nor grants recovery authority.
+    Local installations retain the strict peer/Host/Origin boundary.
+    """
+    publish_host = os.environ.get("MOONMIND_API_PUBLISH_HOST", "").strip()
+    trusted_ingress = os.environ.get("MOONMIND_TRUSTED_INGRESS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not (
+        publish_host and not _is_loopback_publish_host(publish_host) and trusted_ingress
+    ):
+        await require_operator(request)
+        return
+    try:
+        validate_browser_host_and_origin(
+            method=request.method,
+            host_header=request.headers.get("host"),
+            origin=request.headers.get("origin"),
+            referer=request.headers.get("referer"),
+            base_url=(
+                os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
+                or str(request.base_url)
+            ),
+        )
     except OperatorAdmissionError as exc:
         raise _http_exception(exc) from exc
 
