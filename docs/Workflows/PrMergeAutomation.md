@@ -107,7 +107,7 @@ Review-only compiles to publication None and admits only repository read and `re
 
 PublishContext holds repository, prNumber, prUrl, baseRef, headRef, exact headSha, publishedAt or the adoption observation, optional jiraIssueKey, and artifact provenance, with large evidence artifact-backed. It is a projection of validated target facts, not an alternate publication schema: the accepted `moonmind.publish.repository.v1` artifact remains authoritative, and adoption records target evidence without inventing an earlier publication. A PR URL alone is insufficient, and a resolver's head never becomes the original publication base.
 
-The parent records the automation child ID and waits in `awaiting_external`, reaching success only from the admitted terminal outcome. Stage markers use normal search attributes rather than a new root state.
+The parent records the automation child ID and waits in `awaiting_external`, reaching success only from the admitted terminal outcome. Detail responses name an active external reviewer in the wait summary; the dashboard links the exact request and shows when it was posted. A review-only graph of native tools marks admitted agent settings unused: its external reviewer is independent of its recorded Provider Profile. Paused and terminal summaries retain their own outcome. Stage markers use normal search attributes rather than a new root state.
 
 ## 5. MergeAutomation Input and Output
 
