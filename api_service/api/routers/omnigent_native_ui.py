@@ -47,10 +47,11 @@ from api_service.api.routers.omnigent_bridge import (
     _require_bridge_enabled,
     _resolve_and_authorize_chat_binding,
 )
-from api_service.auth_providers import get_current_user
+from api_service.api.workflow_chat_access import get_workflow_chat_access
 from api_service.db.models import User
 from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_MOUNT_PREFIX,
@@ -333,7 +334,7 @@ async def _serve_native_ui(
     ui_path: str,
     embedded: Any,
     config: OmnigentBridgeConfig,
-    user: User,
+    user: User | OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
     upstream: NativeUiUpstream,
@@ -459,7 +460,7 @@ async def serve_native_workflow_chat_ui_root(
     chat_binding_id: str,
     embedded: str | None = Query(default=None),
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_workflow_chat_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store_dep),
     upstream: NativeUiUpstream = Depends(get_native_ui_upstream),
@@ -488,7 +489,7 @@ async def serve_native_workflow_chat_ui_asset(
     ui_path: str,
     embedded: str | None = Query(default=None),
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: User | OperatorAdmission = Depends(get_workflow_chat_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store_dep),
     upstream: NativeUiUpstream = Depends(get_native_ui_upstream),
