@@ -4842,6 +4842,7 @@ async function responseErrorMessage(
 function isPreHandlerAuthRejection(status: number, code: string | null): boolean {
   // These codes come from authentication/admission dependencies, before the
   // route runs. Artifact errors can instead come from post-commit metadata.
+  if (status === 503) return ["unavailable", "misconfigured"].includes(code || "");
   if (status === 401) return [
     "auth_required", "auth_invalid", "auth_conflict", "untrusted_ingress",
     "duplicate_header", "missing_identity", "malformed_identity", "reserved_identity",
@@ -9936,9 +9937,12 @@ function WorkflowStartPageContent({
     const requestId = `submit-${requestSerial}`;
     const createRevision = createDraftRevisionRef.current;
     const submissionHref = window.location.href;
-    const isCurrentCreate = () => (
+    const isCurrentSubmission = () => (
       createMountedRef.current && window.location.href === submissionHref &&
-      submitExpansionRequestIdRef.current === requestSerial &&
+      submitExpansionRequestIdRef.current === requestSerial
+    );
+    const isCurrentCreate = () => (
+      isCurrentSubmission() &&
       (pageMode.mode !== "create" || createDraftRevisionRef.current === createRevision)
     );
     submitExpansionInFlightRef.current = true;
@@ -11655,8 +11659,13 @@ function WorkflowStartPageContent({
           createIntentStore?.save(createIntent);
         }
       }
+      if (createIntent && isCurrentSubmission()) {
+        setAcceptedCreatePath(createSubmissionDestination(created) || null);
+        if (!isCurrentCreate()) {
+          setSubmitMessage("Earlier submission was accepted. Your current draft has been kept.", "ok");
+        }
+      }
       if (!isCurrentCreate()) return;
-      if (createIntent) setAcceptedCreatePath(createSubmissionDestination(created) || null);
       const linkRetry = createIntent && createIntentStore ? { intent: createIntent, store: createIntentStore } : undefined;
       if (inputArtifactRef) {
         await linkInputArtifact(inputArtifactRef, created, { retry: linkRetry });

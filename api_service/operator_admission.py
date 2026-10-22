@@ -42,7 +42,9 @@ def _http_exception(exc: OperatorAdmissionError) -> HTTPException:
     if exc.http_status == 403:
         return HTTPException(status_code=403, detail={"code": exc.code})
     if exc.http_status == 503:
-        return HTTPException(status_code=503, detail=exc.detail)
+        return HTTPException(
+            status_code=503, detail={"code": exc.code, "message": exc.detail}
+        )
     return HTTPException(status_code=exc.http_status, detail={"code": exc.code})
 
 

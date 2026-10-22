@@ -119,6 +119,8 @@ describe("Create authored mutations outside native change events", () => {
 
     expect(navigateTo).not.toHaveBeenCalled();
     expect(within(stepSection()).getByText("new-draft.png")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open accepted result" }).getAttribute("href")).toBe("/workflows/mm%3Aold-intent?source=temporal");
+    expect(screen.getByText("Earlier submission was accepted. Your current draft has been kept.").getAttribute("role")).toBe("status");
     expect(screen.getByRole("button", { name: "Start Workflow" }).getAttribute("aria-disabled")).toBe("false");
   });
 
@@ -175,6 +177,7 @@ describe("Create authored mutations outside native change events", () => {
 
     expect(navigateTo).not.toHaveBeenCalled();
     expect((skill as HTMLInputElement).value).toBe("moonspec-orchestrate");
+    expect(screen.getByRole("link", { name: "Open accepted result" }).getAttribute("href")).toBe("/workflows/mm%3Aold-intent?source=temporal");
   });
 
   it("protects a draft whose only authored change was a dropped file", async () => {
