@@ -124,6 +124,51 @@ def test_started_work_does_not_carry_over_to_a_different_claim(monkeypatch):
     assert _next_request_lease(parent) == other
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("patched", [True, False])
+async def test_legacy_continuation_restores_claim_before_next_agent_dispatch(
+    monkeypatch, patched
+):
+    parent = _parent(monkeypatch)
+    parent._trusted_issue_context = {"trustedSource": "moonmind.github.get_issue"}
+    monkeypatch.setattr(workflow, "patched", lambda _: patched)
+    from unittest.mock import AsyncMock
+
+    renew = AsyncMock(return_value={"status": "renewed", "issueClaimLease": LEASE})
+    monkeypatch.setattr(workflow, "execute_activity", renew)
+
+    await parent._restore_issue_claim_lease()
+
+    if patched:
+        assert _next_request_lease(parent) == LEASE
+        assert renew.await_args.args == ("github_issue.renew_claim", {})
+        await parent._restore_issue_claim_lease()
+        renew.assert_awaited_once()
+    else:
+        renew.assert_not_awaited()
+        assert "issueClaimLease" not in _build_request(parent).parameters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["lost", "retry"])
+async def test_legacy_continuation_cannot_dispatch_without_confirmed_claim(
+    monkeypatch, status
+):
+    from unittest.mock import AsyncMock
+
+    parent = _parent(monkeypatch)
+    parent._trusted_issue_context = {"trustedSource": "moonmind.github.get_issue"}
+    monkeypatch.setattr(workflow, "patched", lambda _: True)
+    monkeypatch.setattr(
+        workflow, "execute_activity", AsyncMock(return_value={"status": status})
+    )
+
+    with pytest.raises(ValueError, match="claim could not be restored"):
+        await parent._restore_issue_claim_lease()
+
+    assert "issueClaimLease" not in parent._trusted_issue_context
+
+
 async def _should_renew_for(monkeypatch, lease: dict, *, durable_wait=False):
     captured = {}
 

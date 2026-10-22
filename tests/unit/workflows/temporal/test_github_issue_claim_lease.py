@@ -4,6 +4,7 @@
 
 from dataclasses import replace
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -20,7 +21,9 @@ from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # no
 
 # The import registers the shared fixture; the alias keeps import linters that
 # do not model pytest fixture injection from flagging the registration.
-_JOURNEY_FIXTURE = journey  # noqa: F841 -- referenced below to keep fixture registration explicit
+_JOURNEY_FIXTURE = (
+    journey  # noqa: F841 -- referenced below to keep fixture registration explicit
+)
 assert _JOURNEY_FIXTURE is journey
 
 
@@ -160,14 +163,12 @@ async def test_renewal_is_coalesced_and_lost_ack_is_confirmed(journey, monkeypat
     assert before_handoff.activity == "preparing"
     # Execution renewal promotes the announcement to the running lease so a
     # multi-minute run is not canceled before its first renewal.
-    promoted = await leases.renew_owned_claim(
-        store=store, service=service, owner=owner
-    )
+    promoted = await leases.renew_owned_claim(store=store, service=service, owner=owner)
     promoted_handoff = parse_attempt_comment(promoted.comment_body).handoff
     assert promoted_handoff.activity == "active"
-    assert leases.parse_time(
-        promoted_handoff.lease_expires_at
-    ) - leases.parse_time(promoted_handoff.lease_renewed_at) == timedelta(minutes=30)
+    assert leases.parse_time(promoted_handoff.lease_expires_at) - leases.parse_time(
+        promoted_handoff.lease_renewed_at
+    ) == timedelta(minutes=30)
     base = leases.utc_now()
     # Past the running renew interval but inside its thirty-minute deadline.
     monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=6))
@@ -178,6 +179,296 @@ async def test_renewal_is_coalesced_and_lost_ack_is_confirmed(journey, monkeypat
         parse_attempt_comment(renewed.comment_body).handoff.lease_expires_at
     ) > leases.parse_time(promoted_handoff.lease_expires_at)
     assert len(state["comments"]) == 1 and renewed.pending_comment_body is None
+
+
+@pytest.mark.asyncio
+async def test_expired_claim_requires_explicit_step_retry_to_reacquire(
+    journey, monkeypatch
+):
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/failed-step"
+    await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    original = await store.get(owner)
+    handoff = parse_attempt_comment(original.comment_body).handoff
+    now = leases.utc_now() + timedelta(minutes=31)
+    monkeypatch.setattr(leases, "utc_now", lambda: now)
+    with pytest.raises(ValueError, match="claim_lease_lost"):
+        await leases.renew_owned_claim(store=store, service=service, owner=owner)
+
+    await leases.reconcile_expired_issue(
+        service=service, repository="example/repo", issue_number=3970
+    )
+    assert state["labels"] == []
+    state["lose_update_ack"] = True
+    renewed = await leases.renew_owned_claim(
+        store=store,
+        service=service,
+        owner=owner,
+        reacquire_expired=True,
+    )
+
+    current = parse_attempt_comment(renewed.comment_body).handoff
+    assert renewed.attempt_id == original.attempt_id
+    assert current.retry_remaining == handoff.retry_remaining
+    assert current.retry_history == handoff.retry_history
+    assert not leases.expired(current)
+    assert len(state["comments"]) == 1
+    assert renewed.pending_comment_body is None
+    assert state["labels"] == ["status: in-progress"]
+    # A repeated request uses the confirmed reservation without another effect.
+    assert (
+        await leases.renew_owned_claim(
+            store=store,
+            service=service,
+            owner=owner,
+            reacquire_expired=True,
+        )
+    ).comment_body == renewed.comment_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["rejected", "readback", "lost_ack"])
+async def test_step_retry_confirms_status_after_uncertain_restoration(
+    journey, monkeypatch, fault
+):
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/failed-step"
+    await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    now = leases.utc_now() + timedelta(minutes=31)
+    monkeypatch.setattr(leases, "utc_now", lambda: now)
+    await leases.reconcile_expired_issue(
+        service=service, repository="example/repo", issue_number=3970
+    )
+    original = await store.get(owner)
+    add_labels = service.add_issue_labels
+    patch_comment = AsyncMock(wraps=service.update_issue_comment)
+    monkeypatch.setattr(service, "update_issue_comment", patch_comment)
+
+    async def uncertain_labels(**kwargs):
+        if fault == "rejected":
+            return {"ok": False, "reasonCode": "fixture_rejected"}
+        result = await add_labels(**kwargs)
+        if fault == "readback":
+            state["failed_read_path"] = "/repos/example/repo/issues/3970"
+            return result
+        return {"ok": False, "reasonCode": "outcome_unknown"}
+
+    monkeypatch.setattr(service, "add_issue_labels", uncertain_labels)
+    kwargs = dict(store=store, service=service, owner=owner, reacquire_expired=True)
+    if fault == "lost_ack":
+        await leases.renew_owned_claim(**kwargs)
+    else:
+        with pytest.raises(ValueError, match="claim_update_pending|claim_read_failure"):
+            await leases.renew_owned_claim(**kwargs)
+        # GitHub confirmed the renewed comment before label confirmation failed.
+        assert not leases.expired(
+            parse_attempt_comment(state["comments"][0]["body"]).handoff
+        )
+        state.pop("failed_read_path", None)
+        monkeypatch.setattr(service, "add_issue_labels", add_labels)
+        await leases.renew_owned_claim(**kwargs)
+    # Repeating the explicit request must reconcile even its coalesced renewal.
+    state["labels"] = []
+    monkeypatch.setattr(service, "add_issue_labels", add_labels)
+    current = await leases.renew_owned_claim(**kwargs)
+    assert state["labels"] == ["status: in-progress"]
+    assert current.attempt_id == original.attempt_id
+    assert current.pending_comment_body is None
+    patch_comment.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("contender", ["preparing", "active", "expired"])
+async def test_step_retry_live_claim_preserves_contender_ordering(
+    journey, monkeypatch, contender
+):
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/live-failed-step"
+    await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    original = await leases.renew_owned_claim(store=store, service=service, owner=owner)
+    handoff = parse_attempt_comment(original.comment_body).handoff
+    now = leases.utc_now()
+    monkeypatch.setattr(leases, "utc_now", lambda: now)
+    later = leases.with_lease(
+        replace(
+            handoff,
+            attempt_id="att-losing-contender",
+            activity="active" if contender == "active" else "preparing",
+        ),
+        now=now - timedelta(minutes=31) if contender == "expired" else now,
+    )
+    state["comments"].append(
+        {
+            "id": int(original.comment_id) + 1,
+            "user": {"id": 456},
+            "body": render_attempt_comment(later),
+        }
+    )
+    kwargs = dict(store=store, service=service, owner=owner, reacquire_expired=True)
+    if contender == "active":
+        with pytest.raises(ValueError, match="active_attempt_conflict"):
+            await leases.renew_owned_claim(**kwargs)
+    else:
+        assert (
+            await leases.renew_owned_claim(**kwargs)
+        ).comment_body == original.comment_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor", [True, False])
+async def test_step_retry_rechecks_expiry_after_status_read(
+    journey, monkeypatch, successor
+):
+    from moonmind.workflows.temporal.activities import (
+        github_issue_reconciliation_activities as reconciliation,
+    )
+
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/expiring-during-retry"
+    await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    original = await leases.renew_owned_claim(store=store, service=service, owner=owner)
+    handoff = parse_attempt_comment(original.comment_body).handoff
+    clock = leases.parse_time(handoff.lease_expires_at) - timedelta(seconds=1)
+    monkeypatch.setattr(leases, "utc_now", lambda: clock)
+    fetch = reconciliation._fetch_issue
+    advanced = False
+
+    async def lease_expires_during_read(**kwargs):
+        nonlocal clock, advanced
+        result = await fetch(**kwargs)
+        if not advanced:
+            advanced = True
+            clock += timedelta(seconds=2)
+            if successor:
+                state["comments"].append(
+                    {
+                        "id": int(original.comment_id) + 1,
+                        "user": {"id": 456},
+                        "body": render_attempt_comment(
+                            leases.with_lease(
+                                replace(
+                                    handoff,
+                                    attempt_id="att-new-after-expiry",
+                                    activity="preparing",
+                                ),
+                                now=clock,
+                            )
+                        ),
+                    }
+                )
+        return result
+
+    monkeypatch.setattr(reconciliation, "_fetch_issue", lease_expires_during_read)
+    kwargs = dict(store=store, service=service, owner=owner, reacquire_expired=True)
+    if successor:
+        with pytest.raises(ValueError, match="claim_successor_exists"):
+            await leases.renew_owned_claim(**kwargs)
+        assert state["comments"][0]["body"] == original.comment_body
+    else:
+        renewed = await leases.renew_owned_claim(**kwargs)
+        assert (
+            leases.parse_time(
+                parse_attempt_comment(renewed.comment_body).handoff.lease_renewed_at
+            )
+            == clock
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fault", "lease_age"),
+    [
+        (fault, lease_age)
+        for fault in (
+            "successor",
+            "expired_successor",
+            "released",
+            "ownership_ended",
+            "hold",
+            "read_failure",
+            "closed",
+            "attention",
+        )
+        for lease_age in (2, 31)
+        if fault != "expired_successor" or lease_age == 31
+    ],
+)
+async def test_explicit_step_retry_cannot_reacquire_changed_issue(
+    journey, monkeypatch, fault, lease_age
+):
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    owner = "default/failed-step"
+    await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueNumber": 3970},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    original = await store.get(owner)
+    handoff = parse_attempt_comment(original.comment_body).handoff
+    now = leases.utc_now() + timedelta(minutes=lease_age)
+    monkeypatch.setattr(leases, "utc_now", lambda: now)
+    if fault in {"successor", "expired_successor"}:
+        successor = replace(
+            handoff,
+            attempt_id="att-successor",
+            predecessor_attempt_id=original.attempt_id,
+            activity="active" if fault == "successor" else handoff.activity,
+        )
+        if fault == "successor":
+            successor = leases.with_lease(successor, now=now)
+        state["comments"].append(
+            {
+                "id": int(original.comment_id) + 1,
+                "user": {"id": 456},
+                "body": render_attempt_comment(successor),
+            }
+        )
+    elif fault in {"released", "ownership_ended"}:
+        async with store.locked(owner) as row:
+            setattr(row, fault, True)
+    elif fault == "hold":
+        body = render_attempt_comment(replace(handoff, operator_hold=True))
+        async with store.locked(owner) as row:
+            row.comment_body = body
+        state["comments"][0]["body"] = body
+    elif fault == "read_failure":
+        state["failed_read_path"] = "/repos/example/repo/issues/3970/comments"
+    elif fault == "closed":
+        state["state"] = "closed"
+    elif fault == "attention":
+        state["labels"] = ["status: needs-attention"]
+    before = [comment["body"] for comment in state["comments"]]
+
+    with pytest.raises(ValueError):
+        await leases.renew_owned_claim(
+            store=store,
+            service=service,
+            owner=owner,
+            reacquire_expired=True,
+        )
+
+    assert [comment["body"] for comment in state["comments"]] == before
 
 
 @pytest.mark.asyncio
