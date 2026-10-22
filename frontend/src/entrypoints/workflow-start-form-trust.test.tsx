@@ -342,6 +342,8 @@ describe("Workflow Create form trust", () => {
     await act(async () => finish({ ok: true, json: async () => ({ workflowId: "mm:old-intent" }) } as Response));
     expect(navigateTo).not.toHaveBeenCalled();
     expect((instructions as HTMLTextAreaElement).value).toBe("Keep this newer draft.");
+    expect(screen.getByRole("link", { name: "Open accepted result" }).getAttribute("href")).toBe("/workflows/mm%3Aold-intent?source=temporal");
+    expect(screen.getByText("Earlier submission was accepted. Your current draft has been kept.").getAttribute("role")).toBe("status");
   });
 
   it.each(["lost acknowledgment", "auth_required", "origin_forbidden"] as const)("preserves an accepted Create after input artifact link %s", async (failure) => {
@@ -410,6 +412,30 @@ describe("Workflow Create form trust", () => {
     expect(bodies[1]?.payload.schedule.scheduledFor).toBe(bodies[0]?.payload.schedule.scheduledFor);
   });
 
+  it.each(["unavailable", "misconfigured"])("retries recurring creation after an operator-admission %s rejection", async (code) => {
+    const original = fetchSpy.getMockImplementation()!;
+    let creates = 0;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        creates += 1;
+        return creates === 1
+          ? { ok: false, status: 503, text: async () => JSON.stringify({ detail: { code, message: "Operator ingress needs repair." } }) } as Response
+          : { ok: true, json: async () => ({ definitionId: "schedule-after-repair" }) } as Response;
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this daily." } });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "recurring" } });
+    fireEvent.change(screen.getByLabelText("Cron Expression"), { target: { value: "0 8 * * *" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText(/Operator ingress needs repair/);
+    expect(screen.queryByText(/Schedule creation outcome is unknown/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(creates).toBe(2));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledExactlyOnceWith("/schedules/schedule-after-repair"));
+  });
+
   it("does not blindly retry an uncertain recurring definition without a replay contract", async () => {
     const original = fetchSpy.getMockImplementation()!;
     let creates = 0;
@@ -449,6 +475,7 @@ describe("Workflow Create form trust", () => {
     await act(async () => navigate("/workflows/new"));
     await act(async () => finish({ ok: true, json: async () => ({ workflowId: "mm:old-draft" }) } as Response));
     expect(navigateTo).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: "Open accepted result" })).toBeNull();
   });
 
   it("reconciles a lost acknowledgment after the absolute scheduled time passes", async () => {
