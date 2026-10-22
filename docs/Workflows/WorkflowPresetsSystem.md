@@ -418,3 +418,19 @@ Versioned reconstruction distinguishes equal historical passthrough values, conf
 ## Conformance
 
 Coverage exercises the real catalog, expansion, compiler, fan-out, and form boundaries: schemas render without per-preset frontend branches; Apply/Reapply and unexpanded Submit produce equivalent targets, policy, and provenance; context changes invalidate stale generated values without losing explicit choices; every built-in family produces its declared Auto behavior and required handoffs; coordinators preserve descendant intent through nesting; contradictory compositions fail before effects; and schedules, edit/rerun, MCP/API, reconstruction, and history replay keep the correct definition evidence. A documentation or seed update alone is not proof of conformance.
+
+### Retained readiness Activity compatibility
+
+Pre-instance Temporal histories retain the original `plan.check_preset_capabilities`
+command, including `principal` and scoped preset provenance. Retrying that recorded
+Activity resolves the original identity only through the guarded conversion's
+committed `legacy_identities` receipt, which maps the original scope/reference/slug
+to the stable preset ID. The Activity still checks current capabilities (including
+composition) without changing recorded steps, inputs, or granted capabilities.
+The principal is historical disambiguation, not runtime ownership or account lookup.
+
+Current commands do not include a principal and still reject legacy scoped input.
+Missing, unpublished, ambiguous, or malformed conversion evidence, deleted/inactive
+IDs, and receipts created before identity evidence was recorded require a refresh.
+The compatibility path never infers an old identity from a current slug, collision
+suffix, creator, or newest row. Discarded identity evidence is not reconstructed.

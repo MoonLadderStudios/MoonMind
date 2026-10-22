@@ -89,6 +89,33 @@ async def test_real_guarded_conversion_preserves_ids_and_resolves_only_collision
         owner, builtin_id, custom_id, parent_id = await seed_collision(session)
         result = await run_guarded_upgrade(session, operator_authorized=True)
         assert result.published, result.decision.to_sanitized_dict()
+        identities = [
+            {
+                "scope": "global",
+                "scopeRef": None,
+                "slug": "shared",
+                "presetId": str(builtin_id),
+            },
+            {
+                "scope": "personal",
+                "scopeRef": str(owner),
+                "slug": "shared",
+                "presetId": str(custom_id),
+            },
+            {
+                "scope": "personal",
+                "scopeRef": str(owner),
+                "slug": "parent",
+                "presetId": str(parent_id),
+            },
+        ]
+        assert result.transforms["presets"]["legacy_identities"] == identities
+        ledger = (await session.execute(select(SingleUserConversionRun))).scalar_one()
+        assert ledger.result_json["production_transforms_completed"] is True
+        assert (
+            ledger.result_json["transforms"]["presets"]["legacy_identities"]
+            == identities
+        )
         session.expire_all()
         builtin = await session.get(Preset, builtin_id)
         custom = await session.get(Preset, custom_id)
@@ -113,6 +140,16 @@ async def test_real_guarded_conversion_preserves_ids_and_resolves_only_collision
     async with preset_sessions() as restarted:
         again = await run_guarded_upgrade(restarted, operator_authorized=True)
         assert again.published
+        assert again.digest == result.digest
+        assert again.transforms["presets"]["legacy_identities"] == identities
+        assert (
+            len(
+                (await restarted.execute(select(SingleUserConversionRun)))
+                .scalars()
+                .all()
+            )
+            == 1
+        )
         assert len((await restarted.execute(select(Preset))).scalars().all()) == 3
         assert (await restarted.get(Preset, custom_id)).slug == custom_slug
 
@@ -328,7 +365,9 @@ async def test_schedule_current_references_rebind_without_reexpanding_snapshot(
 async def test_published_completion_does_not_skip_later_legacy_row(preset_sessions):
     async with preset_sessions() as session:
         owner, _, _, _ = await seed_collision(session)
-        assert (await run_guarded_upgrade(session, operator_authorized=True)).published
+        first = await run_guarded_upgrade(session, operator_authorized=True)
+        assert first.published
+        first_identities = first.transforms["presets"]["legacy_identities"]
         row = Preset(
             slug="later",
             title="Later",
@@ -341,9 +380,28 @@ async def test_published_completion_does_not_skip_later_legacy_row(preset_sessio
         session.add(row)
         await session.commit()
         row_id = row.id
-        assert (await run_guarded_upgrade(session, operator_authorized=True)).published
+        later = await run_guarded_upgrade(session, operator_authorized=True)
+        assert later.published
+        later_identities = [
+            {
+                "scope": "personal",
+                "scopeRef": str(owner),
+                "slug": "later",
+                "presetId": str(row_id),
+            }
+        ]
+        assert later.transforms["presets"]["legacy_identities"] == later_identities
         session.expire_all()
         assert (await session.get(Preset, row_id)).scope_type is None
+        receipts = list(
+            (await session.execute(select(SingleUserConversionRun))).scalars()
+        )
+        assert len(receipts) == 2
+        persisted = [
+            row.result_json["transforms"]["presets"]["legacy_identities"]
+            for row in receipts
+        ]
+        assert first_identities in persisted and later_identities in persisted
 
 
 @pytest.mark.asyncio
@@ -774,3 +832,55 @@ def test_malformed_completion_payload_has_no_authority(payload):
     from api_service.services.single_user_conversion import _is_production_completion
 
     assert not _is_production_completion(payload)
+
+
+@pytest.mark.asyncio
+async def test_identity_evidence_publication_failure_rolls_back(preset_sessions):
+    from unittest.mock import patch
+
+    async with preset_sessions() as session:
+        owner, builtin_id, custom_id, parent_id = await seed_collision(session)
+        attempted = []
+
+        async def fail_publication():
+            ledger = next(
+                row for row in session.new if isinstance(row, SingleUserConversionRun)
+            )
+            outcome = ledger.result_json["transforms"]["presets"]
+            identities = outcome["legacy_identities"]
+            assert len(identities) == 3
+            assert {entry["presetId"] for entry in identities} == {
+                str(builtin_id),
+                str(custom_id),
+                str(parent_id),
+            }
+            assert all(
+                set(entry) == {"scope", "scopeRef", "slug", "presetId"}
+                for entry in identities
+            )
+            assert ledger.result_json["production_transforms_completed"] is True
+            attempted.append(identities)
+            await session.flush()  # Even an inserted receipt must roll back.
+            assert ledger.id is not None
+            raise RuntimeError("interrupted identity evidence publication")
+
+        with patch.object(session, "commit", side_effect=fail_publication):
+            with pytest.raises(RuntimeError, match="identity evidence publication"):
+                await run_guarded_upgrade(session, operator_authorized=True)
+
+    async with preset_sessions() as restarted:
+        custom = await restarted.get(Preset, custom_id)
+        assert custom.scope_type is PresetScopeType.PERSONAL
+        assert custom.scope_ref == str(owner) and custom.slug == "shared"
+        assert not list(
+            (await restarted.execute(select(SingleUserConversionRun))).scalars()
+        )
+        await restarted.rollback()
+        retried = await run_guarded_upgrade(restarted, operator_authorized=True)
+        assert retried.published and len(attempted) == 1
+        assert retried.transforms["presets"]["legacy_identities"] == attempted[0]
+        ledger = (await restarted.execute(select(SingleUserConversionRun))).scalar_one()
+        assert (
+            ledger.result_json["transforms"]["presets"]["legacy_identities"]
+            == attempted[0]
+        )

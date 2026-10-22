@@ -14,6 +14,7 @@ from tests.integration import (
 )
 
 conversion_postgres_url = postgres_fixtures.conversion_postgres_url
+from tests.unit.api import test_legacy_preset_readiness as readiness_scenarios
 from tests.unit.services import test_preset_instance_conversion as scenarios
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
@@ -49,6 +50,7 @@ async def preset_sessions(conversion_postgres_url):
         scenarios.test_multi_person_source_is_not_exposed,
         scenarios.test_alias_preferences_deduplicate_keep_latest_and_earliest,
         scenarios.test_interruption_rolls_back_then_retry_converges,
+        scenarios.test_identity_evidence_publication_failure_rolls_back,
         scenarios.test_same_count_content_edit_invalidates_preflight,
         scenarios.test_missing_composition_target_refuses_without_substitution,
         scenarios.test_schedule_current_references_rebind_without_reexpanding_snapshot,
@@ -66,6 +68,52 @@ async def preset_sessions(conversion_postgres_url):
 )
 async def test_postgres_conversion_boundaries(preset_sessions, scenario):
     await scenario(preset_sessions)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope,capability", [("global", "git"), ("personal", "docker")]
+)
+async def test_postgres_retained_readiness_resolves_stable_id(
+    preset_sessions, scope, capability
+):
+    await readiness_scenarios.test_recorded_retry_uses_stable_converted_id_after_restart(
+        preset_sessions, scope, capability
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "unpublished",
+        "incomplete",
+        "missing",
+        "conflict",
+        "deleted",
+        "inactive",
+        "malformed_id",
+        "malformed_revision",
+        "ineligible",
+        "custom_transform",
+        "missing_identity_field",
+        "conflicting_receipt",
+        "unconverted",
+    ],
+)
+async def test_postgres_retained_readiness_refuses_invalid_evidence(
+    preset_sessions, damage
+):
+    await readiness_scenarios.test_legacy_retry_never_substitutes_current_slug_without_identity_proof(
+        preset_sessions, damage
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_new_readiness_never_grants_legacy_authority(preset_sessions):
+    await readiness_scenarios.test_new_scoped_request_and_mismatched_personal_provenance_still_refuse(
+        preset_sessions
+    )
 
 
 @pytest.mark.asyncio
