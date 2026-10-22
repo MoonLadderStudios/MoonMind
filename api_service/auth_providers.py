@@ -353,16 +353,13 @@ async def get_instance_access(
     until their owning conversion completes; no virtual person is made here.
     """
     if is_disabled_local_mode():
-        if not await _disabled_account_free_allowed(session):
-            from api_service.operator_admission import require_retained_operator_request
-
-            # An incomplete conversion cannot cut over the installed access
-            # authority. Require the retained real account; never invent one.
-            await require_retained_operator_request(request)
-            return await _load_disabled_user(session, allow_transient=False)
         from api_service.operator_admission import require_operator
 
         admission = await require_operator(request)
+        if not await _disabled_account_free_allowed(session):
+            # An incomplete conversion cannot cut over the installed access
+            # authority. Require the retained real account; never invent one.
+            return await _load_disabled_user(session, allow_transient=False)
         request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
         return admission
     return await get_current_user()(request, session)

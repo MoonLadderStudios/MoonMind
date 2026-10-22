@@ -27,7 +27,6 @@ from moonmind.security.operator_admission import (
     OperatorAdmission,
     OperatorAdmissionError,
     resolve_operator_admission,
-    validate_browser_host_and_origin,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +54,7 @@ def _request_inputs(request: Request) -> dict:
         "method": request.method or "GET",
         "headers": headers,
         "local_host_gateway": _local_compose_host_gateway(),
+        "direct_backend_peer": _is_direct_backend_peer(client_host),
     }
 
 
@@ -66,6 +66,39 @@ def _is_loopback_publish_host(publish_host: str) -> bool:
         return False
 
 
+def _container_routes() -> tuple[str | None, tuple] | None:
+    """Return this container's default gateway and directly connected networks.
+
+    ``None`` outside a Compose container. Unreadable routing returns no
+    gateway and a catch-all network so every peer counts as a backend peer.
+    """
+    if (
+        not os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME")
+        or not Path("/.dockerenv").is_file()
+    ):
+        return None
+    gateways: set[str] = set()
+    networks = []
+    try:
+        for line in Path("/proc/net/route").read_text().splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 8 or not int(fields[3], 16) & 1:
+                continue
+            address = ipaddress.IPv4Address(bytes.fromhex(fields[1])[::-1])
+            mask = ipaddress.IPv4Address(bytes.fromhex(fields[7])[::-1])
+            if int(fields[3], 16) & 2:
+                if fields[1] == "00000000" and fields[7] == "00000000":
+                    gateways.add(
+                        str(ipaddress.IPv4Address(bytes.fromhex(fields[2])[::-1]))
+                    )
+            elif int(mask):
+                networks.append(ipaddress.ip_network(f"{address}/{mask}"))
+    except (OSError, ValueError):
+        return None, (ipaddress.ip_network("0.0.0.0/0"), ipaddress.ip_network("::/0"))
+    gateway = next(iter(gateways)) if len(gateways) == 1 else None
+    return gateway, tuple(networks)
+
+
 def _local_compose_host_gateway() -> str | None:
     """Identify the Docker host peer for this instance's loopback publication.
 
@@ -75,68 +108,36 @@ def _local_compose_host_gateway() -> str | None:
     and caller-supplied forwarding headers provide no such proof. Host-native
     servers and ambiguous/unreadable container routing remain loopback-only.
     """
-    if (
-        not os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME")
-        or not Path("/.dockerenv").is_file()
-    ):
-        return None
     if not _is_loopback_publish_host(os.environ.get("MOONMIND_API_PUBLISH_HOST", "")):
         return None
+    routes = _container_routes()
+    return routes[0] if routes else None
+
+
+def _is_direct_backend_peer(client_host: str | None) -> bool:
+    """Whether a peer reached the API over the container's own networks.
+
+    Published-port traffic arrives with its real address or, from the host,
+    as the default gateway. Other peers on a connected network (workers
+    calling ``http://api:8000``) never traversed the operator's publication.
+    """
+    routes = _container_routes()
+    if routes is None:
+        return False
+    gateway, networks = routes
     try:
-        gateways = {
-            str(ipaddress.IPv4Address(bytes.fromhex(fields[2])[::-1]))
-            for line in Path("/proc/net/route").read_text().splitlines()[1:]
-            if (
-                len(fields := line.split()) >= 8
-                and fields[1] == "00000000"
-                and fields[7] == "00000000"
-                and int(fields[3], 16) & 3 == 3
-                and fields[2] != "00000000"
-            )
-        }
-    except (OSError, ValueError):
-        return None
-    return next(iter(gateways)) if len(gateways) == 1 else None
+        peer = ipaddress.ip_address((client_host or "").strip().strip("[]").split("%")[0])
+    except ValueError:
+        return True
+    if gateway and str(peer) == gateway:
+        return False
+    return any(peer.version == net.version and peer in net for net in networks)
 
 
 async def require_operator(request: Request) -> OperatorAdmission:
     """Strict operator boundary: every operator-facing path resolves here."""
     try:
         return resolve_operator_admission(**_request_inputs(request))
-    except OperatorAdmissionError as exc:
-        raise _http_exception(exc) from exc
-
-
-async def require_retained_operator_request(request: Request) -> None:
-    """Validate a request under the retained disabled-mode deployment boundary.
-
-    Before account-free conversion, an explicitly approved non-loopback ingress
-    remains the installed network authority. It still validates browser Host and
-    mutation origins; it neither resolves a person nor grants recovery authority.
-    Local installations retain the strict peer/Host/Origin boundary.
-    """
-    publish_host = os.environ.get("MOONMIND_API_PUBLISH_HOST", "").strip()
-    trusted_ingress = os.environ.get("MOONMIND_TRUSTED_INGRESS", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if not (
-        publish_host and not _is_loopback_publish_host(publish_host) and trusted_ingress
-    ):
-        await require_operator(request)
-        return
-    try:
-        validate_browser_host_and_origin(
-            method=request.method,
-            host_header=request.headers.get("host"),
-            origin=request.headers.get("origin"),
-            referer=request.headers.get("referer"),
-            base_url=(
-                os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
-                or str(request.base_url)
-            ),
-        )
     except OperatorAdmissionError as exc:
         raise _http_exception(exc) from exc
 
@@ -193,6 +194,7 @@ async def admit_websocket(websocket) -> OperatorAdmission:
             method="POST",
             headers=headers,
             local_host_gateway=_local_compose_host_gateway(),
+            direct_backend_peer=_is_direct_backend_peer(client_host),
         )
     except OperatorAdmissionError as exc:
         logger.info(

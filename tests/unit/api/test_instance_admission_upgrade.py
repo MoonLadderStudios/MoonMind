@@ -1,5 +1,6 @@
 """Retained operator access survives an incomplete account-free conversion."""
 
+import ipaddress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -99,6 +100,58 @@ async def test_only_published_conversion_switches_admission(
     if not published:
         assert await auth.get_instance_access(request(), session) is user
         return
+    # Publishing conversion must not revoke the approved non-loopback ingress.
+    assert isinstance(
+        await auth.get_instance_access(request(), session), OperatorAdmission
+    )
+    session.get.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("peer", "admitted"),
+    [("192.168.0.4", True), ("172.19.0.1", True), ("172.19.0.7", False)],
+)
+async def test_approved_publication_rejects_bridge_peers_but_not_its_gateway(
+    retained_instance, monkeypatch, peer, admitted
+):
+    from api_service import operator_admission as adapter
+
+    session, _user, result = retained_instance
+    result.scalars.return_value.all.return_value = [
+        SimpleNamespace(
+            status="complete",
+            result_json={"published": True, "decision": {"disposition": "fresh_init"}},
+        )
+    ]
+    monkeypatch.setattr(
+        adapter,
+        "_container_routes",
+        lambda: (
+            "172.19.0.1",
+            (ipaddress.ip_network("172.19.0.0/16"), ipaddress.ip_network("172.20.0.0/16")),
+        ),
+    )
+    if admitted:
+        assert isinstance(
+            await auth.get_instance_access(request(peer), session), OperatorAdmission
+        )
+        return
+    with pytest.raises(HTTPException) as exc:
+        await auth.get_instance_access(request(peer), session)
+    assert exc.value.status_code == 401
+
+
+async def test_published_conversion_keeps_loopback_publication_local(
+    retained_instance, monkeypatch
+):
+    session, _user, result = retained_instance
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
+    result.scalars.return_value.all.return_value = [
+        SimpleNamespace(
+            status="complete",
+            result_json={"published": True, "decision": {"disposition": "fresh_init"}},
+        )
+    ]
     with pytest.raises(HTTPException) as exc:
         await auth.get_instance_access(request(), session)
     assert exc.value.status_code == 401
