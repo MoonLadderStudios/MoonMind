@@ -25,10 +25,12 @@ Boundary rules (exact, see ``docs/Security/AuthenticationContracts.md``
   roles, and membership are never imported. Container-local loopback
   without that proof never admits once a remote URL is configured.
 * Approved publication (``MOONMIND_API_PUBLISH_HOST`` non-loopback with
-  ``MOONMIND_TRUSTED_INGRESS=1`` and no ``MOONMIND_TRUSTED_PROXIES``)
-  admits peers of the operator-approved binding itself, local or remote,
-  after the same Host/origin checks. This is the installed network
-  authority, so account-free conversion never revokes it.
+  ``MOONMIND_TRUSTED_INGRESS=1``) admits peers reaching the operator-approved
+  binding, after the same Host/origin checks. Direct backend peers on the
+  container's own networks never qualify. An explicit loopback operator URL
+  keeps the local rule, and any configured trusted proxies with a remote URL
+  keep the remote rule. This is the installed network authority, so
+  account-free conversion never revokes it.
 * Caller-controlled forwarding/identity headers (``X-Forwarded-*``,
   ``X-Real-IP``, untrusted ``X-Moonmind-User``), worker credentials
   (execution-fanout markers, worker bearer material), and query-string
@@ -396,19 +398,27 @@ def _trusted_proxies(environ: Mapping | None = None) -> tuple[str, ...]:
 def _approved_publication(source: Mapping) -> bool:
     """Whether the operator approved the non-loopback binding as the ingress.
 
-    Configured trusted proxies mean the operator chose proxy proof instead.
+    With a remote operator URL, any configured trusted-proxy value (even an
+    invalid one) means the operator chose proxy proof instead. Without one,
+    proxy proof cannot apply and the approved binding stays the authority.
     """
     try:
         host = (source.get("MOONMIND_API_PUBLISH_HOST", "") or "").strip()
         trusted = (source.get("MOONMIND_TRUSTED_INGRESS", "") or "").strip().lower()
+        proxies = source.get("MOONMIND_TRUSTED_PROXIES", "") or ""
     except Exception:
+        return False
+    base_url = _public_base_url(source)
+    if base_url and (
+        _is_loopback_base_url(base_url)
+        or (proxies.strip() if isinstance(proxies, str) else proxies)
+    ):
         return False
     return (
         bool(host)
         and host != "localhost"
         and not _is_loopback_ip(host)
         and trusted in {"1", "true", "yes"}
-        and not _trusted_proxies(source)
     )
 
 
@@ -596,11 +606,14 @@ def resolve_operator_admission(
     headers: Mapping | None = None,
     environ: Mapping | None = None,
     local_host_gateway: str | None = None,
+    direct_backend_peer: bool = False,
 ) -> OperatorAdmission:
     """Resolve operator admission for one request (no I/O, no database).
 
     ``headers`` maps header names to values (case-insensitive); query
-    parameters are never consulted. Raises :class:`OperatorAdmissionError`
+    parameters are never consulted. ``direct_backend_peer`` marks a peer on
+    the container's own networks (not the host gateway), which never reached
+    the approved publication. Raises :class:`OperatorAdmissionError`
     for denial/unavailability. Never returns a default user or account
     fallback.
     """
@@ -633,7 +646,9 @@ def resolve_operator_admission(
         base_url="" if loopback_base else base_url,
     )
 
-    if _approved_publication(source if isinstance(source, Mapping) else {}):
+    if not direct_backend_peer and _approved_publication(
+        source if isinstance(source, Mapping) else {}
+    ):
         logger.info(
             "auth_event boundary=operator reason=admitted via=approved_publication"
         )
