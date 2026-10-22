@@ -394,6 +394,10 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
         def run(self, args, timeout_seconds):
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": ""}
+            if args[-3:] == ("config", "--format", "json"):
+                return {"exit": 0, "output": json.dumps({"services": {"api": {
+                    "environment": {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example"}
+                }}})}
             if "--omnigent-select" in args or "--omnigent-migrate" in args:
                 phase = args[-2].removeprefix("--omnigent-")
                 if phase == "select":
@@ -438,6 +442,14 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
         return controller.server.production_apply(controller.store, operation)
 
     controller = controller_factory(apply, target=target)
+    operator_origins = []
+
+    def operator_probe(url):
+        operator_origins.append(url)
+        assert url == "https://operator.example"
+        return "ok"
+
+    monkeypatch.setattr(controller.server, "check_operator_url", operator_probe)
     # The fixture retains the real endpoint; only daemon/registry/database
     # side effects are replaced. Both release algorithms and state stores run.
     monkeypatch.setattr(
@@ -445,6 +457,7 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     )
     result = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
     assert result.status == "COMPLETED", result
+    assert operator_origins == ["https://operator.example"]
     operation = controller.store.load(result.outputs["operationId"])
     assert operation["omnigentSelection"]["revision"] == 1
     assert phases == ["select", "up", "migrate"]
