@@ -9826,6 +9826,9 @@ function WorkflowStartPageContent({
     const requestId = `submit-${requestSerial}`;
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
+    // Hold the check from the click itself: pre-request checks can await
+    // readiness or preset expansion past the press's revert timer.
+    holdSubmitArrowExitUntilNavigation();
     setSubmitMessage(null);
     clearInvalidFieldMark();
 
@@ -10560,7 +10563,6 @@ function WorkflowStartPageContent({
     const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     let didNavigateAfterSubmit = false;
-    holdSubmitArrowExitUntilNavigation();
     try {
       if (selectedAttachmentFiles.length > 0) {
         type AttachmentUploadResult =
@@ -11616,17 +11618,6 @@ function WorkflowStartPageContent({
     }
   }, [isTemporalFormBlocked, showPrimaryCtaArrow]);
 
-  function clearSubmitArrowExit() {
-    if (submitArrowExitHeldRef.current) {
-      return;
-    }
-    if (submitArrowExitTimeoutRef.current !== null) {
-      window.clearTimeout(submitArrowExitTimeoutRef.current);
-      submitArrowExitTimeoutRef.current = null;
-    }
-    setIsSubmitArrowExiting(false);
-  }
-
   function scheduleSubmitArrowExitClear() {
     if (submitArrowExitTimeoutRef.current !== null) {
       window.clearTimeout(submitArrowExitTimeoutRef.current);
@@ -11651,7 +11642,11 @@ function WorkflowStartPageContent({
 
   function releaseSubmitArrowExit() {
     submitArrowExitHeldRef.current = false;
-    clearSubmitArrowExit();
+    if (submitArrowExitTimeoutRef.current !== null) {
+      window.clearTimeout(submitArrowExitTimeoutRef.current);
+      submitArrowExitTimeoutRef.current = null;
+    }
+    setIsSubmitArrowExiting(false);
   }
 
   return (
@@ -14002,15 +13997,18 @@ function WorkflowStartPageContent({
                   setSubmitRippleKey((value) => value + 1);
                 }
                 setIsSubmitArrowExiting(true);
-                scheduleSubmitArrowExitClear();
               }}
+              // A press shows the check until release; a release that does not
+              // submit morphs back to the arrow.
+              onPointerUp={scheduleSubmitArrowExitClear}
+              onPointerCancel={scheduleSubmitArrowExitClear}
+              onPointerLeave={scheduleSubmitArrowExitClear}
             >
               {showPrimaryCtaArrow ? (
                 <span
                   aria-hidden="true"
                   className="queue-submit-primary-arrow"
                   data-submit-arrow="right"
-                  onAnimationEnd={clearSubmitArrowExit}
                 >
                   <span
                     className="queue-submit-primary-arrow-glyph"
