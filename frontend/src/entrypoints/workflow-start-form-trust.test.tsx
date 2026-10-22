@@ -344,7 +344,7 @@ describe("Workflow Create form trust", () => {
     expect((instructions as HTMLTextAreaElement).value).toBe("Keep this newer draft.");
   });
 
-  it("preserves an accepted Create after input artifact linking fails", async () => {
+  it("preserves an accepted Create after input artifact link acknowledgment is lost", async () => {
     const original = fetchSpy.getMockImplementation()!;
     let creates = 0;
     let artifacts = 0;
@@ -358,6 +358,9 @@ describe("Workflow Create form trust", () => {
       if (url === "/api/artifacts" && init?.method === "POST") {
         artifacts += 1;
         return { ok: true, json: async () => ({ artifact_ref: { artifact_id: "large-input" }, upload: { upload_url: "/api/artifacts/large-input/content" } }) } as Response;
+      }
+      if (url === "/api/artifacts/large-input" && !init?.method) {
+        return { ok: true, json: async () => ({ links: [{ namespace: "default", workflow_id: "mm:accepted", run_id: "run-1", link_type: "input.instructions", label: "Submitted Workflow Input" }] }) } as Response;
       }
       if (url === "/api/artifacts/large-input/links") {
         links += 1;
@@ -377,7 +380,7 @@ describe("Workflow Create form trust", () => {
     expect(JSON.stringify(window.sessionStorage)).not.toMatch(/PRIVATE_INSTRUCTIONS|PRIVATE_PARAMETERS|PRIVATE_SECRET|task_instructions|input_parameters/);
     expect(creates).toBe(1);
     expect(artifacts).toBe(1);
-    expect(links).toBe(2);
+    expect(links).toBe(1);
   });
 
   it("retains the originally admitted deferred time on a lost-ack retry", async () => {
@@ -486,7 +489,7 @@ describe("Workflow Create form trust", () => {
       }
       return original(input, init);
     });
-    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    const first = renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
     fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Use the attached design." } });
     const picker = document.querySelector('input[type="file"]')!;
     fireEvent.change(picker, { target: { files: [new File(["image"], "design.png", { type: "image/png" })] } });
@@ -497,6 +500,122 @@ describe("Workflow Create form trust", () => {
     await screen.findByText("Lost attachment response 2");
     expect(artifacts).toBe(1);
     expect(bodies[1]).toEqual(bodies[0]);
+    first.unmount();
+    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Use the attached design." } });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(["image"], "design.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost attachment response 3");
+    expect(artifacts).toBe(1);
+    expect(bodies[2]).toEqual(bodies[0]);
+  });
+
+  it("coalesces simultaneous identical-file uploads so lost-ack retry bodies do not drift", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let artifacts = 0;
+    const bodies: unknown[] = [];
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/artifacts" && init?.method === "POST") {
+        const id = `duplicate-content-${++artifacts}`;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { ok: true, json: async () => ({ artifact_ref: { artifact_id: id } }) } as Response;
+      }
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        bodies.push(JSON.parse(String(init.body)));
+        throw new Error(`Lost duplicate-content response ${bodies.length}`);
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Use both selected files." } });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [100, 200].map((lastModified) => new File(["same content"], "same.png", { type: "image/png", lastModified })) } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost duplicate-content response 1");
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText("Lost duplicate-content response 2");
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(artifacts).toBe(1);
+  });
+
+  it("rejects a fresh past schedule without uploading selected attachments", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/artifacts" && init?.method === "POST") return { ok: true, json: async () => ({ artifact_ref: { artifact_id: "past-orphan" } }) } as Response;
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Past request." } });
+    fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(["image"], "design.png", { type: "image/png" })] } });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "once" } });
+    fireEvent.change(screen.getByLabelText("Scheduled For"), { target: { value: "2000-01-01T09:00" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findAllByText(/Scheduled time must be a valid future date/);
+    expect(fetchSpy.mock.calls.filter(([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST")).toHaveLength(0);
+  });
+
+  it.each(["temporal_submit_disabled", "unknown_gateway_error"])("handles recurring 503 %s according to admission certainty", async (code) => {
+    const original = fetchSpy.getMockImplementation()!;
+    let creates = 0;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        creates += 1;
+        if (creates === 1) return { ok: false, status: 503, text: async () => JSON.stringify({ detail: { code, message: "Submission temporarily unavailable" } }) } as Response;
+        return { ok: true, json: async () => ({ definitionId: "schedule-retried" }) } as Response;
+      }
+      return original(input, init);
+    });
+    renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+    fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this daily." } });
+    fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "recurring" } });
+    fireEvent.change(screen.getByLabelText("Cron Expression"), { target: { value: "0 8 * * *" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await screen.findByText(/Submission temporarily unavailable/);
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    if (code === "temporal_submit_disabled") {
+      await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/schedules/schedule-retried"));
+      expect(creates).toBe(2);
+    } else {
+      await screen.findByText(/Schedule creation outcome is unknown/);
+      expect(creates).toBe(1);
+    }
+  });
+
+  it("reconstructs uploaded attachment refs after reload but separates changed contents", async () => {
+    const original = fetchSpy.getMockImplementation()!;
+    let artifacts = 0;
+    let creates = 0;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/artifacts" && init?.method === "POST") {
+        artifacts += 1;
+        return { ok: true, json: async () => ({ artifact_ref: { artifact_id: `reload-attachment-${artifacts}` } }) } as Response;
+      }
+      if (String(input) === "/api/executions" && init?.method === "POST") {
+        creates += 1;
+        return { ok: true, json: async () => ({ workflowId: `mm:accepted-${creates}` }) } as Response;
+      }
+      return original(input, init);
+    });
+    vi.mocked(navigateTo).mockImplementationOnce(() => { throw new Error("Navigation interrupted"); });
+    async function reconstruct(content: string) {
+      const view = renderWithClient(<WorkflowStartPage payload={payloadWith({ attachments: true })} />);
+      fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Reconstructed draft." } });
+      fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File([content], "design.png", { type: "image/png", lastModified: 100 })] } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      return view;
+    }
+    const first = await reconstruct("PRIVATE_FILE_ALPHA");
+    await screen.findByText(/Workflow was started.*Navigation interrupted/);
+    first.unmount();
+    const second = await reconstruct("PRIVATE_FILE_ALPHA");
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledTimes(2));
+    expect(artifacts).toBe(1);
+    expect(creates).toBe(1);
+    second.unmount();
+    await reconstruct("PRIVATE_FILE_BRAVO");
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledTimes(3));
+    expect(artifacts).toBe(2);
+    expect(creates).toBe(2);
+    expect(JSON.stringify(window.sessionStorage)).not.toMatch(/PRIVATE_FILE|Reconstructed draft/);
   });
 
   it("shows an off-screen validation error in the submit bar and focuses the invalid field", async () => {
