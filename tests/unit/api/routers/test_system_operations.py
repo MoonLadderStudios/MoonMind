@@ -15,7 +15,7 @@ from api_service.api.routers.system_operations import (
     _get_temporal_execution_service,
     router,
 )
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import Base
 from moonmind.config.settings import settings
@@ -84,19 +84,7 @@ def _override_user(
         is_superuser=is_superuser,
         settings_permissions=settings_permissions or set(),
     )
-    dependencies = {
-        dep.call
-        for route in router.routes
-        if route.dependant is not None
-        for dep in route.dependant.dependencies
-        if getattr(dep.call, "__name__", "") in {
-            "_current_user_fallback",
-            "_strict_current_user",
-            "_optional_current_user",
-        }
-    } or {get_current_user(), get_current_user_optional()}
-    for dependency in dependencies:
-        app.dependency_overrides[dependency] = lambda user=user: user
+    app.dependency_overrides[get_instance_access] = lambda user=user: user
 
 
 def test_get_worker_pause_snapshot_returns_system_metrics_and_audit(

@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.instance_access import access_user_id, is_instance_operator
 from api_service.api.routers.provider_profiles import (
     _can_view_profile,
     _managed_secret_statuses_for_rows,
@@ -28,7 +29,7 @@ from api_service.api.routers.provider_profiles import (
     _require_provider_profile_permission,
     _secret_ref_results_for_rows,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
@@ -40,7 +41,6 @@ from api_service.db.models import (
     OmnigentPolicyVersion,
     OmnigentSession,
     ProviderProfileSlotLease,
-    User,
 )
 from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
@@ -1059,7 +1059,7 @@ def _profile_gate_codes(readiness: dict[str, Any]) -> list[str]:
 async def get_omnigent_codex_catalog_readiness(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> OmnigentCodexCatalogReadiness:
     """Return a fresh, bounded readiness snapshot; this response is not cached."""
 
@@ -1426,8 +1426,9 @@ async def get_omnigent_codex_catalog_readiness(
             unavailable_policy_reasons.extend(policy_reasons)
         for identity, version in persisted_policies:
             if not (
-                identity.visibility == "deployment"
-                or identity.owner_user_id == getattr(current_user, "id", None)
+                is_instance_operator(current_user)
+                or identity.visibility == "deployment"
+                or identity.owner_user_id == access_user_id(current_user)
             ):
                 continue
             document = version.document_json
@@ -1727,11 +1728,11 @@ def _catalog_model_ids(value: Any) -> set[str]:
     return models
 
 
-def _can_view_agent_profile(row: Any, current_user: User) -> bool:
+def _can_view_agent_profile(row: Any, current_user: Any) -> bool:
     return bool(
-        getattr(current_user, "is_superuser", False)
+        is_instance_operator(current_user)
         or getattr(row, "visibility", None) != "private"
-        or getattr(row, "owner_id", None) == current_user.id
+        or getattr(row, "owner_id", None) == access_user_id(current_user)
     )
 
 
@@ -1742,7 +1743,7 @@ def _can_view_agent_profile(row: Any, current_user: User) -> bool:
 )
 async def get_omnigent_execution_readiness(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> OmnigentExecutionReadiness:
     """Compile generic launchability with the planner's catalog/selector data."""
 
@@ -2004,7 +2005,7 @@ async def get_omnigent_execution_readiness(
 @router.post("/harness-catalog/synchronize")
 async def synchronize_omnigent_harness_catalog(
     session: AsyncSession = Depends(get_async_session),
-    current_user: User = Depends(get_current_user()),
+    current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Synchronize authenticated endpoint inventory into immutable authority."""
 

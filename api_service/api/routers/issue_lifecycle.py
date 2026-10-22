@@ -16,8 +16,8 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from api_service.auth_providers import get_current_user
-from api_service.db.models import User
+from api_service.api.instance_access import access_principal, is_instance_operator
+from api_service.auth_providers import get_instance_access
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal import github_issue_recovery_surface as surface
@@ -66,8 +66,8 @@ class OperatorActionRequest(BaseModel):
     continue_variant: str | None = None
 
 
-def _permissions_for_user(user: User | None) -> dict[str, bool]:
-    is_admin = bool(user is not None and getattr(user, "is_superuser", False))
+def _permissions_for_user(user: Any) -> dict[str, bool]:
+    is_admin = user is not None and is_instance_operator(user)
     return {
         "can_continue": is_admin,
         "can_hold": user is not None,
@@ -133,11 +133,13 @@ def _decision_field_error(payload: OperatorActionRequest) -> dict[str, Any] | No
 def _build_allowed_decision(
     *,
     payload: OperatorActionRequest,
-    user: User | None,
+    user: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate (already done) then build the portable handoff + comment."""
     operator_identity = {
-        "id": getattr(user, "id", None) or getattr(user, "email", None) or "authenticated-operator",
+        "id": access_principal(user)
+        or getattr(user, "email", None)
+        or "authenticated-operator",
     }
     live_issue = payload.live_issue or {}
     previous_state = str(
@@ -172,7 +174,7 @@ def _build_allowed_decision(
 @router.post("/context")
 async def project_lifecycle_context(
     payload: LifecycleContextRequest,
-    user: User | None = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Derive the bounded issue-lifecycle projection for Workflow Detail."""
     context = surface.build_issue_lifecycle_context(
@@ -201,7 +203,7 @@ async def project_lifecycle_context(
 @router.post("/actions/validate")
 async def validate_operator_action(
     payload: OperatorActionRequest,
-    user: User | None = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Server-side revalidation of one operator action submission.
 
@@ -244,7 +246,7 @@ async def validate_operator_action(
 @router.post("/actions/submit")
 async def submit_operator_action(
     payload: OperatorActionRequest,
-    user: User | None = Depends(get_current_user()),
+    user: Any = Depends(get_instance_access),
     github: GitHubService = Depends(get_github_service),
 ) -> dict[str, Any]:
     """Validate, record, and publish one operator action submission.
