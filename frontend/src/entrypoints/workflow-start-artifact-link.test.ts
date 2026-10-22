@@ -27,13 +27,14 @@ const body = { payload: { task: { instructions: "One workflow" } } };
 function restoredRetry() {
   const store = new CreateSubmissionIntents("artifact-link-test");
   const intent = store.forRequest(body);
-  return { intent, save: () => store.save(intent) };
+  return { intent, store, save: () => store.save(intent) };
 }
 
 describe("accepted Create artifact link replay", () => {
   let links: Map<string, Link[]>;
   let failedPost: { artifactId: string; committed: boolean } | null;
   let metadataFailure: "http" | "network" | "malformed" | null;
+  let rejectedPost: { status: number; code?: string; committed?: boolean } | null;
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
@@ -41,11 +42,21 @@ describe("accepted Create artifact link replay", () => {
     links = new Map();
     failedPost = null;
     metadataFailure = null;
+    rejectedPost = null;
     fetchSpy = vi.spyOn(window, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       const artifactId = decodeURIComponent(url.replace(/^\/api\/artifacts\//, "").replace(/\/links$/, ""));
       const artifactLinks = links.get(artifactId) ?? [];
       if (init?.method === "POST") {
+        if (rejectedPost) {
+          const rejection = rejectedPost;
+          rejectedPost = null;
+          if (rejection.committed) {
+            artifactLinks.push(JSON.parse(String(init.body)) as Link);
+            links.set(artifactId, artifactLinks);
+          }
+          return new Response(JSON.stringify({ detail: { code: rejection.code } }), { status: rejection.status });
+        }
         const failure = failedPost?.artifactId === artifactId ? failedPost : null;
         if (failure) failedPost = null;
         if (!failure || failure.committed) {
@@ -75,6 +86,85 @@ describe("accepted Create artifact link replay", () => {
       String(url) === `/api/artifacts/${artifactId}/links` && init?.method === "POST",
     ).length;
   }
+
+  it.each([
+    [401, "auth_required"], [401, "auth_invalid"], [401, "auth_conflict"],
+    [401, "untrusted_ingress"], [401, "duplicate_header"], [401, "missing_identity"],
+    [401, "malformed_identity"], [401, "reserved_identity"],
+    [401, "email_only_requires_policy"], [401, "untrusted_forwarded"],
+    [403, "inactive"], [403, "enrollment_required"],
+    [403, "host_forbidden"], [403, "origin_forbidden"],
+  ] as const)("retries a proven pre-handler %s/%s rejection after recovery and reload", async (status, code) => {
+    rejectedPost = { status, code };
+    await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() })).rejects.toThrow();
+    expect(links.has("input-1")).toBe(false);
+
+    await linkInputArtifact("input-1", execution, { retry: restoredRetry() });
+    await linkInputArtifact("input-1", execution, { retry: restoredRetry() });
+    expect(postCount("input-1")).toBe(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(links.get("input-1")).toHaveLength(1);
+  });
+
+  it.each([
+    [401, "unknown_auth_failure"], [403, "artifact_forbidden"],
+    [404, "artifact_not_found"], [404, "artifact_expired"],
+    [408, "auth_required"], [409, "artifact_state_error"],
+    [422, "invalid_artifact_payload"], [500, "internal"], [503, "auth_required"],
+  ] as const)("never reposts an absent uncertain link after %s/%s", async (status, code) => {
+    rejectedPost = { status, code };
+    await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() })).rejects.toThrow();
+    await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() }))
+      .rejects.toThrow("The previous artifact link is still unconfirmed.");
+    expect(postCount("input-1")).toBe(1);
+  });
+
+  it.each([[403, "artifact_forbidden"], [404, "artifact_not_found"]] as const)(
+    "reconciles a committed link after post-commit metadata %s/%s without another POST",
+    async (status, code) => {
+      rejectedPost = { status, code, committed: true };
+      await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() })).rejects.toThrow();
+      await linkInputArtifact("input-1", execution, { retry: restoredRetry() });
+      expect(postCount("input-1")).toBe(1);
+      expect(links.get("input-1")).toHaveLength(1);
+    },
+  );
+
+  it("refreshes a stale handler before sending so it cannot repeat an earlier uncertain POST", async () => {
+    const stale = restoredRetry();
+    failedPost = { artifactId: "input-1", committed: false };
+    await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() }))
+      .rejects.toThrow("Link acknowledgment was lost.");
+    await expect(linkInputArtifact("input-1", execution, { retry: stale }))
+      .rejects.toThrow("The previous artifact link is still unconfirmed.");
+    expect(postCount("input-1")).toBe(1);
+  });
+
+  it("does not resurrect a definitive rejection when an older handler saves uncertain progress", async () => {
+    const original = restoredRetry();
+    rejectedPost = { status: 401, code: "auth_required" };
+    await expect(linkInputArtifact("input-1", execution, { retry: original })).rejects.toThrow();
+    const linkKey = JSON.stringify(["input-1", ...Object.values(inputLink)]);
+    original.intent.artifactLinks = { [linkKey]: "uncertain" };
+    original.save();
+    await linkInputArtifact("input-1", execution, { retry: restoredRetry() });
+    expect(postCount("input-1")).toBe(2);
+    expect(links.get("input-1")).toHaveLength(1);
+  });
+
+  it.each([[401, "auth_required"], [403, "origin_forbidden"]] as const)(
+    "does not let a metadata-read %s/%s rejection clear a prior uncertain POST",
+    async (status, code) => {
+      failedPost = { artifactId: "input-1", committed: false };
+      await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() }))
+        .rejects.toThrow("Link acknowledgment was lost.");
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code } }), { status }));
+      await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() })).rejects.toThrow();
+      await expect(linkInputArtifact("input-1", execution, { retry: restoredRetry() }))
+        .rejects.toThrow("The previous artifact link is still unconfirmed.");
+      expect(postCount("input-1")).toBe(1);
+    },
+  );
 
   it("does not repeat confirmed links after navigation failure and reload", async () => {
     await linkInputArtifact("input-1", execution, { retry: restoredRetry() });

@@ -344,7 +344,7 @@ describe("Workflow Create form trust", () => {
     expect((instructions as HTMLTextAreaElement).value).toBe("Keep this newer draft.");
   });
 
-  it("preserves an accepted Create after input artifact link acknowledgment is lost", async () => {
+  it.each(["lost acknowledgment", "auth_required", "origin_forbidden"] as const)("preserves an accepted Create after input artifact link %s", async (failure) => {
     const original = fetchSpy.getMockImplementation()!;
     let creates = 0;
     let artifacts = 0;
@@ -364,7 +364,12 @@ describe("Workflow Create form trust", () => {
       }
       if (url === "/api/artifacts/large-input/links") {
         links += 1;
-        if (links === 1) throw new Error("Link unavailable");
+        if (links === 1) {
+          if (failure === "lost acknowledgment") throw new Error("Link unavailable");
+          return new Response(JSON.stringify({ detail: { code: failure, message: "Link unavailable" } }), {
+            status: failure === "auth_required" ? 401 : 403,
+          });
+        }
         return { ok: true } as Response;
       }
       return original(input, init);
@@ -380,7 +385,7 @@ describe("Workflow Create form trust", () => {
     expect(JSON.stringify(window.sessionStorage)).not.toMatch(/PRIVATE_INSTRUCTIONS|PRIVATE_PARAMETERS|PRIVATE_SECRET|task_instructions|input_parameters/);
     expect(creates).toBe(1);
     expect(artifacts).toBe(1);
-    expect(links).toBe(1);
+    expect(links).toBe(failure === "lost acknowledgment" ? 1 : 2);
   });
 
   it("retains the originally admitted deferred time on a lost-ack retry", async () => {
@@ -646,13 +651,13 @@ describe("Workflow Create form trust", () => {
     expect(fetchSpy.mock.calls.filter(([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST")).toHaveLength(0);
   });
 
-  it.each(["temporal_submit_disabled", "unknown_gateway_error"])("handles recurring 503 %s according to admission certainty", async (code) => {
+  it.each([[503, "temporal_submit_disabled"], [503, "unknown_gateway_error"], [422, "invalid_recurring_workflow"], [401, "auth_required"], [403, "inactive"]] as const)("handles recurring %i %s according to admission certainty", async (status, code) => {
     const original = fetchSpy.getMockImplementation()!;
     let creates = 0;
     fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === "/api/executions" && init?.method === "POST") {
         creates += 1;
-        if (creates === 1) return { ok: false, status: 503, text: async () => JSON.stringify({ detail: { code, message: "Submission temporarily unavailable" } }) } as Response;
+        if (creates === 1) return { ok: false, status, text: async () => JSON.stringify({ detail: { code, message: code === "invalid_recurring_workflow" ? "Failed to create schedule: timed out waiting for acknowledgment" : "Submission temporarily unavailable" } }) } as Response;
         return { ok: true, json: async () => ({ definitionId: "schedule-retried" }) } as Response;
       }
       return original(input, init);
@@ -662,9 +667,9 @@ describe("Workflow Create form trust", () => {
     fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "recurring" } });
     fireEvent.change(screen.getByLabelText("Cron Expression"), { target: { value: "0 8 * * *" } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-    await screen.findByText(/Submission temporarily unavailable/);
+    await screen.findByText(/Submission temporarily unavailable|Failed to create schedule/);
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
-    if (code === "temporal_submit_disabled") {
+    if (code === "temporal_submit_disabled" || code === "auth_required" || code === "inactive") {
       await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/schedules/schedule-retried"));
       expect(creates).toBe(2);
     } else {
@@ -1086,6 +1091,107 @@ describe("Workflow Create form trust", () => {
     expect(creates).toBe(1);
     expect(artifactCreates).toBe(2);
     expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+
+  it.each([[5, 503, "temporal_submit_disabled"], [15, 503, "temporal_submit_disabled"], [15, 422, "schedule_in_past"]] as const)("refreshes a definitively rejected relative delay after %i minutes (%i %s)", async (elapsed, status, code) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2030-01-01T09:00:00Z"));
+      const original = fetchSpy.getMockImplementation()!;
+      const bodies: Array<{ payload: { task: { idempotencyKey: string }; schedule: { scheduledFor: string } } }> = [];
+      fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/executions" && init?.method === "POST") {
+          bodies.push(JSON.parse(String(init.body)));
+          if (bodies.length === 1) return { ok: false, status, text: async () => JSON.stringify({ detail: { code, message: "Submission disabled" } }) } as Response;
+          return { ok: true, json: async () => ({ workflowId: "mm:delayed" }) } as Response;
+        }
+        return original(input, init);
+      });
+      renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+      fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this later." } });
+      fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "deferred_minutes" } });
+      fireEvent.change(screen.getByLabelText("Minutes from now"), { target: { value: "10" } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await screen.findByText("Submission disabled");
+      vi.setSystemTime(new Date(Date.parse("2030-01-01T09:00:00Z") + elapsed * 60000));
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await waitFor(() => expect(navigateTo).toHaveBeenCalled());
+      expect(bodies[1]?.payload.task.idempotencyKey).toBe(bodies[0]?.payload.task.idempotencyKey);
+      expect(bodies[1]?.payload.schedule.scheduledFor).toBe(new Date(Date.now() + 10 * 60000).toISOString());
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["recurring", "deferred_minutes"])("records an owned late rejection after leaving a %s draft", async (mode) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2030-01-01T09:00:00Z"));
+      const original = fetchSpy.getMockImplementation()!;
+      let finish!: (response: Response) => void;
+      let creates = 0;
+      let retryBody: { payload: { schedule?: { scheduledFor?: string } } } | undefined;
+      fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/executions" && init?.method === "POST") {
+          creates += 1;
+          if (creates === 1) return new Promise<Response>((resolve) => { finish = resolve; });
+          retryBody = JSON.parse(String(init.body));
+          return { ok: true, json: async () => ({ workflowId: "mm:retried", definitionId: mode === "recurring" ? "schedule-retried" : undefined }) } as Response;
+        }
+        return original(input, init);
+      });
+      const submit = async () => {
+        fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this later." } });
+        fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: mode } });
+        fireEvent.change(screen.getByLabelText(mode === "recurring" ? "Cron Expression" : "Minutes from now"), { target: { value: mode === "recurring" ? "0 8 * * *" : "10" } });
+        fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      };
+      const old = renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+      await submit();
+      await waitFor(() => expect(finish).toBeDefined());
+      old.unmount();
+      await act(async () => finish({ ok: false, status: 503, text: async () => JSON.stringify({ detail: { code: "temporal_submit_disabled", message: "Submission disabled" } }) } as Response));
+      expect(navigateTo).not.toHaveBeenCalled();
+      vi.setSystemTime(new Date("2030-01-01T09:15:00Z"));
+      renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+      await submit();
+      await waitFor(() => expect(navigateTo).toHaveBeenCalled());
+      expect(creates).toBe(2);
+      if (mode === "deferred_minutes") expect(retryBody?.payload.schedule?.scheduledFor).toBe("2030-01-01T09:25:00.000Z");
+    } finally { vi.useRealTimers(); }
+  });
+
+
+  it.each(["invalid_execution_request", "unknown_gateway_error"])("retains unknown original timing through an auth-rejected replay after %s", async (code) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2030-01-01T09:00:00Z"));
+      const original = fetchSpy.getMockImplementation()!;
+      const bodies: Array<{ payload: { task: { idempotencyKey: string }; schedule: { scheduledFor: string } } }> = [];
+      fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/executions" && init?.method === "POST") {
+          bodies.push(JSON.parse(String(init.body)));
+          if (bodies.length === 1) return { ok: false, status: code === "invalid_execution_request" ? 422 : 503, text: async () => JSON.stringify({ detail: { code, message: "Original admission unconfirmed" } }) } as Response;
+          if (bodies.length === 2) return { ok: false, status: 401, text: async () => JSON.stringify({ detail: { code: "auth_required", message: "Sign in again" } }) } as Response;
+          return { ok: true, json: async () => ({ workflowId: "mm:original" }) } as Response;
+        }
+        return original(input, init);
+      });
+      renderWithClient(<WorkflowStartPage payload={payloadWith()} />);
+      fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Do this later." } });
+      fireEvent.change(screen.getByLabelText("Schedule Mode"), { target: { value: "deferred_minutes" } });
+      fireEvent.change(screen.getByLabelText("Minutes from now"), { target: { value: "10" } });
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await screen.findByText("Original admission unconfirmed");
+      vi.setSystemTime(new Date("2030-01-01T09:15:00Z"));
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await screen.findByText("Sign in again");
+      vi.setSystemTime(new Date("2030-01-01T09:30:00Z"));
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await waitFor(() => expect(navigateTo).toHaveBeenCalled());
+      expect(bodies).toHaveLength(3);
+      expect(new Set(bodies.map((body) => body.payload.task.idempotencyKey)).size).toBe(1);
+      expect(new Set(bodies.map((body) => body.payload.schedule.scheduledFor))).toEqual(new Set(["2030-01-01T09:10:00.000Z"]));
+    } finally { vi.useRealTimers(); }
   });
 
 });

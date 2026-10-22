@@ -4821,9 +4821,7 @@ async function responseErrorDetail(
       if (payload.detail && typeof payload.detail === "object") {
         const detailCode = String(payload.detail.code || "").trim() || null;
         const detailMessage = String(payload.detail.message || "").trim();
-        if (detailMessage) {
-          return { code: detailCode, message: detailMessage };
-        }
+        return { code: detailCode, message: detailMessage || fallback };
       }
     } catch {
       return { code: null, message: rawText };
@@ -4839,6 +4837,19 @@ async function responseErrorMessage(
   fallback: string,
 ): Promise<string> {
   return (await responseErrorDetail(response, fallback)).message;
+}
+
+function isPreHandlerAuthRejection(status: number, code: string | null): boolean {
+  // These codes come from authentication/admission dependencies, before the
+  // route runs. Artifact errors can instead come from post-commit metadata.
+  if (status === 401) return [
+    "auth_required", "auth_invalid", "auth_conflict", "untrusted_ingress",
+    "duplicate_header", "missing_identity", "malformed_identity", "reserved_identity",
+    "email_only_requires_policy", "untrusted_forwarded",
+  ].includes(code || "");
+  return status === 403 && [
+    "inactive", "enrollment_required", "host_forbidden", "origin_forbidden",
+  ].includes(code || "");
 }
 
 async function readBranchResolve(
@@ -5335,7 +5346,7 @@ export async function linkInputArtifact(
   options: {
     linkType?: string;
     label?: string;
-    retry?: { intent: CreateSubmissionIntent; save: () => void } | undefined;
+    retry?: { intent: CreateSubmissionIntent; store: CreateSubmissionIntents } | undefined;
   } = {},
 ): Promise<void> {
   const workflowId = String(execution.workflowId || "").trim();
@@ -5357,14 +5368,10 @@ export async function linkInputArtifact(
     artifactId, namespace, workflowId, runId, linkBody.link_type, linkBody.label,
   ]);
   const retry = options.retry;
+  const attempt = retry?.store.beginArtifactLink(retry.intent, linkKey);
   const progress = retry?.intent.artifactLinks?.[linkKey];
-  const remember = (state: "uncertain" | "complete") => {
-    if (!retry) return;
-    (retry.intent.artifactLinks ??= {})[linkKey] = state;
-    retry.save();
-  };
   if (progress === "complete") return;
-  if (progress === "uncertain") {
+  if (progress === "uncertain" && !attempt) {
     // A failed acknowledgment may precede a delayed commit. Only the exact
     // visible link confirms completion; its absence cannot authorize a new POST.
     const metadataResponse = await fetch(artifactEndpoint, {
@@ -5388,14 +5395,13 @@ export async function linkInputArtifact(
     if (links.some((value) => Object.entries(linkBody).every(
       ([field, expected]) => recordValue(value)[field] === expected,
     ))) {
-      remember("complete");
+      retry?.store.completeArtifactLink(retry.intent, linkKey);
       return;
     }
     throw new Error(
       "The previous artifact link is still unconfirmed. Open the accepted workflow or check again later; the link was not submitted again.",
     );
   }
-  remember("uncertain");
   let response: Response;
   try {
     response = await fetch(linkEndpoint, {
@@ -5423,14 +5429,13 @@ export async function linkInputArtifact(
     throw error;
   }
   if (!response.ok) {
-    throw new Error(
-      await responseErrorMessage(
-        response,
-        "Failed to link input artifact to execution.",
-      ),
-    );
+    const detail = await responseErrorDetail(response, "Failed to link input artifact to execution.");
+    if (retry && attempt && isPreHandlerAuthRejection(response.status, detail.code)) {
+      retry.store.rejectArtifactLink(retry.intent, linkKey, attempt);
+    }
+    throw new Error(detail.message);
   }
-  remember("complete");
+  retry?.store.completeArtifactLink(retry.intent, linkKey);
 }
 
 function ArrowUpIcon() {
@@ -11409,9 +11414,9 @@ function WorkflowStartPageContent({
         return;
       }
       if (scheduleMode === "deferred_minutes" && schedulePayload) {
-        createIntent.scheduledFor ??= String(schedulePayload.scheduledFor);
-        createIntentsRef.current.save(createIntent);
-        schedulePayload.scheduledFor = createIntent.scheduledFor;
+        schedulePayload.scheduledFor = createIntentsRef.current.prepareScheduledFor(
+          createIntent, String(schedulePayload.scheduledFor),
+        );
       }
       taskPayload.idempotencyKey = createIntent.key;
     }
@@ -11619,13 +11624,19 @@ function WorkflowStartPageContent({
         });
         if (!response.ok) {
           const detail = await responseErrorDetail(response, "Failed to start workflow.");
-          if (!isCurrentCreate()) return;
-          // This explicit router rejection occurs before admission/schedule
-          // routing. Unknown server failures must remain uncertain.
-          if (createIntent && ((response.status >= 400 && response.status < 500 && response.status !== 408) ||
-            (response.status === 503 && detail.code === "temporal_submit_disabled"))) {
+          // Even a generic 4xx can follow admission or a lost Temporal
+          // acknowledgment. Only proven pre-admission failures release retries;
+          // the owned transition also preserves any earlier unknown admission.
+          if (createIntent && (isPreHandlerAuthRejection(response.status, detail.code) ||
+            (response.status === 503 && detail.code === "temporal_submit_disabled") ||
+            (response.status === 422 && [
+              "schedule_in_past", "dependency_not_found", "dependency_unauthorized",
+              "dependency_invalid_identifier", "dependency_unsupported_workflow_type",
+              "dependency_self_reference", "dependency_limit_exceeded",
+            ].includes(detail.code || "")))) {
             if (createAttempt) createIntentStore?.rejectSubmission(createIntent, createAttempt);
           }
+          if (!isCurrentCreate()) return;
           if (detail.code?.startsWith("dependency_")) {
             setDependencyMessage(detail.message);
             return;
@@ -11646,7 +11657,7 @@ function WorkflowStartPageContent({
       }
       if (!isCurrentCreate()) return;
       if (createIntent) setAcceptedCreatePath(createSubmissionDestination(created) || null);
-      const linkRetry = createIntent ? { intent: createIntent, save: () => createIntentStore?.save(createIntent) } : undefined;
+      const linkRetry = createIntent && createIntentStore ? { intent: createIntent, store: createIntentStore } : undefined;
       if (inputArtifactRef) {
         await linkInputArtifact(inputArtifactRef, created, { retry: linkRetry });
       }
@@ -11948,7 +11959,7 @@ function WorkflowStartPageContent({
                   url.searchParams.delete("intent");
                   url.searchParams.delete("draftId");
                   window.history.replaceState(
-                    {},
+                    window.history.state,
                     "",
                     `${url.pathname}${url.search}${url.hash}`,
                   );
@@ -11988,7 +11999,7 @@ function WorkflowStartPageContent({
                   url.searchParams.delete("intent");
                   url.searchParams.delete("draftId");
                   window.history.replaceState(
-                    {},
+                    window.history.state,
                     "",
                     `${url.pathname}${url.search}${url.hash}`,
                   );
