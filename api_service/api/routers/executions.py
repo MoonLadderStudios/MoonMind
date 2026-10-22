@@ -61,7 +61,6 @@ from temporalio.api.operatorservice.v1 import ListSearchAttributesRequest
 from temporalio.client import Client
 from temporalio.service import RPCError
 
-from api_service.api.dependencies import resolve_template_scope_for_user
 from api_service.api.execution_fanout import (
     EXECUTION_FANOUT_HEADER,
     enforce_fanout_child_visibility,
@@ -9367,7 +9366,6 @@ def _apply_goal_schedule_metadata(
     task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {
         "slug": str(applied_template.get("slug") or schedule.slug),
-        "scope": "global",
     }
     task_payload["presetSchedule"] = {
         "source": "goal",
@@ -9464,24 +9462,6 @@ async def _expand_goal_preset_for_workflow_submission(
             PresetValidationError,
         )
 
-        template_payload = dict(task_payload.get("taskTemplate") or {})
-        template_scope, template_scope_ref = resolve_template_scope_for_user(
-            user=user,
-            scope=str(template_payload.get("scope") or "global"),
-            scope_ref=(
-                template_payload.get("scopeRef")
-                or template_payload.get("scope_ref")
-            ),
-            write=False,
-        )
-        template_payload["scope"] = template_scope
-        if template_scope_ref is None:
-            template_payload.pop("scopeRef", None)
-            template_payload.pop("scope_ref", None)
-        else:
-            template_payload["scopeRef"] = template_scope_ref
-            template_payload.pop("scope_ref", None)
-        task_payload["taskTemplate"] = template_payload
         try:
             expanded_parameters = await expand_preset_for_child_run(
                 session=session,
@@ -9491,7 +9471,6 @@ async def _expand_goal_preset_for_workflow_submission(
                     "targetRuntime": target_runtime,
                 },
                 allow_goal_schedule=False,
-                user_id=getattr(user, "id", None),
             )
         except PresetNotFoundError as exc:
             raise HTTPException(
@@ -9550,8 +9529,6 @@ async def _expand_goal_preset_for_workflow_submission(
 
     expand_kwargs = {
         "slug": schedule.slug,
-        "scope": "global",
-        "scope_ref": None,
         "inputs": template_inputs,
         "context": context,
         "options": ExpandOptions(should_enforce_step_limit=True),

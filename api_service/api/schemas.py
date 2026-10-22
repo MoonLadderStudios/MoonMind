@@ -301,7 +301,21 @@ class PresetStepToolSchema(BaseModel):
             return payload
         return value
 
-class PresetStepBlueprintSchema(BaseModel):
+class _InstancePresetInput(BaseModel):
+    """Reject obsolete routing rather than resolving a different same-slug preset."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_human_scope(cls, value: object) -> object:
+        if isinstance(value, dict) and {"scope", "scopeRef", "scope_ref"}.intersection(value):
+            raise ValueError(
+                "Presets use the instance catalog. Refresh and select a current preset; "
+                "human scope parameters are no longer accepted."
+            )
+        return value
+
+
+class PresetStepBlueprintSchema(_InstancePresetInput):
     """Template step blueprint definition."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -312,7 +326,6 @@ class PresetStepBlueprintSchema(BaseModel):
     title: Optional[str] = None
     instructions: Optional[str] = None
     alias: Optional[str] = None
-    scope: Optional[Literal["global", "personal"]] = None
     input_mapping: dict[str, Any] = Field(default_factory=dict, alias="inputMapping")
     tool: Optional[PresetStepToolSchema] = None
     skill: Optional[PresetStepSkillSchema] = None
@@ -334,8 +347,6 @@ class PresetSummarySchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     slug: str
-    scope: Literal["global", "personal"]
-    scope_ref: Optional[str] = Field(None, alias="scopeRef")
     title: str
     description: str
     preset_digest: Optional[str] = Field(None, alias="presetDigest")
@@ -371,7 +382,7 @@ class PresetResponseSchema(PresetSummarySchema):
     reviewed_by: Optional[str] = Field(None, alias="reviewedBy")
     reviewed_at: Optional[str] = Field(None, alias="reviewedAt")
 
-class PresetCreateRequestSchema(BaseModel):
+class PresetCreateRequestSchema(_InstancePresetInput):
     """Request model for creating templates."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -379,8 +390,9 @@ class PresetCreateRequestSchema(BaseModel):
     slug: Optional[str] = None
     title: str
     description: str
-    scope: Literal["personal", "global"] | None = None
-    scope_ref: Optional[str] = Field(None, alias="scopeRef")
+    release_status: Literal["draft", "active", "inactive"] = Field(
+        "draft", alias="releaseStatus"
+    )
     tags: list[str] = Field(default_factory=list)
     inputs: list[PresetInputSchema] = Field(default_factory=list)
     steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
@@ -406,7 +418,7 @@ class PresetExpandOptionsSchema(BaseModel):
 
     enforce_step_limit: bool = Field(True, alias="enforceStepLimit")
 
-class PresetExpandRequestSchema(BaseModel):
+class PresetExpandRequestSchema(_InstancePresetInput):
     """Request model for template expansion."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -455,13 +467,14 @@ class PresetExpandResponseSchema(BaseModel):
         default_factory=dict, alias="checkpointBranching"
     )
 
-class PresetSaveFromWorkflowRequestSchema(BaseModel):
+class PresetSaveFromWorkflowRequestSchema(_InstancePresetInput):
     """Request model for creating presets from draft workflow steps."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    scope: Literal["personal", "global"] | None = None
-    scope_ref: Optional[str] = Field(None, alias="scopeRef")
+    release_status: Literal["draft", "active", "inactive"] = Field(
+        "draft", alias="releaseStatus"
+    )
     slug: Optional[str] = None
     title: str
     description: str
@@ -472,7 +485,7 @@ class PresetSaveFromWorkflowRequestSchema(BaseModel):
     )
     tags: list[str] = Field(default_factory=list)
 
-class PresetReviewRequestSchema(BaseModel):
+class PresetReviewRequestSchema(_InstancePresetInput):
     """Review workflow request for release status transitions."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -481,13 +494,10 @@ class PresetReviewRequestSchema(BaseModel):
         ..., alias="releaseStatus"
     )
 
-class PresetFavoriteRequestSchema(BaseModel):
+class PresetFavoriteRequestSchema(_InstancePresetInput):
     """Favorite toggle payload."""
 
     model_config = ConfigDict(populate_by_name=True)
-
-    scope: Literal["global", "personal"]
-    scope_ref: Optional[str] = Field(None, alias="scopeRef")
 
 class SecretCreateRequest(BaseModel):
     """Request body to create a new secret."""

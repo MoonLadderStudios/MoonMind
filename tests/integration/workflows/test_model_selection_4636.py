@@ -65,8 +65,6 @@ async def create_preset(catalog, selection):
         slug="issue-4636",
         title="Issue #4636",
         description="Selection round trip",
-        scope="global",
-        scope_ref=None,
         tags=[],
         inputs_schema=[],
         annotations={},
@@ -80,7 +78,6 @@ async def create_preset(catalog, selection):
             }
         ],
         required_capabilities=[],
-        created_by=None,
     )
 
 
@@ -156,8 +153,6 @@ async def test_4636_preset_database_artifact_plan_preview_and_command_round_trip
             profile = await session.get(ManagedAgentProviderProfile, "issue-4636")
             expanded = await PresetCatalogService(session).expand_template(
                 slug="issue-4636",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
                 options=ExpandOptions(),
@@ -232,8 +227,6 @@ async def test_4636_new_preset_strict_rejected_but_persisted_strict_expands_afte
         async with sessions() as session:
             expanded = await PresetCatalogService(session).expand_template(
                 slug="issue-4636",
-                scope="global",
-                scope_ref=None,
                 inputs={},
                 context={},
                 options=ExpandOptions(),
@@ -391,6 +384,10 @@ async def test_4636_seed_refresh_cannot_introduce_strict_into_existing_preset(tm
     async with template_db(tmp_path) as sessions, sessions() as session:
         catalog = PresetCatalogService(session)
         await create_preset(catalog, {"modelTier": 2})
+        # This is a managed seed refresh, not permission to overwrite custom data.
+        existing = (await session.execute(select(Preset))).scalar_one()
+        existing.seed_source = "selection.yaml"
+        await session.commit()
         seed = {
             "slug": "issue-4636",
             "title": "Issue #4636",
@@ -429,8 +426,6 @@ async def test_4636_custom_launch_keeps_non_model_parameters_across_preset_stora
         await session.commit()
         expanded = await PresetCatalogService(session).expand_template(
             slug="issue-4636",
-            scope="global",
-            scope_ref=None,
             inputs={},
             context={},
             options=ExpandOptions(),
@@ -625,12 +620,10 @@ async def test_4636_save_emitted_client_preset_through_reload_preview_and_launch
 ):
     from api_service.api.routers.presets import save_from_workflow
     from api_service.api.schemas import PresetSaveFromWorkflowRequestSchema
-    from api_service.auth_providers import _transient_disabled_operator
     from api_service.services.presets.save import PresetSaveService
 
     monkeypatch.setenv("MOONMIND_CODEX_MODEL", "runtime-model")
     monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
-    operator = _transient_disabled_operator()
     # workflow-start.test.tsx proves the page emits this exact request for the
     # named user interaction. Exercise its actual API schema and save owner.
     payload = PresetSaveFromWorkflowRequestSchema.model_validate(scenario["request"])
@@ -638,7 +631,7 @@ async def test_4636_save_emitted_client_preset_through_reload_preview_and_launch
         async with sessions() as session:
             session.add(provider_profile())
             saved = await save_from_workflow(
-                payload=payload, service=PresetSaveService(session), user=operator
+                payload=payload, service=PresetSaveService(session)
             )
             await session.commit()
         async with sessions() as session:
@@ -651,12 +644,9 @@ async def test_4636_save_emitted_client_preset_through_reload_preview_and_launch
             await session.commit()
             expanded = await PresetCatalogService(session).expand_template(
                 slug=saved.slug,
-                scope="personal",
-                scope_ref=str(operator.id),
                 inputs={},
                 context={},
                 options=ExpandOptions(),
-                user_id=operator.id,
             )
             runtime = expanded["steps"][0].get("runtime", {})
             assert model_selection_fields(runtime) == scenario["selection"]
@@ -709,7 +699,6 @@ async def test_4636_save_client_preset_cannot_introduce_strict(tmp_path):
 
     from api_service.api.routers.presets import save_from_workflow
     from api_service.api.schemas import PresetSaveFromWorkflowRequestSchema
-    from api_service.auth_providers import _transient_disabled_operator
     from api_service.services.presets.save import PresetSaveService
 
     payload = PresetSaveFromWorkflowRequestSchema.model_validate(
@@ -736,7 +725,6 @@ async def test_4636_save_client_preset_cannot_introduce_strict(tmp_path):
                 await save_from_workflow(
                     payload=payload,
                     service=PresetSaveService(session),
-                    user=_transient_disabled_operator(),
                 )
             assert error.value.status_code == 422
             assert "new strict" in error.value.detail["message"]

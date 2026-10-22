@@ -23,18 +23,17 @@ from uuid import UUID, uuid4
 import yaml
 from jinja2 import StrictUndefined, TemplateError, UndefinedError, nodes
 from jinja2.sandbox import SandboxedEnvironment
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from api_service.db.models import (
     Preset,
     PresetFavorite,
     PresetRecent,
     PresetReleaseStatus,
-    PresetScopeType,
 )
 from moonmind.capabilities.input_contracts import (
     CapabilityInputOwner,
@@ -56,9 +55,6 @@ from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     validate_remediation_loop_agent_instructions,
 )
-
-# Existing account-free preference partition, never an actor or admission proof.
-INSTANCE_PREFERENCE_KEY = UUID(int=0)
 
 _FORBIDDEN_STEP_KEYS = frozenset(
     {
@@ -146,7 +142,6 @@ _STEP_RESERVED_KEYS = frozenset(
         "slug",
         "version",
         "alias",
-        "scope",
         "inputMapping",
         "input_mapping",
         "originalStepId",
@@ -163,7 +158,6 @@ _INCLUDE_STEP_KEYS = frozenset(
         "kind",
         "slug",
         "alias",
-        "scope",
         "inputMapping",
         "input_mapping",
         "annotations",
@@ -223,6 +217,7 @@ _CHECKPOINT_BRANCHING_SIDE_EFFECT_POLICIES = frozenset(
 )
 logger = logging.getLogger(__name__)
 
+
 class _StatsdEmitter:
     """Best-effort StatsD counter emitter for template catalog activity."""
 
@@ -239,9 +234,7 @@ class _StatsdEmitter:
             or os.getenv("STATSD_PORT")
             or "8125"
         ).strip()
-        prefix = (
-            os.getenv("PRESET_METRICS_PREFIX") or "moonmind.presets"
-        ).strip()
+        prefix = (os.getenv("PRESET_METRICS_PREFIX") or "moonmind.presets").strip()
         self._prefix = prefix.rstrip(".")
         self._address: tuple[str, int] | None = None
         self._socket: socket.socket | None = None
@@ -255,9 +248,7 @@ class _StatsdEmitter:
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self._enabled = True
             except Exception:
-                logger.warning(
-                    "Preset metrics emitter disabled due to init failure."
-                )
+                logger.warning("Preset metrics emitter disabled due to init failure.")
                 self._enabled = False
 
     @property
@@ -283,13 +274,17 @@ class _StatsdEmitter:
                 self._disabled_until = time.monotonic() + self._backoff_seconds
                 self._backoff_seconds = min(self._backoff_seconds * 2, 60.0)
 
+
 _METRICS = _StatsdEmitter()
+
 
 class PresetError(RuntimeError):
     """Base error for preset catalog operations."""
 
+
 class PresetNotFoundError(PresetError):
     """Raised when a template or version is missing."""
+
 
 class PresetValidationError(PresetError):
     """Raised when template payloads fail validation."""
@@ -300,14 +295,17 @@ class PresetValidationError(PresetError):
         super().__init__(message)
         self.errors = errors or []
 
+
 class PresetConflictError(PresetError):
     """Raised when uniqueness constraints are violated."""
+
 
 @dataclass(slots=True)
 class ExpandOptions:
     """Options provided when expanding template steps."""
 
     should_enforce_step_limit: bool = True
+
 
 def _normalize_slug(value: str) -> str:
     normalized = _SLUG_PATTERN.sub("-", str(value or "").strip().lower()).strip("-")
@@ -317,28 +315,6 @@ def _normalize_slug(value: str) -> str:
         raise PresetValidationError("Template slug exceeds max length (128).")
     return normalized
 
-def _normalize_scope(scope: str) -> PresetScopeType:
-    raw = str(scope or "").strip().lower()
-    if raw not in {
-        PresetScopeType.GLOBAL.value,
-        PresetScopeType.PERSONAL.value,
-    }:
-        raise PresetValidationError(
-            "scope must be one of: global, personal"
-        )
-    return PresetScopeType(raw)
-
-def _normalize_scope_ref(
-    scope: PresetScopeType, scope_ref: str | None
-) -> str | None:
-    cleaned = str(scope_ref or "").strip() or None
-    if scope is PresetScopeType.GLOBAL:
-        return None
-    if cleaned is None:
-        raise PresetValidationError(
-            "scopeRef is required for personal scopes."
-        )
-    return cleaned
 
 def _normalize_tag_list(values: list[Any] | None) -> list[str]:
     if values is None:
@@ -353,6 +329,7 @@ def _normalize_tag_list(values: list[Any] | None) -> list[str]:
         normalized.append(tag)
     return normalized
 
+
 def _normalize_capabilities(values: list[Any] | None) -> list[str]:
     if values is None:
         return []
@@ -366,6 +343,7 @@ def _normalize_capabilities(values: list[Any] | None) -> list[str]:
         normalized.append(capability)
     return normalized
 
+
 def _extract_step_capabilities(step: dict[str, Any]) -> list[str]:
     skill = step.get("skill")
     if not isinstance(skill, dict):
@@ -374,6 +352,7 @@ def _extract_step_capabilities(step: dict[str, Any]) -> list[str]:
     if not isinstance(caps, list):
         return []
     return _normalize_capabilities(caps)
+
 
 def _normalize_step_type(raw_step: Mapping[str, Any], *, index: int) -> str:
     raw_type = raw_step.get("type")
@@ -446,6 +425,7 @@ def _has_substantive_tool_metadata(value: Any) -> bool:
         return bool(value)
     return True
 
+
 def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
     if not isinstance(raw_tool, Mapping):
         raise PresetValidationError(
@@ -456,9 +436,7 @@ def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
     raw_tool.pop("toolVersion", None)
     tool_id = str(raw_tool.get("id") or raw_tool.get("name") or "").strip()
     if not tool_id:
-        raise PresetValidationError(
-            f"Step {index} tool.id or tool.name is required."
-        )
+        raise PresetValidationError(f"Step {index} tool.id or tool.name is required.")
     inputs = raw_tool.get("inputs")
     args = raw_tool.get("args")
     if inputs is None or (
@@ -495,6 +473,7 @@ def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
                 f"Step {index} command-like Tool steps require bounded inputs and policy metadata."
             )
     return tool_payload
+
 
 def _normalize_skill_payload(raw_skill: Any, *, index: int) -> dict[str, Any]:
     if raw_skill is None:
@@ -573,6 +552,10 @@ def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
             code="required",
         )
     raw_preset = dict(raw_preset)
+    if raw_preset.get("scope") or raw_preset.get("scopeRef"):
+        raise PresetValidationError(
+            "Preset composition no longer accepts human scope; select an instance preset."
+        )
     raw_preset.pop("version", None)
     raw_preset.pop("presetVersion", None)
     preset_slug = str(raw_preset.get("slug") or raw_preset.get("id") or "").strip()
@@ -596,9 +579,6 @@ def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
         "slug": _normalize_slug(preset_slug),
         "inputs": dict(inputs),
     }
-    scope = raw_preset.get("scope")
-    if scope is not None:
-        preset_payload["scope"] = _normalize_scope(str(scope)).value
     return preset_payload
 
 
@@ -618,26 +598,25 @@ def _preset_step_to_include(
         "alias": _normalize_slug(str(alias_source)),
         "inputMapping": dict(preset["inputs"]),
     }
-    if "scope" in preset:
-        include_payload["scope"] = preset["scope"]
     annotations = raw_step.get("annotations")
     if annotations is not None:
         include_payload["annotations"] = annotations
     return include_payload
 
+
 def _slugify_from_title(title: str) -> str:
     return _normalize_slug(title)
+
 
 def _hash_from_inputs(values: dict[str, Any]) -> str:
     normalized = repr(sorted(values.items())).encode("utf-8")
     return hashlib.sha1(normalized).hexdigest()[:8]
 
+
 def _preset_digest(template: Preset) -> str:
     payload = json.dumps(
         {
             "slug": template.slug,
-            "scope": template.scope_type.value,
-            "scopeRef": template.scope_ref,
             "inputs": template.inputs_schema or [],
             "steps": template.steps or [],
             "annotations": template.annotations or {},
@@ -653,14 +632,17 @@ def _preset_digest(template: Preset) -> str:
 def _build_step_id(*, slug: str, index: int, inputs: dict[str, Any]) -> str:
     return f"tpl:{slug}:{index:02d}:{_hash_from_inputs(inputs)}"
 
+
 def _template_path_label(*, slug: str, alias: str | None = None) -> str:
     label = slug
     if alias:
         return f"{alias}:{label}"
     return label
 
+
 def _format_include_path(path: list[str]) -> str:
     return " -> ".join(path)
+
 
 def _composition_capabilities(node: dict[str, Any]) -> list[str]:
     capabilities = list(node.get("requiredCapabilities") or [])
@@ -668,6 +650,7 @@ def _composition_capabilities(node: dict[str, Any]) -> list[str]:
         if isinstance(child, dict):
             capabilities.extend(_composition_capabilities(child))
     return _normalize_capabilities(capabilities)
+
 
 def _authored_presets_from_composition(node: dict[str, Any]) -> list[dict[str, Any]]:
     presets: list[dict[str, Any]] = []
@@ -685,7 +668,6 @@ def _authored_presets_from_composition(node: dict[str, Any]) -> list[dict[str, A
         entry: dict[str, Any] = {
             "presetSlug": str(candidate.get("slug") or "").strip(),
             "presetDigest": str(candidate.get("digest") or "").strip(),
-            "scope": str(candidate.get("scope") or "").strip(),
             "includePath": [
                 str(item).strip()
                 for item in candidate.get("path") or []
@@ -711,6 +693,7 @@ def _authored_presets_from_composition(node: dict[str, Any]) -> list[dict[str, A
 
     visit(node)
     return presets
+
 
 def _render_value(
     env: SandboxedEnvironment,
@@ -743,9 +726,7 @@ def _render_value(
                 f"Template references an unknown variable: {exc}."
             ) from exc
         except TemplateError as exc:
-            raise PresetValidationError(
-                f"Template rendering failed: {exc}."
-            ) from exc
+            raise PresetValidationError(f"Template rendering failed: {exc}.") from exc
         stripped = rendered.strip()
         if native_template:
             lowered = stripped.lower()
@@ -794,6 +775,7 @@ def _preset_step_enabled(value: Any) -> bool:
         return False
     return True
 
+
 def _validate_breakdown_source_inputs(
     *,
     slug: str,
@@ -826,6 +808,7 @@ def _validate_breakdown_source_inputs(
         ],
     )
 
+
 def _single_allowed_jira_project_key() -> str | None:
     projects = settings.atlassian.jira.jira_allowed_projects
     if not projects:
@@ -834,6 +817,7 @@ def _single_allowed_jira_project_key() -> str | None:
     if len(allowed) != 1:
         return None
     return allowed[0]
+
 
 def _effective_inputs_schema(
     *,
@@ -849,9 +833,7 @@ def _effective_inputs_schema(
     repository = _repository_from_context(context)
     repository_project_key = _jira_project_default_for_repository(repository)
     project_key = repository_project_key or _single_allowed_jira_project_key()
-    repository_default = (
-        repository if slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS else None
-    )
+    repository_default = repository if slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS else None
     effective_schema = [dict(definition) for definition in inputs_schema]
     default_configured_repository = str(
         settings.workflow.github_repository or ""
@@ -867,9 +849,13 @@ def _effective_inputs_schema(
             definition["default"] = repository_default
         elif name == "repository" and slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS:
             default_repository = str(definition.get("default") or "").strip()
-            if default_repository and default_repository == default_configured_repository:
+            if (
+                default_repository
+                and default_repository == default_configured_repository
+            ):
                 definition["default"] = None
     return effective_schema
+
 
 def _repository_from_context(context: Mapping[str, Any] | None) -> str | None:
     if not isinstance(context, Mapping):
@@ -898,6 +884,7 @@ def _normalize_runtime_orchestration_mode(
     normalized[_ORCHESTRATION_MODE_INPUT] = "runtime"
     return normalized
 
+
 def _jira_project_default_for_repository(repository: str | None) -> str | None:
     if not repository:
         return None
@@ -907,7 +894,9 @@ def _jira_project_default_for_repository(repository: str | None) -> str | None:
     normalized_repository = repository.strip().lower()
     allowed_projects = {
         project.strip().upper()
-        for project in str(settings.atlassian.jira.jira_allowed_projects or "").split(",")
+        for project in str(settings.atlassian.jira.jira_allowed_projects or "").split(
+            ","
+        )
         if project.strip()
     }
     for item in raw.split(","):
@@ -926,10 +915,12 @@ def _jira_project_default_for_repository(repository: str | None) -> str | None:
         return project_key
     return None
 
+
 def _jira_project_default_for_context(repository: str | None) -> str | None:
-    return _jira_project_default_for_repository(
-        repository
-    ) or _single_allowed_jira_project_key()
+    return (
+        _jira_project_default_for_repository(repository)
+        or _single_allowed_jira_project_key()
+    )
 
 
 def _is_valid_github_repository(repository: str) -> bool:
@@ -971,10 +962,7 @@ def _issue_object_from_ref(
             if _is_valid_github_repository(repository) and number_text.isdigit():
                 return {"repository": repository, "number": int(number_text)}
         parsed = urlparse(ref)
-        if (
-            parsed.scheme in {"http", "https"}
-            and parsed.netloc.lower() == "github.com"
-        ):
+        if parsed.scheme in {"http", "https"} and parsed.netloc.lower() == "github.com":
             parts = [part for part in parsed.path.split("/") if part]
             if (
                 len(parts) >= 4
@@ -986,7 +974,9 @@ def _issue_object_from_ref(
                     "repository": f"{parts[0]}/{parts[1]}",
                     "number": int(parts[3]),
                 }
-    keys = [str(item or "").strip() for item in (ref_path or []) if str(item or "").strip()]
+    keys = [
+        str(item or "").strip() for item in (ref_path or []) if str(item or "").strip()
+    ]
     if keys:
         target: dict[str, Any] = {}
         cursor = target
@@ -1132,9 +1122,8 @@ def _apply_contextual_input_overrides(
         schema_defaults = _input_schema_defaults_by_name(inputs_schema)
         submitted_repository = str(adjusted.get("repository") or "").strip()
         schema_repository = str(schema_defaults.get("repository", "")).strip()
-        if (
-            repository
-            and (not submitted_repository or submitted_repository == schema_repository)
+        if repository and (
+            not submitted_repository or submitted_repository == schema_repository
         ):
             adjusted["repository"] = repository
         return adjusted
@@ -1152,14 +1141,15 @@ def _apply_contextual_input_overrides(
     if slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS:
         submitted_repository = str(adjusted.get("repository") or "").strip()
         schema_repository = schema_defaults.get("repository", "")
-        if (
-            repository
-            and (not submitted_repository or submitted_repository == schema_repository)
+        if repository and (
+            not submitted_repository or submitted_repository == schema_repository
         ):
             adjusted["repository"] = repository
 
     if project_key:
-        submitted_project = str(adjusted.get(_JIRA_BREAKDOWN_PROJECT_INPUT) or "").strip()
+        submitted_project = str(
+            adjusted.get(_JIRA_BREAKDOWN_PROJECT_INPUT) or ""
+        ).strip()
         if (
             not submitted_project
             or submitted_project in _JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS
@@ -1167,11 +1157,14 @@ def _apply_contextual_input_overrides(
             adjusted[_JIRA_BREAKDOWN_PROJECT_INPUT] = project_key
     return adjusted
 
-def _input_schema_defaults_by_name(inputs_schema: list[dict[str, Any]]) -> dict[str, str]:
+
+def _input_schema_defaults_by_name(
+    inputs_schema: list[dict[str, Any]],
+) -> dict[str, str]:
     return {
-        str(definition.get("name") or "").strip(): str(
-            definition.get("default") or ""
-        ).strip()
+        str(definition.get("name") or "")
+        .strip(): str(definition.get("default") or "")
+        .strip()
         for definition in inputs_schema
         if str(definition.get("name") or "").strip()
     }
@@ -1372,6 +1365,7 @@ def _apply_dependent_input_defaults(
             adjusted[name] = mapped
     return adjusted
 
+
 def _contains_secret_like_value(value: Any) -> bool:
     if isinstance(value, Mapping):
         for key, nested in value.items():
@@ -1390,6 +1384,7 @@ def _contains_secret_like_value(value: Any) -> bool:
         for line in text.splitlines()
         if (parts := line.strip().split())
     )
+
 
 def _capability_contract_from_inputs(
     *,
@@ -1416,6 +1411,7 @@ def _capability_contract_from_inputs(
     )
     return contract["inputSchema"], contract["uiSchema"], contract["defaults"]
 
+
 def _schema_contract_input_definitions(
     *,
     input_schema: Mapping[str, Any],
@@ -1433,7 +1429,9 @@ def _schema_contract_input_definitions(
     definitions: list[dict[str, Any]] = []
     for name, raw_field_schema in properties.items():
         field_name = str(name or "").strip()
-        field_schema = dict(raw_field_schema) if isinstance(raw_field_schema, Mapping) else {}
+        field_schema = (
+            dict(raw_field_schema) if isinstance(raw_field_schema, Mapping) else {}
+        )
         if not field_name:
             continue
         field_type = str(field_schema.get("type") or "text").strip().lower()
@@ -1449,11 +1447,7 @@ def _schema_contract_input_definitions(
                 "label": str(field_schema.get("title") or field_name).strip(),
                 "type": input_type,
                 "required": field_name in required,
-                **(
-                    {"default": defaults[field_name]}
-                    if field_name in defaults
-                    else {}
-                ),
+                **({"default": defaults[field_name]} if field_name in defaults else {}),
                 **(
                     {"options": [str(item) for item in field_schema.get("enum") or []]}
                     if input_type == "enum"
@@ -1468,6 +1462,7 @@ def _schema_contract_input_definitions(
             }
         )
     return definitions
+
 
 def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
     annotations = dict(item.get("annotations") or {})
@@ -1566,8 +1561,7 @@ def _normalize_checkpoint_branching_policy(value: Any) -> dict[str, Any]:
     if runtime_context_policy not in _CHECKPOINT_BRANCHING_RUNTIME_CONTEXT_POLICIES:
         supported = ", ".join(sorted(_CHECKPOINT_BRANCHING_RUNTIME_CONTEXT_POLICIES))
         raise PresetValidationError(
-            "checkpointBranching.runtimeContextPolicy must be one of: "
-            f"{supported}."
+            "checkpointBranching.runtimeContextPolicy must be one of: " f"{supported}."
         )
 
     publish_mode = str(value.get("publishMode") or "none").strip()
@@ -1581,8 +1575,7 @@ def _normalize_checkpoint_branching_policy(value: Any) -> dict[str, Any]:
     if side_effect_policy not in _CHECKPOINT_BRANCHING_SIDE_EFFECT_POLICIES:
         supported = ", ".join(sorted(_CHECKPOINT_BRANCHING_SIDE_EFFECT_POLICIES))
         raise PresetValidationError(
-            "checkpointBranching.sideEffectPolicy must be one of: "
-            f"{supported}."
+            "checkpointBranching.sideEffectPolicy must be one of: " f"{supported}."
         )
 
     budget = value.get("maxBudgetUsd")
@@ -1663,12 +1656,8 @@ def _normalize_title_enrichment_policy(value: Any) -> dict[str, Any] | None:
         raise PresetValidationError("titleEnrichment.enabled must be true or false.")
     provider = str(value.get("provider") or "").strip().lower()
     if provider not in ("github",):
-        raise PresetValidationError(
-            "titleEnrichment.provider must be 'github'."
-        )
-    source_tool = str(
-        value.get("sourceTool") or value.get("source_tool") or ""
-    ).strip()
+        raise PresetValidationError("titleEnrichment.provider must be 'github'.")
+    source_tool = str(value.get("sourceTool") or value.get("source_tool") or "").strip()
     if not source_tool:
         raise PresetValidationError(
             "titleEnrichment.sourceTool is required when enabled."
@@ -1715,7 +1704,9 @@ def _normalize_checkpoint_branching_triggers(value: Any) -> list[str]:
 
 def _positive_int_field(value: Any, *, field_name: str) -> int:
     if isinstance(value, bool):
-        raise PresetValidationError(f"checkpointBranching.{field_name} must be positive.")
+        raise PresetValidationError(
+            f"checkpointBranching.{field_name} must be positive."
+        )
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
@@ -1762,9 +1753,12 @@ def _normalize_checkpoint_branch_templates(value: Any) -> list[dict[str, str]]:
 
 def _is_protected_branch_ref(ref: str) -> bool:
     normalized = ref.removeprefix("refs/heads/").lower()
-    return normalized in {"main", "master", "trunk", "develop"} or normalized.startswith(
-        "release/"
-    )
+    return normalized in {
+        "main",
+        "master",
+        "trunk",
+        "develop",
+    } or normalized.startswith("release/")
 
 
 def _serialize_template(
@@ -1785,8 +1779,6 @@ def _serialize_template(
     )
     serialized = {
         "slug": template.slug,
-        "scope": template.scope_type.value,
-        "scopeRef": template.scope_ref,
         "title": template.title,
         "description": template.description,
         "tags": list(template.tags or []),
@@ -1817,15 +1809,16 @@ def _serialize_template(
             {
                 "steps": list(template.steps or []),
                 "annotations": dict(template.annotations or {}),
-                "reviewedBy": str(template.reviewed_by)
-                if template.reviewed_by
-                else None,
-                "reviewedAt": template.reviewed_at.isoformat()
-                if template.reviewed_at
-                else None,
+                "reviewedBy": (
+                    str(template.reviewed_by) if template.reviewed_by else None
+                ),
+                "reviewedAt": (
+                    template.reviewed_at.isoformat() if template.reviewed_at else None
+                ),
             }
         )
     return serialized
+
 
 def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
     """Load seed template definitions from YAML files."""
@@ -1883,8 +1876,7 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
             isinstance(step.get("annotations"), Mapping)
             and (
                 step["annotations"].get("moonSpecRemediationAttempt") is not None
-                or step["annotations"].get("moonSpecRemediationMaxAttempts")
-                is not None
+                or step["annotations"].get("moonSpecRemediationMaxAttempts") is not None
             )
             for step in steps
         ):
@@ -1898,11 +1890,15 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
         annotations = step.get("annotations")
         if not isinstance(annotations, Mapping):
             continue
-        role = str(
-            annotations.get("issueImplementRole")
-            or annotations.get("jiraOrchestrateRole")
-            or ""
-        ).strip().lower()
+        role = (
+            str(
+                annotations.get("issueImplementRole")
+                or annotations.get("jiraOrchestrateRole")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if role not in {"moonspec-remediation", "moonspec-verification-gate"}:
             continue
         try:
@@ -1989,35 +1985,44 @@ class PresetCatalogService:
         gaps: list[dict[str, Any]] = []
         for saved in request.presets:
             slug = saved["slug"]
-            scope = _normalize_scope(saved.get("scope", "global"))
-            scope_ref = saved.get("scopeRef")
-            if scope is PresetScopeType.PERSONAL:
-                scope_ref = scope_ref or request.principal
-                if scope_ref != request.principal:
-                    raise PresetValidationError(
-                        "Saved personal preset owner does not match the execution owner."
+            if request.principal is not None:
+                # Only the retained pre-instance Activity wire shape includes
+                # principal. It identifies historical provenance, not authority.
+                template = await self._legacy_readiness_template(
+                    saved, request.principal
+                )
+                if template is None:
+                    gaps.append(
+                        {"slug": slug, "reason": "legacy_preset_requires_refresh"}
                     )
-            scope_ref = _normalize_scope_ref(scope, scope_ref)
-            try:
-                template = await self._get_template_for_scope(
-                    slug=_normalize_slug(slug), scope=scope, scope_ref=scope_ref
-                )
-            except PresetNotFoundError:
-                gaps.append(
-                    {"slug": slug, "scope": scope.value, "reason": "preset_unavailable"}
-                )
-                continue
+                    continue
+            else:
+                if (
+                    saved.get("scope")
+                    or saved.get("scopeRef")
+                    or saved.get("scope_ref")
+                ):
+                    gaps.append(
+                        {"slug": slug, "reason": "legacy_preset_requires_refresh"}
+                    )
+                    continue
+                try:
+                    template = await self._get_instance_template(
+                        slug=_normalize_slug(slug)
+                    )
+                except PresetNotFoundError:
+                    gaps.append({"slug": slug, "reason": "preset_unavailable"})
+                    continue
             try:
                 required = await self._current_declared_capabilities(
                     template,
                     path=[_template_path_label(slug=template.slug)],
-                    visited={(scope.value, template.slug, scope_ref)},
+                    visited={template.slug},
                 )
             except PresetValidationError as exc:
                 gaps.append(
                     {
                         "slug": slug,
-                        "scope": scope.value,
                         "reason": "preset_composition_unavailable",
                         "errors": exc.errors,
                     }
@@ -2025,9 +2030,7 @@ class PresetCatalogService:
                 continue
             missing = sorted(set(required) - admitted)
             if missing:
-                gaps.append(
-                    {"slug": slug, "scope": scope.value, "missingCapabilities": missing}
-                )
+                gaps.append({"slug": slug, "missingCapabilities": missing})
         if not gaps:
             return {"status": "ready"}
         missing = sorted(
@@ -2049,20 +2052,91 @@ class PresetCatalogService:
             ),
         }
 
-    async def _get_template_for_scope(
+    async def _legacy_readiness_template(
+        self, saved: Mapping[str, str], principal: str
+    ) -> Preset | None:
+        """Resolve a recorded Activity identity through committed conversion proof.
+
+        Never infer identity from the surviving slug or a generated suffix. A
+        collision, deletion or newly authored replacement cannot substitute for
+        the original preset. No user lookup or personal runtime ownership occurs.
+        """
+        from api_service.services.single_user_conversion import (
+            SCHEMA_REVISION,
+            SingleUserConversionRun,
+            _is_production_completion,
+        )
+
+        scope = saved.get("scope", "global")
+        scope_ref = saved.get("scopeRef") or None
+        if scope not in {"global", "personal"} or saved.get("scope_ref"):
+            return None
+        if scope == "personal":
+            scope_ref = scope_ref or principal
+            if scope_ref != principal:
+                return None
+        elif scope_ref is not None:
+            return None
+        slug = _normalize_slug(saved["slug"])
+        identities: set[UUID] = set()
+        receipts = await self._session.scalars(
+            select(SingleUserConversionRun).where(
+                SingleUserConversionRun.status == "complete"
+            )
+        )
+        for receipt in receipts:
+            proof = receipt.result_json
+            if not isinstance(proof, dict):
+                continue
+            revision = proof.get("schema_revision")
+            if not isinstance(revision, str):
+                continue
+            if revision not in {
+                "397_instance_preset_catalog",
+                SCHEMA_REVISION,
+            } or not _is_production_completion(
+                proof,
+                schema_revision=revision,
+                required_transforms=("artifacts", "profile_secrets", "presets"),
+            ):
+                continue
+            entries = proof["transforms"]["presets"].get("legacy_identities")
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict) or (
+                    entry.get("scope"),
+                    entry.get("scopeRef"),
+                    entry.get("slug"),
+                ) != (scope, scope_ref, slug):
+                    continue
+                if not {"scope", "scopeRef", "slug", "presetId"}.issubset(entry):
+                    return None
+                try:
+                    identities.add(UUID(entry["presetId"]))
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    return None
+        if len(identities) != 1:
+            return None
+        return await self._session.scalar(
+            select(Preset).where(
+                Preset.id == next(iter(identities)),
+                Preset.scope_type.is_(None),
+                Preset.is_active.is_(True),
+            )
+        )
+
+    async def _get_instance_template(
         self,
         *,
         slug: str,
-        scope: PresetScopeType,
-        scope_ref: str | None,
         include_inactive: bool = False,
     ) -> Preset:
         stmt = (
             select(Preset)
             .where(
                 Preset.slug == slug,
-                Preset.scope_type == scope,
-                Preset.scope_ref == scope_ref,
+                Preset.scope_type.is_(None),
             )
             .limit(1)
         )
@@ -2077,31 +2151,14 @@ class PresetCatalogService:
     async def list_templates(
         self,
         *,
-        scope: str | None = None,
-        scope_ref: str | None = None,
         tag: str | None = None,
         search: str | None = None,
         favorites_only: bool = False,
-        user_id: UUID | None = None,
         include_inactive: bool = False,
-        include_global: bool = False,
     ) -> list[dict[str, Any]]:
-        stmt = select(Preset)
+        stmt = select(Preset).where(Preset.scope_type.is_(None))
         if not include_inactive:
             stmt = stmt.where(Preset.is_active.is_(True))
-        if scope is not None:
-            scope_type = _normalize_scope(scope)
-            scope_filter = Preset.scope_type == scope_type
-            if scope_type is not PresetScopeType.GLOBAL:
-                scope_filter &= (
-                    Preset.scope_ref
-                    == _normalize_scope_ref(scope_type, scope_ref)
-                )
-            if include_global:
-                scope_filter = or_(
-                    scope_filter, Preset.scope_type == PresetScopeType.GLOBAL
-                )
-            stmt = stmt.where(scope_filter)
 
         template_rows = (await self._session.execute(stmt)).scalars().all()
         lowered_tag = str(tag or "").strip().lower()
@@ -2109,33 +2166,32 @@ class PresetCatalogService:
 
         favorites_map: dict[UUID, bool] = {}
         recents_map: dict[UUID, datetime] = {}
-        if user_id is not None:
-            favorite_rows = (
-                (
-                    await self._session.execute(
-                        select(PresetFavorite.template_id).where(
-                            PresetFavorite.user_id == user_id
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            favorites_map = {template_id: True for template_id in favorite_rows}
-
-            recent_rows = (
+        favorite_rows = (
+            (
                 await self._session.execute(
-                    select(
-                        PresetRecent.template_id,
-                        PresetRecent.applied_at,
+                    select(PresetFavorite.template_id).where(
+                        PresetFavorite.user_id.is_(None)
                     )
-                    .where(PresetRecent.user_id == user_id)
-                    .order_by(PresetRecent.applied_at.desc())
                 )
-            ).all()
-            for template_id, applied_at in recent_rows:
-                if template_id not in recents_map:
-                    recents_map[template_id] = applied_at
+            )
+            .scalars()
+            .all()
+        )
+        favorites_map = {template_id: True for template_id in favorite_rows}
+
+        recent_rows = (
+            await self._session.execute(
+                select(
+                    PresetRecent.template_id,
+                    PresetRecent.applied_at,
+                )
+                .where(PresetRecent.user_id.is_(None))
+                .order_by(PresetRecent.applied_at.desc())
+            )
+        ).all()
+        for template_id, applied_at in recent_rows:
+            if template_id not in recents_map:
+                recents_map[template_id] = applied_at
 
         serialized: list[dict[str, Any]] = []
         for template in template_rows:
@@ -2169,14 +2225,17 @@ class PresetCatalogService:
             key=lambda item: (
                 not item["isFavorite"],
                 item["recentAppliedAt"] is None,
-                item["recentAppliedAt"] or "",
+                (
+                    -datetime.fromisoformat(item["recentAppliedAt"]).timestamp()
+                    if item["recentAppliedAt"]
+                    else 0
+                ),
                 item["title"].lower(),
             )
         )
         logger.info(
             "preset_catalog.list",
             extra={
-                "scope": scope,
                 "favorites_only": favorites_only,
                 "results": len(serialized),
             },
@@ -2188,37 +2247,30 @@ class PresetCatalogService:
         self,
         *,
         slug: str,
-        scope: str,
-        scope_ref: str | None,
-        user_id: UUID | None = None,
     ) -> dict[str, Any]:
-        scope_type = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
-        template = await self._get_template_for_scope(
+
+        template = await self._get_instance_template(
             slug=_normalize_slug(slug),
-            scope=scope_type,
-            scope_ref=normalized_scope_ref,
         )
         is_favorite = False
         recent_applied_at = None
-        if user_id is not None:
-            favorite = await self._session.execute(
-                select(PresetFavorite.id).where(
-                    PresetFavorite.user_id == user_id,
-                    PresetFavorite.template_id == template.id,
-                )
+        favorite = await self._session.execute(
+            select(PresetFavorite.id).where(
+                PresetFavorite.user_id.is_(None),
+                PresetFavorite.template_id == template.id,
             )
-            is_favorite = favorite.scalar_one_or_none() is not None
-            recent = await self._session.execute(
-                select(PresetRecent.applied_at)
-                .where(
-                    PresetRecent.user_id == user_id,
-                    PresetRecent.template_id == template.id,
-                )
-                .order_by(PresetRecent.applied_at.desc())
-                .limit(1)
+        )
+        is_favorite = favorite.scalar_one_or_none() is not None
+        recent = await self._session.execute(
+            select(PresetRecent.applied_at)
+            .where(
+                PresetRecent.user_id.is_(None),
+                PresetRecent.template_id == template.id,
             )
-            recent_applied_at = recent.scalar_one_or_none()
+            .order_by(PresetRecent.applied_at.desc())
+            .limit(1)
+        )
+        recent_applied_at = recent.scalar_one_or_none()
 
         return _serialize_template(
             template=template,
@@ -2233,32 +2285,25 @@ class PresetCatalogService:
         slug: str,
         title: str,
         description: str,
-        scope: str,
-        scope_ref: str | None,
         tags: list[Any] | None,
         inputs_schema: list[dict[str, Any]],
         steps: list[dict[str, Any]],
         annotations: dict[str, Any] | None = None,
         required_capabilities: list[Any] | None = None,
-        created_by: UUID | None = None,
         release_status: PresetReleaseStatus = PresetReleaseStatus.DRAFT,
         seed_source: str | None = None,
         auto_commit: bool = True,
     ) -> dict[str, Any]:
-        normalized_scope = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(normalized_scope, scope_ref)
+
         normalized_slug = _normalize_slug(slug)
         existing = await self._session.execute(
             select(Preset.id).where(
                 Preset.slug == normalized_slug,
-                Preset.scope_type == normalized_scope,
-                Preset.scope_ref == normalized_scope_ref,
+                Preset.scope_type.is_(None),
             )
         )
         if existing.scalar_one_or_none() is not None:
-            raise PresetConflictError(
-                "Template slug already exists for this scope."
-            )
+            raise PresetConflictError("Template slug already exists in this instance.")
 
         normalized_title = str(title or "").strip()
         normalized_description = str(description or "").strip()
@@ -2284,8 +2329,7 @@ class PresetCatalogService:
         template = Preset(
             id=uuid4(),
             slug=normalized_slug,
-            scope_type=normalized_scope,
-            scope_ref=normalized_scope_ref,
+            scope_type=None,
             title=normalized_title,
             description=normalized_description,
             tags=_normalize_tag_list(tags),
@@ -2297,17 +2341,26 @@ class PresetCatalogService:
             release_status=release_status,
             seed_source=seed_source,
             is_active=True,
-            created_by=created_by,
         )
-        self._session.add(template)
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(template)
+                await self._session.flush()
+        except IntegrityError as exc:
+            if getattr(
+                exc.orig, "sqlstate", None
+            ) == "23505" or "UNIQUE constraint failed" in str(exc.orig):
+                raise PresetConflictError(
+                    "Template slug already exists in this instance."
+                ) from exc
+            raise
         if auto_commit:
             await self._session.commit()
+            await self._session.refresh(template)
             logger.info(
                 "preset_catalog.create",
                 extra={
                     "slug": normalized_slug,
-                    "scope": normalized_scope.value,
                 },
             )
             _METRICS.increment("create")
@@ -2332,9 +2385,7 @@ class PresetCatalogService:
             label = str(raw_input.get("label") or "").strip()
             input_type = str(raw_input.get("type") or "text").strip().lower()
             if not name:
-                raise PresetValidationError(
-                    "Template inputs require non-empty names."
-                )
+                raise PresetValidationError("Template inputs require non-empty names.")
             if name in names:
                 raise PresetValidationError(
                     f"Duplicate template input '{name}' is not allowed."
@@ -2390,7 +2441,11 @@ class PresetCatalogService:
                     "default": default_value,
                     **({"options": normalized_options} if normalized_options else {}),
                     **({"placeholder": placeholder} if placeholder else {}),
-                    **({"schema": dict(schema_value)} if isinstance(schema_value, dict) else {}),
+                    **(
+                        {"schema": dict(schema_value)}
+                        if isinstance(schema_value, dict)
+                        else {}
+                    ),
                     **(
                         {"uiSchema": dict(ui_schema_value)}
                         if isinstance(ui_schema_value, dict)
@@ -2413,6 +2468,10 @@ class PresetCatalogService:
                     f"Step {index} must be an object with instructions and optional skill."
                 )
             raw_step = dict(raw_step)
+            if raw_step.get("scope") or raw_step.get("scopeRef"):
+                raise PresetValidationError(
+                    "Preset composition no longer accepts human scope; select an instance preset."
+                )
             raw_step.pop("version", None)
             raw_step.pop("presetVersion", None)
             blocked = sorted(
@@ -2445,15 +2504,14 @@ class PresetCatalogService:
                         f"Step {index} include alias '{include_alias}' is duplicated."
                     )
                 include_aliases.add(include_alias)
-                include_scope = raw_step.get("scope")
                 include_payload: dict[str, Any] = {
                     "kind": _INCLUDE_KIND,
                     "slug": include_slug,
                     "alias": include_alias,
                 }
-                if include_scope is not None:
-                    include_payload["scope"] = _normalize_scope(str(include_scope)).value
-                input_mapping = raw_step.get("inputMapping", raw_step.get("input_mapping"))
+                input_mapping = raw_step.get(
+                    "inputMapping", raw_step.get("input_mapping")
+                )
                 if input_mapping is not None:
                     if not isinstance(input_mapping, dict):
                         raise PresetValidationError(
@@ -2536,8 +2594,7 @@ class PresetCatalogService:
                 {
                     str(key).strip(): value
                     for key, value in raw_step.items()
-                    if str(key).strip()
-                    and str(key).strip() not in _STEP_RESERVED_KEYS
+                    if str(key).strip() and str(key).strip() not in _STEP_RESERVED_KEYS
                 }
             )
             validated.append(step_payload)
@@ -2547,18 +2604,12 @@ class PresetCatalogService:
         self,
         include: Mapping[str, Any],
         *,
-        scope: PresetScopeType,
-        scope_ref: str | None,
         path: list[str],
-        visited: set[tuple[str, str, str | None]],
+        visited: set[str],
     ) -> tuple[Preset, str, list[str]]:
         """Resolve one include using the same authority rules for every reader."""
         include_slug = _normalize_slug(str(include.get("slug") or ""))
         include_alias = _normalize_slug(str(include.get("alias") or ""))
-        include_scope = _normalize_scope(str(include.get("scope") or scope.value))
-        include_scope_ref = (
-            None if include_scope is PresetScopeType.GLOBAL else scope_ref
-        )
         include_path = [
             *path,
             _template_path_label(
@@ -2566,20 +2617,7 @@ class PresetCatalogService:
                 alias=include_alias,
             ),
         ]
-        if (
-            scope is PresetScopeType.GLOBAL
-            and include_scope is PresetScopeType.PERSONAL
-        ):
-            message = (
-                "Global presets cannot include personal presets at "
-                f"{_format_include_path(include_path)}."
-            )
-            raise _include_tree_error(
-                message=message,
-                code="preset_include_scope_violation",
-                include_path=include_path,
-            )
-        target_key = (include_scope.value, include_slug, include_scope_ref)
+        target_key = include_slug
         if target_key in visited:
             message = (
                 "Preset include cycle detected at "
@@ -2591,10 +2629,8 @@ class PresetCatalogService:
                 include_path=include_path,
             )
         try:
-            child_template = await self._get_template_for_scope(
+            child_template = await self._get_instance_template(
                 slug=include_slug,
-                scope=include_scope,
-                scope_ref=include_scope_ref,
             )
         except PresetError as exc:
             message = (
@@ -2623,7 +2659,7 @@ class PresetCatalogService:
         template: Preset,
         *,
         path: list[str],
-        visited: set[tuple[str, str, str | None]],
+        visited: set[str],
     ) -> list[str]:
         """Read the current declared graph without rendering or mutating a plan."""
         capabilities = list(template.required_capabilities or [])
@@ -2642,12 +2678,10 @@ class PresetCatalogService:
                 continue
             child, _alias, child_path = await self._resolve_include_target(
                 include,
-                scope=template.scope_type,
-                scope_ref=template.scope_ref,
                 path=path,
                 visited=visited,
             )
-            child_key = (child.scope_type.value, child.slug, child.scope_ref)
+            child_key = child.slug
             capabilities.extend(
                 await self._current_declared_capabilities(
                     child, path=child_path, visited={*visited, child_key}
@@ -2659,15 +2693,13 @@ class PresetCatalogService:
         self,
         *,
         template: Preset,
-        scope: PresetScopeType,
-        scope_ref: str | None,
         variables: dict[str, Any],
         root_slug: str,
         root_inputs: dict[str, Any],
         root_max_step_count: int,
         enforce_limit: bool,
         path: list[str],
-        visited: set[tuple[str, str, str | None]],
+        visited: set[str],
         resolved_steps: list[dict[str, Any]],
         alias: str | None = None,
         input_mapping: dict[str, Any] | None = None,
@@ -2696,7 +2728,6 @@ class PresetCatalogService:
         node: dict[str, Any] = {
             "slug": template.slug,
             "digest": _preset_digest(template),
-            "scope": scope.value,
             "path": list(path),
             "stepIds": [],
             "includes": [],
@@ -2724,8 +2755,7 @@ class PresetCatalogService:
             kind = str(rendered.get("kind") or _STEP_KIND).strip().lower()
             if (
                 kind == _STEP_KIND
-                and str(rendered.get("type") or "").strip().lower()
-                == _STEP_TYPE_PRESET
+                and str(rendered.get("type") or "").strip().lower() == _STEP_TYPE_PRESET
             ):
                 rendered = _preset_step_to_include(rendered, index=source_index)
                 rendered.pop("version", None)
@@ -2735,19 +2765,11 @@ class PresetCatalogService:
                 child_template, include_alias, include_path = (
                     await self._resolve_include_target(
                         rendered,
-                        scope=scope,
-                        scope_ref=scope_ref,
                         path=path,
                         visited=visited,
                     )
                 )
-                include_scope = child_template.scope_type
-                include_scope_ref = child_template.scope_ref
-                target_key = (
-                    include_scope.value,
-                    child_template.slug,
-                    include_scope_ref,
-                )
+                target_key = child_template.slug
                 input_mapping = rendered.get("inputMapping") or {}
                 if not isinstance(input_mapping, dict):
                     message = (
@@ -2797,8 +2819,6 @@ class PresetCatalogService:
                 }
                 child_node = await self._expand_preset_steps(
                     template=child_template,
-                    scope=include_scope,
-                    scope_ref=include_scope_ref,
                     variables=child_variables,
                     root_slug=root_slug,
                     root_inputs=root_inputs,
@@ -2857,7 +2877,6 @@ class PresetCatalogService:
                     "source": {
                         "slug": template.slug,
                         "presetDigest": _preset_digest(template),
-                        "scope": scope.value,
                         "stepIndex": source_index,
                     },
                     "path": list(path),
@@ -2911,8 +2930,7 @@ class PresetCatalogService:
                 {
                     str(key).strip(): value
                     for key, value in rendered.items()
-                    if str(key).strip()
-                    and str(key).strip() not in _STEP_RESERVED_KEYS
+                    if str(key).strip() and str(key).strip() not in _STEP_RESERVED_KEYS
                 }
             )
             resolved_steps.append(step_payload)
@@ -2923,19 +2941,13 @@ class PresetCatalogService:
         self,
         *,
         slug: str,
-        scope: str,
-        scope_ref: str | None,
         inputs: dict[str, Any],
         context: dict[str, Any] | None = None,
         options: ExpandOptions | None = None,
-        user_id: UUID | None = None,
     ) -> dict[str, Any]:
-        normalized_scope = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(normalized_scope, scope_ref)
-        template = await self._get_template_for_scope(
+
+        template = await self._get_instance_template(
             slug=_normalize_slug(slug),
-            scope=normalized_scope,
-            scope_ref=normalized_scope_ref,
         )
 
         effective_context = dict(context or {})
@@ -2957,12 +2969,16 @@ class PresetCatalogService:
             annotated_defaults = (template.annotations or {}).get("defaults")
             contract_definitions = _schema_contract_input_definitions(
                 input_schema=annotated_schema,
-                ui_schema=annotated_ui_schema
-                if isinstance(annotated_ui_schema, Mapping)
-                else {},
-                defaults=annotated_defaults
-                if isinstance(annotated_defaults, Mapping)
-                else {},
+                ui_schema=(
+                    annotated_ui_schema
+                    if isinstance(annotated_ui_schema, Mapping)
+                    else {}
+                ),
+                defaults=(
+                    annotated_defaults
+                    if isinstance(annotated_defaults, Mapping)
+                    else {}
+                ),
             )
             existing_names = {
                 str(definition.get("name") or "").strip()
@@ -3014,20 +3030,16 @@ class PresetCatalogService:
         warnings: list[str] = []
         enforce_limit = options.should_enforce_step_limit if options else True
         max_step_count = max(int(template.max_step_count or 25), 1)
-        root_path = [
-            _template_path_label(slug=template.slug)
-        ]
+        root_path = [_template_path_label(slug=template.slug)]
         composition = await self._expand_preset_steps(
             template=template,
-            scope=normalized_scope,
-            scope_ref=normalized_scope_ref,
             variables=variables,
             root_slug=template.slug,
             root_inputs=validated_inputs,
             root_max_step_count=max_step_count,
             enforce_limit=enforce_limit,
             path=root_path,
-            visited={(normalized_scope.value, template.slug, normalized_scope_ref)},
+            visited={template.slug},
             resolved_steps=resolved_steps,
         )
         _validate_moonspec_remediation_topology(resolved_steps)
@@ -3057,9 +3069,9 @@ class PresetCatalogService:
                 variables=variables,
             )
         annotations = template.annotations or {}
-        checkpoint_branching = annotations.get("checkpointBranching") or annotations.get(
-            "checkpoint_branching"
-        )
+        checkpoint_branching = annotations.get(
+            "checkpointBranching"
+        ) or annotations.get("checkpoint_branching")
         if checkpoint_branching is not None:
             checkpoint_branching = _normalize_checkpoint_branching_policy(
                 checkpoint_branching
@@ -3068,18 +3080,11 @@ class PresetCatalogService:
         if template.release_status is PresetReleaseStatus.INACTIVE:
             warnings.append("Template is marked inactive.")
 
-        if user_id is not None:
-            await self.record_recent(
-                user_id=user_id,
-                template_id=template.id,
-            )
-
         applied_at = datetime.now(UTC).isoformat()
         logger.info(
             "preset_catalog.expand",
             extra={
                 "slug": template.slug,
-                "scope": normalized_scope.value,
                 "steps": len(resolved_steps),
             },
         )
@@ -3119,6 +3124,9 @@ class PresetCatalogService:
                 "presetTitle": str(template.title or "").strip(),
                 "presetSlug": str(template.slug or "").strip(),
             }
+        # Materialize the response before committing preferences: callers may
+        # use sessions that expire ORM instances on commit.
+        await self.record_recent(template_id=template.id)
         return expanded_payload
 
     def _resolve_inputs(
@@ -3179,7 +3187,9 @@ class PresetCatalogService:
                             if isinstance(nested_schema, dict)
                             else None
                         )
-                        label = str(title or f"{definition.get('label') or name} {key}").strip()
+                        label = str(
+                            title or f"{definition.get('label') or name} {key}"
+                        ).strip()
                         if key == "key" and name == "jira_issue":
                             message = "Jira issue key is required."
                         else:
@@ -3238,64 +3248,48 @@ class PresetCatalogService:
     async def set_favorite(
         self,
         *,
-        user_id: UUID,
         slug: str,
-        scope: str,
-        scope_ref: str | None,
         auto_commit: bool = True,
     ) -> None:
-        scope_type = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
-        template = await self._get_template_for_scope(
+
+        template = await self._get_instance_template(
             slug=_normalize_slug(slug),
-            scope=scope_type,
-            scope_ref=normalized_scope_ref,
         )
-        existing = await self._session.execute(
-            select(PresetFavorite.id).where(
-                PresetFavorite.user_id == user_id,
-                PresetFavorite.template_id == template.id,
+        dialect_name = self._session.bind.dialect.name if self._session.bind else ""
+        favorite_insert = {"postgresql": pg_insert, "sqlite": sqlite_insert}.get(
+            dialect_name
+        )
+        if favorite_insert is None:
+            raise PresetValidationError(
+                "Instance preferences require PostgreSQL or SQLite."
+            )
+        await self._session.execute(
+            favorite_insert(PresetFavorite)
+            .values(template_id=template.id, user_id=None)
+            .on_conflict_do_nothing(
+                index_elements=["template_id"],
+                index_where=PresetFavorite.user_id.is_(None),
             )
         )
-        if existing.scalar_one_or_none() is None:
-            self._session.add(
-                PresetFavorite(
-                    user_id=user_id,
-                    template_id=template.id,
-                )
-            )
-            if auto_commit:
-                await self._session.commit()
-            else:
-                await self._session.flush()
-            logger.info(
-                "preset_catalog.favorite",
-                extra={
-                    "slug": template.slug,
-                    "scope": scope_type.value,
-                },
-            )
-            _METRICS.increment("favorite")
+        if auto_commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
+        _METRICS.increment("favorite")
 
     async def clear_favorite(
         self,
         *,
-        user_id: UUID,
         slug: str,
-        scope: str,
-        scope_ref: str | None,
     ) -> None:
-        scope_type = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
-        template = await self._get_template_for_scope(
+
+        template = await self._get_instance_template(
             slug=_normalize_slug(slug),
-            scope=scope_type,
-            scope_ref=normalized_scope_ref,
             include_inactive=True,
         )
         await self._session.execute(
             delete(PresetFavorite).where(
-                PresetFavorite.user_id == user_id,
+                PresetFavorite.user_id.is_(None),
                 PresetFavorite.template_id == template.id,
             )
         )
@@ -3303,8 +3297,7 @@ class PresetCatalogService:
         logger.info(
             "preset_catalog.unfavorite",
             extra={
-                "slug": template.slug,
-                "scope": scope_type.value,
+                "slug": slug,
             },
         )
         _METRICS.increment("unfavorite")
@@ -3312,7 +3305,6 @@ class PresetCatalogService:
     async def record_recent(
         self,
         *,
-        user_id: UUID,
         template_id: UUID,
         auto_commit: bool = True,
     ) -> None:
@@ -3324,25 +3316,24 @@ class PresetCatalogService:
             await self._session.execute(
                 recent_insert(PresetRecent)
                 .values(
-                    user_id=user_id,
                     template_id=template_id,
                 )
                 .on_conflict_do_update(
-                    index_elements=["user_id", "template_id"],
+                    index_elements=["template_id"],
+                    index_where=PresetRecent.user_id.is_(None),
                     set_={"applied_at": datetime.now(UTC)},
                 )
             )
         else:
             self._session.add(
                 PresetRecent(
-                    user_id=user_id,
                     template_id=template_id,
                 )
             )
         await self._session.flush()
         keep_recent_ids = (
             select(PresetRecent.id)
-            .where(PresetRecent.user_id == user_id)
+            .where(PresetRecent.user_id.is_(None))
             .order_by(
                 PresetRecent.applied_at.desc(),
                 PresetRecent.id.desc(),
@@ -3351,7 +3342,7 @@ class PresetCatalogService:
         )
         await self._session.execute(
             delete(PresetRecent).where(
-                PresetRecent.user_id == user_id,
+                PresetRecent.user_id.is_(None),
                 PresetRecent.id.not_in(keep_recent_ids),
             )
         )
@@ -3369,15 +3360,10 @@ class PresetCatalogService:
         self,
         *,
         slug: str,
-        scope: str,
-        scope_ref: str | None,
     ) -> None:
-        scope_type = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
-        template = await self._get_template_for_scope(
+
+        template = await self._get_instance_template(
             slug=_normalize_slug(slug),
-            scope=scope_type,
-            scope_ref=normalized_scope_ref,
             include_inactive=True,
         )
         template.is_active = False
@@ -3385,8 +3371,7 @@ class PresetCatalogService:
         logger.info(
             "preset_catalog.delete",
             extra={
-                "slug": template.slug,
-                "scope": scope_type.value,
+                "slug": slug,
             },
         )
         _METRICS.increment("delete")
@@ -3395,11 +3380,8 @@ class PresetCatalogService:
         self,
         *,
         slugs: Sequence[str],
-        scope: str,
-        scope_ref: str | None,
     ) -> int:
-        scope_type = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
+
         normalized_slugs = [
             _normalize_slug(slug) for slug in slugs if str(slug or "").strip()
         ]
@@ -3409,8 +3391,7 @@ class PresetCatalogService:
         result = await self._session.execute(
             select(Preset).where(
                 Preset.slug.in_(normalized_slugs),
-                Preset.scope_type == scope_type,
-                Preset.scope_ref == normalized_scope_ref,
+                Preset.scope_type.is_(None),
                 Preset.is_active.is_(True),
             )
         )
@@ -3418,13 +3399,13 @@ class PresetCatalogService:
         for template in templates:
             template.is_active = False
 
+        changed_slugs = [template.slug for template in templates]
         if templates:
             await self._session.commit()
             logger.info(
                 "preset_catalog.deactivate",
                 extra={
-                    "slugs": [template.slug for template in templates],
-                    "scope": scope_type.value,
+                    "slugs": changed_slugs,
                 },
             )
             _METRICS.increment("delete", len(templates))
@@ -3434,29 +3415,21 @@ class PresetCatalogService:
         self,
         *,
         slug: str,
-        scope: str,
-        scope_ref: str | None,
         release_status: PresetReleaseStatus,
-        reviewer_id: UUID | None = None,
     ) -> dict[str, Any]:
-        scope_type = _normalize_scope(scope)
-        normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
-        template = await self._get_template_for_scope(
+
+        template = await self._get_instance_template(
             slug=_normalize_slug(slug),
-            scope=scope_type,
-            scope_ref=normalized_scope_ref,
             include_inactive=True,
         )
         template.release_status = release_status
-        if reviewer_id is not None:
-            template.reviewed_by = reviewer_id
-            template.reviewed_at = datetime.now(UTC)
+        template.reviewed_at = datetime.now(UTC)
         await self._session.commit()
+        await self._session.refresh(template)
         logger.info(
             "preset_catalog.review",
             extra={
                 "slug": template.slug,
-                "scope": scope_type.value,
                 "release_status": release_status.value,
             },
         )
@@ -3468,11 +3441,22 @@ class PresetCatalogService:
             include_detail=True,
         )
 
+    async def _require_instance_seed_sync_ready(self) -> None:
+        pending = await self._session.execute(
+            select(Preset.id).where(Preset.scope_type.is_not(None)).limit(1)
+        )
+        if pending.first() is not None:
+            raise PresetValidationError(
+                "Retained preset data requires guarded conversion before seed synchronization. "
+                "Resolve the conversion preflight; no replacement presets were created."
+            )
+
     async def import_seed_templates(
         self,
         *,
         seed_dir: Path,
     ) -> int:
+        await self._require_instance_seed_sync_ready()
         loaded = load_seed_template_definitions(seed_dir)
 
         created = 0
@@ -3480,7 +3464,6 @@ class PresetCatalogService:
             item = dict(item)
             item.pop("version", None)
             item.pop("presetVersion", None)
-            scope = str(item.get("scope", "global")).strip() or "global"
             # Deployment provenance: seed-synced rows are deployment-owned
             # catalog entries, which the single-user conversion inventory
             # (#4346) must not mistake for unattested unowned human data.
@@ -3495,14 +3478,11 @@ class PresetCatalogService:
                     title=str(item.get("title") or "").strip(),
                     description=str(item.get("description") or "").strip()
                     or "Seed template.",
-                    scope=scope,
-                    scope_ref=item.get("scopeRef"),
                     tags=item.get("tags") or [],
                     inputs_schema=item.get("inputs") or [],
                     steps=item.get("steps") or [],
                     annotations=_normalize_seed_annotations(item),
                     required_capabilities=item.get("requiredCapabilities") or [],
-                    created_by=None,
                     release_status=PresetReleaseStatus.ACTIVE,
                     seed_source=seed_source,
                     auto_commit=False,
@@ -3522,6 +3502,7 @@ class PresetCatalogService:
     ) -> SeedSyncResult:
         """Create or refresh seeded templates from YAML definitions."""
 
+        await self._require_instance_seed_sync_ready()
         loaded = load_seed_template_definitions(seed_dir)
         result = SeedSyncResult()
 
@@ -3529,8 +3510,6 @@ class PresetCatalogService:
             item = dict(item)
             item.pop("version", None)
             item.pop("presetVersion", None)
-            scope = _normalize_scope(str(item.get("scope", "global")).strip() or "global")
-            scope_ref = _normalize_scope_ref(scope, item.get("scopeRef"))
             # Record provenance for new seeds. An existing unmarked row may
             # contain operator work and must not be adopted by slug alone.
             seed_source = item.get("seedSource") or "seed-catalog"
@@ -3554,10 +3533,7 @@ class PresetCatalogService:
                 select(Preset)
                 .where(
                     Preset.slug == normalized_slug,
-                    Preset.scope_type == scope,
-                    Preset.scope_ref == scope_ref,
-                )
-                .options(
+                    Preset.scope_type.is_(None),
                 )
                 .limit(1)
             )
@@ -3568,14 +3544,11 @@ class PresetCatalogService:
                     slug=normalized_slug,
                     title=title,
                     description=description,
-                    scope=scope.value,
-                    scope_ref=scope_ref,
                     tags=item.get("tags") or [],
                     inputs_schema=validated_inputs,
                     steps=validated_steps,
                     annotations=annotations,
                     required_capabilities=derived_capabilities,
-                    created_by=None,
                     release_status=PresetReleaseStatus.ACTIVE,
                     seed_source=seed_source,
                     auto_commit=False,

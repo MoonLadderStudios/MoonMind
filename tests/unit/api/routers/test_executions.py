@@ -1183,7 +1183,6 @@ async def test_goal_preset_submission_expands_before_planner(
 
     assert task_payload["taskTemplate"] == {
         "slug": "jira-implement",
-        "scope": "global",
         "presetDigest": task_payload["appliedStepTemplates"][0]["presetDigest"],
     }
     assert task_payload["inputs"]["jira_issue_key"] == "MM-747"
@@ -1213,7 +1212,6 @@ async def test_explicit_github_issue_template_expands_before_planner(
                 ),
                 "taskTemplate": {
                     "slug": "github-issue-implement",
-                    "scope": "global",
                 },
                 "inputs": {
                     "github_issue": {
@@ -1251,7 +1249,7 @@ async def test_explicit_github_issue_template_expands_before_planner(
 
 
 @pytest.mark.asyncio
-async def test_explicit_template_rejects_another_users_personal_scope() -> None:
+async def test_explicit_template_rejects_unconverted_personal_scope() -> None:
     owner_id = uuid4()
     caller_id = uuid4()
     task_payload = {
@@ -1270,8 +1268,9 @@ async def test_explicit_template_rejects_another_users_personal_scope() -> None:
             user=SimpleNamespace(id=caller_id, is_superuser=False),
         )
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail["code"] == "template_scope_forbidden"
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "invalid_execution_request"
+    assert "reapply the preset" in exc_info.value.detail["message"]
 
 
 @pytest.mark.asyncio
@@ -1289,7 +1288,6 @@ async def test_explicit_template_maps_missing_preset_to_not_found(tmp_path) -> N
                     task_payload={
                         "taskTemplate": {
                             "slug": "missing-explicit-preset",
-                            "scope": "global",
                         }
                     },
                     request_payload={},
@@ -1301,7 +1299,6 @@ async def test_explicit_template_maps_missing_preset_to_not_found(tmp_path) -> N
                     task_payload={
                         "taskTemplate": {
                             "slug": "github-issue-implement",
-                            "scope": "global",
                         },
                         "inputs": {},
                     },
@@ -1345,7 +1342,7 @@ async def test_explicit_template_preserves_branch_and_checkpoint_overrides(
         FakePresetCatalogService,
     )
     task_payload = {
-        "taskTemplate": {"slug": "branch-aware", "scope": "global"},
+        "taskTemplate": {"slug": "branch-aware"},
         "git": {"branch": "release/next"},
         "checkpointBranching": {"enabled": False},
     }

@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, Preset, PresetScopeType
+from api_service.db.models import Base, Preset
 from api_service.services.presets.catalog import (
     PresetCatalogService,
 )
@@ -56,7 +56,7 @@ async def _load_preset(session) -> Preset:
         select(Preset)
         .where(
             Preset.slug == "batch-workflows",
-            Preset.scope_type == PresetScopeType.GLOBAL,
+            Preset.scope_type.is_(None),
             Preset.scope_ref.is_(None),
         )
     )
@@ -75,7 +75,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
 
             assert template.title == "Batch Jira Workflows"
             assert template.slug == "batch-workflows"
-            assert template.scope_type is PresetScopeType.GLOBAL
+            assert template.scope_type is None
 
             schema = annotations["inputSchema"]
             assert schema["required"] == [
@@ -224,8 +224,6 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
 
             expanded = await service.expand_template(
                 slug="batch-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "jira_project_key": "MM",
                     "jira_status": "In Progress",
@@ -302,8 +300,6 @@ async def test_batch_workflows_expands_repository_from_context_when_not_provided
 
             expanded = await service.expand_template(
                 slug="batch-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "jira_project_key": "MM",
                     "jira_status": "In Progress",
@@ -331,8 +327,6 @@ async def test_batch_workflows_ignores_removed_target_preset_version_input(tmp_p
 
             expanded = await service.expand_template(
                 slug="batch-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "jira_project_key": "MM",
                     "jira_status": "In Progress",
@@ -375,8 +369,6 @@ async def test_batch_workflows_child_publish_default_follows_run_ref(
 
             expanded = await service.expand_template(
                 slug="batch-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "jira_project_key": "MM",
                     "jira_status": "In Progress",
@@ -408,8 +400,6 @@ async def test_batch_workflows_explicit_publish_override_wins_over_run_ref(tmp_p
 
             expanded = await service.expand_template(
                 slug="batch-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "jira_project_key": "MM",
                     "jira_status": "In Progress",
@@ -437,8 +427,6 @@ async def test_batch_workflows_constraints_travel_via_file_not_shell(tmp_path):
 
             expanded = await service.expand_template(
                 slug="batch-workflows",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "jira_project_key": "MM",
                     "jira_status": "In Progress",

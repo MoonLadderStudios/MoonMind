@@ -163,8 +163,6 @@ async def test_saved_default_claim_survives_lost_ack_and_worker_replacement(
             await catalog.sync_seed_templates(seed_dir=seed)
             expanded = await catalog.expand_template(
                 slug="github-issue-search-and-implement",
-                scope="global",
-                scope_ref=None,
                 inputs=inputs,
                 context={"repository": "example/repo"},
             )

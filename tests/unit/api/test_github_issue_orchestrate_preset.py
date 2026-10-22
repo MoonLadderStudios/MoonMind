@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, Preset, PresetScopeType
+from api_service.db.models import Base, Preset
 from api_service.services.presets.catalog import PresetCatalogService
 
 pytestmark = [pytest.mark.asyncio]
@@ -50,7 +50,7 @@ async def _load_preset(session) -> Preset:
     result = await session.execute(
         select(Preset).where(
             Preset.slug == "github-issue-orchestrate",
-            Preset.scope_type == PresetScopeType.GLOBAL,
+            Preset.scope_type.is_(None),
             Preset.scope_ref.is_(None),
         )
     )
@@ -67,7 +67,7 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
             annotations = template.annotations or {}
 
     assert template.title == "GitHub Issue Orchestrate"
-    assert template.scope_type is PresetScopeType.GLOBAL
+    assert template.scope_type is None
     assert sorted(template.required_capabilities) == ["gh", "git"]
 
     assert annotations["jiraIssue"] == "MM-1067"
@@ -144,8 +144,6 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
 
             expanded = await service.expand_template(
                 slug="github-issue-orchestrate",
-                scope="global",
-                scope_ref=None,
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
