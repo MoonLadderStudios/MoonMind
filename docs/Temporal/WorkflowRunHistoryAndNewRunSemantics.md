@@ -127,7 +127,7 @@ Retry is distinct from rerun (a fresh execution of the authored input), Continue
 
 ### 7A.2 Choosing the step
 
-The run workflow writes each step's order to the `mm_current_step_order` memo when the step starts, and the first history change to an order marks that step's start. The step ledger's `order` matches that value. By default MoonMind restarts the earliest failed step, whether the finish summary names it or the ledger marks it failed, else the last step that started. A plan that continued past an earlier failure would replay that failure in any reset after it. The operator may instead choose any earlier step that started; a step that never started cannot be chosen.
+The run workflow records the step's execution position and logical identity in memo when it starts. Ledger order can differ after dynamic loop expansion, so retry binds the boundary by logical identity; older histories supply that identity through the recorded AgentRun request. By default MoonMind restarts the earliest failed step named by the finish summary or ledger, else the last step that started. A reset after an unresolved earlier failure would replay that failure. The operator may choose any earlier step that started; an unstarted step cannot be chosen.
 
 ### 7A.3 Admission
 
@@ -139,11 +139,13 @@ Before resetting, MoonMind requires that:
 
 - the latest run is the run the operator saw (`sourceRunId`, refused as `run_changed`) and is closed as failed, canceled, terminated, or timed out (`run_not_failed`);
 - the run is not a child owned by a parent workflow (`child_workflow`), because the parent owns its lifecycle;
-- a GitHub issue claim the run holds is still live (`issue_claim_released`, `issue_claim_expired`), because a reset run cannot re-acquire a claim another run may now hold;
+- a GitHub issue claim remains unreleased and GitHub confirms uncontested ownership. Explicit retry may reacquire its expired lease only when no later attempt exists and the open issue has no blocking status or hold (`issue_claim_released`, `issue_claim_unavailable`). Reacquisition preserves attempt identity and retry allowance, and holds the local claim lock through reset;
 - the history up to the chosen step replays against the installed workflow code (`history_not_replayable`), checked with the Temporal replayer before any reset, so an incompatible code change refuses the retry and leaves the failed run untouched;
 - the history is still retained (`history_unavailable`).
 
 The request's `idempotencyKey` is the reset's request id and is named in the reset reason, so repeating a request returns the same new run, even when Temporal accepted the reset before MoonMind saved its response. Signals and updates received after the reset point are not reapplied to the new run.
+
+Issue leases cross remediation Continue-As-New boundaries. Before dispatch, older continuations that omitted the lease recover its identity through the Activity's recorded ancestry and require a confirmed renewal; they cannot revive an expired reservation automatically.
 
 ### 7A.4 What is not repeated
 

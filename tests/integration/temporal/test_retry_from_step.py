@@ -1,5 +1,7 @@
 """Retry a failed run from a step through the API against a real Temporal server."""
 
+# ruff: noqa: F811 -- imported pytest fixture
+
 import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
@@ -28,12 +30,16 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionRecord,
 )
-from moonmind.workflows.temporal import retry_from_step
+from moonmind.workflows.temporal import github_issue_claim_lease as claim_leases
+from moonmind.workflows.temporal import retry_from_step, story_output_tools
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
+from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from moonmind.workflows.temporal.retry_from_step import STEP_ORDER_MEMO_KEY
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
+from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -61,19 +67,34 @@ class StepWorkflow:
     @workflow.query(name="get_step_ledger")
     def get_step_ledger(self) -> dict:
         info = workflow.info()
-        return {"workflowId": info.workflow_id, "runId": info.run_id, "steps": self._rows}
+        return {
+            "workflowId": info.workflow_id,
+            "runId": info.run_id,
+            "steps": self._rows,
+        }
 
     @workflow.run
     async def run(self) -> list[str]:
         now = workflow.now().isoformat()
         self._rows = [
-            {"logicalStepId": step, "order": order, "title": f"Step {order}", "status": "pending", "updatedAt": now}
+            {
+                "logicalStepId": step,
+                "order": order,
+                "title": f"Step {order}",
+                "status": "pending",
+                "updatedAt": now,
+            }
             for order, step in enumerate(STEPS, start=1)
         ]
         results = []
         for row in self._rows:
             row.update(status="running", startedAt=workflow.now().isoformat())
-            workflow.upsert_memo({STEP_ORDER_MEMO_KEY: row["order"], "summary": f"Executing {row['title']}"})
+            workflow.upsert_memo(
+                {
+                    STEP_ORDER_MEMO_KEY: row["order"],
+                    "summary": f"Executing {row['title']}",
+                }
+            )
             try:
                 results.append(
                     await workflow.execute_activity(
@@ -115,7 +136,9 @@ def _app(service, session, env, user) -> FastAPI:
     while routes:
         route = routes.pop()
         routes.extend(getattr(getattr(route, "original_router", route), "routes", ()))
-        for dependency in getattr(getattr(route, "dependant", None), "dependencies", ()):
+        for dependency in getattr(
+            getattr(route, "dependant", None), "dependencies", ()
+        ):
             if getattr(dependency.call, "__name__", "") in {
                 "_current_user_fallback",
                 "_strict_current_user",
@@ -127,8 +150,10 @@ def _app(service, session, env, user) -> FastAPI:
     return app
 
 
+@pytest.mark.usefixtures("deployment_without_recorded_connections")
+@pytest.mark.parametrize("expired_claim", [False, True])
 async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, journey, expired_claim
 ):
     STEP_CALLS.clear()
     FAILING_STEP["step"] = "step-3"
@@ -148,6 +173,30 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
             owner = str(uuid4())
             workflow_id = f"mm:{uuid4()}"
             user = SimpleNamespace(id=owner, is_superuser=False)
+            if expired_claim:
+                _, github, _ = journey
+                claims = IssueClaimStore(
+                    async_sessionmaker(engine, expire_on_commit=False)
+                )
+                monkeypatch.setattr(
+                    story_output_tools, "IssueClaimStore", lambda: claims
+                )
+                monkeypatch.setattr(
+                    "moonmind.workflows.adapters.github_service.GitHubService",
+                    lambda: github,
+                )
+                await story_output_tools.load_github_issue_preset_brief(
+                    {"repository": "example/repo", "issueNumber": 3970},
+                    {"execution_owner": f"default/{workflow_id}"},
+                    github_service_factory=lambda: github,
+                )
+                clock = claim_leases.utc_now() + timedelta(minutes=31)
+                monkeypatch.setattr(claim_leases, "utc_now", lambda: clock)
+                assert claim_leases.expired(
+                    parse_attempt_comment(
+                        (await claims.get(f"default/{workflow_id}")).comment_body
+                    ).handoff
+                )
             service = TemporalExecutionService(
                 session, client_adapter=TemporalClientAdapter(env.client)
             )
@@ -165,9 +214,16 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     task_queue=TASK_QUEUE,
                     search_attributes=TypedSearchAttributes(
                         [
-                            SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_id"), owner),
-                            SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_type"), "user"),
-                            SearchAttributePair(SearchAttributeKey.for_keyword("mm_entry"), "user_workflow"),
+                            SearchAttributePair(
+                                SearchAttributeKey.for_keyword("mm_owner_id"), owner
+                            ),
+                            SearchAttributePair(
+                                SearchAttributeKey.for_keyword("mm_owner_type"), "user"
+                            ),
+                            SearchAttributePair(
+                                SearchAttributeKey.for_keyword("mm_entry"),
+                                "user_workflow",
+                            ),
                         ]
                     ),
                 )
@@ -190,7 +246,10 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
 
                     response = await client.post(
                         f"/api/executions/{workflow_id}/retry-from-step",
-                        json={"idempotencyKey": "retry-1", "sourceRunId": failed_run_id},
+                        json={
+                            "idempotencyKey": "retry-1",
+                            "sourceRunId": failed_run_id,
+                        },
                     )
                     assert response.status_code == 202, response.text
                     body = response.json()
@@ -199,7 +258,9 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     new_run_id = body["runId"]
                     assert new_run_id != failed_run_id
 
-                    retried = env.client.get_workflow_handle(workflow_id, run_id=new_run_id)
+                    retried = env.client.get_workflow_handle(
+                        workflow_id, run_id=new_run_id
+                    )
                     async with asyncio.timeout(30):
                         assert await retried.result() == [
                             "step-1 ok",
@@ -210,11 +271,16 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     # Earlier steps came from history; only the failed step and
                     # its successors ran again.
                     assert STEP_CALLS == ["step-3", "step-4"]
-                    assert (await retried.describe()).status == WorkflowExecutionStatus.COMPLETED
+                    assert (
+                        await retried.describe()
+                    ).status == WorkflowExecutionStatus.COMPLETED
 
                     repeated = await client.post(
                         f"/api/executions/{workflow_id}/retry-from-step",
-                        json={"idempotencyKey": "retry-1", "sourceRunId": failed_run_id},
+                        json={
+                            "idempotencyKey": "retry-1",
+                            "sourceRunId": failed_run_id,
+                        },
                     )
                     assert repeated.status_code == 202
                     assert repeated.json()["runId"] == new_run_id
@@ -223,7 +289,10 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     # (crash or failed commit), with the row either still on the
                     # failed run or already synced to the successor.
                     for row_run_id in (failed_run_id, new_run_id):
-                        for model in (TemporalExecutionCanonicalRecord, TemporalExecutionRecord):
+                        for model in (
+                            TemporalExecutionCanonicalRecord,
+                            TemporalExecutionRecord,
+                        ):
                             row = await session.get(model, workflow_id)
                             if row is not None:
                                 row.run_id = row_run_id
@@ -232,7 +301,10 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                         await session.commit()
                         recovered = await client.post(
                             f"/api/executions/{workflow_id}/retry-from-step",
-                            json={"idempotencyKey": "retry-1", "sourceRunId": failed_run_id},
+                            json={
+                                "idempotencyKey": "retry-1",
+                                "sourceRunId": failed_run_id,
+                            },
                         )
                         assert recovered.status_code == 202, recovered.text
                         assert recovered.json()["runId"] == new_run_id
@@ -240,7 +312,10 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
 
                     other = await client.post(
                         f"/api/executions/{workflow_id}/retry-from-step",
-                        json={"idempotencyKey": "retry-2", "sourceRunId": failed_run_id},
+                        json={
+                            "idempotencyKey": "retry-2",
+                            "sourceRunId": failed_run_id,
+                        },
                     )
                     assert other.status_code == 409
                     assert other.json()["detail"]["reason"] == "run_changed"
@@ -253,7 +328,9 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     workflows=[StepWorkflow],
                     data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
                     workflow_runner=UnsandboxedWorkflowRunner(),
-                ).replay_workflow(await retried.fetch_history(), raise_on_replay_failure=False)
+                ).replay_workflow(
+                    await retried.fetch_history(), raise_on_replay_failure=False
+                )
                 assert replay.replay_failure is None
     finally:
         await engine.dispose()
@@ -264,7 +341,6 @@ async def test_retry_is_refused_when_installed_code_cannot_replay_the_kept_histo
 ):
     STEP_CALLS.clear()
     FAILING_STEP["step"] = "step-2"
-
 
     monkeypatch.setattr(retry_from_step, "_replay_workflows", lambda: [ChangedWorkflow])
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/executions.db")
@@ -298,9 +374,16 @@ async def test_retry_is_refused_when_installed_code_cannot_replay_the_kept_histo
                     task_queue=TASK_QUEUE,
                     search_attributes=TypedSearchAttributes(
                         [
-                            SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_id"), owner),
-                            SearchAttributePair(SearchAttributeKey.for_keyword("mm_owner_type"), "user"),
-                            SearchAttributePair(SearchAttributeKey.for_keyword("mm_entry"), "user_workflow"),
+                            SearchAttributePair(
+                                SearchAttributeKey.for_keyword("mm_owner_id"), owner
+                            ),
+                            SearchAttributePair(
+                                SearchAttributeKey.for_keyword("mm_owner_type"), "user"
+                            ),
+                            SearchAttributePair(
+                                SearchAttributeKey.for_keyword("mm_entry"),
+                                "user_workflow",
+                            ),
                         ]
                     ),
                 )
@@ -317,7 +400,9 @@ async def test_retry_is_refused_when_installed_code_cannot_replay_the_kept_histo
                 assert response.status_code == 409
                 assert response.json()["detail"]["reason"] == "history_not_replayable"
                 # Nothing was reset: the failed run is still the latest run.
-                description = await env.client.get_workflow_handle(workflow_id).describe()
+                description = await env.client.get_workflow_handle(
+                    workflow_id
+                ).describe()
                 assert description.run_id == failed_run_id
                 assert description.status == WorkflowExecutionStatus.FAILED
     finally:

@@ -312,9 +312,11 @@ async def reconcile_expired_issue(
     if not reclaimable(issue_state, labels, active, ended, seen):
         return {
             "reclaimed": False,
-            "reasonCode": "settled_status_retained"
-            if issue_state == "open" and settled_elsewhere(labels)
-            else "live_or_legacy_owner",
+            "reasonCode": (
+                "settled_status_retained"
+                if issue_state == "open" and settled_elsewhere(labels)
+                else "live_or_legacy_owner"
+            ),
         }
     if seen == 0 and "status: in-progress" not in labels:
         return {"reclaimed": False, "reasonCode": "nothing_to_reconcile"}
@@ -344,8 +346,53 @@ async def reconcile_expired_issue(
     }
 
 
-async def renew_owned_claim(*, store, service, owner):
+async def _require_step_retry_claim(row, comments, service):
+    """An expired reservation can return only if no later attempt took over."""
+    from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+        _fetch_issue,
+    )
+    from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
+
+    if not str(row.comment_id or "").isdigit():
+        raise ValueError("claim_evidence_conflict")
+    for comment in comments:
+        parsed = parse_attempt_comment(comment.get("body"))
+        if parsed.status == "no_marker" or parsed.attempt_id == row.attempt_id:
+            continue
+        identifier = str(comment.get("id") or "")
+        if not identifier.isdigit() or int(identifier) > int(row.comment_id):
+            raise ValueError("claim_successor_exists")
+    issue_result = await _fetch_issue(
+        service=service,
+        repository=row.repository,
+        issue_number=row.issue_number,
+    )
+    issue = issue_result.get("issue") or {}
+    if not issue_result.get("ok") or not isinstance(issue, dict):
+        raise ValueError("claim_read_failure")
+    labels = {
+        str(label.get("name") if isinstance(label, dict) else label).strip().casefold()
+        for label in issue.get("labels", [])
+    }
+    if issue.get("state") != "open" or any(
+        label.startswith("status:") and label != "status: in-progress"
+        for label in labels
+    ):
+        raise ValueError("claim_issue_not_retryable")
+
+
+async def renew_owned_claim(*, store, service, owner, reacquire_expired=False):
     """Serialize renewal and retain intent/readback across uncertain PATCHes."""
+    async with store.locked(owner) as row:
+        return await renew_locked_claim(
+            row=row,
+            service=service,
+            reacquire_expired=reacquire_expired,
+        )
+
+
+async def renew_locked_claim(*, row, service, reacquire_expired=False):
+    """Renew under the owner's lock; only explicit failed-step retry reacquires."""
     from sqlalchemy.ext.asyncio import async_object_session
 
     from moonmind.workflows.temporal.github_issue_attempts import (
@@ -357,88 +404,93 @@ async def renew_owned_claim(*, store, service, owner):
         inspect_claim_comments,
     )
 
-    async with store.locked(owner) as row:
-        listed = await service.list_issue_comments(
-            repo=row.repository, issue_number=row.issue_number
-        )
-        if not listed.get("ok") or not isinstance(listed.get("comments"), list):
-            raise ValueError("claim_read_failure")
-        receipt = ClaimReceipt.from_row(row)
-        comment_id = inspect_claim_comments(receipt, listed["comments"])
-        # Ownership that this attempt already relinquished is never renewed,
-        # even while its bookkeeping retries.
-        if row.released or row.ownership_ended or not comment_id:
-            raise ValueError("claim_lease_lost")
-        observed = next(
-            comment["body"]
-            for comment in listed["comments"]
-            if str(comment["id"]) == comment_id
-        )
-        if row.pending_comment_body == observed:
-            row.comment_body, row.pending_comment_body = observed, None
-        handoff = parse_attempt_comment(row.comment_body).handoff
-        if handoff is None or not valid_lease(handoff):
-            raise ValueError("claim_lease_required")
-        if (
-            expired(handoff)
-            or handoff.activity not in RENEWABLE_ACTIVITIES
-            or handoff.operator_hold
-        ):
-            raise ValueError("claim_lease_lost")
-        # Execution renewal covers dispatch, including durable capacity waits.
-        # Promote the announcement to the running lease so a multi-minute wait
-        # or execution is not canceled before its first renewal. Selection-time
-        # announcements keep the five-minute deadline until dispatch.
-        promoting = handoff.activity == "preparing"
-        if promoting:
-            handoff = replace(handoff, activity="active")
-        now = utc_now()
-        if (
-            not promoting
-            and not row.pending_comment_body
-            and now - parse_time(handoff.lease_renewed_at)
-            < renew_interval_for(handoff.activity)
-        ):
-            return ClaimReceipt.from_row(row)
-        if promoting:
-            # An unconfirmed pre-promotion write never left GitHub confirmed;
-            # replace it with the promoted running lease.
-            renewed = render_attempt_comment(with_lease(handoff, now=now))
-        else:
-            renewed = row.pending_comment_body or render_attempt_comment(
-                with_lease(handoff, now=now)
-            )
-        if row.pending_comment_body and not promoting:
-            pending = parse_attempt_comment(renewed).handoff
-            if (
-                pending is None
-                or not valid_lease(pending)
-                or replace(
-                    pending,
-                    lease_expires_at=handoff.lease_expires_at,
-                    lease_renewed_at=handoff.lease_renewed_at,
-                )
-                != handoff
-            ):
-                raise ValueError("claim_update_pending")
-        row.pending_comment_body = renewed
+    listed = await service.list_issue_comments(
+        repo=row.repository, issue_number=row.issue_number
+    )
+    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+        raise ValueError("claim_read_failure")
+    receipt = ClaimReceipt.from_row(row)
+    comment_id = inspect_claim_comments(receipt, listed["comments"])
+    # Ownership that this attempt already relinquished is never renewed,
+    # even while its bookkeeping retries.
+    if row.released or row.ownership_ended or not comment_id:
+        raise ValueError("claim_lease_lost")
+    if reacquire_expired:
+        await _require_step_retry_claim(row, listed["comments"], service)
+    observed = next(
+        comment["body"]
+        for comment in listed["comments"]
+        if str(comment["id"]) == comment_id
+    )
+    if row.pending_comment_body == observed:
+        row.comment_body, row.pending_comment_body = observed, None
+    handoff = parse_attempt_comment(row.comment_body).handoff
+    if handoff is None or not valid_lease(handoff):
+        raise ValueError("claim_lease_required")
+    if (
+        (expired(handoff) and not reacquire_expired)
+        or handoff.activity not in RENEWABLE_ACTIVITIES
+        or handoff.operator_hold
+    ):
+        raise ValueError("claim_lease_lost")
+    # Execution renewal covers dispatch, including durable capacity waits.
+    # Promote the announcement to the running lease so a multi-minute wait
+    # or execution is not canceled before its first renewal. Selection-time
+    # announcements keep the five-minute deadline until dispatch.
+    promoting = handoff.activity == "preparing"
+    if promoting:
+        handoff = replace(handoff, activity="active")
+    now = utc_now()
+    if (
+        not promoting
+        and not row.pending_comment_body
+        and now - parse_time(handoff.lease_renewed_at)
+        < renew_interval_for(handoff.activity)
+    ):
         await async_object_session(row).commit()
-        await service.update_issue_comment(
-            repo=row.repository, comment_id=int(comment_id), body=renewed
+        return ClaimReceipt.from_row(row)
+    if promoting:
+        # An unconfirmed pre-promotion write never left GitHub confirmed;
+        # replace it with the promoted running lease.
+        renewed = render_attempt_comment(with_lease(handoff, now=now))
+    else:
+        renewed = row.pending_comment_body or render_attempt_comment(
+            with_lease(handoff, now=now)
         )
-        listed = await service.list_issue_comments(
-            repo=row.repository, issue_number=row.issue_number
-        )
-        if not listed.get("ok") or not isinstance(listed.get("comments"), list):
-            raise ValueError("claim_read_failure")
-        inspect_claim_comments(ClaimReceipt.from_row(row), listed["comments"])
-        if not any(
-            str(comment["id"]) == comment_id and comment.get("body") == renewed
-            for comment in listed["comments"]
+    if row.pending_comment_body and not promoting:
+        pending = parse_attempt_comment(renewed).handoff
+        if (
+            pending is None
+            or not valid_lease(pending)
+            or replace(
+                pending,
+                lease_expires_at=handoff.lease_expires_at,
+                lease_renewed_at=handoff.lease_renewed_at,
+            )
+            != handoff
         ):
             raise ValueError("claim_update_pending")
-        row.comment_body, row.pending_comment_body = renewed, None
-        return ClaimReceipt.from_row(row)
+    row.pending_comment_body = renewed
+    await async_object_session(row).commit()
+    await service.update_issue_comment(
+        repo=row.repository, comment_id=int(comment_id), body=renewed
+    )
+    listed = await service.list_issue_comments(
+        repo=row.repository, issue_number=row.issue_number
+    )
+    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+        raise ValueError("claim_read_failure")
+    inspect_claim_comments(ClaimReceipt.from_row(row), listed["comments"])
+    if reacquire_expired:
+        await _require_step_retry_claim(row, listed["comments"], service)
+    if not any(
+        str(comment["id"]) == comment_id and comment.get("body") == renewed
+        for comment in listed["comments"]
+    ):
+        raise ValueError("claim_update_pending")
+    row.comment_body, row.pending_comment_body = renewed, None
+    await async_object_session(row).commit()
+    return ClaimReceipt.from_row(row)
 
 
 async def renew_execution_claim(lease, *, store=None, service=None, owner=None):
@@ -453,6 +505,13 @@ async def renew_execution_claim(lease, *, store=None, service=None, owner=None):
     store = store or IssueClaimStore()
     service = service or GitHubService()
     receipt = await store.for_execution(owner or claim_owner())
+    # Trusted continuation discovery uses the Activity's recorded ancestry,
+    # never an owner supplied by the workflow input. It grants no expired lease.
+    discovering = not lease
+    if discovering and receipt is None:
+        return {"status": "unclaimed"}
+    if discovering:
+        lease = receipt.handoff().get("issueClaimLease") or {}
     if not receipt or any(
         lease.get(key) != value
         for key, value in {
@@ -478,4 +537,5 @@ async def renew_execution_claim(lease, *, store=None, service=None, owner=None):
         "owner": receipt.owner,
         "attemptId": receipt.attempt_id,
         "leaseExpiresAt": handoff.lease_expires_at,
+        **({"issueClaimLease": dict(lease)} if discovering else {}),
     }

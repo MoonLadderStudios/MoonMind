@@ -163,8 +163,12 @@ The instruction names the base identity; it never attests the base authority. A
 claim that bootstrapped the session it is claiming against is never its own
 bound — otherwise the guard would compare the request with the metadata it just
 wrote. A turn that joins an *existing* session is still bounded by that session's
-own durable record. When the repaired Step Execution never established a
-canonical session, there is no prior Omnigent authority to broaden and the turn
+own durable record. A separate remediation step uses its own admitted Skill
+snapshot, so a different snapshot does not broaden the repaired step's
+execution authority. Harness, model, effort, repository, workspace, profile,
+launch and publication bounds still apply; Skill changes within an existing
+session still require new session authority. When the repaired Step Execution
+never established a canonical session, there is no prior Omnigent authority to broaden and the turn
 is admitted; that is an absence of recorded authority, not a comparison against
 the claim itself.
 
