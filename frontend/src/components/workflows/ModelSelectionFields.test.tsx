@@ -20,6 +20,11 @@ describe('#4636 shared production selector', () => {
     expect(payload()).toEqual({});
     expect(screen.getByText('Inherited from workflow')).toBeTruthy();
   });
+  it('shows the default tier without a Profile default source note', () => {
+    render(<Form />);
+    expect((screen.getByLabelText('Workflow Tier') as HTMLSelectElement).value).toBe('2');
+    expect(screen.queryByText(/Profile default/)).toBeNull();
+  });
   it('selects Custom directly without changing either displayed value', () => {
     render(<Form />);
     fireEvent.change(screen.getByLabelText('Workflow Tier'), { target: { value: 'custom' } });
