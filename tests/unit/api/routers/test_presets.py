@@ -290,7 +290,11 @@ def test_presets_keep_account_free_local_admission_without_loading_user(
     catalog = AsyncMock()
     catalog.list_templates.return_value = []
     app.dependency_overrides[_get_catalog_service] = lambda: catalog
-    app.dependency_overrides[get_async_session] = lambda: object()
+
+    def session_provider() -> object:
+        return object()
+
+    app.dependency_overrides[get_async_session] = session_provider
     monkeypatch.setattr(auth_providers, "is_disabled_local_mode", lambda: True)
     monkeypatch.setattr(
         auth_providers, "_disabled_account_free_allowed", AsyncMock(return_value=True)

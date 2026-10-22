@@ -106,11 +106,16 @@ async def test_save_uses_instance_preferences_without_identity(tmp_path):
 
 
 async def test_admitted_http_journey_does_not_load_person(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
 
+    from api_service import auth_providers
     from api_service.api.routers.presets import router
     from api_service.db.base import get_async_session
+    from api_service.db.models import User
+    from api_service.services.single_user_conversion import run_guarded_upgrade
     from moonmind.config.settings import settings
 
     monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
@@ -129,6 +134,27 @@ async def test_admitted_http_journey_does_not_load_person(tmp_path, monkeypatch)
             transport=ASGITransport(app=app, client=("127.0.0.1", 12345)),
             base_url="http://localhost",
         ) as client:
+            # Loopback proves operator access, not a completed data cutover.
+            denied = await client.post(
+                "/api/presets",
+                json={
+                    "slug": "http-demo",
+                    "title": "HTTP",
+                    "description": "Real HTTP",
+                    "steps": [{"instructions": "work"}],
+                    "releaseStatus": "active",
+                },
+            )
+            assert denied.status_code == 503
+            assert denied.json()["detail"] == "setup_required"
+            async with maker() as session:
+                assert not (await session.scalars(select(Preset))).all()
+                result = await run_guarded_upgrade(session, operator_authorized=True)
+                assert result.published
+                assert not (await session.scalars(select(User))).all()
+
+            load_user = AsyncMock(side_effect=AssertionError("must not load a person"))
+            monkeypatch.setattr(auth_providers, "_load_disabled_user", load_user)
             response = await client.post(
                 "/api/presets",
                 json={
@@ -152,6 +178,9 @@ async def test_admitted_http_journey_does_not_load_person(tmp_path, monkeypatch)
             listed = await client.get("/api/presets", params={"favoritesOnly": "true"})
             assert [i["slug"] for i in listed.json()["items"]] == ["http-demo"]
             assert listed.json()["items"][0]["recentAppliedAt"]
+            load_user.assert_not_awaited()
+            async with maker() as session:
+                assert not (await session.scalars(select(User))).all()
         async with AsyncClient(
             transport=ASGITransport(app=app, client=("10.1.2.3", 12345)),
             base_url="http://localhost",
