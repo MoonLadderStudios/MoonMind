@@ -299,10 +299,12 @@ Docker nor waits for completion.
 
 - HTTP: `POST /api/v1/container-jobs`, `GET /api/v1/container-jobs/{jobId}`,
   `GET .../{jobId}/logs`, `GET .../{jobId}/artifacts`, and
-  `POST .../{jobId}/cancel`, all authenticated and owner-scoped.
-- MCP: the five `container.*` tools go to the same service; `tools/list`
-  advertises them only when the surface is enabled and the backend route is
-  ready.
+  `POST .../{jobId}/cancel`, operator-admitted and owner-scoped. Converted
+  instances need no person; retained owner keys still isolate jobs and replay.
+  Presented machine credentials cannot substitute for HTTP operator admission.
+- MCP: managed CLI/session callers use `/api/mcp/container/tools/call` with
+  signed, session-scoped capability checks, never operator fallback. General
+  MCP tools retain their existing admission. Discovery lists enabled tools only.
 - `MOONMIND_CONTAINER_JOBS_ENABLED` gates the surface. The local Compose
   deployment enables it by default; non-Compose deployments default to off.
 - The service can be ready while an optional source is cold; a cold recipe is

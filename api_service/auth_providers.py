@@ -368,6 +368,26 @@ async def get_instance_access(
     return await get_current_user()(request, session)
 
 
+async def get_instance_operator_access(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),  # noqa: B008 - FastAPI injection
+) -> User | OperatorAdmission:
+    """Operator-only consumer with explicit credential precedence.
+
+    Disabled-mode operator admission is transport-based, not a bearer verifier.
+    A presented machine credential must therefore fail closed on this surface,
+    even when its peer could otherwise use local/ingress admission. Machine
+    protocols verify their own credentials at their separate scoped endpoints.
+    Authenticated deployments retain normal MoonMind session verification.
+    """
+    if (is_disabled_local_mode() and "authorization" in request.headers) or any(
+        name in request.headers
+        for name in ("x-moonmind-execution-fanout", "x-moonmind-worker-token")
+    ):
+        raise HTTPException(status_code=401, detail={"code": "auth_invalid"})
+    return await get_instance_access(request, session)
+
+
 async def get_instance_access_optional(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
