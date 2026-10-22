@@ -21,6 +21,7 @@ export function createSubmissionResult(value: CreateSubmissionResult): CreateSub
 export interface CreateSubmissionIntent {
   key: string;
   uncertain: boolean;
+  attempt?: string;
   accepted?: CreateSubmissionResult;
   inputArtifactRef?: string;
   scheduledFor?: string;
@@ -83,6 +84,11 @@ export function createSubmissionScope(): string {
   return scope;
 }
 
+// A failed write must not let a reconstructed handler trust an older persisted
+// record. These whitelisted records survive only the current page lifetime.
+const failedIntentWrites = new Map<string, CreateSubmissionIntent>();
+const failedAttachmentWrites = new Map<string, CreateAttachmentRef>();
+
 export class CreateSubmissionIntents {
   private readonly intents = new Map<string, CreateSubmissionIntent>();
   private readonly uploads = new Map<string, CreateAttachmentRef>();
@@ -94,7 +100,7 @@ export class CreateSubmissionIntents {
   }
 
   attachment(fingerprint: string): CreateAttachmentRef | null {
-    const cached = this.uploads.get(fingerprint);
+    const cached = failedAttachmentWrites.get(`${this.storageKey(fingerprint)}.upload`) || this.uploads.get(fingerprint);
     if (cached) return cached;
     try {
       const stored = attachmentMetadata(JSON.parse(window.sessionStorage.getItem(`${this.storageKey(fingerprint)}.upload`) || 'null'));
@@ -127,21 +133,29 @@ export class CreateSubmissionIntents {
     const metadata = attachmentMetadata(ref);
     if (!metadata) return;
     this.uploads.set(fingerprint, metadata);
-    try { window.sessionStorage.setItem(`${this.storageKey(fingerprint)}.upload`, JSON.stringify(metadata)); }
-    catch { /* Live retries still reuse the uploaded ref. */ }
+    const key = `${this.storageKey(fingerprint)}.upload`;
+    try {
+      window.sessionStorage.setItem(key, JSON.stringify(metadata));
+      failedAttachmentWrites.delete(key);
+    } catch { failedAttachmentWrites.set(key, metadata); }
   }
 
   forRequest(body: Record<string, unknown>): CreateSubmissionIntent {
     const fingerprint = JSON.stringify(body);
     const known = this.intents.get(fingerprint);
-    if (known) return known;
+    if (known) {
+      this.save(known);
+      return known;
+    }
     let intent: CreateSubmissionIntent | null = null;
     try {
-      const stored = JSON.parse(window.sessionStorage.getItem(this.storageKey(fingerprint)) || 'null');
+      const stored = failedIntentWrites.get(this.storageKey(fingerprint)) ||
+        JSON.parse(window.sessionStorage.getItem(this.storageKey(fingerprint)) || 'null');
       if (stored && typeof stored.key === 'string' && typeof stored.uncertain === 'boolean') {
         intent = {
           key: stored.key,
           uncertain: stored.uncertain,
+          ...(typeof stored.attempt === 'string' ? { attempt: stored.attempt } : {}),
           ...(stored.accepted && typeof stored.accepted === 'object' ? { accepted: createSubmissionResult(stored.accepted) } : {}),
           ...(typeof stored.inputArtifactRef === 'string' ? { inputArtifactRef: stored.inputArtifactRef } : {}),
           ...(typeof stored.scheduledFor === 'string' ? { scheduledFor: stored.scheduledFor } : {}),
@@ -155,33 +169,66 @@ export class CreateSubmissionIntents {
     return intent;
   }
 
+  beginSubmission(intent: CreateSubmissionIntent, recurring: boolean): string | null {
+    this.save(intent);
+    if (intent.accepted || (recurring && intent.uncertain)) return null;
+    const attempt = newRequestId();
+    this.persist(intent, { begin: attempt });
+    return attempt;
+  }
+
+  rejectSubmission(intent: CreateSubmissionIntent, attempt: string): void {
+    this.persist(intent, { rejected: attempt });
+  }
+
   save(intent: CreateSubmissionIntent): void {
+    this.persist(intent);
+  }
+
+  private persist(intent: CreateSubmissionIntent, transition?: { begin?: string; rejected?: string }): void {
     for (const [fingerprint, candidate] of this.intents) {
       if (candidate !== intent) continue;
-      try {
-        const stored = JSON.parse(window.sessionStorage.getItem(this.storageKey(fingerprint)) || 'null');
-        if (stored?.key === intent.key) {
-          // Older handlers may finish after a reconstructed store has accepted
-          // this request. Preserve confirmed progress rather than rewinding it.
-          if (stored.accepted && typeof stored.accepted === 'object') intent.accepted = createSubmissionResult(stored.accepted);
-          if (typeof stored.inputArtifactRef === 'string') intent.inputArtifactRef = stored.inputArtifactRef;
-          if (typeof stored.scheduledFor === 'string') intent.scheduledFor = stored.scheduledFor;
-          const links = artifactLinkProgress(stored.artifactLinks);
-          for (const [key, state] of Object.entries(artifactLinkProgress(intent.artifactLinks))) {
-            if (links[key] !== 'complete') links[key] = state;
-          }
-          if (Object.keys(links).length) intent.artifactLinks = links;
+      let stored: CreateSubmissionIntent | null = null;
+      try { stored = failedIntentWrites.get(this.storageKey(fingerprint)) ||
+        JSON.parse(window.sessionStorage.getItem(this.storageKey(fingerprint)) || 'null'); }
+      catch { /* Storage may be unavailable; preserve the live state below. */ }
+      if (stored?.key === intent.key) {
+        // Older handlers may finish after a reconstructed store has accepted
+        // this request. Admission state changes only through owned transitions;
+        // artifact/link saves must neither clear nor resurrect uncertainty.
+        if (typeof stored.uncertain === 'boolean') intent.uncertain = stored.uncertain;
+        if (typeof stored.attempt === 'string') intent.attempt = stored.attempt;
+        else delete intent.attempt;
+        if (stored.accepted && typeof stored.accepted === 'object') intent.accepted = createSubmissionResult(stored.accepted);
+        if (typeof stored.inputArtifactRef === 'string') intent.inputArtifactRef = stored.inputArtifactRef;
+        if (typeof stored.scheduledFor === 'string') intent.scheduledFor = stored.scheduledFor;
+        const links = artifactLinkProgress(stored.artifactLinks);
+        for (const [key, state] of Object.entries(artifactLinkProgress(intent.artifactLinks))) {
+          if (links[key] !== 'complete') links[key] = state;
         }
-        if (intent.accepted) intent.uncertain = false;
-        window.sessionStorage.setItem(this.storageKey(fingerprint), JSON.stringify({
-          key: intent.key,
-          uncertain: intent.uncertain,
-          ...(intent.accepted ? { accepted: createSubmissionResult(intent.accepted) } : {}),
-          ...(intent.inputArtifactRef ? { inputArtifactRef: intent.inputArtifactRef } : {}),
-          ...(intent.scheduledFor ? { scheduledFor: intent.scheduledFor } : {}),
-          ...(intent.artifactLinks ? { artifactLinks: artifactLinkProgress(intent.artifactLinks) } : {}),
-        }));
-      } catch { /* Keep the live intent when tab storage is full or unavailable. */ }
+        if (Object.keys(links).length) intent.artifactLinks = links;
+      }
+      if (transition?.begin) {
+        intent.attempt = transition.begin;
+        intent.uncertain = true;
+      } else if (transition?.rejected && intent.attempt === transition.rejected) {
+        intent.uncertain = false;
+      }
+      if (intent.accepted) intent.uncertain = false;
+      const metadata: CreateSubmissionIntent = {
+        key: intent.key,
+        uncertain: intent.uncertain,
+        ...(intent.attempt ? { attempt: intent.attempt } : {}),
+        ...(intent.accepted ? { accepted: createSubmissionResult(intent.accepted) } : {}),
+        ...(intent.inputArtifactRef ? { inputArtifactRef: intent.inputArtifactRef } : {}),
+        ...(intent.scheduledFor ? { scheduledFor: intent.scheduledFor } : {}),
+        ...(intent.artifactLinks ? { artifactLinks: artifactLinkProgress(intent.artifactLinks) } : {}),
+      };
+      const key = this.storageKey(fingerprint);
+      try {
+        window.sessionStorage.setItem(key, JSON.stringify(metadata));
+        failedIntentWrites.delete(key);
+      } catch { failedIntentWrites.set(key, metadata); }
       return;
     }
   }
