@@ -27,6 +27,7 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
 from moonmind.security.mcp_tool_capabilities import mint_mcp_tool_capability
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.statuses.workflow import MoonMindWorkflowState
 
 pytestmark = pytest.mark.asyncio
@@ -313,8 +314,10 @@ async def test_presented_runtime_credential_cannot_use_operator_path(
 async def test_local_operator_dispatches_without_a_synthetic_user(mcp_app, monkeypatch):
     captured: dict[str, Any] = {}
 
-    async def _dispatch(payload, owner, session, *, capability=None):
+    async def _dispatch(payload, owner, session, *, capability=None, operator=None):
         captured["owner"] = owner
+        captured["operator"] = operator
+        assert capability is None
         return {"jobId": "container-job:" + "1" * 32}
 
     monkeypatch.setattr(mcp_tools, "_dispatch_container_job_tool", _dispatch)
@@ -337,3 +340,4 @@ async def test_local_operator_dispatches_without_a_synthetic_user(mcp_app, monke
     assert captured["owner"] == OwnerIdentity(
         principalId=providers.instance_operator_principal(), principalType="user"
     )
+    assert isinstance(captured["operator"], OperatorAdmission)

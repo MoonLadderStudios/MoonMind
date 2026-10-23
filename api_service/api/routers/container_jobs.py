@@ -115,9 +115,11 @@ def container_job_owner(access: OperatorAdmission) -> OwnerIdentity:
     )
 
 
-def _build_service(session: AsyncSession) -> ContainerJobService:
+def _build_service(
+    session: AsyncSession, operator: OperatorAdmission
+) -> ContainerJobService:
     return ContainerJobService(
-        session, artifacts=get_temporal_artifact_service(session)
+        session, artifacts=get_temporal_artifact_service(session), operator=operator
     )
 
 
@@ -154,7 +156,7 @@ async def submit_container_job(
 
     try:
         _require_ready()
-        service = _build_service(session)
+        service = _build_service(session, user)
         accepted = await service.submit(owner=container_job_owner(user), request=payload)
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
         raise _raise_from(exc) from exc
@@ -172,7 +174,7 @@ async def get_container_job_status(
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobStatus:
     _require_ready()
-    service = _build_service(session)
+    service = _build_service(session, user)
     try:
         snapshot = await service.status(owner=container_job_owner(user), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 - normalized to a stable problem detail
@@ -193,7 +195,7 @@ async def get_container_job_logs(
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobLogPage:
     _require_ready()
-    service = _build_service(session)
+    service = _build_service(session, user)
     try:
         page = await service.logs(
             owner=container_job_owner(user),
@@ -220,7 +222,7 @@ async def get_container_job_artifacts(
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobArtifactPage:
     _require_ready()
-    service = _build_service(session)
+    service = _build_service(session, user)
     try:
         page = await service.artifacts(
             owner=container_job_owner(user), job_id=job_id, cursor=cursor, limit=limit
@@ -244,7 +246,7 @@ async def cancel_container_job(
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobCancelResult:
     _require_ready()
-    service = _build_service(session)
+    service = _build_service(session, user)
     try:
         result = await service.cancel(
             owner=container_job_owner(user), job_id=job_id, request=payload

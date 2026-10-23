@@ -18,7 +18,6 @@ from httpx import ASGITransport, AsyncClient
 from api_service.api.routers import container_jobs as http_router
 from api_service.api.routers import mcp_tools as mcp_tools_router
 from api_service.auth_providers import get_instance_access
-from moonmind.security.operator_admission import OperatorAdmission
 from api_service.services.container_jobs import (
     ContainerJobAuthorizationError,
     ContainerJobIdempotencyConflictError,
@@ -34,6 +33,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobStatus,
     RegistryAuthorization,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -97,7 +97,9 @@ class _FakeService:
 
 def _install_fake_service(monkeypatch, module, service) -> None:
     monkeypatch.setattr(
-        module, "ContainerJobService", lambda session, artifacts=None, capability=None: service
+        module,
+        "ContainerJobService",
+        lambda session, artifacts=None, capability=None, operator=None: service,
     )
     monkeypatch.setattr(
         module, "get_temporal_artifact_service", lambda session: None, raising=False

@@ -9,12 +9,12 @@ over durable references, never as an unbounded daemon stream.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,8 +54,10 @@ from moonmind.schemas.container_job_models import (
     require_explicit_resources,
 )
 from moonmind.security.container_job_capabilities import (
-    ContainerJobSessionCapability, container_job_matches_capability,
+    ContainerJobSessionCapability,
+    container_job_matches_capability,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 _STDERR_MARKER = "[stderr]"
@@ -118,12 +120,36 @@ class ContainerJobArtifactReader(Protocol):
 
 
 class ContainerJobRepository:
+
     def __init__(
-        self, session: AsyncSession, *,
+        self,
+        session: AsyncSession,
+        *,
         capability: ContainerJobSessionCapability | None = None,
+        operator: OperatorAdmission | None = None,
     ) -> None:
+        if operator is not None and (
+            not isinstance(operator, OperatorAdmission) or capability is not None
+        ):
+            raise ValueError("Operator and machine authority must remain separate")
         self._session = session
         self._capability = capability
+        self._operator = operator
+
+    def _owner_scope(self, owner: OwnerIdentity):
+        exact = and_(
+            ContainerJobRecord.owner_id == owner.principal_id,
+            ContainerJobRecord.owner_type == owner.principal_type,
+        )
+        if self._operator is None:
+            return exact
+        return or_(
+            exact,
+            and_(
+                ContainerJobRecord.owner_type == "user",
+                ContainerJobRecord.operator_access_granted.is_(True),
+            ),
+        )
 
     async def create_or_replay(
         self,
@@ -171,8 +197,21 @@ class ContainerJobRepository:
             return existing, True
 
     async def _by_idempotency(self, owner: OwnerIdentity, key: str) -> ContainerJobRecord | None:
-        result = await self._session.execute(select(ContainerJobRecord).where(ContainerJobRecord.owner_id == owner.principal_id, ContainerJobRecord.owner_type == owner.principal_type, ContainerJobRecord.idempotency_key == key))
-        return result.scalar_one_or_none()
+        rows = (
+            await self._session.scalars(
+                select(ContainerJobRecord)
+                .where(
+                    self._owner_scope(owner),
+                    ContainerJobRecord.idempotency_key == key,
+                )
+                .limit(2)
+            )
+        ).all()
+        if len(rows) > 1:
+            raise ContainerJobIdempotencyConflictError(
+                "idempotency key identifies multiple retained jobs"
+            )
+        return rows[0] if rows else None
 
     async def find_exact_replay(
         self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest
@@ -188,7 +227,12 @@ class ContainerJobRepository:
         return existing
 
     async def get_for_owner(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobRecord | None:
-        result = await self._session.execute(select(ContainerJobRecord).where(ContainerJobRecord.job_id == job_id, ContainerJobRecord.owner_id == owner.principal_id, ContainerJobRecord.owner_type == owner.principal_type))
+        result = await self._session.execute(
+            select(ContainerJobRecord).where(
+                ContainerJobRecord.job_id == job_id,
+                self._owner_scope(owner),
+            )
+        )
         record = result.scalar_one_or_none()
         if record is not None and self._capability is not None:
             if owner != self._capability.owner:
@@ -240,6 +284,7 @@ class ContainerJobRepository:
 
 
 class ContainerJobService:
+
     def __init__(
         self,
         session: AsyncSession,
@@ -249,9 +294,12 @@ class ContainerJobService:
         artifacts: ContainerJobArtifactReader | None = None,
         backend_settings: ContainerBackendSettings | None = None,
         capability: ContainerJobSessionCapability | None = None,
+        operator: OperatorAdmission | None = None,
     ) -> None:
         self._session = session
-        self.repository = ContainerJobRepository(session, capability=capability)
+        self.repository = ContainerJobRepository(
+            session, capability=capability, operator=operator
+        )
         self._temporal = temporal or TemporalClientAdapter()
         self._artifacts = artifacts
         self._authorizer = authorizer or PrivateImageAuthorizationService(
@@ -321,7 +369,7 @@ class ContainerJobService:
             and terminal.get("failureClass")
             == ContainerJobFailureClass.TEMPORAL_START.value
         )
-        preserve_existing_terminal = bool(
+        completed_replay = bool(
             existing is not None
             and not recovering_start_failure
             and record.state
@@ -333,6 +381,12 @@ class ContainerJobService:
                 ContainerJobState.REJECTED.value,
             }
         )
+        if completed_replay:
+            # Confirmed terminal work needs no new workflow start, including
+            # when Temporal history has expired or its service is unavailable.
+            return ContainerJobAccepted(
+                jobId=record.job_id, replayed=True, createdAt=record.created_at
+            )
         if recovering_start_failure:
             record.state = ContainerJobState.QUEUED.value
             record.terminal_outcome_json = None
@@ -349,20 +403,21 @@ class ContainerJobService:
             await self._temporal.start_container_job(
                 ContainerJobWorkflowInput(
                     jobId=record.job_id,
-                    owner=owner,
+                    owner=OwnerIdentity(
+                        principalId=record.owner_id, principalType=record.owner_type
+                    ),
                     request=request,
                     registryAuthorization=authorization,
                 )
             )
         except Exception:
-            if not preserve_existing_terminal:
-                record.state = ContainerJobState.FAILED.value
-                record.terminal_outcome_json = TerminalOutcome(
-                    failureClass=ContainerJobFailureClass.TEMPORAL_START,
-                    message=_TEMPORAL_START_FAILURE_MESSAGE,
-                ).model_dump(mode="json", by_alias=True, exclude_none=True)
-                record.updated_at = datetime.now(timezone.utc)
-                await self._session.commit()
+            record.state = ContainerJobState.FAILED.value
+            record.terminal_outcome_json = TerminalOutcome(
+                failureClass=ContainerJobFailureClass.TEMPORAL_START,
+                message=_TEMPORAL_START_FAILURE_MESSAGE,
+            ).model_dump(mode="json", by_alias=True, exclude_none=True)
+            record.updated_at = datetime.now(timezone.utc)
+            await self._session.commit()
             raise
         created_at = record.created_at or datetime.now(timezone.utc)
         return ContainerJobAccepted(jobId=record.job_id, replayed=replayed, createdAt=created_at)
@@ -392,6 +447,7 @@ class ContainerJobService:
             record.state = ContainerJobState.CANCELING.value
             await self.repository._session.flush()
             await self._temporal.signal_container_job_cancel(job_id)
+            await self._session.commit()
         return ContainerJobCancelResult(jobId=job_id, state=record.state, accepted=not terminal, replayed=replayed)
 
     async def logs(
@@ -408,7 +464,12 @@ class ContainerJobService:
             # bounded contract is an empty page, not an unbounded daemon stream.
             return ContainerJobLogPage(jobId=job_id, entries=[], nextCursor=None)
 
-        text = await self._read_evidence_text(owner=owner, artifact_ref=record.logs_ref)
+        text = await self._read_evidence_text(
+            owner=OwnerIdentity(
+                principalId=record.owner_id, principalType=record.owner_type
+            ),
+            artifact_ref=record.logs_ref,
+        )
         lines = text.split("\n")
         if lines and lines[-1] == "":
             lines.pop()
@@ -453,7 +514,10 @@ class ContainerJobService:
             # its collected output references, rather than describing the
             # manifest wrapper as though it were the job's sole output.
             manifest_text = await self._read_evidence_text(
-                owner=owner, artifact_ref=record.artifacts_ref
+                owner=OwnerIdentity(
+                    principalId=record.owner_id, principalType=record.owner_type
+                ),
+                artifact_ref=record.artifacts_ref,
             )
             try:
                 manifest = ContainerJobArtifactPage.model_validate(

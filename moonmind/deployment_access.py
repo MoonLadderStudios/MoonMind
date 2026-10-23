@@ -112,6 +112,14 @@ def validate_access(candidate: Mapping, containers: Sequence[Mapping]) -> None:
         if "oidc" in {old_env.get("AUTH_PROVIDER"), new_env.get("AUTH_PROVIDER")}:
             settings += ("OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET")
         for name in settings:
+            if (
+                name == "AUTH_PROVIDER"
+                and (old_env.get(name) or "") in {"", "disabled"}
+                and (new_env.get(name) or "") in {"", "disabled"}
+            ):
+                # The account-free API ignores this retired default selector.
+                # Bindings, networks and actual ingress protections still match.
+                continue
             if (old_env.get(name) or "") != (new_env.get(name) or ""):
                 changed.append(name)
         if changed:

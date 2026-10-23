@@ -1,9 +1,9 @@
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base
@@ -229,7 +229,7 @@ async def test_exact_replay_recovers_temporal_start_failure(
 
 
 @pytest.mark.asyncio
-async def test_terminal_replay_start_error_preserves_terminal_projection(
+async def test_terminal_replay_preserves_result_without_repeating_start(
     session_factory,
     temporal,
 ) -> None:
@@ -245,9 +245,12 @@ async def test_terminal_replay_start_error_preserves_terminal_projection(
         )
         await session.commit()
         temporal.start_container_job.side_effect = RuntimeError("temporal unavailable")
+        temporal.start_container_job.reset_mock()
 
-        with pytest.raises(RuntimeError, match="temporal unavailable"):
-            await service.submit(owner=owner, request=submission())
+        replay = await service.submit(owner=owner, request=submission())
+        assert replay.job_id == accepted.job_id
+        assert replay.replayed is True
+        temporal.start_container_job.assert_not_awaited()
 
         preserved = await service.status(owner=owner, job_id=accepted.job_id)
 
