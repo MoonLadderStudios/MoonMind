@@ -57,7 +57,11 @@ def upgrade():
         events = _rows("settings_audit_events")
         op.execute(
             events.update()
-            .where(events.c.workspace_id == _ZERO, events.c.user_id == _ZERO)
+            .where(
+                events.c.scope == "workspace",
+                events.c.workspace_id == _ZERO,
+                events.c.user_id == _ZERO,
+            )
             .values(workspace_id=None, user_id=None)
         )
     if "settings_overrides" not in tables:
