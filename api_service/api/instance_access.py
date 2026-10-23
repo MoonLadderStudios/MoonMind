@@ -1,10 +1,4 @@
-"""Read routes' ``get_instance_access`` result without resolving a person.
-
-``get_instance_access`` returns the retained predecessor ``User`` until guarded
-conversion publishes, and an ``OperatorAdmission`` afterwards. Routes use these
-helpers instead of reading ``User`` attributes so admitted requests never need a
-person row (MoonLadderStudios/MoonMind#4354).
-"""
+"""Resource provenance for admitted operators; machine scopes stay independent."""
 
 from __future__ import annotations
 
@@ -18,9 +12,7 @@ from moonmind.security.operator_admission import OperatorAdmission
 def is_instance_operator(access: Any) -> bool:
     """Whether the caller may manage every instance resource."""
 
-    return isinstance(access, OperatorAdmission) or bool(
-        getattr(access, "is_superuser", False)
-    )
+    return isinstance(access, OperatorAdmission)
 
 
 def access_principal(access: Any) -> str:
@@ -37,9 +29,9 @@ def access_principal(access: Any) -> str:
 
 
 def access_user_id(access: Any) -> UUID | None:
-    """Retained ``user.id`` for columns that still reference a person row.
+    """Optional historical attribution; new operator requests have no person.
 
-    Admission has no person, so person foreign keys stay null.
+    Admission has no person, so new person-attribution columns stay null.
     """
 
     if isinstance(access, OperatorAdmission):

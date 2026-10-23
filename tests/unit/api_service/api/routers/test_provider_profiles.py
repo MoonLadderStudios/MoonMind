@@ -49,6 +49,7 @@ from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
     provider_profile_launch_ready_from_payload,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 
 CODEX_OPENAI_API_KEY_PRESET_VERSION = get_provider_profile_creation_preset(
@@ -190,6 +191,12 @@ def _override_current_user(
     )
     app.dependency_overrides[get_instance_access] = lambda user=user: user
     return user
+
+
+def _override_instance_operator() -> OperatorAdmission:
+    admission = OperatorAdmission(via="loopback")
+    app.dependency_overrides[get_instance_access] = lambda: admission
+    return admission
 
 
 def _advertise_expert_manual_contracts(
@@ -806,7 +813,7 @@ async def test_unrelated_update_preserves_enabled_unknown_profile_without_author
 async def test_imported_credential_volume_uses_derived_mount_and_validation(
     client_app: AsyncClient, _module_db, monkeypatch
 ) -> None:
-    _override_current_user(is_superuser=True)
+    _override_instance_operator()
     verified: list[tuple[str, str, str]] = []
 
     async def _verify(
@@ -874,10 +881,11 @@ async def test_imported_credential_volume_uses_derived_mount_and_validation(
 
 
 @pytest.mark.asyncio
-async def test_imported_credential_volume_requires_superuser_authority(
-    client_app: AsyncClient, _module_db
+@pytest.mark.parametrize("is_superuser", [False, True])
+async def test_imported_credential_volume_rejects_unadmitted_caller(
+    client_app: AsyncClient, _module_db, is_superuser: bool
 ) -> None:
-    _override_current_user(is_superuser=False)
+    _override_current_user(is_superuser=is_superuser)
 
     async with client_app as client:
         response = await client.post(
@@ -902,7 +910,7 @@ async def test_replacing_imported_volume_increments_and_reconciles_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile_id = f"mm3820-import-replacement-{uuid4().hex}"
-    _override_current_user(is_superuser=True)
+    _override_instance_operator()
     reconciled: list[tuple[str, int]] = []
 
     async def _verify(
@@ -5532,7 +5540,7 @@ def _mm3788_profile_payload(
 async def test_mm3788_runtime_filter_excludes_other_runtime_profiles(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _override_current_user(is_superuser=True)
+    _override_instance_operator()
     _advertise_expert_manual_contracts(
         monkeypatch,
         ("codex_cli", "minimax", "secret_ref", "api_key_env"),
@@ -5586,7 +5594,7 @@ async def test_mm3788_runtime_filter_excludes_other_runtime_profiles(
 async def test_mm3788_runtime_filter_composes_with_enabled_only(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _override_current_user(is_superuser=True)
+    _override_instance_operator()
     _advertise_expert_manual_contracts(
         monkeypatch,
         ("mm3788_compose_runtime", "minimax", "secret_ref", "api_key_env"),

@@ -121,7 +121,6 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
     build_activity_bindings,
 )
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
@@ -1377,7 +1376,7 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             # The default journey retains disabled-mode read compatibility;
             # verify the sibling denial at the authenticated artifact boundary.
             with monkeypatch.context() as authenticated:
-                authenticated.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+                authenticated.setenv("AUTH_PROVIDER", "accounts")
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await observer.read(
                         artifact_id=artifact_id,

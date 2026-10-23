@@ -57,7 +57,7 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -128,7 +128,8 @@ async def migrate_legacy_profile_secrets(
     "outcome": "created"|"reused"|"conflict_kept_existing"}]}``.
     Never returns plaintext values.
     """
-    from api_service.db.models import ManagedSecret, SecretStatus, UserProfile
+    from api_service.db.models import ManagedSecret, SecretStatus
+    from api_service.migrations.account_source import source_profiles
 
     if enforce_eligibility:
         eligibility = await check_single_operator_eligibility(session)
@@ -153,14 +154,14 @@ async def migrate_legacy_profile_secrets(
     created = 0
     reused = 0
 
-    rows = (await session.execute(select(UserProfile))).scalars().all()
+    rows = await source_profiles(session)
     for profile in rows:
-        user_id = getattr(profile, "user_id", None)
+        user_id = profile.get("user_id")
         if user_id is None:
             continue
         for column, short in LEGACY_FIELDS:
             try:
-                value = getattr(profile, column, None)
+                value = profile.get(column)
             except Exception as exc:
                 # Single-user (#4349): an unreadable legacy ciphertext
                 # (rotated/damaged encryption key) must defer conversion,
@@ -303,37 +304,17 @@ async def check_single_operator_eligibility(session: AsyncSession) -> dict[str, 
     silently discard rows. Returns metadata only (counts + hex user ids),
     never secret values.
     """
-    from api_service.db.models import UserProfile
+    from api_service.migrations.account_source import source_profiles
 
-    conditions = [
-        UserProfile.google_api_key_encrypted.is_not(None),
-        UserProfile.openai_api_key_encrypted.is_not(None),
-        UserProfile.github_token_encrypted.is_not(None),
-        UserProfile.anthropic_api_key_encrypted.is_not(None),
-    ]
-    rows = (
-        await session.execute(
-            select(UserProfile.user_id).where(or_(*conditions))
-        )
-    ).all()
-    user_ids = sorted({str(r[0]) for r in rows if r[0] is not None})
-    # Exclude rows whose "values" are empty strings: presence check above is
-    # NULL-based, so confirm at least one non-blank value exists.
-    if user_ids:
-        profiles = (
-            await session.execute(select(UserProfile).where(or_(*conditions)))
-        ).scalars().all()
-        populated = sorted(
-            {
-                str(p.user_id)
-                for p in profiles
-                if p.user_id is not None
-                and any(
-                    _is_set(getattr(p, column, None)) for column, _ in LEGACY_FIELDS
-                )
-            }
-        )
-        user_ids = populated
+    profiles = await source_profiles(session)
+    user_ids = sorted(
+        {
+            str(profile["user_id"])
+            for profile in profiles
+            if profile.get("user_id") is not None
+            and any(_is_set(profile.get(column)) for column, _ in LEGACY_FIELDS)
+        }
+    )
     if len(user_ids) <= 1:
         return {
             "eligible": True,

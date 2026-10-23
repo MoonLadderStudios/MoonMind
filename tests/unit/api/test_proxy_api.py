@@ -116,3 +116,27 @@ def test_proxy_success_openai(mock_encryption, mock_resolver, mock_httpx):
         headers={"Authorization": "Bearer valid-openai"}
     )
     assert resp.status_code == 200
+
+
+def test_proxy_keeps_ingress_and_browser_credentials_out_of_upstream(
+    monkeypatch, mock_encryption, mock_resolver, mock_httpx
+):
+    monkeypatch.setenv("MOONMIND_PROXY_IDENTITY_HEADER", "X-Operator-Proof")
+    response = client.post(
+        "/api/v1/proxy/anthropic/v1/messages",
+        headers={
+            "Authorization": "Bearer valid-token",
+            "Cookie": "ingress=session",
+            "X-Moonmind-User": "ingress-assertion",
+            "X-Operator-Proof": "configured-assertion",
+            "X-Request-Id": "retained",
+        },
+    )
+    assert response.status_code == 200
+    upstream = {k.lower(): v for k, v in mock_httpx.request.call_args.kwargs["headers"].items()}
+    assert "cookie" not in upstream
+    assert "authorization" not in upstream
+    assert "x-moonmind-user" not in upstream
+    assert "x-operator-proof" not in upstream
+    assert upstream["x-api-key"] == "sk-ant-12345"
+    assert upstream["x-request-id"] == "retained"

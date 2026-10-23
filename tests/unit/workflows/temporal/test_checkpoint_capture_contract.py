@@ -15,7 +15,6 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import Base
 from moonmind.schemas.temporal_models import StepCheckpointCreateInput
 from moonmind.workflows.temporal import activity_runtime
-from moonmind.workflows.temporal import artifacts as artifact_module
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalCheckpointActivities,
@@ -41,9 +40,6 @@ async def capture_artifacts(tmp_path, monkeypatch):
         activity_type="step_checkpoint.create_v2",
     )
     monkeypatch.setattr(activity_runtime.temporal_activity, "info", lambda: info)
-    # Exercise the production machine-principal policy, independent of the
-    # host's disabled-local HTTP authentication setting.
-    monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     async with factory() as session:
         service = TemporalArtifactService(
             TemporalArtifactRepository(session),

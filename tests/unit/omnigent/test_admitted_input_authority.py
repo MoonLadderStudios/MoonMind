@@ -1,9 +1,8 @@
 """Runtime readers carry the admitted execution's input authority (#4633).
 
 Uses the real artifact service (SQLite metadata plus local blobs) and
-synthetic identities. Authenticated modes enforce execution delegation at the
-artifact service; disabled mode retains local read compatibility. Admitted
-readers still validate the immutable plan input closure in every mode.
+synthetic identities. Retired AUTH_PROVIDER values never relax machine
+execution delegation or the immutable plan input closure.
 """
 
 from __future__ import annotations
@@ -69,7 +68,7 @@ def auth_mode():
 
 @pytest_asyncio.fixture
 async def artifacts(tmp_path, monkeypatch, auth_mode):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
         settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")
@@ -282,7 +281,7 @@ SHAPES = {
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_mode", AUTHENTICATED_MODES)
+@pytest.mark.parametrize("auth_mode", AUTH_MODES)
 async def test_bare_runtime_readers_are_denied_without_admitted_scope(
     artifacts, auth_mode
 ):
@@ -390,7 +389,7 @@ async def test_admitted_skill_closure_reaches_every_runtime_consumer(
 async def test_unadmitted_execution_cannot_read_another_executions_inputs(
     artifacts, auth_mode
 ):
-    """Immutable closures hold in all modes; authenticated reads also need scope."""
+    """Immutable closures and execution scope survive retired login selectors."""
 
     gateway = TemporalOmnigentArtifactGateway(artifacts)
     runs = {}
@@ -411,16 +410,15 @@ async def test_unadmitted_execution_cannot_read_another_executions_inputs(
         await gateway.read_requested_skill_snapshot(
             skills_b.manifest_id, request=request_a
         )
-    # Authenticated artifact reads also require this run's delegation.
+    # Artifact reads also require this run's delegation.
     forged = request_a.model_copy(
         update={
             "omnigent_execution_plan": request_b.omnigent_execution_plan,
             "parameters": dict(request_b.parameters),
         }
     )
-    if auth_mode != "disabled":
-        with pytest.raises(TemporalArtifactAuthorizationError):
-            await gateway.read_admitted_input(skills_b.body_id, request=forged)
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await gateway.read_admitted_input(skills_b.body_id, request=forged)
     # Concurrent use of one gateway keeps each run's delegation separate.
     results = await asyncio.gather(
         *(
@@ -675,10 +673,9 @@ async def test_planned_host_launch_requires_its_admitted_execution(
     resolver = OmnigentPlannedHostResolver(
         catalog_repository=SimpleNamespace(), artifact_gateway=gateway
     )
-    # Authenticated reads require delegation before the exact launch is read.
-    if auth_mode != "disabled":
-        with pytest.raises(TemporalArtifactAuthorizationError):
-            await resolver._load_exact_launch(plan, request=request)
+    # Reads require delegation before the exact launch is read.
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await resolver._load_exact_launch(plan, request=request)
     await gateway.admit_execution_plan_inputs(request=request, plan=plan)
     if binding_shape == "retained-plan-ref":
         request = request.model_copy(update={"omnigent_execution_plan": None})
@@ -687,9 +684,8 @@ async def test_planned_host_launch_requires_its_admitted_execution(
         await resolver._load_exact_launch(
             plan, request=request.model_copy(update={"step_execution": None})
         )
-    if auth_mode != "disabled":
-        with pytest.raises(TemporalArtifactAuthorizationError):
-            await gateway.read_bytes(launch_id)
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await gateway.read_bytes(launch_id)
 
     other_plan, other_request, _launch, _launch_id = await _admitted_launch(
         artifacts, workflow_id="launch-b"
@@ -698,14 +694,13 @@ async def test_planned_host_launch_requires_its_admitted_execution(
     # A substituted launch is outside the request's immutable plan closure.
     with pytest.raises(OmnigentArtifactError, match="not an admitted input"):
         await resolver._load_exact_launch(other_plan, request=request)
-    # Authenticated artifact reads reject another workflow's delegation.
+    # Artifact reads reject another workflow's delegation.
     forged = request.model_copy(update={
         "omnigent_execution_plan": other_request.omnigent_execution_plan,
         "parameters": dict(other_request.parameters),
     })
-    if auth_mode != "disabled":
-        with pytest.raises(TemporalArtifactAuthorizationError):
-            await resolver._load_exact_launch(other_plan, request=forged)
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await resolver._load_exact_launch(other_plan, request=forged)
     async with artifacts() as session:
         row = await TemporalArtifactRepository(session).get_artifact(launch_id)
         assert row.created_by_principal == "system"

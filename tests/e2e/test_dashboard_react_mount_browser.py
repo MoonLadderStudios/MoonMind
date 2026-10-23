@@ -19,10 +19,11 @@ if not os.getenv("RUN_E2E_TESTS"):
 
 from playwright.sync_api import expect, sync_playwright
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from api_service.main import app as main_app
+from tests.helpers.account_source import User
+
 
 @contextmanager
 def _playwright_page(playwright_obj):
@@ -39,7 +40,7 @@ def _playwright_page(playwright_obj):
 @pytest.fixture(scope="module")
 def server():
     test_user = User(id=uuid4(), email="mc-smoke@example.com")
-    main_app.dependency_overrides[get_current_user] = lambda: test_user
+    main_app.dependency_overrides[get_instance_access] = lambda: test_user
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)

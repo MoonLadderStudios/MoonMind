@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.executions import _get_service, router
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
@@ -515,7 +515,7 @@ async def test_public_checkpoint_branch_launch_is_idempotent_under_postgres_race
         if route_item.dependant is not None
         for dependency in route_item.dependant.dependencies
         if getattr(dependency.call, "__name__", "") == "_current_user_fallback"
-    } or {get_current_user()}
+    } or {get_instance_access}
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda: user
 

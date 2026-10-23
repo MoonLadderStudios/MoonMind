@@ -33,7 +33,6 @@ PyYAML = ">=6.0.2"
 asyncpg = ">=0.31,<0.33"
 SQLAlchemy = "~=2.0.49"
 docker = ">=7.1,<7.3"
-"fastapi-users" = { version = "~=15.0.5", extras = ["sqlalchemy"] }
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
 alembic = ">=1.18.4,<1.21.0"
 sqlalchemy-utils = ">=0.42.1,<0.44.0"

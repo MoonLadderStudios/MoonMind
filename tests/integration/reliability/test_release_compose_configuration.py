@@ -133,7 +133,6 @@ async def test_wildcard_operator_probe_preserves_real_compose_auth_startup(
     from fastapi import FastAPI
 
     from api_service import main as api_main
-    from moonmind.security import auth_modes_4120 as auth_modes
     from moonmind.workflows.skills.deployment_surface import operator_urls
 
     original = (
@@ -178,11 +177,10 @@ async def test_wildcard_operator_probe_preserves_real_compose_auth_startup(
         "MOONMIND_SESSION_SECRET", "release-origin-test-key-32-bytes-long"
     )
     monkeypatch.delenv("MOONMIND_AUTH_MIGRATION_DECISION", raising=False)
-    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "disabled")
-    monkeypatch.setattr(auth_modes, "_ACTIVE_PRODUCTION_MODE", None)
+    monkeypatch.setenv("AUTH_PROVIDER", str(None or ""))
     app = FastAPI()
-    await api_main._initialize_oidc_provider(app)
-    assert app.state.auth_production_mode == "disabled"
+    await api_main._initialize_operator_admission(app)
+    assert app.state.operator_admission_ready is True
 
 
 @pytest.mark.parametrize("public_url", ["", "https://ingress.example.invalid"])

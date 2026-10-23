@@ -22,7 +22,6 @@ from api_service.db.models import (
     TemporalArtifactRedactionLevel,
     TemporalArtifactUseClaim,
 )
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
@@ -135,7 +134,7 @@ async def _serve(service, surface: str, artifact_id: str, **overrides):
 async def test_failed_acquisition_preserves_authorized_read_and_caller_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, surface: str
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -155,7 +154,7 @@ async def test_failed_acquisition_preserves_authorized_read_and_caller_work(
 async def test_failed_release_preserves_committed_claim_and_caller_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -197,7 +196,7 @@ async def test_failed_release_preserves_committed_claim_and_caller_work(
 async def test_failed_release_still_returns_bounded_read_and_ttl_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, surface: str
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -222,7 +221,7 @@ async def test_failed_release_still_returns_bounded_read_and_ttl_claim(
 async def test_failed_acquisition_does_not_break_safe_preview_derivation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -259,7 +258,7 @@ async def test_caller_preflush_failure_is_not_swallowed_as_observation_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The caller's failed write is a real error, outside best-effort accounting."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
         artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
@@ -285,7 +284,7 @@ async def test_outer_commit_failure_is_not_reported_as_successful_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Unknown commit outcomes cannot be treated as a skipped observation."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
         artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
@@ -308,7 +307,7 @@ async def test_outer_commit_failure_is_not_reported_as_successful_read(
 async def test_failed_release_does_not_hide_original_storage_read_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -334,7 +333,7 @@ async def test_failed_release_does_not_hide_original_storage_read_failure(
 async def test_successful_observation_retains_existing_visibility_and_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
         artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
@@ -360,7 +359,7 @@ async def test_observation_failure_never_weakens_read_authorization(
     surface: str,
     denial: str,
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -397,7 +396,7 @@ async def test_claim_trigger_aborting_caller_transaction_is_never_best_effort(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
 ) -> None:
     """RAISE(ROLLBACK) loses the outer transaction, even if ORM flags stay active."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -428,7 +427,7 @@ async def test_unrecoverable_claim_execution_error_propagates_without_losing_wor
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, failure_kind: str
 ) -> None:
     """Real SQL-execution events must not convert cancellation/control loss to success."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -489,7 +488,7 @@ async def test_physical_savepoint_control_errors_never_report_read_success(
     statement_prefix: str,
 ) -> None:
     """A real SQLite error at a control statement is not a skipped claim write."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
@@ -522,7 +521,7 @@ async def test_successful_claim_is_visible_to_independent_reader_before_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Serving starts after durable admission; bounded-read completion releases it."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
         artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
@@ -572,7 +571,7 @@ async def test_successful_claim_is_visible_to_independent_reader_before_bytes(
 async def test_explicit_claim_retry_extends_but_never_shortens_loaded_expiry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
         artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
@@ -612,7 +611,7 @@ async def test_explicit_claim_retry_extends_but_never_shortens_loaded_expiry(
 async def test_failed_claim_extension_preserves_loaded_expiry_and_caller_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)
         artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
@@ -660,12 +659,14 @@ async def test_failed_claim_extension_preserves_loaded_expiry_and_caller_work(
 
 @pytest.mark.parametrize("surface", ("read", "read_path", "compute_preview"))
 @pytest.mark.parametrize("primary_kind", ("missing", "invalid", "cancelled", "none"))
-@pytest.mark.parametrize("release_kind", ("non_database", "invalidated", "control", "cancelled"))
+@pytest.mark.parametrize(
+    "release_kind", ("non_database", "invalidated", "control", "cancelled")
+)
 async def test_release_failure_preserves_primary_serving_failure(
     tmp_path, monkeypatch, caplog, surface, primary_kind, release_kind
 ):
     """Real release SQL errors retain the read error, including cancellation."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.WARNING, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = _service(session, tmp_path)

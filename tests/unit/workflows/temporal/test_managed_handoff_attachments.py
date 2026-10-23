@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from moonmind.config.settings import settings
+from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjectionError
 from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -33,7 +33,7 @@ from tests.unit.workflows.temporal.test_activity_runtime import temporal_db
 async def test_separate_remaining_work_survives_publication_and_next_turn(
     tmp_path: Path, monkeypatch, reference_field, auth_mode
 ):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     root = tmp_path / "agent_jobs"
     workspace = root / "parent-workflow" / "repo"
     verify_path = workspace / "var/artifacts/moonspec-verify/final.json"
@@ -186,7 +186,9 @@ async def test_managed_turn_stages_exact_brief_and_preserves_candidate(
             )
             ref = await _write_json_artifact(
                 service,
-                principal="system:tool",
+                # Permit metadata reads so the unrelated-link case exercises
+                # workflow isolation even when the reader owns the artifact.
+                principal="workflow:parent-workflow",
                 payload=brief,
                 execution_ref=ExecutionRef(
                     namespace="default",
@@ -210,8 +212,12 @@ async def test_managed_turn_stages_exact_brief_and_preserves_candidate(
                 "skipSkillMaterialization": True,
             }
             if linked_workflow != "parent-workflow":
-                with pytest.raises(Exception, match="workflow"):
+                with pytest.raises(
+                    WorkspaceArtifactProjectionError,
+                    match="not linked to the current workflow family",
+                ) as denied:
                     await activities.agent_runtime_prepare_turn_instructions(payload)
+                assert denied.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
                 assert not list(workspace.glob(".moonmind/attachments/*"))
             else:
                 # Cold launch metadata and subsequent turns use the same owner;

@@ -763,12 +763,11 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
     explicit_target: bool,
     retained_binding: str | None,
 ) -> None:
-    from moonmind.config.settings import settings
     from moonmind.omnigent import production, profile_bound_execution
 
     # The Skill set is owned by its producer, so under authentication only
     # the Step Execution's admitted scope can read it (#4633).
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
 
     workflow_id = "mm:codex-durable-skill-journey"
     host_id = "host-" + hashlib.sha256(workflow_id.encode()).hexdigest()[:16]

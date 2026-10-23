@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers import mcp_tools
-from api_service.db.models import User
 from api_service.services.container_jobs import ContainerJobService
 from moonmind import container_job_cli
 from moonmind.schemas.container_job_models import (
@@ -22,10 +21,10 @@ from moonmind.schemas.container_job_models import (
     ContainerJobStatus,
     OwnerIdentity,
 )
-from moonmind.security import auth_modes_4120
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
+from tests.helpers.account_source import User
 
 _SECRET = "test-container-cli-machine-secret"
 _OWNER = OwnerIdentity(principalId="workflow-1", principalType="service")
@@ -87,7 +86,7 @@ def machine_route(request, monkeypatch):
     monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", lambda _: None)
     monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
     monkeypatch.setattr(mcp_tools.settings.security, "JWT_SECRET_KEY", _SECRET)
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
 
     app = FastAPI()
     app.include_router(mcp_tools.router, prefix="/api")

@@ -10,24 +10,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
-    Base,
     Preset,
     PresetFavorite,
     PresetRecent,
     PresetScopeType,
-    User,
 )
 from api_service.services.single_user_conversion import (
     SingleUserConversionRun,
     run_guarded_upgrade,
 )
+from tests.helpers.account_source import User, create_source_schema
 
 
 @pytest_asyncio.fixture
 async def preset_sessions(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/presets.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     yield sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     await engine.dispose()
 
@@ -502,7 +501,9 @@ async def test_synthetic_local_scope_converts_without_creating_person(preset_ses
         assert result.published, result.decision.to_sanitized_dict()
         session.expire_all()
         assert (await session.get(Preset, row_id)).scope_type is None
-        assert not list((await session.execute(select(User))).scalars())
+        from api_service.migrations.account_source import source_user_ids
+
+        assert await source_user_ids(session) == []
 
 
 @pytest.mark.asyncio
@@ -540,14 +541,25 @@ async def seed_instance_admission(session, schema_revision):
     """Persist the real completion shape emitted by the account-free predecessor."""
     from copy import deepcopy
 
-    result = await run_guarded_upgrade(session, operator_authorized=True)
+    from api_service.services.single_user_conversion import DEFAULT_SUBSYSTEM_TRANSFORMS
+
+    transforms = {
+        name: fn
+        for name, fn in DEFAULT_SUBSYSTEM_TRANSFORMS.items()
+        if name != "accounts"
+    }
+    result = await run_guarded_upgrade(
+        session, operator_authorized=True, transforms=transforms
+    )
     assert result.published
     row = (await session.execute(select(SingleUserConversionRun))).scalar_one()
-    if schema_revision != "398_instance_settings":
+    if True:
         stored = deepcopy(row.result_json)
         stored["schema_revision"] = schema_revision
+        stored["production_transforms_completed"] = True
         # Predecessors predate later transforms but certify admission.
-        stored["transforms"].pop("settings")
+        if schema_revision != "398_instance_settings":
+            stored["transforms"].pop("settings")
         if schema_revision == "396_artifact_operator_recovery":
             stored["transforms"].pop("presets")
         row.result_json = stored
@@ -618,7 +630,9 @@ async def test_certified_operator_global_preset_converts(
             recent.user_id is None
             and recent.applied_at.replace(tzinfo=UTC) == recent_at
         )
-        assert not list((await session.execute(select(User))).scalars())
+        from api_service.migrations.account_source import source_user_ids
+
+        assert await source_user_ids(session) == []
 
 
 @pytest.mark.asyncio
@@ -686,7 +700,9 @@ async def test_certified_ownerless_schedule_survives_preset_conversion(
             "slug": "seeded",
             "inputs": {"false": False},
         }
-        assert not list((await session.execute(select(User))).scalars())
+        from api_service.migrations.account_source import source_user_ids
+
+        assert await source_user_ids(session) == []
 
 
 @pytest.mark.asyncio

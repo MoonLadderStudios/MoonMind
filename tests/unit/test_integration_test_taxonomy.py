@@ -273,22 +273,7 @@ def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> No
     ), "Performance test should use 500 deterministic event count"
 
 
-def test_phase6_artifact_authorization_tests_require_oidc() -> None:
-    """Phase 6: artifact authorization tests must toggle AUTH_PROVIDER to
-    exercise real ownership checks, not rely on disabled auth."""
-    authz_test = (
-        REPO_ROOT
-        / "tests"
-        / "integration"
-        / "temporal"
-        / "test_temporal_artifact_authorization.py"
-    ).read_text(encoding="utf-8")
-    assert "AUTH_PROVIDER" in authz_test
-    assert "oidc" in authz_test
-    assert "TemporalArtifactAuthorizationError" in authz_test
-
-
-def test_keycloak_removal_auth_boundaries_select_integration_ci() -> None:
+def test_operator_access_boundaries_select_integration_ci() -> None:
     """MoonLadderStudios/MoonMind#4128: auth/provider/session/configuration,
     route/dependency, and Compose changes must run the hermetic integration_ci
     suite. Representative diffs pin this so a touched boundary cannot silently
@@ -301,7 +286,8 @@ def test_keycloak_removal_auth_boundaries_select_integration_ci() -> None:
     # Production auth, session issuance, worker authority, route mounting,
     # configuration, and deployment topology boundaries.
     for changed_path in (
-        "api_service/auth.py",
+        "moonmind/security/operator_admission.py",
+        "moonmind/security/deployment_auth.py",
         "api_service/auth_providers.py",
         "api_service/main.py",
         "moonmind/config/settings.py",

@@ -15,19 +15,18 @@ from unittest.mock import AsyncMock
 
 import pytest
 from temporalio import activity
-from temporalio.workflow import ParentInfo
 from temporalio.api.failure.v1 import Failure
-from temporalio.converter import DataConverter, DefaultFailureConverter, DefaultPayloadConverter
-from temporalio.service import RPCError, RPCStatusCode, WorkflowService
 from temporalio.api.workflowservice.v1 import (
     DescribeNamespaceResponse,
     DescribeWorkflowExecutionResponse,
 )
+from temporalio.converter import DataConverter, DefaultFailureConverter, DefaultPayloadConverter
+from temporalio.service import RPCError, RPCStatusCode, WorkflowService
+from temporalio.workflow import ParentInfo
 
 from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
-from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
@@ -52,8 +51,8 @@ from moonmind.workflows.temporal.story_output_tools import (
 )
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.agent_run import (
-    MoonMindAgentRun,
     TRUSTED_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID,
+    MoonMindAgentRun,
 )
 from tests.unit.omnigent.test_remediation_artifact_authority import artifacts  # noqa: F401
 from tests.unit.workflows.skills.test_acceptance_source_binding import (
@@ -352,9 +351,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             else:
                 assert all(value in {None, "workflow:unrelated"} for value in read_scopes)
         gate = published.metadata["moonSpecVerify"]
-        if scope in {"own", "restricted", "temporary"} or (
-            scope in {"unrelated", "missing"} and settings.oidc.AUTH_PROVIDER == "disabled"
-        ):
+        if scope in {"own", "restricted", "temporary"}:
             assert not gate.get("contractViolations")
             assert "acceptanceProjection" in gate["validatedRefs"]
             if scope == "temporary":

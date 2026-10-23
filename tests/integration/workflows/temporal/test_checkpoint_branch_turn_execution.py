@@ -29,7 +29,7 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from temporalio.workflow import ActivityCancellationType
 
 from api_service.api.routers.executions import _get_service, router
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
@@ -69,18 +69,18 @@ from moonmind.workflows.temporal.activities import omnigent_activities
 from moonmind.workflows.temporal.activities.omnigent_activities import (
     omnigent_profile_bound_execute_activity,
 )
-from moonmind.workflows.temporal.artifacts import (
-    ExecutionRef,
-    LocalTemporalArtifactStore,
-    TemporalArtifactService,
-)
-from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_TASK_QUEUE,
     ARTIFACTS_TASK_QUEUE,
     SANDBOX_TASK_QUEUE,
     get_workflow_task_queue,
 )
+from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
+    LocalTemporalArtifactStore,
+    TemporalArtifactService,
+)
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
     CheckpointBranchRetainedEvidenceError,
@@ -1078,7 +1078,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         if route_item.dependant is not None
         for dependency in route_item.dependant.dependencies
         if getattr(dependency.call, "__name__", "") == "_current_user_fallback"
-    } or {get_current_user()}
+    } or {get_instance_access}
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda: user
 

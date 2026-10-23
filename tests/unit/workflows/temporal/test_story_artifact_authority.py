@@ -234,17 +234,17 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
     )
     try:
         # The executing native tool's real Temporal context supplies scope.
-        if auth_mode != "disabled":
-            for workflow_id in ("sibling-parent", "forged-parent"):
-                monkeypatch.setattr(worker_runtime.temporalio.activity, "info", lambda: SimpleNamespace(
-                    workflow_id=workflow_id,
-                ))
-                with pytest.raises(TemporalArtifactAuthorizationError):
-                    await captured["reader"](ref)
+        # Retired login selectors cannot relax machine execution scope.
+        for workflow_id in ("sibling-parent", "forged-parent"):
+            monkeypatch.setattr(worker_runtime.temporalio.activity, "info", lambda: SimpleNamespace(
+                workflow_id=workflow_id,
+            ))
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await captured["reader"](ref)
         monkeypatch.setattr(worker_runtime.temporalio.activity, "info", lambda: SimpleNamespace(
             workflow_id=parent,
         ))
-        if auth_mode == "disabled" or scenario in {
+        if scenario in {
             "current_history", "checkpoint_branch_turn", "retained_checkpoint_branch_turn",
             "retained_history", "describe_unavailable"
         }:

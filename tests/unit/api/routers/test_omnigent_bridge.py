@@ -19,18 +19,19 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
-    _get_bridge_store,
     _get_bridge_proxy,
+    _get_bridge_store,
     _get_create_embedded_facade,
     _get_execution_service,
     _get_launch_default_agent_selection,
-    _require_bridge_enabled,
     _reconcile_facade_mutation,
+    _require_bridge_enabled,
     embedded_host_auth_preflight,
+    get_capability_registry,
     router,
 )
-from api_service.api.routers.omnigent_bridge import get_capability_registry
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access, instance_operator_principal
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -161,7 +162,7 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     )
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     client = TestClient(app)
 
     response = client.get(_READINESS_PATH)
@@ -655,7 +656,7 @@ def _build(
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     proxy = proxy or _FakeProxy()
     store = store or _FakeStore()
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = lambda: store
@@ -695,6 +696,29 @@ def test_create_session_success_at_mount_path() -> None:
     assert binding.workflow_id == "mm:w1"
     assert binding.idempotency_key == "idem-1"
     assert binding.correlation_id == "corr-1"
+
+
+def test_instance_operator_can_create_control_and_read_retained_session() -> None:
+    client, proxy, store = _build(owner_id="retained-owner")
+    metadata = store._session().metadata_
+    metadata["callerAuthorities"] = {
+        instance_operator_principal(): {name: True for name in CAPABILITY_NAMES}
+    }
+    store._session_overrides["metadata_"] = metadata
+    client.app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="trusted_ingress"
+    )
+
+    created = client.post(_CREATE_PATH, json=_create_body())
+    assert created.status_code == 200, created.text
+    projected = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events"
+    )
+    assert projected.status_code == 200, projected.text
+    controlled = client.post(_EVENTS_PATH, json={"type": "stop"})
+    assert controlled.status_code == 200, controlled.text
+    assert len(proxy.created) == 1
+    assert len(proxy.posted_events) == 1
 
 
 def test_create_session_blocks_mode_transition_with_active_other_mode() -> None:
@@ -935,7 +959,7 @@ def test_embedded_stream_emits_durable_sse_cursor_and_resumes() -> None:
     embedded = _FakeEmbeddedFacade()
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: monkeypatch_config
     app.dependency_overrides[_get_create_embedded_facade] = lambda: embedded
@@ -969,7 +993,7 @@ def test_embedded_public_routes_use_same_authorized_facade_boundary() -> None:
     embedded = _FakeEmbeddedFacade()
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     app.dependency_overrides[_get_create_embedded_facade] = lambda: embedded
@@ -1267,7 +1291,7 @@ def test_resolve_elicitation_parks_delivery_ambiguity_on_provider_failure() -> N
 def test_resolve_elicitation_reports_structured_error_when_mode_has_no_facade() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
 
@@ -1285,7 +1309,7 @@ def test_resolve_elicitation_reports_structured_error_when_mode_has_no_facade() 
 def test_session_authorization_reports_structured_error_when_proxy_is_missing() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
 
@@ -1722,7 +1746,7 @@ def test_superuser_owns_any_workflow() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     proxy = _FakeProxy()
-    app.dependency_overrides[get_current_user()] = _superuser
+    app.dependency_overrides[get_instance_access] = _superuser
     # Service returns a foreign owner, but superuser bypasses ownership.
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
@@ -1756,7 +1780,7 @@ def test_create_session_rejected_in_retired_embedded_mode() -> None:
             },
         }
     )
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
@@ -1795,7 +1819,7 @@ def test_stop_session_event_dispatches_to_embedded_exact_host_facade() -> None:
             },
         }
     )
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
@@ -1838,16 +1862,20 @@ def test_cleanup_session_event_uses_typed_embedded_control() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = _FakeEmbeddedFacade()
-    embedded_config = parse_bridge_config({
-        "enabled": False,
-        "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-        "hostConnection": {"embedded": {
-            "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
-            "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
-            "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
-        }},
-    })
-    app.dependency_overrides[get_current_user()] = _mock_user
+    embedded_config = parse_bridge_config(
+        {
+            "enabled": False,
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
@@ -1877,16 +1905,20 @@ def test_cleanup_session_rejects_missing_terminal_lease_evidence() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = _FakeEmbeddedFacade()
-    embedded_config = parse_bridge_config({
-        "enabled": False,
-        "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-        "hostConnection": {"embedded": {
-            "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
-            "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
-            "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
-        }},
-    })
-    app.dependency_overrides[get_current_user()] = _mock_user
+    embedded_config = parse_bridge_config(
+        {
+            "enabled": False,
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://omnigent/proxy",
+                    "liveSmokeEvidenceRef": "artifact://omnigent/smoke",
+                    "hostAuthConformanceEvidenceRef": "artifact://omnigent/auth",
+                }
+            },
+        }
+    )
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
@@ -1924,7 +1956,7 @@ def test_interrupt_embedded_control_is_explicitly_unsupported() -> None:
             },
         }
     )
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
@@ -2034,7 +2066,7 @@ def test_proxy_and_embedded_share_unknown_and_non_owner_error_contracts() -> Non
         facade._session_owner = owner
         app = FastAPI()
         app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-        app.dependency_overrides[get_current_user()] = _mock_user
+        app.dependency_overrides[get_instance_access] = _mock_user
         app.dependency_overrides[_get_execution_service] = lambda: _FakeService(caller)
         if embedded:
             app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
@@ -2088,7 +2120,7 @@ def test_embedded_clear_rejection_preserves_retrieval_authority() -> None:
         revoke_scope=Mock(return_value=["cap-1"]),
         has_live_session_authority=Mock(return_value=True),
     )
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None

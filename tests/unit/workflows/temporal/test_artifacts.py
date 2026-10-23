@@ -15,14 +15,15 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
-    TemporalExecutionCanonicalRecord,
-    TemporalExecutionOwnerType,
-    TemporalWorkflowType,
     TemporalArtifactRedactionLevel,
     TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
     TemporalArtifactStorageBackend,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalWorkflowType,
 )
+from moonmind.workflows.temporal import artifacts as artifact_module
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
@@ -36,7 +37,6 @@ from moonmind.workflows.temporal.artifacts import (
     build_artifact_ref,
     generate_artifact_id,
 )
-from moonmind.workflows.temporal import artifacts as artifact_module
 from moonmind.workflows.temporal.report_artifacts import (
     REPORT_ARTIFACT_LINK_TYPES,
     build_report_bundle_result,
@@ -1806,7 +1806,6 @@ async def test_execution_owner_can_read_linked_artifact_from_other_principal(
 ) -> None:
     """MM-628: browser reads may use execution ownership, not storage ownership alone."""
 
-    monkeypatch.setattr(artifact_module.settings.oidc, "AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = TemporalArtifactRepository(session)

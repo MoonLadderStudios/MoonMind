@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Annotated, Any, ClassVar, Literal, Optional, Sequence
+from typing import Annotated, Any, Literal, Optional, Sequence
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
@@ -1315,9 +1315,9 @@ class SecuritySettings(BaseSettings):
     @field_validator("JWT_SECRET_KEY", mode="after")
     @classmethod
     def resolve_machine_signing_key(cls, value: str | None) -> str:
-        from moonmind.security.auth_modes_4120 import (
+        from moonmind.security.deployment_auth import (
             looks_like_placeholder_secret,
-            resolve_session_secret,
+            resolve_signing_key,
         )
 
         # Migrate the previous template's scaffolding through the same durable
@@ -1335,7 +1335,7 @@ class SecuritySettings(BaseSettings):
         # API and workers already share this deployment-owned secrets volume.
         # Keep machine authority separate from the API-only session key. Reuse
         # the atomic durable-key mechanism so concurrent starters agree.
-        return resolve_session_secret(
+        return resolve_signing_key(
             key_path=ENV_FILE.parent / "var" / "secrets" / "machine_signing_key",
         ).hex()
 
@@ -1684,94 +1684,6 @@ class MemorySettings(BaseSettings):
         extra="ignore",
     )
 
-class OIDCSettings(BaseSettings):
-    """OIDC settings.
-
-    Storage for the raw ``AUTH_PROVIDER`` selector. Interpretation of the
-    selector (validation, fresh-vs-upgrade classification, migration
-    decisions, and deployment policy) is owned by
-    ``moonmind.security.auth_modes_4120`` (#4120); production consumers
-    must use that owner instead of comparing this field directly.
-    """
-
-    # Canonical application-authentication selector
-    # (docs/Security/AuthenticationContracts.md). Supported target modes are
-    # `accounts`, `oidc`, `header`, and explicitly restricted local `disabled`.
-    # Retired selectors (`keycloak`, `default`, `google`, `local`) are rejected
-    # at API startup with migration guidance, never silently translated.
-    SUPPORTED_AUTH_PROVIDERS: ClassVar[tuple] = ("accounts", "oidc", "header", "disabled")
-    RETIRED_AUTH_PROVIDERS: ClassVar[tuple] = ("keycloak", "default", "google", "local")
-
-    AUTH_PROVIDER: str = Field(
-        "disabled",
-        description="Authentication provider: 'accounts', 'oidc', 'header', or 'disabled'.",
-        alias="AUTH_PROVIDER",
-    )
-    OIDC_ISSUER_URL: Optional[str] = Field(
-        None,
-        alias="OIDC_ISSUER_URL",
-        description="Issuer URL of the generic external OIDC provider for 'oidc' mode.",
-    )
-    OIDC_CLIENT_ID: Optional[str] = Field(None, alias="OIDC_CLIENT_ID")
-    OIDC_CLIENT_SECRET: Optional[str] = Field(None, alias="OIDC_CLIENT_SECRET")
-    DEFAULT_USER_ID: Optional[str] = Field(
-        None,
-        alias="DEFAULT_USER_ID",
-        description="Default user ID for 'disabled' auth_provider mode.",
-    )
-    DEFAULT_USER_EMAIL: Optional[str] = Field(
-        None,
-        alias="DEFAULT_USER_EMAIL",
-        description="Default user email for 'disabled' auth_provider mode.",
-    )
-    DEFAULT_USER_PASSWORD: Optional[str] = Field(
-        "default_password_please_change",
-        alias="DEFAULT_USER_PASSWORD",
-        description="Default user password for 'disabled' auth_provider mode. Used for user creation if needed.",
-    )
-
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
-
-    def validate_auth_provider(self) -> str:
-        """Return the normalized selector, failing fast on retired/unknown values.
-
-        Retired bundled-Keycloak selectors are rejected with migration guidance
-        (MoonLadderStudios/MoonMind#4129); they are never silently translated to
-        another mode. Unknown selectors fail closed the same way. The normalized
-        value is stored so later exact comparisons against canonical lowercase
-        modes (for example `"disabled"`) see the same selector that validation
-        approved; noncanonical spellings such as `DISABLED` or padded values
-        therefore select the intended mode instead of falling through to an
-        authenticated bearer dependency.
-
-        A blank/omitted selector returns ``""`` (undecided) without raising:
-        the omitted-fresh vs. omitted-populated decision is owned by
-        ``moonmind.security.auth_modes_4120.classify_deployment`` (#4120 req 3),
-        which selects ``accounts`` on a genuinely fresh database and raises a
-        protected ``MigrationRequiredError`` on a populated one. Callers that
-        need the production decision must classify; they must not treat blank
-        as ``disabled``.
-        """
-        provider = (self.AUTH_PROVIDER or "").strip().lower()
-        if not provider:
-            return ""
-        if provider in self.RETIRED_AUTH_PROVIDERS:
-            raise RuntimeError(
-                f"Unsupported AUTH_PROVIDER '{self.AUTH_PROVIDER}': the bundled "
-                "Keycloak integration was removed (#4129). Use 'accounts' for "
-                "built-in accounts, 'oidc' with OIDC_ISSUER_URL/OIDC_CLIENT_ID/"
-                "OIDC_CLIENT_SECRET for generic external OIDC, 'header' behind a "
-                "trusted proxy, or explicitly restricted local 'disabled'. "
-                "See docs/Security/AuthenticationContracts.md."
-            )
-        if provider not in self.SUPPORTED_AUTH_PROVIDERS:
-            raise RuntimeError(
-                f"Unknown AUTH_PROVIDER '{self.AUTH_PROVIDER}': supported modes are "
-                "'accounts', 'oidc', 'header', and explicitly restricted local "
-                "'disabled'. See docs/Security/AuthenticationContracts.md."
-            )
-        self.AUTH_PROVIDER = provider
-        return provider
 
 class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
@@ -2121,7 +2033,6 @@ class AppSettings(BaseSettings):
     github: GitHubSettings = Field(default_factory=GitHubSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
-    oidc: OIDCSettings = Field(default_factory=OIDCSettings)
 
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
     temporal_dashboard: TemporalDashboardSettings = Field(

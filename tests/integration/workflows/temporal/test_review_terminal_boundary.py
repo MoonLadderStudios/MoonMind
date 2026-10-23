@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
     _bind_activity_handler,
 )
+from moonmind.workflows.temporal.artifacts import ExecutionRef
 from moonmind.workflows.temporal.client import (
     MOONMIND_TEMPORAL_DATA_CONVERTER,
     TemporalClientAdapter,
@@ -179,7 +180,14 @@ async def test_review_survives_through_terminal_persistence(
             executed.append(activity.info().activity_id)
             (workspace / "accepted.txt").write_text("Accepted implementation evidence")
             output = await owners.put(
-                {"summary": "Accepted implementation evidence"}, principal=owner
+                {"summary": "Accepted implementation evidence"},
+                principal=owner,
+                link=ExecutionRef(
+                    namespace=activity.info().namespace,
+                    workflow_id=activity.info().workflow_id,
+                    run_id=activity.info().workflow_run_id,
+                    link_type="output.summary",
+                ),
             )
             return {
                 "status": "COMPLETED",
@@ -226,6 +234,54 @@ async def test_review_survives_through_terminal_persistence(
                     )
                 return snapshot
 
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "plan_artifact_ref": plan,
+                    "initial_parameters": {
+                        "publishMode": "none" if outcome == "approved" else "pr"
+                    },
+                },
+                id=f"review-{uuid4()}",
+                task_queue=queue,
+                search_attributes=TypedSearchAttributes(
+                    [
+                        SearchAttributePair(
+                            SearchAttributeKey.for_keyword("mm_owner_type"), "user"
+                        ),
+                        SearchAttributePair(
+                            SearchAttributeKey.for_keyword("mm_owner_id"), owner
+                        ),
+                    ]
+                ),
+            )
+            desc = await handle.describe()
+            async with owners.sessions() as session:
+                session.add(
+                    TemporalExecutionCanonicalRecord(
+                        workflow_id=desc.id,
+                        run_id=desc.run_id,
+                        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                        owner_type=TemporalExecutionOwnerType.USER,
+                        owner_id=owner,
+                        entry="user_workflow",
+                    )
+                )
+                # Admit operator-created inputs before a worker can read them.
+                for ref, link_type in ((plan, "input.plan"), (registry, "input.registry")):
+                    await owners.service(session).link_artifact(
+                        artifact_id=ref,
+                        principal=owner,
+                        execution_ref=ExecutionRef(
+                            namespace=env.client.namespace,
+                            workflow_id=desc.id,
+                            run_id=desc.run_id,
+                            link_type=link_type,
+                        ),
+                    )
+                await session.commit()
+
             async with (
                 Worker(
                     env.client,
@@ -257,41 +313,6 @@ async def test_review_survives_through_terminal_persistence(
                     activities=[load_snapshot],
                 ),
             ):
-                handle = await env.client.start_workflow(
-                    MoonMindUserWorkflow.run,
-                    {
-                        "workflow_type": "MoonMind.UserWorkflow",
-                        "plan_artifact_ref": plan,
-                        "initial_parameters": {
-                            "publishMode": "none" if outcome == "approved" else "pr"
-                        },
-                    },
-                    id=f"review-{uuid4()}",
-                    task_queue=queue,
-                    search_attributes=TypedSearchAttributes(
-                        [
-                            SearchAttributePair(
-                                SearchAttributeKey.for_keyword("mm_owner_type"), "user"
-                            ),
-                            SearchAttributePair(
-                                SearchAttributeKey.for_keyword("mm_owner_id"), owner
-                            ),
-                        ]
-                    ),
-                )
-                desc = await handle.describe()
-                async with owners.sessions() as session:
-                    session.add(
-                        TemporalExecutionCanonicalRecord(
-                            workflow_id=desc.id,
-                            run_id=desc.run_id,
-                            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
-                            owner_type=TemporalExecutionOwnerType.USER,
-                            owner_id=owner,
-                            entry="user_workflow",
-                        )
-                    )
-                    await session.commit()
                 session_handle = await env.client.start_workflow(
                     MoonMindAgentSessionWorkflow.run,
                     CodexManagedSessionWorkflowInput(
@@ -338,7 +359,9 @@ async def test_review_survives_through_terminal_persistence(
                 )
                 assert checkpoint["boundary"] == "after_gate"
                 assert checkpoint["source"]["runId"] == desc.run_id
-                archive = await owners.read(checkpoint["workspace"]["archiveRef"])
+                archive = await owners.read(
+                    checkpoint["workspace"]["archiveRef"], principal=owner
+                )
                 with tarfile.open(fileobj=io.BytesIO(archive)) as captured:
                     member = next(
                         name

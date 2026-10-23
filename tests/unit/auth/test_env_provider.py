@@ -23,13 +23,8 @@ async def test_env_provider_returns_none_when_missing(monkeypatch):
     assert secret is None
 
 @pytest.mark.asyncio
-async def test_env_provider_handles_kwargs(monkeypatch):
+async def test_env_provider_rejects_retired_person_arguments(monkeypatch):
     monkeypatch.setenv("ANOTHER_KEY", "anothervalue")
     provider = EnvAuthProvider()
-
-    # Passing user and extra kwargs should not raise any error and still return the value
-    secret = await provider.get_secret(
-        key="ANOTHER_KEY", user=None, extra="extra_kwarg"
-    )
-
-    assert secret == "anothervalue"
+    with pytest.raises(TypeError):
+        await provider.get_secret(key="ANOTHER_KEY", user=None)

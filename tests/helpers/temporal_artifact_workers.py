@@ -27,7 +27,7 @@ class ArtifactWorkers:
             TemporalArtifactRepository(session), store=self.store
         )
 
-    async def put(self, payload, *, principal="system"):
+    async def put(self, payload, *, principal="system", link=None):
         async with self.sessions() as session:
             record, _ = await self.service(
                 session
@@ -40,6 +40,7 @@ class ArtifactWorkers:
                 ),
                 content_type="application/json",
                 scope="boundary-fixture",
+                link=link,
             )
             return record.artifact_id
 

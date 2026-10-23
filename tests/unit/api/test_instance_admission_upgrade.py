@@ -1,4 +1,4 @@
-"""Retained operator access survives an incomplete account-free conversion."""
+"""Installed operator access survives account retirement; incomplete data stays closed."""
 
 import ipaddress
 from types import SimpleNamespace
@@ -10,8 +10,6 @@ from fastapi import HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service import auth_providers as auth
-from api_service.db.models import User
-from moonmind.security import auth_modes_4120
 from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = pytest.mark.asyncio
@@ -19,13 +17,18 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def retained_instance(monkeypatch):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
     monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "")
     monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "0.0.0.0")
     monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
     monkeypatch.delenv("MOONMIND_TRUSTED_PROXIES", raising=False)
-    user = User(id=uuid4(), email="retained@example.invalid", is_active=True)
-    monkeypatch.setattr(auth.settings.oidc, "DEFAULT_USER_ID", str(user.id))
+    user = SimpleNamespace(id=uuid4())
+    from api_service.services import single_user_conversion
+
+    monkeypatch.setattr(
+        single_user_conversion,
+        "completed_guarded_upgrade",
+        AsyncMock(return_value=object()),
+    )
     session = AsyncMock(spec=AsyncSession)
     session.get.return_value = user
     result = MagicMock()
@@ -49,61 +52,25 @@ def request(peer="192.168.65.1"):
     )
 
 
-@pytest.mark.parametrize(
-    "dependency", [auth.get_instance_access, auth.get_instance_access_optional]
-)
-@pytest.mark.parametrize("conversion_status", [None, "blocked", "running"])
-async def test_incomplete_conversion_preserves_retained_access(
-    retained_instance,
-    dependency,
-    conversion_status,
+@pytest.mark.parametrize("failed", [False, True])
+async def test_incomplete_conversion_refuses_without_person_fallback(
+    retained_instance, monkeypatch, failed
 ):
-    session, user, result = retained_instance
-    if conversion_status:
-        result.scalars.return_value.all.return_value = [
-            SimpleNamespace(status=conversion_status, result_json={"published": False})
-        ]
-    incoming = request()
+    from api_service.services import single_user_conversion
 
-    assert await dependency(incoming, session) is user
-    session.get.assert_awaited_once_with(User, user.id)
-    assert auth.get_operator_recovery_principal(incoming) is None
-
-
-@pytest.mark.parametrize("failure", [None, ConnectionError("unavailable store")])
-async def test_unconverted_instance_never_invents_an_operator(
-    retained_instance, failure
-):
     session, _user, _result = retained_instance
-    session.get.return_value = None
-    session.get.side_effect = failure
+    monkeypatch.setattr(
+        single_user_conversion,
+        "completed_guarded_upgrade",
+        AsyncMock(
+            return_value=None,
+            side_effect=ConnectionError("store unavailable") if failed else None,
+        ),
+    )
     with pytest.raises(HTTPException) as exc:
         await auth.get_instance_access(request(), session)
     assert exc.value.status_code == 503
-    assert exc.value.detail == ("setup_required" if failure is None else "unavailable")
-
-
-@pytest.mark.parametrize("published", [False, True])
-async def test_only_published_conversion_switches_admission(
-    retained_instance, published
-):
-    session, user, result = retained_instance
-    result.scalars.return_value.all.return_value = [
-        SimpleNamespace(
-            status="complete",
-            result_json={
-                "published": published,
-                "decision": {"disposition": "eligible_conversion"},
-            },
-        )
-    ]
-    if not published:
-        assert await auth.get_instance_access(request(), session) is user
-        return
-    # Publishing conversion must not revoke the approved non-loopback ingress.
-    assert isinstance(
-        await auth.get_instance_access(request(), session), OperatorAdmission
-    )
+    assert exc.value.detail == ("unavailable" if failed else "conversion_required")
     session.get.assert_not_awaited()
 
 
@@ -280,8 +247,10 @@ async def test_retained_approved_ingress_preserves_existing_browser_url(
         (b"host", b"operator.example"),
         (b"origin", b"https://operator.example"),
     ]
-    assert await auth.get_instance_access(incoming, session) is user
-    assert auth.get_operator_recovery_principal(incoming) is None
+    assert isinstance(
+        await auth.get_instance_access(incoming, session), OperatorAdmission
+    )
+    assert auth.get_operator_recovery_principal(incoming) == "operator"
 
 
 async def test_retained_local_operator_keeps_its_real_principal(
@@ -291,5 +260,7 @@ async def test_retained_local_operator_keeps_its_real_principal(
     session, user, _result = retained_instance
     monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
     incoming = request("127.0.0.1")
-    assert await auth.get_instance_access(incoming, session) is user
-    assert auth.get_operator_recovery_principal(incoming) is None
+    assert isinstance(
+        await auth.get_instance_access(incoming, session), OperatorAdmission
+    )
+    assert auth.get_operator_recovery_principal(incoming) == "operator"

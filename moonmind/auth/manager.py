@@ -1,5 +1,4 @@
 import logging
-from typing import Any
 
 from .env_provider import EnvAuthProvider
 from .profile_provider import ProfileAuthProvider
@@ -16,23 +15,25 @@ class AuthProviderManager:
         provider: str,
         *,
         key: str,
-        user: Any | None = None,
         profile_id: str | None = None,
         allow_env_fallback: bool | None = None,
-        **kwargs: Any,
+        expected_credential_revision: int | None = None,
+        expected_policy_revision: int | None = None,
     ) -> str | None:
         provider = provider.lower()
         if provider == "profile":
             # A caller bound to an explicit profile must fail closed on that
             # profile alone: never select another profile, account, model, or
             # billing route via ambient env fallback unless the caller opts
-            # in explicitly. Legacy user-only callers keep the prior default.
-            bound_profile = profile_id or kwargs.get("profile_id")
+            # in explicitly. Unbound callers retain explicit environment fallback.
+            bound_profile = profile_id
             if allow_env_fallback is None:
                 allow_env_fallback = False if bound_profile else True
             try:
                 secret = await self.profile_provider.get_secret(
-                    key=key, user=user, profile_id=bound_profile, **kwargs
+                    key=key, profile_id=bound_profile,
+                    expected_credential_revision=expected_credential_revision,
+                    expected_policy_revision=expected_policy_revision,
                 )
             except Exception as exc:  # pragma: no cover - provider failure
                 logging.warning("Profile provider error: %s", exc)

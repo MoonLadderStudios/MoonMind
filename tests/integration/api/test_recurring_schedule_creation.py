@@ -16,7 +16,7 @@ from api_service.api.routers.executions import (
     get_temporal_client,
     router,
 )
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 
@@ -38,7 +38,7 @@ def _override_user_dependencies(app: FastAPI) -> SimpleNamespace:
         if dep.call.__name__ in {"_strict_current_user", "_optional_current_user", "get_instance_access", "get_instance_access_optional"}
     }
     if not user_dependencies:
-        user_dependencies = {get_current_user(), get_current_user_optional()}
+        user_dependencies = {get_instance_access, get_instance_access_optional}
 
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user

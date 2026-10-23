@@ -7,13 +7,14 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from api_service.db.models import Preset, PresetScopeType, User
+from api_service.db.models import Preset, PresetScopeType
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.services.single_user_conversion import (
     SingleUserConversionRun,
     run_guarded_upgrade,
 )
 from moonmind.workflows.executions.preset_readiness import SavedPresetCapabilitiesInput
+from tests.helpers.account_source import User, create_source_schema
 from tests.unit.api.test_presets_service import template_db
 
 pytestmark = pytest.mark.asyncio
@@ -22,6 +23,10 @@ pytestmark = pytest.mark.asyncio
 @pytest_asyncio.fixture
 async def preset_sessions(tmp_path):
     async with template_db(tmp_path) as sessions:
+        async with sessions() as session:
+            connection = await session.connection()
+            await connection.run_sync(create_source_schema)
+            await session.commit()
         yield sessions
 
 

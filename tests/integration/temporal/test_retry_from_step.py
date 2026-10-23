@@ -21,7 +21,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.api.routers import executions
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
@@ -130,8 +130,8 @@ def _app(service, session, env, user) -> FastAPI:
     app.dependency_overrides[get_async_session] = session_dependency
     app.dependency_overrides[executions._get_service] = lambda: service
     app.dependency_overrides[executions.get_temporal_client] = lambda: env.client
-    app.dependency_overrides[get_current_user()] = lambda: user
-    app.dependency_overrides[get_current_user_optional()] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
+    app.dependency_overrides[get_instance_access_optional] = lambda: user
     routes = list(app.routes)
     while routes:
         route = routes.pop()
