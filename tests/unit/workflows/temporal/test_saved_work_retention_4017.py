@@ -678,11 +678,12 @@ async def test_sweep_bounded_paginated_idempotent_observable(
             assert settled.soft_deleted_count == 0
 
 
-async def test_legacy_disabled_mode_preserves_saved_work_reads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_instance_operator_preserves_saved_work_reads(
+    tmp_path: Path,
 ) -> None:
-    """Local saved-work access keeps its merged-main disabled-mode behavior."""
-    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+    """Admitted operator scope restores retained work without changing its owner."""
+    from api_service.auth_providers import instance_operator_principal
+
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -690,14 +691,16 @@ async def test_legacy_disabled_mode_preserves_saved_work_reads(
             claim = await service.acquire_saved_work_use(
                 artifact_id=artifact.artifact_id,
                 principal="service:restore-worker",
+                admitted_principal=instance_operator_principal(),
                 request_id="restore-local",
                 operation_kind="restore",
             )
             assert claim.artifact_id == artifact.artifact_id
             assert claim.owner_principal == "service:restore-worker"
+            assert artifact.created_by_principal == "owner-1"
 
 
-@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header"])
+@pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header", "disabled"])
 async def test_service_principal_carries_admitted_scope_for_saved_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str
 ) -> None:
