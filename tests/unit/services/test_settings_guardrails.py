@@ -401,10 +401,13 @@ def test_section29_1_unexposed_setting_cannot_be_edited():
 
 def test_section29_2_writes_accept_no_client_chosen_scope_or_subject():
     """§29.2 — a client cannot pick a person or scope to write under."""
-    service = SettingsCatalogService(env={})
-    with pytest.raises(TypeError):
-        service.ensure_write_allowed("workflow.default_runtime", scope="user")  # type: ignore[call-arg]
-    assert "scope" not in inspect.signature(SettingsCatalogService.apply_overrides).parameters
+    for method in (
+        SettingsCatalogService.ensure_write_allowed,
+        SettingsCatalogService.apply_overrides,
+    ):
+        parameters = inspect.signature(method).parameters
+        assert "scope" not in parameters
+        assert "subject" not in parameters
 
 
 def test_section29_3_writes_pass_through_backend_validation():

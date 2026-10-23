@@ -93,7 +93,9 @@ def test_upgrade_converts_only_deployment_subject_rows_and_downgrade_restores(
                 f"('e', 'settings.override.updated', 'shared', 'workspace', "
                 f"'{ZERO}', '{ZERO}'), "
                 f"('f', 'settings.override.updated', 'shared', 'user', "
-                f"'{ZERO}', '{PERSON}')"
+                f"'{ZERO}', '{PERSON}'), "
+                f"('g', 'settings.override.updated', 'shared', 'user', "
+                f"'{ZERO}', '{ZERO}')"
             )
         )
 
@@ -117,6 +119,8 @@ def test_upgrade_converts_only_deployment_subject_rows_and_downgrade_restores(
         assert events == [
             ("e", "workspace", None, None),
             ("f", "user", ZERO, PERSON),
+            # A persisted zero-UUID User is still a person.
+            ("g", "user", ZERO, ZERO),
         ]
         # One instance row per key; the predecessor key still bounds legacy rows.
         connection.execute(
