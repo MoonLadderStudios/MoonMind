@@ -236,7 +236,7 @@ Operator origins come from effective Compose settings and bindings. An explicit 
 
 Verification requests the protected settings catalog, preserving TLS and ingress authentication; login redirects and public health cannot pass. A managed controller probes host loopback from an unprivileged host-network container. This never proves an external route or supplies identity headers or sessions. Missing credentials or unreachable networks remain incomplete verification; pre-update application health never gates repair.
 
-CI qualifies a candidate implementation; deployment observations identify the artifact actually installed. Updates do not run full CI or paid-provider qualification.
+Release publication runs required CI and the installed journeys against the assembled application manifest before moving `latest`; deployment observations identify the artifact actually installed. Updates still pull the requested channel directly and do not run full CI or paid-provider qualification.
 
 CI journeys for this boundary:
 
