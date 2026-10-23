@@ -372,10 +372,12 @@ jobs:
         if: matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true'
         run: git submodule update --init --depth 1 -- omnigent
       - name: Cache Temporal test servers
-        if: matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true'
+        if: >-
+          (matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true') ||
+          (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         timeout-minutes: 5
-        # Prepare both SDK binaries with bounded download retries before xdist
-        # workers start, keeping rate-limit recovery outside individual tests.
+        # Both suites start SDK environments. Recover bounded download failures
+        # before their test deadlines, rather than inside the first test.
         run: python api_service/docker/cache_temporal_test_server.py
       - name: Start isolated reliability dependencies
         if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
