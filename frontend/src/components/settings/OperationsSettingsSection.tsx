@@ -473,10 +473,8 @@ function workerDisplayName(shard: WorkerShard): string {
 
 export function OperationsSettingsSection({
   workerPauseConfig,
-  canInvokeOperations,
 }: {
   workerPauseConfig: WorkerPauseConfig | null;
-  canInvokeOperations: boolean;
 }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<{ level: 'ok' | 'error'; text: string } | null>(
@@ -1002,7 +1000,6 @@ export function OperationsSettingsSection({
               type="button"
               className="text-sm text-sky-700 hover:text-sky-600 dark:text-sky-400"
               disabled={
-                !canInvokeOperations ||
                 retryMutation.isPending ||
                 controllerUnavailable
               }
@@ -1126,13 +1123,6 @@ export function OperationsSettingsSection({
 
   return (
     <div className="space-y-6">
-      {!canInvokeOperations ? (
-        <section className="rounded-3xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400">
-          Operational state is available for inspection. Commands are read-only because{' '}
-          <code>operations.invoke</code> is not granted.
-        </section>
-      ) : null}
-
       <section
         className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm"
         aria-label="MoonMind update"
@@ -1245,7 +1235,6 @@ export function OperationsSettingsSection({
                 type="submit"
                 disabled={
                   deploymentMutation.isPending ||
-                  !canInvokeOperations ||
                   controllerUnavailable ||
                   controllerNotInstalled
                 }
@@ -1613,7 +1602,7 @@ export function OperationsSettingsSection({
                 </p>
 
                 <form className="mt-5 space-y-4" onSubmit={handlePause}>
-                  <fieldset className="space-y-3" disabled={actionMutation.isPending || !canInvokeOperations}>
+                  <fieldset className="space-y-3" disabled={actionMutation.isPending}>
                     <legend className="text-sm font-medium text-slate-700 dark:text-300">
                       Pause workers
                     </legend>
@@ -1651,7 +1640,7 @@ export function OperationsSettingsSection({
                 <div className="my-6 border-t border-slate-200 dark:border-slate-800" />
 
                 <form className="space-y-4" onSubmit={handleResume}>
-                  <fieldset className="space-y-3" disabled={actionMutation.isPending || !canInvokeOperations}>
+                  <fieldset className="space-y-3" disabled={actionMutation.isPending}>
                     <legend className="text-sm font-medium text-slate-700 dark:text-slate-300">
                       Resume workers
                     </legend>

@@ -12,6 +12,7 @@ from api_service.api.routers import omnigent_bridge as bridge
 from api_service.api.routers import omnigent_native_ui as ui
 from api_service.db.base import get_async_session
 from api_service.db.models import Base
+from api_service.services.single_user_conversion import run_guarded_upgrade
 from tests.helpers.account_source import User
 from tests.unit.api.routers.test_omnigent_native_ui import _INDEX_HTML, _FakeUpstream
 from tests.unit.api.routers.test_omnigent_workflow_chat import (
@@ -40,8 +41,6 @@ async def chat(tmp_path, monkeypatch):
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        from api_service.services.single_user_conversion import run_guarded_upgrade
-
         result = await run_guarded_upgrade(session, operator_authorized=True)
         assert result.published
 

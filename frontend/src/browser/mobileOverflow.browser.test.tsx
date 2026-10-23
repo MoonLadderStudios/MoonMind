@@ -44,12 +44,6 @@ const uiInfo = {
   features: { omnigentAgents: true, omnigentPolicies: true, artifacts: true },
   endpoints: { omnigentAgents: '/api/omnigent/api/agents', omnigentPolicies: '/api/omnigent/api/policies' },
   limits: {},
-  settingsPermissions: [
-    'provider_profiles.read',
-    'provider_profiles.write',
-    'secrets.metadata.read',
-    'secrets.write',
-  ],
   dashboardConfig: { pollIntervalsMs: { list: 60_000, detail: 60_000 } },
 };
 
@@ -380,7 +374,6 @@ function settingsResponse(url: URL): Response | null {
 
 const settingsUiInfo = {
   ...uiInfo,
-  settingsPermissions: [...uiInfo.settingsPermissions, 'settings.catalog.read', 'settings.audit.read', 'operations.read', 'operations.invoke'],
   workerPause: { get: '/api/workers', post: '/api/worker-action', shardHealth: '/api/v1/operations/codex/shards', pollIntervalMs: 60_000 },
 };
 

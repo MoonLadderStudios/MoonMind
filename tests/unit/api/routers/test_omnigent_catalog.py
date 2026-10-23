@@ -418,9 +418,6 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
             return catalog_result
 
     monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
-    monkeypatch.setattr(
-        catalog, "_require_provider_profile_permission", lambda *_: None
-    )
     monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
     _set_ready_opencode_image_pair(monkeypatch)
     # Exercise the documented default catalog interval, not an inherited value.
@@ -607,9 +604,6 @@ async def test_catalog_identity_changes_do_not_hide_configured_profiles(
             return catalog_result
 
     monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
-    monkeypatch.setattr(
-        catalog, "_require_provider_profile_permission", lambda *_: None
-    )
     monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
@@ -1535,9 +1529,6 @@ def test_catalog_filters_persisted_policies_not_visible_to_caller(monkeypatch):
     app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id="current-user", is_superuser=False
     )
-    monkeypatch.setattr(
-        catalog, "_require_provider_profile_permission", lambda *_: None
-    )
 
     response = TestClient(app).get("/api/omnigent/codex-catalog-readiness")
 
@@ -1555,9 +1546,6 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
     app = _app(monkeypatch, session=_Session([visible, hidden]))
     app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id="current-user", is_superuser=False
-    )
-    monkeypatch.setattr(
-        catalog, "_require_provider_profile_permission", lambda *_: None
     )
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
@@ -1879,9 +1867,6 @@ def _mm3833_generic_readiness(monkeypatch, document, providers):
             return catalog_result
 
     monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
-    monkeypatch.setattr(
-        catalog, "_require_provider_profile_permission", lambda *_: None
-    )
     monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
     _set_ready_opencode_image_pair(monkeypatch)
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
@@ -2436,13 +2421,6 @@ def test_static_policy_requires_live_connected_host_lease(monkeypatch):
         reason["code"] for reason in profile["gateReasons"]
     }
     assert body["hostModes"] == ["on_demand_docker"]
-
-
-def test_catalog_denies_caller_without_provider_profile_permission(monkeypatch):
-    response = TestClient(_app(monkeypatch, session=_Session([]), superuser=False)).get(
-        "/api/omnigent/codex-catalog-readiness"
-    )
-    assert response.status_code == 403
 
 
 # --- Exact-artifact + freshness support gating (MoonLadderStudios/MoonMind#3710 AC10) -

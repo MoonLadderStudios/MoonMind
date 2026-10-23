@@ -20,11 +20,6 @@ describe('Settings Entrypoint', () => {
     page: 'settings-providers-secrets',
     apiBase: '/api',
     initialData: {
-      settingsPermissions: [
-        'provider_profiles.read',
-        'secrets.metadata.read',
-        'settings.catalog.read',
-      ],
     },
   };
 
@@ -108,7 +103,7 @@ describe('MoonLadderStudios/MoonMind#4019 Source Control on Providers & Secrets'
     renderProvidersPage({
       page: 'settings-providers-secrets',
       apiBase: '/api',
-      initialData: { settingsPermissions: ['settings.effective.read'] },
+      initialData: { },
     });
 
     const section = await screen.findByRole('region', { name: 'Source Control' });
@@ -152,11 +147,6 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     page: 'settings-providers-secrets',
     apiBase: '/api',
     initialData: {
-      settingsPermissions: [
-        'provider_profiles.read',
-        'provider_profiles.write',
-        'secrets.metadata.read',
-      ],
       runtimeConfig: {
         system: {
           // `omnigent` is a facade, never a Provider Profile owner, so it must
