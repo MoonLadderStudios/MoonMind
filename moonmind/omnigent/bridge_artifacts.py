@@ -13,7 +13,7 @@ import mimetypes
 import os.path
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
@@ -63,7 +63,14 @@ class OmnigentArtifactError(RuntimeError):
 
 
 async def link_verified_execution_plan_inputs(
-    *, session_factory, plan, binding, workflow_id: str, run_id: str
+    *,
+    session_factory,
+    plan,
+    binding,
+    workflow_id: str,
+    run_id: str,
+    namespace: str = "default",
+    planning_parameters: Mapping[str, Any] | None = None,
 ) -> None:
     """Link exact verified inputs at a trusted execution admission boundary."""
     from moonmind.omnigent.harness_platform.execution_plan import (
@@ -151,10 +158,22 @@ async def link_verified_execution_plan_inputs(
                         "support evidence pointer conflicts with verified execution authority"
                     )
         service = TemporalArtifactService(repository)
+        refs.update(
+            await _frozen_planning_input_refs(
+                repository,
+                service,
+                plan=plan,
+                planning_parameters=planning_parameters,
+            )
+        )
 
         async def link(artifact_id: str) -> None:
             await _link_execution_input(
-                repository, artifact_id, workflow_id=workflow_id, run_id=run_id
+                repository,
+                artifact_id,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                namespace=namespace,
             )
 
         for artifact_id in sorted(_artifact_ids(refs)):
@@ -171,7 +190,12 @@ async def link_verified_execution_plan_inputs(
 
 
 async def _link_execution_input(
-    repository, artifact_id: str, *, workflow_id: str, run_id: str
+    repository,
+    artifact_id: str,
+    *,
+    workflow_id: str,
+    run_id: str,
+    namespace: str = "default",
 ) -> None:
     """Grant one execution read access to an input it was admitted to use."""
     from moonmind.workflows.temporal.artifacts import (
@@ -184,7 +208,7 @@ async def _link_execution_input(
     # cannot append duplicate links on PostgreSQL either.
     await repository.get_artifact_for_update(artifact_id)
     if any(
-        link.namespace == "default"
+        link.namespace == namespace
         and link.workflow_id == workflow_id
         and link.run_id == run_id
         and link.link_type == "input.execution_plan"
@@ -195,12 +219,91 @@ async def _link_execution_input(
         artifact_id=artifact_id,
         principal=_GATEWAY_PRINCIPAL,
         execution_ref=ExecutionRef(
-            namespace="default",
+            namespace=namespace,
             workflow_id=workflow_id,
             run_id=run_id,
             link_type="input.execution_plan",
         ),
     )
+
+
+async def _frozen_planning_input_refs(
+    repository, service, *, plan, planning_parameters
+) -> set[str]:
+    """Delegate saved planning inputs through their immutable admission proof.
+
+    A plan's snapshot is authority for the saved input/plan pointers, rather
+    than a caller's current parameters or the artifact's human provenance.
+    Validate the frozen planning pointers before creating their links.
+    """
+    authority = plan.payload.authority
+    if authority is None:
+        if planning_parameters is not None:
+            raise OmnigentArtifactError(
+                "scheduled planning lacks frozen input authority"
+            )
+        return set()
+    snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(
+        authority.taskInputSnapshotRef
+    )
+    snapshot_artifact = await repository.get_artifact(snapshot_id)
+    principal = str(snapshot_artifact.created_by_principal or "").strip()
+    expected_digest = authority.taskInputSnapshotDigest.removeprefix("sha256:")
+    if not principal or snapshot_artifact.sha256 != expected_digest:
+        raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
+    _, body = await service.read(
+        artifact_id=snapshot_id,
+        principal=principal,
+        allow_restricted_raw=True,
+    )
+    if hashlib.sha256(body).hexdigest() != expected_digest:
+        raise OmnigentArtifactError("frozen task-input snapshot digest mismatch")
+    try:
+        frozen = json.loads(body)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise OmnigentArtifactError("frozen task-input snapshot is invalid") from exc
+    source = frozen.get("source") if isinstance(frozen, dict) else None
+    if not isinstance(source, dict) or source.get("kind") != "schedule":
+        if planning_parameters is not None:
+            raise OmnigentArtifactError("scheduled planning lacks a schedule snapshot")
+        return set()
+    definition_id = str(source.get("definitionId") or "").strip()
+    if not definition_id:
+        raise OmnigentArtifactError("schedule snapshot lacks definition authority")
+    target = frozen.get("target")
+    if not isinstance(target, dict):
+        raise OmnigentArtifactError("schedule snapshot lacks its frozen target")
+    if planning_parameters is not None:
+        system = planning_parameters.get("system")
+        recurrence = system.get("recurrence") if isinstance(system, Mapping) else None
+        if (
+            not isinstance(recurrence, Mapping)
+            or str(recurrence.get("definitionId") or "") != definition_id
+        ):
+            raise OmnigentArtifactError(
+                "scheduled recurrence conflicts with frozen input authority"
+            )
+        for key in ("inputArtifactRef", "planArtifactRef"):
+            supplied = planning_parameters.get(key)
+            if supplied is not None and supplied != target.get(key):
+                raise OmnigentArtifactError(
+                    "scheduled planning input conflicts with frozen input authority"
+                )
+    refs = {
+        str(target[key])
+        for key in ("inputArtifactRef", "planArtifactRef")
+        if target.get(key)
+    }
+    for artifact_id in sorted(_artifact_ids(refs)):
+        # Snapshot creation does not let a machine invent permission for an
+        # unrelated artifact. Its original admitted principal must be able to
+        # read every delegated input, including retained security checks.
+        await service.read(
+            artifact_id=artifact_id,
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+    return refs
 
 
 def _execution_plan_input_refs(plan, binding) -> set[str]:
