@@ -159,6 +159,19 @@ async function replaceWithKeyboard(input: HTMLInputElement, text: string) {
   input.focus();
   input.setSelectionRange(0, input.value.length);
   await userEvent.keyboard(text ? `{Backspace}${text}` : '{Backspace}');
+  await waitFor(() => {
+    const active = document.activeElement;
+    const state = JSON.stringify({
+      field: input.getAttribute('aria-label'),
+      value: input.value,
+      connected: input.isConnected,
+      activeElement: active?.getAttribute('aria-label') || active?.tagName,
+      documentHasFocus: document.hasFocus(),
+      snapshotFrames: document.querySelectorAll('iframe.html2canvas-container').length,
+    });
+    expect(input.value, state).toBe(text);
+    expect(active, state).toBe(input);
+  });
 }
 
 function publicationOutcome(select: HTMLSelectElement): string {
@@ -223,6 +236,7 @@ describe('Create workspace source and publication intent', () => {
       // A source the backend can never admit is caught before submission and
       // focus moves to the field that needs the correction.
       await replaceWithKeyboard(repository, 'octo repo');
+      await waitFor(() => expect(start).not.toHaveAttribute('aria-busy', 'true'));
       await userEvent.click(start);
       expect(await screen.findByText(REPOSITORY_ERROR)).toBeTruthy();
       expect(document.activeElement).toBe(repository);
