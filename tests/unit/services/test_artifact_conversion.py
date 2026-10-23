@@ -22,8 +22,11 @@ from api_service.db.models import (
 )
 from api_service.services import single_user_conversion as conversion
 from moonmind.workflows.temporal.artifacts import (
-    LocalTemporalArtifactStore, TemporalArtifactAuthorizationError,
-    TemporalArtifactRepository, TemporalArtifactService, TemporalArtifactStateError,
+    LocalTemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+    TemporalArtifactStateError,
 )
 from tests.helpers.account_source import User, add_source_user, create_source_schema
 
@@ -538,10 +541,103 @@ async def test_populated_projection_owner_still_requires_single_person_attributi
         assert projection.owner_id == str(other_id)
 
 
+@pytest.mark.parametrize(
+    "table_name",
+    [
+        "temporal_executions",
+        "temporal_execution_sources",
+        "workflow_execution_source_mappings",
+    ],
+)
+@pytest.mark.parametrize(
+    "configuration", ["default", "explicit_zero", "oidc", "nonzero"]
+)
+async def test_reserved_local_execution_owner_preserves_projection_without_recovery_grant(
+    tmp_path,
+    monkeypatch,
+    table_name,
+    configuration,
+):
+    from api_service.db.models import (
+        Base,
+        TemporalExecutionOwnerType,
+        TemporalWorkflowType,
+    )
+
+    monkeypatch.setenv(
+        "AUTH_PROVIDER", "oidc" if configuration == "oidc" else "disabled"
+    )
+    monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
+    if configuration != "default":
+        monkeypatch.setenv(
+            "DEFAULT_USER_ID",
+            (
+                str(uuid4())
+                if configuration == "nonzero"
+                else conversion.DEPLOYMENT_SUBJECT_ID
+            ),
+        )
+    table = Base.metadata.tables[table_name]
+    values = {
+        "workflow_id": "retained-workflow",
+        "entry": "temporal",
+        "owner_type": TemporalExecutionOwnerType.USER,
+        "owner_id": conversion.DEPLOYMENT_SUBJECT_ID,
+    }
+    if table_name == "workflow_execution_source_mappings":
+        values.update(source="temporal", source_record_id="retained-workflow")
+    else:
+        values.update(
+            run_id="retained-run", workflow_type=TemporalWorkflowType.USER_WORKFLOW
+        )
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            await session.execute(table.insert().values(**values))
+            session.add(
+                TemporalArtifact(
+                    artifact_id="machine-evidence",
+                    storage_key="machine-key",
+                    created_by_principal="workflow:retained-workflow",
+                    redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                )
+            )
+            await session.commit()
+            before = dict((await session.execute(select(table))).mappings().one())
+            result = await conversion.run_guarded_upgrade(
+                session, operator_authorized=True
+            )
+            eligible = configuration in {"default", "explicit_zero"}
+            assert result.published is eligible, result.to_sanitized_dict()
+            if eligible:
+                from api_service.migrations.account_source import source_user_ids
+
+                assert await source_user_ids(session) == []
+                assert result.decision.principal_count == 0
+                assert result.transforms["artifacts"]["recovery_grants"] == 0
+            else:
+                assert result.decision.reason_code == "unknown_principal"
+            assert (
+                dict((await session.execute(select(table))).mappings().one()) == before
+            )
+            assert not (
+                await session.get(TemporalArtifact, "machine-evidence")
+            ).operator_recovery_granted
+        if eligible:
+            async with maker() as restarted:
+                assert (
+                    await conversion.run_guarded_upgrade(
+                        restarted,
+                        operator_authorized=True,
+                    )
+                ).published
+
+
 async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
     import importlib
+
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
+
     from api_service.services.single_user_conversion import completed_guarded_upgrade
 
     migration = importlib.import_module(
