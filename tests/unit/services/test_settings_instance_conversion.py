@@ -128,7 +128,7 @@ async def test_conversion_preserves_effective_values_nulls_refs_and_inheritance(
         assert events[TOKEN].new_value_json == "db://operator-token"
         assert events[TOKEN].user_id is None
         history = await service.list_audit_events(
-            permissions={"settings.audit.read", "secrets.metadata.read"}, key=TOKEN
+            key=TOKEN
         )
         assert [item.event_type for item in history] == ["settings.override.converted"]
 
@@ -266,6 +266,47 @@ async def test_multi_person_settings_stay_protected(factory):
             env={}, session=session
         ).effective_value_async(TOKEN)
         assert effective.source != "instance_override"
+
+
+@pytest.mark.parametrize(
+    "event_type", ["settings.override.rejected", "settings.override.changed"]
+)
+@pytest.mark.parametrize("unknown_subject", [False, True])
+async def test_audit_actor_is_preserved_provenance_not_a_settings_owner(
+    factory,
+    event_type,
+    unknown_subject,
+):
+    async with factory() as session:
+        audit = SettingsAuditEvent(
+            event_type=event_type,
+            key=CANARY,
+            scope="workspace",
+            workspace_id=uuid.uuid4(),
+            actor_user_id=uuid.uuid4(),
+            user_id=uuid.uuid4() if unknown_subject else None,
+            reason="Retained historical request",
+            redacted=True,
+        )
+        session.add(audit)
+        session.add(SettingsOverride(key=CANARY, value_json=25))
+        await session.commit()
+        table = SettingsAuditEvent.__table__
+        before = dict((await session.execute(select(table))).mappings().one())
+
+        result = await suc.run_guarded_upgrade(session, operator_authorized=True)
+
+        assert result.published is (not unknown_subject), result.to_sanitized_dict()
+        if unknown_subject:
+            assert result.decision.reason_code == "unknown_principal"
+        else:
+            from api_service.migrations.account_source import source_user_ids
+
+            assert await source_user_ids(session) == []
+            assert result.decision.principal_count == 0
+        assert dict((await session.execute(select(table))).mappings().one()) == before
+        [retained] = await _rows(session)
+        assert (retained.scope, retained.value_json) == (None, 25)
 
 
 async def test_instance_edit_during_refused_conversion_is_not_replaced(factory):

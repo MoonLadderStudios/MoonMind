@@ -20,7 +20,7 @@ const pageTwo = row('page-two-workflow', 'Roundtrip page two');
 const pageThree = row('page-three-workflow', 'Roundtrip page three');
 const uiInfo = {
   app: 'moonmind', apiBase: '/api', features: { workflowList: true, workflowLiveUpdates: false },
-  limits: {}, endpoints: {}, settingsPermissions: [],
+  limits: {}, endpoints: {},
   dashboardConfig: {
     pollIntervalsMs: { list: 60_000, detail: 60_000, events: 60_000 },
     features: { temporalDashboard: { listEnabled: true, workspaceShellEnabled: true } },

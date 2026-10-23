@@ -639,9 +639,6 @@ async def test_4636_preview_returns_current_field_sources_for_saved_partial_and_
     from datetime import datetime, timezone
 
     selected.updated_at = datetime(2026, 10, 2, tzinfo=timezone.utc)
-    monkeypatch.setattr(
-        router, "_require_provider_profile_permission", lambda *_args: None
-    )
     monkeypatch.setattr(router, "_can_view_profile", lambda *_args: True)
     response = await router.preview_model_tiers(
         profile_id="test-profile",

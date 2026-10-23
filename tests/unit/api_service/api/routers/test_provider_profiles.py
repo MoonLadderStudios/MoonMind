@@ -240,34 +240,6 @@ def _advertise_expert_manual_contracts(
 
 
 @pytest.mark.asyncio
-async def test_provider_profile_list_requires_read_permission(
-    client_app: AsyncClient, _module_db
-) -> None:
-    _override_current_user(settings_permissions=set())
-
-    async with client_app as client:
-        response = await client.get("/api/v1/provider-profiles")
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Missing required provider profile permission: provider_profiles.read."
-
-
-@pytest.mark.asyncio
-async def test_provider_profile_get_requires_read_permission_before_lookup(
-    client_app: AsyncClient, _module_db
-) -> None:
-    _override_current_user(settings_permissions=set())
-
-    async with client_app as client:
-        response = await client.get("/api/v1/provider-profiles/missing-profile")
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == (
-        "Missing required provider profile permission: provider_profiles.read."
-    )
-
-
-@pytest.mark.asyncio
 async def test_creation_preset_exposes_only_backend_supported_authentication_methods(
     client_app: AsyncClient, _module_db
 ) -> None:
@@ -357,18 +329,6 @@ async def test_creation_choices_project_backend_declarations_for_first_profile(
     assert harnesses["opencode"]["custom_provider_allowed"] is True
     assert harnesses["codex_cli"]["custom_provider_allowed"] is False
     assert harnesses["claude_code"]["custom_provider_allowed"] is False
-
-
-@pytest.mark.asyncio
-async def test_creation_choices_require_provider_profile_read_permission(
-    client_app: AsyncClient, _module_db
-) -> None:
-    _override_current_user(settings_permissions=set())
-
-    async with client_app as client:
-        response = await client.get("/api/v1/provider-profiles/creation-choices")
-
-    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -968,59 +928,6 @@ async def test_replacing_imported_volume_increments_and_reconciles_generation(
     assert response.json()["volume_ref"] == "replacement-codex-home"
     assert response.json()["credential_generation"] == 5
     assert reconciled == [(profile_id, 5)]
-
-
-@pytest.mark.asyncio
-async def test_provider_profile_write_actions_require_write_permission(
-    client_app: AsyncClient, _module_db
-) -> None:
-    user = _override_current_user(settings_permissions={"provider_profiles.read"})
-    profile_id = "read_only_profile"
-
-    async with db_base.async_session_maker() as session:
-        existing = await session.get(ManagedAgentProviderProfile, profile_id)
-        if existing is None:
-            session.add(
-                ManagedAgentProviderProfile(
-                    profile_id=profile_id,
-                    runtime_id="read_only_runtime",
-                    provider_id="openai",
-                    credential_source=ProviderCredentialSource.NONE,
-                    runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
-                    owner_user_id=user.id,
-                    enabled=True,
-                )
-            )
-            await session.commit()
-
-    async with client_app as client:
-        create_response = await client.post(
-            "/api/v1/provider-profiles",
-            json={
-                "profile_id": "read_only_created",
-                "runtime_id": "codex_cli",
-                "provider_id": "openai",
-                "credential_source": "none",
-                "runtime_materialization_mode": "composite",
-            },
-        )
-        update_response = await client.patch(
-            f"/api/v1/provider-profiles/{profile_id}",
-            json={"enabled": False},
-        )
-        delete_response = await client.delete(f"/api/v1/provider-profiles/{profile_id}")
-        api_key_response = await client.post(
-            "/api/v1/provider-profiles/missing-api-key-profile/credentials/api-key",
-            json={"api_key": "sk-mm875-read-only-token"},
-        )
-
-    assert create_response.status_code == 403
-    assert update_response.status_code == 403
-    assert delete_response.status_code == 403
-    assert api_key_response.status_code == 403
-    assert create_response.json()["detail"] == (
-        "Missing required provider profile permission: provider_profiles.write."
-    )
 
 
 class _TrackedProfile:
