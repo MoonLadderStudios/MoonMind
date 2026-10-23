@@ -154,9 +154,11 @@ async def test_state_write_failure_is_observable_without_secret_text(
         raise RuntimeError("private credential sentinel")
 
     monkeypatch.setattr(base, "async_session_maker", unavailable)
-    await codex_login.record_ended_codex_login("codex-oauth", 4)
-    assert "codex-oauth" in caplog.text
+    await codex_login.record_ended_codex_login("private-profile-sentinel", 4)
+    assert "Could not record ended Codex login" in caplog.text
+    assert "credential_generation=4" in caplog.text
     assert "RuntimeError" in caplog.text
+    assert "private-profile-sentinel" not in caplog.text
     assert "private credential sentinel" not in caplog.text
 
 
