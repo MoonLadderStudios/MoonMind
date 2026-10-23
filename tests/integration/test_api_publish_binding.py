@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from api_service import main
 from moonmind.deployment_access import DeploymentAccessError, validate_access
+from moonmind.security.operator_admission import OperatorAdmissionError
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,8 +68,7 @@ async def test_rendered_binding_matches_production_startup(
     compose_path = tmp_path / "docker-compose.yaml"
     compose_path.write_bytes((ROOT / "docker-compose.yaml").read_bytes())
     (tmp_path / ".env").write_text(
-        "AUTH_PROVIDER=disabled\n"
-        + "".join(f"{name}={value}\n" for name, value in overrides.items()),
+        "".join(f"{name}={value}\n" for name, value in overrides.items()),
         encoding="utf-8",
     )
     render_env = {
@@ -171,28 +171,22 @@ async def test_rendered_binding_matches_production_startup(
         "MOONMIND_TRUSTED_INGRESS", ""
     )
 
-    # Use the rendered security inputs at the real API initialization boundary,
-    # including a second startup reusing the same deployment-owned signing key.
+    # Use the rendered access inputs at the real API initialization boundary,
+    # including a second startup with the same deployment-owned configuration.
     for name in (
-        "AUTH_PROVIDER",
         "MOONMIND_API_PUBLISH_HOST",
         "MOONMIND_TRUSTED_INGRESS",
-        "MOONMIND_SESSION_SECRET",
-        "JWT_SECRET",
         "MOONMIND_PUBLIC_BASE_URL",
-        "MOONMIND_AUTH_MIGRATION_DECISION",
     ):
         monkeypatch.setenv(name, environment.get(name, ""))
-    monkeypatch.setenv("AUTH_PROVIDER", str(None or ""))
-    key_path = tmp_path / "session-key"
-    monkeypatch.setenv("MOONMIND_SESSION_KEY_PATH", str(key_path))
     if not allowed:
-        with pytest.raises(RuntimeError, match="trusted-ingress"):
+        with pytest.raises(OperatorAdmissionError, match="trusted ingress") as error:
             await main._initialize_operator_admission(FastAPI())
+        assert error.value.code == "unavailable"
         return
     app = FastAPI()
     await main._initialize_operator_admission(app)
-    assert app.state.auth_production_mode == "disabled"
-    first_key = key_path.read_bytes()
-    await main._initialize_operator_admission(FastAPI())
-    assert key_path.read_bytes() == first_key
+    assert app.state.operator_admission_ready is True
+    restarted = FastAPI()
+    await main._initialize_operator_admission(restarted)
+    assert restarted.state.operator_admission_ready is True
