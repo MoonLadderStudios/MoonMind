@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import sys
 
 from temporalio.testing import WorkflowEnvironment
 
@@ -15,7 +17,19 @@ async def _cache_test_server() -> None:
         WorkflowEnvironment.start_time_skipping,
         WorkflowEnvironment.start_local,
     ):
-        environment = await start_environment()
+        for retry_delay in (30, 60, None):
+            try:
+                environment = await start_environment()
+                break
+            except RuntimeError as exc:
+                if retry_delay is None or not re.search(
+                    r"failed to download ephemeral server executable: .*"
+                    r"HTTP status (?:client|server) error \((?:429|5\d\d)\b",
+                    str(exc),
+                ):
+                    raise
+                print(f"{exc}; retrying in {retry_delay}s", file=sys.stderr, flush=True)
+                await asyncio.sleep(retry_delay)
         await environment.shutdown()
 
 

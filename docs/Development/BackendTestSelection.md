@@ -236,11 +236,11 @@ a stable process handle, force-stops it like the SDK's normal shutdown, and
 waits at most two seconds total for exit without reaping SDK-owned children.
 This avoids leaving a CLI draining after its worker exits; an unconfirmed exit
 is reported without replacing the original timeout failure.
-Real subprocess cases retain an independently owned control server during a
-fatal worker timeout and debugger suppression. The image-build cache owner
-materializes both SDK-selected binaries before hermetic runtime execution;
-cached-startup coverage disables SDK download egress. Neither mechanism
-fixes the test that caused the original worker failure.
+Real subprocess cases retain an independent control server through fatal
+timeouts and debugger suppression. Image builds cache both SDK-selected
+binaries, retrying HTTP 429/5xx downloads after 30 and 60 seconds before
+preserving the final error. Cached-startup coverage disables download egress.
+Neither mechanism fixes the test behind the original worker failure.
 
 Deployment and both disposable Compose test stacks pin the same multi-platform MinIO community
 image from `ghcr.io/coollabsio/minio` by release and digest. The original
