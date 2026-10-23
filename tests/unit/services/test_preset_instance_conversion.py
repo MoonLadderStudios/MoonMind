@@ -15,11 +15,12 @@ from api_service.db.models import (
     PresetRecent,
     PresetScopeType,
 )
+from api_service.migrations.account_source import source_user_ids
 from api_service.services.single_user_conversion import (
     SingleUserConversionRun,
     run_guarded_upgrade,
 )
-from tests.helpers.account_source import User, create_source_schema
+from tests.helpers.account_source import User, add_source_user, create_source_schema
 
 
 @pytest_asyncio.fixture
@@ -358,6 +359,172 @@ async def test_schedule_current_references_rebind_without_reexpanding_snapshot(
             "initialParameters"
         ]["workflow"] == current
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_job_evidence_owner_does_not_block_saved_schedule_conversion(
+    preset_sessions,
+):
+    from copy import deepcopy
+
+    from api_service.db.models import (
+        RecurringWorkflowDefinition,
+        TemporalArtifact,
+        TemporalArtifactRedactionLevel,
+        TemporalExecutionOwnerType,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+    )
+    from api_service.services.container_jobs import owner_artifact_principal
+    from api_service.services.presets.catalog import PresetCatalogService
+    from moonmind.schemas.container_job_models import OwnerIdentity
+    from moonmind.statuses.workflow import MoonMindWorkflowState
+    from moonmind.workflows.executions.preset_readiness import (
+        SavedPresetCapabilitiesInput,
+        legacy_saved_preset_capability_check,
+        saved_preset_capability_check,
+    )
+
+    owner_id = UUID(int=0)
+    principal = owner_artifact_principal(
+        OwnerIdentity(principal_type="user", principal_id=str(owner_id))
+    )
+    async with preset_sessions() as session:
+        await add_source_user(session, User(id=owner_id, email="retained-zero@example.invalid"))
+        await session.flush()
+        builtin = Preset(
+            slug="shared",
+            title="Builtin",
+            description="kept",
+            scope_type=PresetScopeType.GLOBAL,
+            seed_source="shared.yaml",
+            steps=[{"instructions": "current builtin instructions"}],
+            required_capabilities=["git"],
+        )
+        personal = Preset(
+            slug="shared",
+            title="Personal",
+            description="kept",
+            scope_type=PresetScopeType.PERSONAL,
+            scope_ref=str(owner_id),
+            created_by=owner_id,
+            steps=[{"instructions": "current personal instructions"}],
+            required_capabilities=["docker"],
+        )
+        evidence = TemporalArtifact(
+            artifact_id="retained-job-evidence",
+            storage_key="retained-job-key",
+            created_by_principal=principal,
+            redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+        )
+        schedule_id = uuid4()
+        admitted = {
+            "requiredCapabilities": ["git", "docker"],
+            "system": {"recurrence": {"definitionId": str(schedule_id)}},
+            "workflow": {
+                "appliedStepTemplates": [
+                    {"slug": "shared", "scope": "global", "digest": "builtin-save"},
+                    {
+                        "slug": "shared",
+                        "scope": "personal",
+                        "scopeRef": str(owner_id),
+                        "digest": "personal-save",
+                        "inputs": {"empty": "", "false": False},
+                    },
+                ],
+                "steps": [{"id": "frozen-step", "instructions": "saved search"}],
+            },
+        }
+        schedule = RecurringWorkflowDefinition(
+            id=schedule_id,
+            name="retained search",
+            cron="0 * * * *",
+            timezone="UTC",
+            owner_user_id=owner_id,
+            target={"initialParameters": deepcopy(admitted)},
+        )
+        projection = TemporalExecutionRecord(
+            workflow_id="retained-search-projection",
+            run_id="retained-search-run",
+            namespace="moonmind",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_type=TemporalExecutionOwnerType.USER,
+            owner_id=None,
+            state=MoonMindWorkflowState.FAILED,
+            entry="temporal",
+            parameters={"workflow": {"instructions": "retained execution"}},
+            memo={"summary": "original failure"},
+            search_attributes={"mm_entry": ["temporal"]},
+        )
+        session.add_all([builtin, personal, evidence, schedule, projection])
+        await session.commit()
+        projection_query = select(TemporalExecutionRecord.__table__).where(
+            TemporalExecutionRecord.workflow_id == projection.workflow_id
+        )
+        retained_projection = deepcopy(
+            dict((await session.execute(projection_query)).mappings().one())
+        )
+        preset_ids = (builtin.id, personal.id)
+        retained_check = legacy_saved_preset_capability_check(
+            admitted,
+            principal=str(owner_id),
+        )
+        retained_input = deepcopy(retained_check.model_dump())
+        blocked = await PresetCatalogService(session).check_saved_capabilities(
+            SavedPresetCapabilitiesInput(
+                definition_id=str(schedule_id),
+                presets=[{"slug": "shared"}],
+                required_capabilities=admitted["requiredCapabilities"],
+            )
+        )
+        assert blocked["status"] == "refresh_required"
+        assert "guarded single-user conversion" in blocked["message"]
+
+        converted = await run_guarded_upgrade(session, operator_authorized=True)
+        assert converted.published, converted.to_sanitized_dict()
+        assert converted.decision.person_count == 1
+        assert converted.transforms["artifacts"]["recovery_grants"] == 1
+        assert (
+            dict((await session.execute(projection_query)).mappings().one())
+            == retained_projection
+        )
+
+    async with preset_sessions() as restarted:
+        replay = await run_guarded_upgrade(restarted, operator_authorized=True)
+        assert replay.published
+        assert replay.digest == converted.digest
+        assert (
+            len((await restarted.scalars(select(SingleUserConversionRun))).all()) == 1
+        )
+        assert owner_id in await source_user_ids(restarted)
+        assert (
+            dict((await restarted.execute(projection_query)).mappings().one())
+            == retained_projection
+        )
+        evidence = await restarted.get(TemporalArtifact, "retained-job-evidence")
+        assert evidence.created_by_principal == principal
+        assert evidence.operator_recovery_granted is True
+        presets = [await restarted.get(Preset, preset_id) for preset_id in preset_ids]
+        assert all(
+            preset.scope_type is None and preset.scope_ref is None for preset in presets
+        )
+        saved = (await restarted.get(RecurringWorkflowDefinition, schedule_id)).target[
+            "initialParameters"
+        ]
+        assert saved["requiredCapabilities"] == admitted["requiredCapabilities"]
+        assert saved["workflow"]["steps"] == admitted["workflow"]["steps"]
+        applied = saved["workflow"]["appliedStepTemplates"]
+        assert [item["slug"] for item in applied] == [preset.slug for preset in presets]
+        assert [item["digest"] for item in applied] == ["builtin-save", "personal-save"]
+        assert applied[1]["inputs"] == {"empty": "", "false": False}
+        catalog = PresetCatalogService(restarted)
+        assert await catalog.check_saved_capabilities(
+            saved_preset_capability_check(saved)
+        ) == {"status": "ready"}
+        assert await catalog.check_saved_capabilities(retained_check) == {
+            "status": "ready"
+        }
+        assert retained_check.model_dump() == retained_input
 
 
 @pytest.mark.asyncio

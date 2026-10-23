@@ -54,6 +54,7 @@ async def preset_sessions(conversion_postgres_url):
         scenarios.test_same_count_content_edit_invalidates_preflight,
         scenarios.test_missing_composition_target_refuses_without_substitution,
         scenarios.test_schedule_current_references_rebind_without_reexpanding_snapshot,
+        scenarios.test_job_evidence_owner_does_not_block_saved_schedule_conversion,
         scenarios.test_published_completion_does_not_skip_later_legacy_row,
         scenarios.test_real_zero_user_is_not_a_deployment_alias,
         scenarios.test_direct_transform_does_not_invent_real_zero_eligibility,
