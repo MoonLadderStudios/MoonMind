@@ -324,13 +324,10 @@ function InstanceSettingsContent({ payload }: { payload: BootPayload }) {
       description="Review instance configuration and defaults, including validation and application diagnostics."
     >
       <NoticeBanner notice={notice} />
-      <GeneratedSettingsSection
-        scope="workspace"
-        canReadAudit={permissions.has('settings.audit.read')}
-      />
+      <GeneratedSettingsSection canReadAudit={permissions.has('settings.audit.read')} />
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        This page edits instance-wide settings. Older per-user overrides are
-        kept but not edited here.
+        This page edits instance-wide settings. The guarded upgrade reconciles
+        per-user overrides retained from an account installation.
       </p>
 
       <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">

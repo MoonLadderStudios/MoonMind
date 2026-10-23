@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -220,14 +220,12 @@ async def test_set_status_records_audit_event(mock_db_session):
     mock_db_session.execute.side_effect = mock_execute
 
     actor_id = uuid4()
-    workspace_id = uuid4()
 
     await SecretsService.set_status(
         mock_db_session,
         slug,
         SecretStatus.DISABLED,
         actor_user_id=actor_id,
-        workspace_id=workspace_id,
         reason="rotation cadence",
     )
 
@@ -240,7 +238,7 @@ async def test_set_status_records_audit_event(mock_db_session):
     event = audit_calls[0]
     assert event.event_type == "secrets.status.changed"
     assert event.actor_user_id == actor_id
-    assert event.workspace_id == workspace_id
+    assert (event.workspace_id, event.user_id) == (None, None)
     assert event.redacted is True
     assert event.old_value_json == {
         "status": "active",
@@ -383,25 +381,17 @@ async def test_list_secret_usage_reports_settings_consumers_without_plaintext(
     mock_db_session,
 ):
     raw_secret = "ghp_usage_plaintext"
-    scoped_rows = [
-        ("integrations.github.token_ref", "workspace", "db://github-pat-main")
-    ]
-    _usage_execute(mock_db_session, SecretStatus.ACTIVE, scoped_rows)
+    instance_rows = [("integrations.github.token_ref", "db://github-pat-main")]
+    _usage_execute(mock_db_session, SecretStatus.ACTIVE, instance_rows)
 
-    result = await SecretsService.list_secret_usage(
-        mock_db_session,
-        "github-pat-main",
-        workspace_id=uuid4(),
-        user_id=uuid4(),
-    )
+    result = await SecretsService.list_secret_usage(mock_db_session, "github-pat-main")
 
     assert result["secretRef"] == "db://github-pat-main"
     assert result["usages"] == [
         {
             "consumerType": "setting_override",
-            "objectName": "Workspace setting integrations.github.token_ref",
+            "objectName": "Instance setting integrations.github.token_ref",
             "reference": "db://github-pat-main",
-            "scope": "workspace",
             "settingKey": "integrations.github.token_ref",
         }
     ]
@@ -409,14 +399,14 @@ async def test_list_secret_usage_reports_settings_consumers_without_plaintext(
     usage_statement = mock_db_session.execute.call_args_list[1].args[0]
     assert "settings_overrides.key" in str(usage_statement)
     assert "settings_overrides.value_json" in str(usage_statement)
-    assert "settings_overrides.workspace_id" in str(usage_statement)
+    assert "settings_overrides.scope IS NULL" in str(usage_statement)
 
 
 @pytest.mark.asyncio
 async def test_list_secret_usage_reports_provider_and_connection_consumers(
     mock_db_session,
 ):
-    scoped_rows = [("some.key", "workspace", "db://shared-pat")]
+    scoped_rows = [("some.key", "db://shared-pat")]
     profile_result = [("codex-default", {"api_key": "db://shared-pat"})]
     connection_result = [("conn-1", {"pat": {"ref": "db://shared-pat"}})]
     status_result = MagicMock()
@@ -480,27 +470,6 @@ async def test_list_secret_usage_reports_empty_and_missing_without_plaintext(
     ]
     assert "plaintext" not in repr(missing)
 
-
-@pytest.mark.asyncio
-async def test_list_secret_usage_restricts_query_to_caller_scope(mock_db_session):
-    workspace_id = uuid4()
-    user_id = uuid4()
-    _usage_execute(mock_db_session, SecretStatus.ACTIVE, [])
-
-    await SecretsService.list_secret_usage(
-        mock_db_session,
-        "github-pat-main",
-        workspace_id=workspace_id,
-        user_id=user_id,
-    )
-
-    usage_statement = mock_db_session.execute.call_args_list[1].args[0]
-    compiled = usage_statement.compile(compile_kwargs={"literal_binds": True})
-    statement = str(compiled)
-
-    assert workspace_id.hex in statement
-    assert user_id.hex in statement
-    assert UUID("00000000-0000-0000-0000-000000000000").hex in statement
 
 @pytest.mark.asyncio
 async def test_import_from_env(mock_db_session):

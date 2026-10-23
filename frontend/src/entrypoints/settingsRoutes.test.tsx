@@ -29,7 +29,6 @@ function response(body: unknown): Response {
 
 const instanceCatalog = {
   section: 'user-workspace',
-  scope: 'workspace',
   categories: {
     Workflow: [
       {
@@ -40,7 +39,6 @@ const instanceCatalog = {
         section: 'user-workspace',
         type: 'string',
         ui: 'readonly',
-        scopes: ['workspace'],
         default_value: 'pr',
         effective_value: 'pr',
         override_value: null,
@@ -88,7 +86,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
         return Promise.resolve(response({ items: [] }));
       }
       if (url.startsWith('/api/v1/settings/catalog')) {
-        return Promise.resolve(response({ ...instanceCatalog, scope: 'workspace' }));
+        return Promise.resolve(response(instanceCatalog));
       }
       if (url === '/api/system/worker-pause') {
         return Promise.resolve(response({ system: { workersPaused: false }, metrics: {}, commands: [] }));
@@ -157,7 +155,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(await screen.findByRole('heading', { name: 'Instance' })).toBeTruthy();
     await waitFor(() => {
       expect(requestedUrls).toContain(
-        '/api/v1/settings/catalog?section=user-workspace&scope=workspace',
+        '/api/v1/settings/catalog?section=user-workspace',
       );
     });
     expect(requestedUrls).not.toContain('/me');
@@ -190,7 +188,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
       const auditUrl = requestedUrls.find((url) => url.startsWith('/api/v1/settings/audit'));
       expect(auditUrl).toBeTruthy();
       const query = new URL(auditUrl ?? '', window.location.origin).searchParams;
-      expect(query.get('scope')).toBe('workspace');
+      expect(query.has('scope')).toBe(false);
       expect(query.get('key')).toBe('workflow.default_publish_mode');
     });
   });

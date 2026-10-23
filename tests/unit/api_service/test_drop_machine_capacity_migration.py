@@ -55,7 +55,10 @@ def test_migration_graph_keeps_single_head_at_new_revision() -> None:
     # (#4350), the legacy GitHub credential mapping (#4023), the runtime
     # evidence retention backfill, the default-connection grants, and the
     # remediation link target and artifact recovery extend the single head.
-    assert tuple(script.get_heads()) == ("397_instance_preset_catalog",)
+    assert tuple(script.get_heads()) == ("398_instance_settings",)
+    assert script.get_revision("398_instance_settings").down_revision == (
+        "397_instance_preset_catalog"
+    )
     assert script.get_revision("397_instance_preset_catalog").down_revision == (
         "396_artifact_operator_recovery"
     )

@@ -67,10 +67,9 @@ async def saved_profile_submission(tmp_path, monkeypatch):
             )
             app.dependency_overrides[_get_service] = lambda: service
             app.dependency_overrides[get_async_session] = lambda: session
-            user = _override_user_dependencies(app, is_superuser=True)
-            catalog = SettingsCatalogService(session=session, user_id=user.id)
+            _override_user_dependencies(app, is_superuser=True)
+            catalog = SettingsCatalogService(session=session)
             await catalog.apply_overrides(
-                scope="workspace",
                 changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
             )
             reads = []
@@ -136,7 +135,6 @@ async def test_raw_create_resolves_saved_profile_once(
 ):
     context = saved_profile_submission
     await context.catalog.apply_overrides(
-        scope="user",
         changes={"workflow.default_provider_profile_ref": f"saved-{runtime}"},
     )
     context.settings_reads.clear()
@@ -263,7 +261,6 @@ async def test_raw_retry_keeps_recorded_profile(saved_profile_submission, change
         await context.session.commit()
     else:
         await context.catalog.apply_overrides(
-            scope="workspace",
             changes={"workflow.default_provider_profile_ref": "saved-claude_code"},
         )
     context.settings_reads.clear()

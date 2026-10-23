@@ -6,9 +6,9 @@ MoonMind is a single-user application: one operator per instance. Settings provi
 
 The [single-user application design](../SingleUserApplicationDesign.md#5-instance-settings-presets-and-preferences) defines the target: instance overrides with meaningful project, repository, provider, and runtime contexts where needed. These contexts are configuration inputs, not human ownership boundaries. Operator admission and scoped machine authority preserve access controls, locked values, secret confidentiality, and operation-specific policy.
 
-[Instance routes](../../api_service/api/routers/settings.py) consume operator admission after published guarded conversion, without resolving a person or granting a virtual administrator. Instance overrides retain the serialized `workspace` label and existing storage key; new audit events have no human actor. Personal writes are unavailable through this admission. The [catalog](../../api_service/services/settings_catalog.py) and [database models](../../api_service/db/models.py) retain predecessor user/workspace contexts for unconverted account deployments and historical data. Their existing permissions, locked values and secret handling still apply.
+[Settings routes](../../api_service/api/routers/settings.py) read and change one instance configuration through the shared instance admission, without resolving a person or a synthetic subject. No current setting declares a project, repository, provider, or runtime context, so requests carry no scope. An instance override row has null `scope`, `workspace_id` and `user_id`; new audit events carry no subject or actor, only reason and request id. A retained account session keeps its existing settings permissions; operator admission holds them all. Server-side locks, read-only descriptors and validation remain the authority for protected values, whatever a UI permission flag shows.
 
-Existing endpoints and serialized labels remain compatibility interfaces. A source containing multiple people's data needs the [upgrade eligibility and disposition](../SingleUserApplicationDesign.md#upgrade-eligibility-and-disposition); it cannot be flattened into instance settings without preserving ownership and data safety. Historical actor identifiers can remain provenance without becoming a new account dependency.
+Rows with a subject are retained predecessor data. Instance reads, audit history, consumers and the broken-reference scan ignore them, while backups and the secret-deletion guard still include them. Revision 398 rewrites only the deployment-subject (zero-UUID) workspace rows, which already were the instance configuration. Personal and other context rows wait for the `settings` transform in the [guarded conversion](../../api_service/services/single_user_conversion.py), which runs after attribution and writer exclusion. A personal row overrode its workspace for that person, so for the proven operator it becomes the instance value; shared rows decide only keys without one. An instance write or reset made after revision 398 (an override event with null scope) is a later explicit choice, so it joins the deciding tier instead of losing to a retained row; a reset cannot be named in a disposition, so the operator names a retained value and resets again after conversion if needed. Equal choices merge, and the merged version advances past every prior version. Distinct choices within the deciding tier refuse with a redacted `settings_collision` until the operator's disposition names one of those values. Superseded values stay in the `settings.override.converted` audit event. Multi-person sources stay untouched under the [upgrade eligibility and disposition](../SingleUserApplicationDesign.md#upgrade-eligibility-and-disposition), and historical actor identifiers remain provenance only.
 
 ## Responsibilities and sources
 
@@ -37,7 +37,7 @@ Validate at write and pre-persistence boundaries, during effective-value preview
 
 The target resolution is built-in/deployment defaults, then applicable instance/context overrides, with explicit operator locks winning. An override does not mutate the underlying default. Reset removes the override and reveals the remaining source; it is not a write of the presently inherited value.
 
-For **current compatibility behavior**, `SettingsCatalogService._resolve_value_from_overrides` gives a lock precedence, then checks the requested user override and inherited workspace override (or only workspace for a workspace request), then rename-aware migration handling and configured defaults. `_resolve_value` checks declared environment aliases before the configured settings path and descriptor default. Source badges must report the actual resolved source; they must not claim that the instance-only migration is complete.
+`SettingsCatalogService._resolve_value_from_overrides` gives a lock precedence, then the instance override (`instance_override`), then rename-aware migration handling and configured defaults. `_resolve_value` checks declared environment aliases before the configured settings path and descriptor default. Source badges report the actual resolved source.
 
 Distinguish absence, an intentional null override, an inherited null, missing defaults, a broken reference, a policy block, and invalid migrated data. Diagnostics explain fallback or blocked readiness rather than silently presenting an invalid value as usable. Settings resolution returns a SecretRef, never its plaintext. The Secrets System resolves it only at controlled validation or execution boundaries.
 
@@ -62,9 +62,9 @@ The new contract requires a coordinated cutover of the backend descriptor/config
 
 ## Persistence, APIs, and concurrent changes
 
-The current `settings_overrides` and `settings_audit_events` models are the source for exact schema and compatibility columns. Overrides hold small non-secret JSON values or references, schema/value versions, and provenance. Audit holds event identity, affected key/context, reason, and redacted before/after values. Do not copy account-era DDL into new instance settings designs.
+The `settings_overrides` and `settings_audit_events` models are the source for exact schema. Overrides hold small non-secret JSON values or references, schema/value versions, and provenance; a partial unique index allows one instance row per key. Audit holds event identity, key, reason, request id, and redacted before/after values.
 
-The router provides catalog and effective reads, diagnostics, validation and preview, scoped updates/reset, and audit retrieval. Keep existing URLs and enforcement during migration. Writes use server validation and concurrent-write protection; a stale version must not overwrite another accepted change. Reset must honor the same lock and authorization boundary as update.
+The router provides `GET /api/v1/settings/catalog`, `/effective`, `/effective/{key}`, `/diagnostics` and `/audit`, `POST /validate` and `/preview`, `PATCH /api/v1/settings` for updates, and `DELETE /api/v1/settings/{key}` for reset. Writes use server validation and expected-version protection, so a stale version cannot overwrite another client's accepted change. Reset honors the same lock and authorization boundary as update.
 
 ## Activation and operations
 
@@ -96,7 +96,7 @@ Custom database backups must preserve the same confidentiality expectations. The
 
 1. Take and verify a database backup covering settings overrides/audit and dependent secret/profile records. Use the Settings-only exporter for a portable redaction-checked snapshot when needed.
 2. Restore dependencies before settings where possible. Retain migration audit events alongside the affected rows.
-3. Run `scan_broken_references` from the backup service after a partial or staged restore. It reports persisted SecretRefs and provider-profile references whose targets are missing, disabled, or invalid.
+3. Run `scan_broken_references` from the backup service after a partial or staged restore. It reports instance SecretRefs and provider-profile references whose targets are missing, disabled, or invalid, and never substitutes another credential or profile.
 4. Repair the dependency, select a valid reference, or reset the affected override before resuming dependent launches. Resolver diagnostics must remain visible; inherited/default fallback is not proof that the original dependency was restored.
 5. Rehearse full and partial restores in an isolated environment, including settings without managed secrets and secrets without settings. Confirm diagnostics, preserved values, and absence of spurious audit changes.
 
@@ -108,7 +108,7 @@ Registry migration metadata and row migration are separate. `SettingMigrationRul
 
 ### 24.1 Renaming Settings
 
-`apply_rename` preserves the source value, context identifiers, schema version, and value version at the new key, and records `settings.migration.renamed`. A pre-existing target raises `SettingsMigrationCollisionError` unless explicitly skipped. Preserve effective values and report collisions rather than overwriting accepted configuration.
+`apply_rename` preserves the instance value, schema version, and value version at the new key, and records `settings.migration.renamed`. Retained predecessor rows are left for the guarded conversion. A pre-existing target raises `SettingsMigrationCollisionError` unless explicitly skipped. Preserve effective values and report collisions rather than overwriting accepted configuration.
 
 ### 24.2 Removing Settings
 
@@ -124,4 +124,4 @@ Keep rename, removal, and `settings.migration.type_changed` events in backups wi
 
 ## Verification references
 
-Behavior coverage lives in [settings migration tests](../../tests/unit/services/test_settings_migrations.py), [backup tests](../../tests/unit/services/test_settings_backup.py), and [backup/recovery integration coverage](../../tests/integration/api/test_settings_backup_recovery_contract.py). These exercise their respective boundaries, not completion of the single-user or publication-default cutovers. Inspect current registry/router and deployment evidence before claiming those migrations are complete.
+Behavior coverage lives in [settings migration tests](../../tests/unit/services/test_settings_migrations.py), [backup tests](../../tests/unit/services/test_settings_backup.py), [instance conversion tests](../../tests/unit/services/test_settings_instance_conversion.py), and [backup/recovery integration coverage](../../tests/integration/api/test_settings_backup_recovery_contract.py). They exercise their own boundaries, not a deployment's conversion or the publication-default cutover; inspect deployment evidence before claiming either ran.

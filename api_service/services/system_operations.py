@@ -27,7 +27,6 @@ from moonmind.schemas.workflow_control_models import (
 )
 
 
-_DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 _WORKER_STATE_KEY = "operations.workers.pause_state"
 _WORKER_AUDIT_KEY = "operations.workers"
 _LOG = logging.getLogger(__name__)
@@ -367,8 +366,6 @@ class SystemOperationsService:
                 event_type="operation_invoked",
                 key=_WORKER_AUDIT_KEY,
                 scope="system",
-                workspace_id=_DEFAULT_SUBJECT_ID,
-                user_id=_DEFAULT_SUBJECT_ID,
                 actor_user_id=actor_uuid,
                 old_value_json=None,
                 new_value_json={
@@ -454,9 +451,7 @@ class SystemOperationsService:
         # SQLite, where SELECT FOR UPDATE does not serialize concurrent writers.
         await self._session.execute(
             update(SettingsOverride).where(
-                SettingsOverride.scope == "workspace",
-                SettingsOverride.workspace_id == _DEFAULT_SUBJECT_ID,
-                SettingsOverride.user_id == _DEFAULT_SUBJECT_ID,
+                SettingsOverride.scope.is_(None),
                 SettingsOverride.key == _WORKER_STATE_KEY,
             ).values(
                 value_version=SettingsOverride.value_version,
@@ -469,8 +464,7 @@ class SystemOperationsService:
         try:
             async with self._session.begin_nested():
                 current = SettingsOverride(
-                    scope="workspace", workspace_id=_DEFAULT_SUBJECT_ID,
-                    user_id=_DEFAULT_SUBJECT_ID, key=_WORKER_STATE_KEY,
+                    key=_WORKER_STATE_KEY,
                     value_json={}, schema_version=1, value_version=0,
                 )
                 self._session.add(current)
@@ -485,9 +479,7 @@ class SystemOperationsService:
 
     async def _state_row(self, *, lock: bool = False) -> SettingsOverride | None:
         statement = select(SettingsOverride).where(
-            SettingsOverride.scope == "workspace",
-            SettingsOverride.workspace_id == _DEFAULT_SUBJECT_ID,
-            SettingsOverride.user_id == _DEFAULT_SUBJECT_ID,
+            SettingsOverride.scope.is_(None),
             SettingsOverride.key == _WORKER_STATE_KEY,
         ).execution_options(populate_existing=True)
         if lock:

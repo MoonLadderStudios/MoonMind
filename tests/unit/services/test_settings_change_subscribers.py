@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Iterable
-from uuid import uuid4
 
 import pytest
 
@@ -31,14 +30,11 @@ def _event(
     apply_mode: str,
     affected_systems: Iterable[str],
     refresh_targets: Iterable[str],
-    scope: str = "workspace",
 ) -> SettingsChangeEvent:
     return SettingsChangeEvent(
         key=key,
-        scope=scope,
-        source=f"{scope}_override",
+        source="instance_override",
         apply_mode=apply_mode,
-        actor_user_id=uuid4(),
         changed_at=datetime.now(timezone.utc),
         affected_systems=list(affected_systems),
         refresh_targets=list(refresh_targets),
@@ -91,7 +87,6 @@ async def test_worker_reload_subscriber_infers_soft_reload_for_worker_reload_mod
     assert isinstance(intent, WorkerReloadIntent)
     assert intent.intent == "soft_reload"
     assert intent.key == "skills.policy_mode"
-    assert intent.scope == "workspace"
     assert intent.apply_mode == "worker_reload"
     assert intent.refresh_target == "worker_reloaders"
     assert intent.affected_systems == ("workflow_runtime", "skills")

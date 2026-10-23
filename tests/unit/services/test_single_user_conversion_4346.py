@@ -475,7 +475,7 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
     import logging
 
     from api_service.db import base as db_base
-    from api_service.db.models import SettingsOverride
+    from api_service.db.models import SettingsOverride, WorkflowRun
     from api_service.main import _run_guarded_single_user_upgrade
 
     engine, factory = _factory(tmp_path, "startup-refusal.db")
@@ -491,6 +491,7 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
                 value_json="setting-secret-value",
             )
         )
+        session.add(WorkflowRun(feature_key="feat-1", requested_by_user_id=u.id))
         await session.commit()
     records: list[str] = []
 
@@ -514,6 +515,6 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
     assert summary["published"] is False
     assert (
         "Single-user guarded upgrade blocked (missing_transform_coverage: "
-        "retained subsystems lack registered transforms: settings)"
+        "retained subsystems lack registered transforms: workflows)"
     ) in logged
     assert "setting-secret-value" not in logged

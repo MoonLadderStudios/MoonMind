@@ -23,12 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import SettingsAuditEvent, SettingsOverride
-from api_service.services.settings_catalog import (
-    SettingMigrationRule,
-    SettingScope,
-)
-
-_DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
+from api_service.services.settings_catalog import SettingMigrationRule
 
 SettingsMigrationEventType = Literal[
     "settings.migration.renamed",
@@ -56,9 +51,6 @@ class SettingsMigrationOutcome(BaseModel):
     rule_new_key: str | None = None
     state: str
     event_type: SettingsMigrationEventType
-    scope: SettingScope
-    workspace_id: UUID
-    user_id: UUID
     old_schema_version: int | None = None
     new_schema_version: int | None = None
     old_value: Any = None
@@ -100,9 +92,7 @@ class SettingsMigrationOrchestrator:
 
     session: AsyncSession
     migration_rules: tuple[SettingMigrationRule, ...]
-    actor_user_id: UUID | None = None
     request_id: str | None = None
-    workspace_id: UUID = field(default=_DEFAULT_SUBJECT_ID)
     redact_keys: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
@@ -123,13 +113,11 @@ class SettingsMigrationOrchestrator:
     ) -> list[SettingsMigrationOutcome]:
         """Copy overrides from ``rule.old_key`` to ``rule.new_key``.
 
-        For every ``settings_overrides`` row that targets ``rule.old_key`` in
-        this orchestrator's workspace, the helper:
+        When the instance has an override for ``rule.old_key``, the helper:
 
         * Inserts an equivalent row keyed by ``rule.new_key`` (preserving
-          ``scope``, ``user_id``, ``workspace_id``, ``value_json``,
-          ``schema_version``, and ``value_version``), unless the target row
-          already exists.
+          ``value_json``, ``schema_version``, and ``value_version``), unless
+          the target row already exists.
         * Deletes the source row so subsequent diagnostics see the rename as
           completed.
         * Records a ``settings.migration.renamed`` audit event referencing
@@ -148,20 +136,14 @@ class SettingsMigrationOrchestrator:
         outcomes: list[SettingsMigrationOutcome] = []
         old_rows = await self._fetch_overrides(rule.old_key)
         target_rows = await self._fetch_overrides(rule.new_key)
-        targets_by_subject: dict[
-            tuple[str, UUID], SettingsOverride
-        ] = {(target.scope, target.user_id): target for target in target_rows}
+        target = target_rows[0] if target_rows else None
 
-        if on_collision == "raise":
-            for row in old_rows:
-                if (row.scope, row.user_id) in targets_by_subject:
-                    raise SettingsMigrationCollisionError(
-                        f"rename target {rule.new_key!r} already has an override "
-                        f"in scope {row.scope!r}"
-                    )
+        if on_collision == "raise" and old_rows and target is not None:
+            raise SettingsMigrationCollisionError(
+                f"rename target {rule.new_key!r} already has an override"
+            )
 
         for row in old_rows:
-            target = targets_by_subject.get((row.scope, row.user_id))
             if target is not None:
                 outcomes.append(
                     SettingsMigrationOutcome(
@@ -169,9 +151,6 @@ class SettingsMigrationOrchestrator:
                         rule_new_key=rule.new_key,
                         state=rule.state,
                         event_type="settings.migration.renamed",
-                        scope=row.scope,
-                        workspace_id=row.workspace_id,
-                        user_id=row.user_id,
                         old_schema_version=row.schema_version,
                         new_schema_version=target.schema_version,
                         old_value=row.value_json,
@@ -186,15 +165,12 @@ class SettingsMigrationOrchestrator:
             value_version = row.value_version
 
             new_row = SettingsOverride(
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 key=rule.new_key,
                 value_json=old_value,
                 schema_version=schema_version,
                 value_version=value_version,
                 created_by=row.created_by,
-                updated_by=self.actor_user_id or row.updated_by,
+                updated_by=row.updated_by,
             )
             self.session.add(new_row)
             await self.session.delete(row)
@@ -202,9 +178,6 @@ class SettingsMigrationOrchestrator:
             event = self._record_audit_event(
                 event_type="settings.migration.renamed",
                 key=rule.old_key,
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 old_value=old_value,
                 new_value=old_value,
                 reason=rule.message,
@@ -215,9 +188,6 @@ class SettingsMigrationOrchestrator:
                     rule_new_key=rule.new_key,
                     state=rule.state,
                     event_type="settings.migration.renamed",
-                    scope=row.scope,
-                    workspace_id=row.workspace_id,
-                    user_id=row.user_id,
                     old_schema_version=schema_version,
                     new_schema_version=schema_version,
                     old_value=old_value,
@@ -261,14 +231,10 @@ class SettingsMigrationOrchestrator:
             row.value_json = new_value
             row.schema_version = coercion.target_schema_version
             row.value_version = row.value_version + 1
-            row.updated_by = self.actor_user_id or row.updated_by
 
             event = self._record_audit_event(
                 event_type="settings.migration.type_changed",
                 key=rule.old_key,
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 old_value=old_value,
                 new_value=new_value,
                 reason=rule.message,
@@ -279,9 +245,6 @@ class SettingsMigrationOrchestrator:
                     rule_new_key=None,
                     state=rule.state,
                     event_type="settings.migration.type_changed",
-                    scope=row.scope,
-                    workspace_id=row.workspace_id,
-                    user_id=row.user_id,
                     old_schema_version=old_schema_version,
                     new_schema_version=coercion.target_schema_version,
                     old_value=old_value,
@@ -311,9 +274,6 @@ class SettingsMigrationOrchestrator:
             event = self._record_audit_event(
                 event_type="settings.migration.removed",
                 key=rule.old_key,
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 old_value=row.value_json,
                 new_value=row.value_json,
                 reason=rule.message,
@@ -324,9 +284,6 @@ class SettingsMigrationOrchestrator:
                     rule_new_key=None,
                     state=rule.state,
                     event_type="settings.migration.removed",
-                    scope=row.scope,
-                    workspace_id=row.workspace_id,
-                    user_id=row.user_id,
                     old_schema_version=row.schema_version,
                     new_schema_version=row.schema_version,
                     old_value=row.value_json,
@@ -374,7 +331,7 @@ class SettingsMigrationOrchestrator:
         result = await self.session.execute(
             select(SettingsOverride).where(
                 SettingsOverride.key == key,
-                SettingsOverride.workspace_id == self.workspace_id,
+                SettingsOverride.scope.is_(None),
             )
         )
         return list(result.scalars().all())
@@ -384,9 +341,6 @@ class SettingsMigrationOrchestrator:
         *,
         event_type: SettingsMigrationEventType,
         key: str,
-        scope: str,
-        workspace_id: UUID,
-        user_id: UUID,
         old_value: Any,
         new_value: Any,
         reason: str | None,
@@ -395,10 +349,6 @@ class SettingsMigrationOrchestrator:
         event = SettingsAuditEvent(
             event_type=event_type,
             key=key,
-            scope=scope,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            actor_user_id=self.actor_user_id,
             old_value_json=None if redacted else old_value,
             new_value_json=None if redacted else new_value,
             redacted=redacted,

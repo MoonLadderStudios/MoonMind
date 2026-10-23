@@ -43,7 +43,6 @@ async def test_effective_values_contract_reports_metadata_and_operator_lock(monk
         section="user-workspace",
         value_type="string",
         ui="input",
-        scopes=("workspace",),
         default_value="built-in",
         settings_path=("settings", "configured"),
         apply_mode="worker_reload",
@@ -58,7 +57,6 @@ async def test_effective_values_contract_reports_metadata_and_operator_lock(monk
         section="user-workspace",
         value_type="string",
         ui="input",
-        scopes=("workspace",),
         default_value="built-in",
         operator_locked_value="operator-value",
         operator_lock_reason="Controlled by operator policy.",
@@ -80,11 +78,10 @@ async def test_effective_values_contract_reports_metadata_and_operator_lock(monk
     ) as client:
         effective = await client.get(
             "/api/v1/settings/effective",
-            params={"scope": "workspace"},
         )
         diagnostics = await client.get(
             "/api/v1/settings/diagnostics",
-            params={"scope": "workspace", "key": "test.locked"},
+            params={"key": "test.locked"},
         )
 
     assert effective.status_code == 200
@@ -120,11 +117,10 @@ async def test_mm656_effective_preview_and_readiness_share_validation_details(mo
     ) as client:
         effective = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
-            params={"scope": "workspace"},
         )
         diagnostics = await client.get(
             "/api/v1/settings/diagnostics",
-            params={"scope": "workspace", "key": "workflow.default_publish_mode"},
+            params={"key": "workflow.default_publish_mode"},
         )
 
     assert effective.status_code == 200

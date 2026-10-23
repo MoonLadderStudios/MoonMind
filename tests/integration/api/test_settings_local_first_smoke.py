@@ -20,8 +20,6 @@ by other suites (see §9 of the walkthrough doc).
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -39,6 +37,7 @@ from api_service.db.models import (
     SettingsOverride,
 )
 from api_service.main import app
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -69,21 +68,9 @@ async def local_first_db(tmp_path):
     original = db_base.async_session_maker
     db_base.async_session_maker = session_maker
 
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="local-first-smoke@example.com",
-        is_superuser=True,
-        settings_permissions={
-            "settings.catalog.read",
-            "settings.effective.read",
-            "settings.user.write",
-            "settings.workspace.write",
-            "secrets.metadata.read",
-            "secrets.value.write",
-        },
-        workspace_id=uuid4(),
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: OperatorAdmission(
+        via="loopback"
     )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
     try:
         yield session_maker
     finally:
@@ -101,7 +88,7 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
         # --- §1 Empty-state catalog read (SettingsSystem.md §5.1, §10, §29.8) ---
         catalog = await client.get(
             "/api/v1/settings/catalog",
-            params={"section": "user-workspace", "scope": "workspace"},
+            params={"section": "user-workspace"},
         )
         assert catalog.status_code == 200
         catalog_body = catalog.json()
@@ -134,7 +121,7 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
 
         # --- §3 SecretRef-backed override (§5.3, §10.4, §29.5, §29.6) ---
         bound = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {TOKEN_KEY: LOCAL_SECRET_REF},
                 "expected_versions": {TOKEN_KEY: 1},
@@ -146,11 +133,11 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
         token_value = bound_body["values"][TOKEN_KEY]
         # A SecretRef descriptor backed by a resolvable `db://` reference is
         # canonicalized to `secret_ref` per SettingsSystem.md §7.6. Plain
-        # `workspace_override` is the source for a SecretRef descriptor with
+        # `instance_override` is the source for a SecretRef descriptor with
         # a non-`db://` reference (e.g. `env://`). Either is valid evidence
         # that the override row was recorded; the invariant in §29.8 is that
         # *a* source is always reported.
-        assert token_value["source"] in {"secret_ref", "workspace_override"}
+        assert token_value["source"] in {"secret_ref", "instance_override"}
         assert token_value["value"] == LOCAL_SECRET_REF
         change_events = bound_body["change_events"]
         assert any(
@@ -167,14 +154,14 @@ async def test_local_first_walkthrough_runs_end_to_end(local_first_db):
         assert usage_body["secretRef"] == LOCAL_SECRET_REF
         assert any(
             consumer["settingKey"] == TOKEN_KEY
-            and consumer["scope"] == "workspace"
+            and consumer["objectName"] == f"Instance setting {TOKEN_KEY}"
             and consumer["consumerType"] == "setting_override"
             for consumer in usage_body["usages"]
         )
         assert PLACEHOLDER_PLAINTEXT not in usage.text
 
         # --- §5 Reset returns to inheritance (§5.4, §29.9) ---
-        reset = await client.delete(f"/api/v1/settings/workspace/{TOKEN_KEY}")
+        reset = await client.delete(f"/api/v1/settings/{TOKEN_KEY}")
         assert reset.status_code == 200, reset.text
         reset_body = reset.json()
         # After reset the SecretRef descriptor falls back to inherited values

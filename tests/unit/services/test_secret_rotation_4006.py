@@ -492,7 +492,6 @@ async def test_setting_override_reference_blocks_delete(tmp_path):
             await SecretsService.create_secret(db, "guarded", "v1")
             db.add(
                 SettingsOverride(
-                    scope="workspace",
                     key="integrations.github.token_ref",
                     value_json="db://guarded",
                 )

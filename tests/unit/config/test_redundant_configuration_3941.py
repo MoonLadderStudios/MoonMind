@@ -155,7 +155,6 @@ def _boolean_registry() -> tuple:
             section="user-workspace",
             value_type="boolean",
             ui="toggle",
-            scopes=("workspace",),
             default_value=False,
             order=1,
             apply_mode="worker_reload",
@@ -175,9 +174,7 @@ def test_resolver_preserves_explicit_false_over_default() -> None:
         registry=_boolean_registry(),
     )
 
-    effective = service.effective_value(
-        "test.redundant_example_flag", scope="workspace"
-    )
+    effective = service.effective_value("test.redundant_example_flag")
 
     assert effective.value is False
     assert effective.source == "environment"
@@ -195,9 +192,7 @@ def test_resolver_reset_to_default_without_store() -> None:
         registry=_boolean_registry(),
     )
 
-    effective = service.effective_value(
-        "test.redundant_example_flag", scope="workspace"
-    )
+    effective = service.effective_value("test.redundant_example_flag")
 
     assert effective.value is False
     assert effective.source == "default"
@@ -215,7 +210,6 @@ def test_resolver_unavailable_store_never_exposes_secrets() -> None:
             section="user-workspace",
             value_type="string",
             ui="text",
-            scopes=("workspace",),
             default_value="",
             order=2,
             apply_mode="immediate",
@@ -229,9 +223,7 @@ def test_resolver_unavailable_store_never_exposes_secrets() -> None:
         registry=registry,
     )
 
-    effective = service.effective_value(
-        "test.redundant_example_token", scope="workspace"
-    )
+    effective = service.effective_value("test.redundant_example_token")
 
     assert effective.source == "environment"
     assert "operator-held-reference" not in (effective.source_explanation or "")

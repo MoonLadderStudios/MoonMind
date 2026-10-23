@@ -263,7 +263,7 @@ const enrollmentProfiles = [
 // worker, shard and deployment state the Operations cards read.
 function settingDescriptor(overrides: Record<string, unknown>) {
   return {
-    description: LONG_TEXT, category: 'Workflow', section: 'user-workspace', scopes: ['workspace'],
+    description: LONG_TEXT, category: 'Workflow', section: 'user-workspace',
     default_value: null, override_value: null, source: 'config_or_default',
     source_explanation: 'Resolved from application settings.', apply_mode: 'next_task',
     activation_state: 'active', active: true, pending_value: null, affected_process_or_worker: 'task_creation',
@@ -277,7 +277,6 @@ function settingDescriptor(overrides: Record<string, unknown>) {
 
 const workspaceCatalog = {
   section: 'user-workspace',
-  scope: 'workspace',
   categories: {
     Workflow: [
       settingDescriptor({
@@ -341,7 +340,7 @@ function settingsResponse(url: URL): Response | null {
       return json(workspaceCatalog);
     case '/api/v1/settings/audit':
       return json({ items: [{
-        id: 'audit-1', event_type: 'setting_updated', key: 'workflow.branch_prefix', scope: 'workspace',
+        id: 'audit-1', event_type: 'setting_updated', key: 'workflow.branch_prefix',
         actor_user_id: '00000000-0000-0000-0000-000000000001', old_value: 'mm/', new_value: LONG_ID, redacted: false,
         reason: LONG_TEXT, validation_outcome: 'valid', affected_systems: ['task_creation'], created_at: '2026-10-01T00:00:00Z',
       }] });
