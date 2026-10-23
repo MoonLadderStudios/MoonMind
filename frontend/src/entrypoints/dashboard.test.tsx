@@ -312,8 +312,8 @@ vi.mock('./workflow-start', () => ({
 
 vi.mock('./settings', () => {
   const MockSettingsPage = ({ payload }: { payload: BootPayload }) => {
-    const initialData = payload.initialData as { settingsPermissions?: string[] } | undefined;
-    return <div>Settings permissions: {(initialData?.settingsPermissions ?? []).join(',')}</div>;
+    const initialData = payload.initialData as { workerPause?: { get?: string } } | undefined;
+    return <div>Worker snapshot: {initialData?.workerPause?.get}</div>;
   };
   return {
     SettingsEntryPage: MockSettingsPage,
@@ -351,7 +351,6 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
       initialPath: '/workflows/new',
       pollIntervalsMs: { list: 60_000, detail: 60_000, events: 60_000 },
     },
-    settingsPermissions: [],
     workerPause: {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',
@@ -2012,7 +2011,7 @@ describe('Dashboard shared entry', () => {
     window.history.replaceState({}, '', '/settings');
     renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-    await screen.findByText('Settings permissions:');
+    await screen.findByText('Worker snapshot: /api/system/worker-pause');
 
     expect(screen.queryByRole('radiogroup', { name: 'Workflow list display' })).toBeNull();
   });
@@ -2028,7 +2027,7 @@ describe('Dashboard shared entry', () => {
       window.history.replaceState({}, '', path);
       renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
 
-      expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+      expect(await screen.findByText('Worker snapshot: /api/system/worker-pause')).toBeTruthy();
       expect(screen.queryByText('Unknown dashboard page:')).toBeNull();
       // A trailing slash is a canonical route, not an unknown Settings alias, so
       // it is never rewritten back to the /settings entry point.
@@ -2336,14 +2335,14 @@ describe('Dashboard shared entry', () => {
     expect(window.location.search).toBe('?source=temporal');
   });
 
-  it('MM-1029 loads Settings permissions during SPA navigation', async () => {
+  it('MM-1029 loads instance Settings operational config during SPA navigation', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/ui/info') {
         return Promise.resolve({
           ok: true,
           json: async () => uiInfo({
-            settingsPermissions: ['provider_profiles.write', 'settings.effective.read'],
+            workerPause: { get: '/api/system/worker-pause' },
           }),
         } as Response);
       }
@@ -2363,7 +2362,7 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Providers & Secrets' }));
 
     expect(
-      await screen.findByText('Settings permissions: provider_profiles.write,settings.effective.read'),
+      await screen.findByText('Worker snapshot: /api/system/worker-pause'),
     ).toBeTruthy();
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/ui/info',
@@ -2824,7 +2823,7 @@ describe('Dashboard shared entry', () => {
     expect((await screen.findByRole('status')).textContent).toContain('Opening first workflow...');
     fireEvent.click(screen.getByRole('button', { name: 'System' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Providers & Secrets' }));
-    expect(await screen.findByText('Settings permissions:')).toBeTruthy();
+    expect(await screen.findByText('Worker snapshot: /api/system/worker-pause')).toBeTruthy();
 
     const completeList = resolveList;
     if (!completeList) {

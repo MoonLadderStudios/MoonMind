@@ -232,7 +232,8 @@ Observation distinguishes the controller's own one-off container from ordinary s
 
 ### 12.2 Application-level verification
 
-Operator origins come from effective Compose settings and bindings. An explicit `--operator-url` overrides them or supplies a non-derivable target.
+Origins follow Compose settings; wildcard bindings verify loopback.
+Use `--operator-url` for LAN or VPN verification without changing bindings.
 
 Verification requests the protected settings catalog, preserving TLS and ingress authentication; login redirects and public health cannot pass. A managed controller probes host loopback from an unprivileged host-network container. This never proves an external route or supplies identity headers or sessions. Missing credentials or unreachable networks remain incomplete verification; pre-update application health never gates repair.
 
