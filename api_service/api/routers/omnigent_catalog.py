@@ -26,7 +26,6 @@ from api_service.api.routers.provider_profiles import (
     _can_view_profile,
     _managed_secret_statuses_for_rows,
     _provider_profile_readiness,
-    _require_provider_profile_permission,
     _secret_ref_results_for_rows,
 )
 from api_service.auth_providers import get_instance_access
@@ -1063,7 +1062,6 @@ async def get_omnigent_codex_catalog_readiness(
 ) -> OmnigentCodexCatalogReadiness:
     """Return a fresh, bounded readiness snapshot; this response is not cached."""
 
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     config = get_bridge_config()
     bridge = config.readiness()
     configured_canary_token = os.getenv(
@@ -1772,7 +1770,6 @@ async def get_omnigent_execution_readiness(
         resolve_runtime_target_catalog,
     )
 
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     profiles = list(
         (
             await session.execute(
@@ -2013,5 +2010,4 @@ async def synchronize_omnigent_harness_catalog(
         synchronize_omnigent_harness_catalog as synchronize_harness_catalog,
     )
 
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     return await synchronize_harness_catalog(session)

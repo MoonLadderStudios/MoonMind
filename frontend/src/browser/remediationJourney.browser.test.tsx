@@ -286,7 +286,6 @@ const uiInfo = {
       },
     },
   },
-  settingsPermissions: [],
 };
 
 const payload: BootPayload = { page: 'dashboard', apiBase: '/api' };

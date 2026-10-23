@@ -17,7 +17,6 @@ from api_service.services.system_operations import (
     SystemOperationsService,
     WorkerOperationCommand,
 )
-from api_service.services.settings_catalog import has_settings_permission
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal import TemporalExecutionService
 
@@ -46,23 +45,6 @@ def _get_temporal_execution_service(
     )
 
 
-def _require_operation_permission(user: Any, permission: str) -> None:
-    # Authorization is checked after admission in every mode: operator
-    # admission and the retained local principal hold every operations
-    # permission, so no mode-based bypass exists here.
-    if has_settings_permission(user, permission):
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "code": "worker_operation_forbidden",
-            "message": f"Missing required operations permission: {permission}.",
-            "failureClass": "authorization_failure",
-            "requiredPermission": permission,
-        },
-    )
-
-
 def _validation_error(exc: SystemOperationValidationError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -76,7 +58,6 @@ async def get_worker_pause_snapshot(
     temporal_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
     user: Any = Depends(get_instance_access),
 ) -> WorkerPauseSnapshotResponse:
-    _require_operation_permission(user, "operations.read")
     return await SystemOperationsService(
         session, temporal_service=temporal_service
     ).snapshot()
@@ -89,7 +70,6 @@ async def submit_worker_pause_operation(
     temporal_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
     user: Any = Depends(get_instance_access),
 ) -> WorkerPauseSnapshotResponse:
-    _require_operation_permission(user, "operations.invoke")
     service = SystemOperationsService(session, temporal_service=temporal_service)
     try:
         return await service.submit(
