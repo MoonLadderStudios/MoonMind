@@ -2761,7 +2761,7 @@ class TemporalExecutionService:
 
         if _workflow_payload(record.parameters).get("remediation"):
             remediation_link = await self._session.get(
-                TemporalExecutionRemediationLink, workflow_id
+                TemporalExecutionRemediationLink, workflow_id, populate_existing=True
             )
             if remediation_link is None or not remediation_link.context_artifact_ref:
                 try:
@@ -2773,6 +2773,9 @@ class TemporalExecutionService:
                         await self._remediation_context_builder(
                             session=context_session
                         ).build_context(remediation_workflow_id=workflow_id)
+                    # The producer committed through a separate session.
+                    if remediation_link is not None:
+                        await self._session.refresh(remediation_link)
                 except Exception as error:
                     logger.exception(
                         "Remediation context preparation failed for %s", workflow_id
