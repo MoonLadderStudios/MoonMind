@@ -29,8 +29,8 @@ If the bundled helper is materialized, post with:
 .agents/skills/jira-verify/tools/post_jira_comment.py --issue <ISSUE> --body-file <comment_file>
 ```
 
-When the MoonMind API requires auth, provide an existing runtime token via
-`MOONMIND_AUTH_HEADER`, `MOONMIND_API_TOKEN`, `MOONMIND_AUTH_TOKEN`,
-`MOONMIND_BEARER_TOKEN`, or `MOONMIND_API_KEY`; do not print those values.
+Inside a MoonMind managed step the helper sends the step's scoped Jira tool
+capability from `MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE` (or
+`MOONMIND_MCP_TOOLS_BEARER_TOKEN`); do not print it.
 Otherwise call the trusted Jira tool directly with `jira.add_comment` and
 arguments `{"issueKey":"<ISSUE>","body":"<comment text>"}`.

@@ -4290,6 +4290,8 @@ async def test_agent_runtime_prepare_turn_instructions_adds_jira_tool_hint(
     assert "artifacts/story-breakdowns/demo/stories.json" in result
     assert "`$MOONMIND_URL`" in result
     assert "POST $MOONMIND_URL/mcp/tools/call" in result
+    assert "X-MoonMind-Mcp-Tools: v1" in result
+    assert "$MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE" in result
     assert "jira.create_issue" in result
     assert "Managed Codex CLI note:" in result
 

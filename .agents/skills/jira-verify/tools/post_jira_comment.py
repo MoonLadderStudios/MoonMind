@@ -43,8 +43,26 @@ def _scan(body: str) -> None:
                 f"Refusing to post comment: body matches secret pattern {pattern.pattern!r}."
             )
 
+def _scoped_jira_token() -> str:
+    """Read the step's scoped Jira tool capability MoonMind materialized."""
+    token_file = os.environ.get("MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE", "").strip()
+    if token_file:
+        try:
+            token = Path(token_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise SystemExit(f"Jira tool capability file is unavailable: {exc}")
+        if not token:
+            raise SystemExit("Jira tool capability file is empty.")
+        return token
+    return os.environ.get("MOONMIND_MCP_TOOLS_BEARER_TOKEN", "").strip()
+
 def _headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
+    scoped_token = _scoped_jira_token()
+    if scoped_token:
+        headers["X-MoonMind-Mcp-Tools"] = "v1"
+        headers["Authorization"] = f"Bearer {scoped_token}"
+        return headers
     auth_header = os.environ.get("MOONMIND_AUTH_HEADER", "").strip()
     bearer_token = (
         os.environ.get("MOONMIND_API_TOKEN")

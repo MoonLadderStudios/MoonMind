@@ -95,6 +95,7 @@ _MOONMIND_RUNTIME_ENV_FILES = {
     "MOONMIND_REPOSITORY_CONNECTION_REF": "repository-connection-ref",
     "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "execution-fanout-file",
     "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE": "container-jobs-file",
+    "MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE": "mcp-tools-file",
     "MOONMIND_CONTAINER_JOBS_MCP_URL": "container-jobs-mcp-url",
     "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "container-jobs-source-kind",
     "MOONMIND_CONTAINER_JOBS_SESSION_ID": "container-jobs-session-id",

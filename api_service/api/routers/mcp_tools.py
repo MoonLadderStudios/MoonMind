@@ -11,10 +11,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.api.routers.container_jobs import container_jobs_ready
-from api_service.auth_providers import get_current_user
+from api_service.api.routers.container_jobs import (
+    container_job_owner,
+    container_jobs_ready,
+)
+from api_service.auth_providers import get_instance_operator_access
 from api_service.db.base import async_session_maker, get_async_session
-from api_service.db.models import User
+from api_service.db.models import TemporalExecutionCanonicalRecord, User
 from api_service.services.container_jobs import ContainerJobService
 from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
 from api_service.services.remediation_actions import build_remediation_action_executor
@@ -23,10 +26,17 @@ from moonmind.security.auth_modes_4120 import (
     is_disabled_local_mode,
     public_base_url_is_loopback,
 )
+from moonmind.security.mcp_tool_capabilities import (
+    McpToolCapability,
+    McpToolCapabilityError,
+    verify_mcp_tool_capability,
+)
 from moonmind.security.operator_admission import (
+    OperatorAdmission,
     OperatorAdmissionError,
     validate_browser_host_and_origin,
 )
+from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.mcp.container_job_tool_registry import (
@@ -70,6 +80,10 @@ from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
 
 logger = logging.getLogger(__name__)
+
+MCP_TOOLS_HEADER = "X-MoonMind-Mcp-Tools"
+MCP_TOOLS_VERSION = "v1"
+McpCaller = User | OperatorAdmission | McpToolCapability
 
 
 def _validate_mcp_post_request(request: Request) -> None:
@@ -181,6 +195,75 @@ def _to_http_exception(exc: Exception) -> HTTPException:
     )
 
 
+def _machine_denied(code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": code, "message": message},
+    )
+
+
+async def _verify_mcp_tool_capability(
+    request: Request, session: AsyncSession
+) -> McpToolCapability:
+    if request.headers.get(MCP_TOOLS_HEADER, "").strip() != MCP_TOOLS_VERSION:
+        raise _machine_denied(
+            "unsupported_mcp_tool_capability",
+            "The requested MCP tool capability format is not recognized.",
+        )
+    scheme, _, token = request.headers.get("authorization", "").strip().partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise _machine_denied(
+            "mcp_tool_capability_required", "A scoped MCP tool bearer is required."
+        )
+    try:
+        capability = verify_mcp_tool_capability(
+            token.strip(), secret=str(settings.security.JWT_SECRET_KEY or "")
+        )
+    except McpToolCapabilityError as exc:
+        raise _machine_denied("invalid_mcp_tool_capability", str(exc)) from exc
+    # Revocation follows the bound workflow: a finished or unknown execution
+    # cannot keep using its runtime's tool authority until expiry.
+    try:
+        record = await session.get(
+            TemporalExecutionCanonicalRecord, capability.workflow_id
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="unavailable"
+        ) from exc
+    if record is None or record.state in TERMINAL_WORKFLOW_STATES:
+        raise _machine_denied(
+            "stale_mcp_tool_capability",
+            "The capability's workflow is no longer active.",
+        )
+    return capability
+
+
+async def get_mcp_caller(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+) -> McpCaller:
+    """Admit the operator, or a managed runtime by its scoped capability.
+
+    A presented machine marker is verified on its own and never falls back to
+    operator admission; the operator path rejects presented machine
+    credentials. Neither path resolves or synthesizes a person.
+    """
+    if MCP_TOOLS_HEADER.lower() in request.headers:
+        return await _verify_mcp_tool_capability(request, session)
+    return await get_instance_operator_access(request, session)
+
+
+def _caller_principal(caller: User | OperatorAdmission) -> str:
+    return container_job_owner(caller).principal_id
+
+
+def _visible_tools(tools: list[Any], caller: McpCaller) -> list[Any]:
+    if isinstance(caller, McpToolCapability):
+        return [tool for tool in tools if caller.allows_tool(tool.name)]
+    return tools
+
+
 def _list_container_job_tools() -> list[Any]:
     if not container_jobs_ready():
         return []
@@ -249,10 +332,19 @@ async def _dispatch_container_job_tool(
 
 async def _dispatch_tool_call(
     payload: ToolCallRequest,
-    user: User,
+    caller: McpCaller,
     session: AsyncSession | None = None,
 ) -> Any:
-    if _container_job_registry.has_tool(payload.tool):
+    if isinstance(caller, McpToolCapability):
+        if not caller.allows_tool(payload.tool):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "mcp_tool_capability_scope_mismatch",
+                    "message": "The tool is outside the capability's purpose.",
+                },
+            )
+    elif _container_job_registry.has_tool(payload.tool):
         if session is None:  # pragma: no cover - transport always provides a session
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -262,9 +354,7 @@ async def _dispatch_tool_call(
                 },
             )
         return await _dispatch_container_job_tool(
-            payload,
-            OwnerIdentity(principalId=str(user.id), principalType="user"),
-            session,
+            payload, container_job_owner(caller), session
         )
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(
@@ -327,7 +417,7 @@ async def _dispatch_tool_call(
                 live_follower=log_adapter,
                 action_executor=build_remediation_action_executor(session=session),
             ),
-            principal=str(user.id),
+            principal=_caller_principal(caller),
         )
         return await _remediation_registry.call_tool(
             tool=payload.tool,
@@ -439,7 +529,7 @@ def _tool_error_payload(detail: Any) -> dict[str, Any]:
 
 async def _handle_json_rpc_request(
     message: Any,
-    user: User,
+    caller: McpCaller,
     session: AsyncSession | None = None,
 ) -> dict[str, Any] | None:
     if _is_json_rpc_notification(message) or _is_json_rpc_response(message):
@@ -495,7 +585,7 @@ async def _handle_json_rpc_request(
         if method == "tools/list":
             tools = [
                 tool.model_dump(by_alias=True)
-                for tool in _list_streamable_callable_tools()
+                for tool in _visible_tools(_list_streamable_callable_tools(), caller)
             ]
             return _json_rpc_result(request_id, {"tools": tools})
         if method == "tools/call":
@@ -515,7 +605,7 @@ async def _handle_json_rpc_request(
                 )
             result = await _dispatch_tool_call(
                 ToolCallRequest(tool=tool_name, arguments=arguments),
-                user,
+                caller,
                 session,
             )
             return _json_rpc_result(request_id, _tool_result_payload(result))
@@ -558,7 +648,7 @@ async def _handle_json_rpc_request(
 @router.post("")
 async def handle_streamable_http_post(
     request: Request,
-    user: User = Depends(get_current_user()),
+    caller: McpCaller = Depends(get_mcp_caller),
     session: AsyncSession = Depends(get_async_session),
 ) -> Response:
     """Handle MCP Streamable HTTP JSON-RPC messages at the single MCP endpoint."""
@@ -595,7 +685,7 @@ async def handle_streamable_http_post(
         responses = [
             response
             for response in [
-                await _handle_json_rpc_request(message, user, session)
+                await _handle_json_rpc_request(message, caller, session)
                 for message in payload
             ]
             if response is not None
@@ -604,7 +694,7 @@ async def handle_streamable_http_post(
             return Response(status_code=status.HTTP_202_ACCEPTED)
         return JSONResponse(responses)
 
-    response = await _handle_json_rpc_request(payload, user, session)
+    response = await _handle_json_rpc_request(payload, caller, session)
     if response is None:
         return Response(status_code=status.HTTP_202_ACCEPTED)
     return JSONResponse(response)
@@ -628,7 +718,7 @@ async def handle_streamable_http_get(request: Request) -> Response:
 
 @router.get("/resources", response_model=ResourceListResponse)
 async def list_resources(
-    _user: User = Depends(get_current_user()),
+    _caller: McpCaller = Depends(get_mcp_caller),
 ) -> ResourceListResponse:
     """Return MoonMind MCP resource definitions."""
     return ResourceListResponse(resources=_resources)
@@ -636,15 +726,15 @@ async def list_resources(
 
 @router.get("/tools", response_model=ToolListResponse)
 async def list_tools(
-    _user: User = Depends(get_current_user()),
+    caller: McpCaller = Depends(get_mcp_caller),
 ) -> ToolListResponse:
-    """Return all registered MCP tool definitions."""
-    return ToolListResponse(tools=_list_registered_tools())
+    """Return the registered MCP tool definitions visible to the caller."""
+    return ToolListResponse(tools=_visible_tools(_list_registered_tools(), caller))
 
 @router.post("/tools/call", response_model=ToolCallResponse)
 async def call_tool(
     payload: ToolCallRequest,
-    user: User = Depends(get_current_user()),
+    caller: McpCaller = Depends(get_mcp_caller),
     session: AsyncSession = Depends(get_async_session),
 ) -> ToolCallResponse:
     """Dispatch one MCP tool invocation."""
@@ -652,7 +742,7 @@ async def call_tool(
     try:
         result = await _dispatch_tool_call(
             payload,
-            user,
+            caller,
             session,
         )
     except HTTPException:

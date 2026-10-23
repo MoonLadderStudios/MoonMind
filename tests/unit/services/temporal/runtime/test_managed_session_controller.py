@@ -33,6 +33,7 @@ from moonmind.security.container_job_capabilities import (
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
+from moonmind.security.mcp_tool_capabilities import verify_mcp_tool_capability
 from moonmind.workflows.temporal.runtime import (
     managed_api_key_resolve as managed_api_key_resolve_module,
 )
@@ -329,6 +330,7 @@ async def test_default_command_runner_clears_supplemental_groups_when_uid_change
         (None, True),
         ((), False),
         (("execution.fanout",), True),
+        (("jira",), False),
     ],
 )
 async def test_controller_launches_container_and_returns_typed_handle(
@@ -472,6 +474,21 @@ async def test_controller_launches_container_and_returns_typed_handle(
     else:
         assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in run_command
         assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in docker_run_env
+    if required_capabilities == ("jira",):
+        assert "MOONMIND_MCP_TOOLS_BEARER_TOKEN" in run_command
+        assert not any(
+            item.startswith("MOONMIND_MCP_TOOLS_BEARER_TOKEN=") for item in run_command
+        )
+        jira_tools = verify_mcp_tool_capability(
+            docker_run_env["MOONMIND_MCP_TOOLS_BEARER_TOKEN"],
+            secret=str(settings.security.JWT_SECRET_KEY),
+        )
+        assert jira_tools.purpose == "jira"
+        assert jira_tools.workflow_id == "wf-task-1"
+        assert jira_tools.session_id == "sess-1"
+        assert jira_tools.source_kind == "managed_session"
+    else:
+        assert "MOONMIND_MCP_TOOLS_BEARER_TOKEN" not in docker_run_env
     assert not any(item.startswith("DOCKER_HOST=") for item in run_command)
     assert not any(item.startswith("SYSTEM_DOCKER_HOST=") for item in run_command)
     assert "python3" in run_command

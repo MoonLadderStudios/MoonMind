@@ -20,6 +20,7 @@ from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     verify_execution_fanout_capability,
 )
+from moonmind.security.mcp_tool_capabilities import verify_mcp_tool_capability
 from moonmind.workflows.executions.repository_contract import (
     RepositoryClientEvidence,
     RepositoryClientPolicy,
@@ -5166,6 +5167,56 @@ def test_direct_managed_launch_removes_unrequested_ambient_fanout_authority() ->
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE" not in environment
     assert "MOONMIND_REPOSITORY_CONNECTION_REF" not in environment
+
+
+def test_direct_managed_launch_scopes_jira_tool_authority_to_jira_steps() -> None:
+    request = _make_request(
+        parameters={"requiredCapabilities": ["jira", "git"]},
+        step_execution={
+            "workflowId": "mm:parent",
+            "runId": "workflow-run-1",
+            "logicalStepId": "verify",
+            "executionOrdinal": 1,
+            "stepExecutionId": "mm:parent:workflow-run-1:verify:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+    )
+    environment = {
+        "MOONMIND_URL": "http://api:8000",
+        "MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE": "/stale/token-file",
+    }
+
+    ManagedRuntimeLauncher._materialize_mcp_tools_environment(
+        environment=environment,
+        request=request,
+        workflow_id="mm:parent",
+        run_id="agent-run-1",
+        runtime_id="claude_code",
+    )
+    capability = verify_mcp_tool_capability(
+        environment["MOONMIND_MCP_TOOLS_BEARER_TOKEN"],
+        secret=str(settings.security.JWT_SECRET_KEY),
+    )
+
+    assert "MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE" not in environment
+    assert capability.purpose == "jira"
+    assert capability.workflow_id == "mm:parent"
+    assert capability.agent_run_id == "agent-run-1"
+    assert capability.step_id == "verify"
+    assert capability.source_kind == "managed_process"
+
+    unrequested = {
+        "MOONMIND_URL": "http://api:8000",
+        "MOONMIND_MCP_TOOLS_BEARER_TOKEN": "stale-inline-token",
+    }
+    ManagedRuntimeLauncher._materialize_mcp_tools_environment(
+        environment=unrequested,
+        request=_make_request(parameters={"requiredCapabilities": ["git"]}),
+        workflow_id="mm:parent",
+        run_id="agent-run-1",
+        runtime_id="claude_code",
+    )
+    assert "MOONMIND_MCP_TOOLS_BEARER_TOKEN" not in unrequested
 
 
 def test_direct_managed_launch_rejects_denied_fanout_authorization() -> None:

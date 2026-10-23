@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import ASGITransport, AsyncClient
 
+import api_service.operator_admission as operator_admission
 from api_service.api.routers import mcp_tools
-from api_service.auth_providers import get_current_user
 from moonmind.security import auth_modes_4120
 
 pytestmark = pytest.mark.asyncio
@@ -17,8 +17,8 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def browser_app(monkeypatch, disabled_env_keys):
-    # Keep production auth resolution: only the backing DB is represented by
-    # an already initialized local operator, not an override of current_user.
+    # Keep production caller resolution: only the backing DB is represented by
+    # a retained local operator, not an override of the MCP caller.
     monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
     for key in (
         "MOONMIND_PUBLIC_BASE_URL",
@@ -34,7 +34,7 @@ def browser_app(monkeypatch, disabled_env_keys):
     app.include_router(mcp_tools.router, prefix="/api")
     app.add_middleware(CORSMiddleware, allow_origins=[], allow_credentials=True)
     app.dependency_overrides[mcp_tools.get_async_session] = lambda: session
-    assert get_current_user() not in app.dependency_overrides
+    assert mcp_tools.get_mcp_caller not in app.dependency_overrides
     dispatch = AsyncMock(return_value={"accepted": True})
     monkeypatch.setattr(mcp_tools, "_dispatch_tool_call", dispatch)
     return app, dispatch
@@ -82,8 +82,11 @@ async def test_local_browser_default_and_explicit_urls_work(
     app, dispatch = browser_app
     if configured_base:
         monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", origin)
-    # Compose can present the bridge peer even for a loopback published port;
-    # the browser guard must not confuse container transport with publication.
+    # Compose presents the host gateway for a loopback published port; the
+    # browser guard must not confuse container transport with publication.
+    monkeypatch.setattr(
+        operator_admission, "_local_compose_host_gateway", lambda: "172.18.0.1"
+    )
     async with AsyncClient(
         transport=ASGITransport(app=app, client=("172.18.0.1", 43210)),
         base_url=origin,
@@ -114,12 +117,18 @@ async def test_audited_ingress_without_public_url_stays_supported(
 async def test_public_url_works_behind_tls_terminating_proxy(browser_app, monkeypatch):
     app, dispatch = browser_app
     monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "https://operator.example")
+    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
+    monkeypatch.setenv("MOONMIND_TRUSTED_PROXIES", "127.0.0.1")
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://api:8000"
     ) as client:
         response = await client.post(
             "/api/mcp",
-            headers={"Host": "operator.example", "Origin": "https://operator.example"},
+            headers={
+                "Host": "operator.example",
+                "Origin": "https://operator.example",
+                "X-Moonmind-User": "operator",
+            },
             json=_invocation("/api/mcp"),
         )
     assert response.status_code == 200
@@ -127,9 +136,11 @@ async def test_public_url_works_behind_tls_terminating_proxy(browser_app, monkey
 
 
 @pytest.mark.parametrize("configured_base", [None, "https://operator.example"])
-async def test_originless_compose_client_stays_supported(
+async def test_originless_compose_client_needs_its_scoped_capability(
     browser_app, monkeypatch, configured_base
 ):
+    # The browser guard lets origin-less machine clients address Compose's API
+    # DNS, but reaching it is not operator admission (#4352).
     app, dispatch = browser_app
     if configured_base:
         monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", configured_base)
@@ -137,8 +148,8 @@ async def test_originless_compose_client_stays_supported(
         transport=ASGITransport(app=app), base_url="http://api:8000"
     ) as client:
         response = await client.post("/api/mcp", json=_invocation("/api/mcp"))
-    assert response.status_code == 200
-    dispatch.assert_awaited_once()
+    assert response.status_code in {401, 403, 503}
+    dispatch.assert_not_awaited()
 
 
 async def test_forged_forwarding_headers_do_not_allow_rebinding(browser_app):

@@ -58,6 +58,7 @@ async def test_real_session_authority_is_preserved(monkeypatch, transport, state
         (b"authorization", b"Bearer invalid"),
         (b"x-moonmind-worker-token", b"invalid"),
         (b"x-moonmind-execution-fanout", b"v1"),
+        (b"x-moonmind-mcp-tools", b"v1"),
         (b"x-moonmind-integration-token", b"invalid"),
     ],
 )

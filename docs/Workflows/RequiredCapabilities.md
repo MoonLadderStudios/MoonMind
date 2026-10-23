@@ -124,7 +124,7 @@ A read-only probe or an endpoint-required permission header does not prove write
 
 ### 7.3 jira
 
-Jira requires trusted issue/project operations or qualifying prefetched trusted content. Known issue targets are authorized, private payloads are sanitized/materialized when needed, and raw Atlassian credentials are not placed in managed shells or Skill files. Prefetched issue content cannot satisfy a declared later mutation by itself.
+Jira requires trusted issue/project operations or qualifying prefetched trusted content. Known issue targets are authorized, private payloads are sanitized/materialized when needed, and raw Atlassian credentials are not placed in managed shells or Skill files. The runtime receives only a workflow-bound bearer for `jira.*` MCP tools, never operator access; see [Model Context Protocol](../ExternalAgents/ModelContextProtocol.md#authentication). Prefetched issue content cannot satisfy a declared later mutation by itself.
 
 ### 7.4 docker
 
