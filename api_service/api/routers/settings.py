@@ -22,9 +22,7 @@ from api_service.services.settings_catalog import (
     SettingsError,
     SettingsValidationResponse,
     SettingsValidationError,
-    has_settings_permission,
     settings_error,
-    settings_permissions_for_user,
 )
 from moonmind.workflows.executions.repository_contract import RepositoryRouteError
 
@@ -34,9 +32,6 @@ logger = logging.getLogger(__name__)
 
 VALID_SETTING_SECTIONS = set(get_args(SettingSection))
 _MAX_SETTINGS_REQUEST_ID_LENGTH = 255
-# Retained account sessions keep their existing write permission. Operator
-# admission holds it; the server still enforces locks and read-only settings.
-_WRITE_PERMISSION = "settings.workspace.write"
 
 
 def _should_attempt_settings_db() -> bool:
@@ -127,23 +122,6 @@ async def _readable_assigned_repositories(connection_id: str) -> tuple[str, ...]
         for assignment in assignments
         if assignment.verified and "read" in assignment.operations
     )
-
-
-def _permission_denied_response(permission: str) -> JSONResponse:
-    return _error_response(
-        403,
-        settings_error(
-            "permission_denied",
-            f"Missing required settings permission: {permission}.",
-            details={"required_permission": permission},
-        ),
-    )
-
-
-def _require_permission(user: Any, permission: str) -> JSONResponse | None:
-    if has_settings_permission(user, permission):
-        return None
-    return _permission_denied_response(permission)
 
 
 def _error_response(status_code: int, error: SettingsError) -> JSONResponse:
@@ -245,10 +223,7 @@ def _settings_validation_status(error: SettingsError) -> int:
     return 400
 
 
-def _proposal_error(payload: SettingsProposalRequest, user: Any) -> JSONResponse | None:
-    denied = _require_permission(user, _WRITE_PERMISSION)
-    if denied is not None:
-        return denied
+def _proposal_error(payload: SettingsProposalRequest) -> JSONResponse | None:
     if not payload.changes:
         return _error_response(
             400,
@@ -275,9 +250,6 @@ async def get_settings_catalog(
     section: Annotated[str | None, Query()] = None,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    denied = _require_permission(user, "settings.catalog.read")
-    if denied is not None:
-        return denied
     resolved_section = _coerce_section(section)
     if isinstance(resolved_section, JSONResponse):
         return resolved_section
@@ -295,9 +267,6 @@ async def get_settings_catalog(
 async def get_effective_settings(
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    denied = _require_permission(user, "settings.effective.read")
-    if denied is not None:
-        return denied
     if not _should_attempt_settings_db():
         return SettingsCatalogService().effective_values()
     try:
@@ -313,9 +282,6 @@ async def get_effective_setting(
     key: str,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    denied = _require_permission(user, "settings.effective.read")
-    if denied is not None:
-        return denied
     try:
         if not _should_attempt_settings_db():
             return SettingsCatalogService().effective_value(key)
@@ -333,9 +299,6 @@ async def get_settings_diagnostics(
     key: Annotated[str | None, Query()] = None,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    denied = _require_permission(user, "settings.effective.read")
-    if denied is not None:
-        return denied
     try:
         if not _should_attempt_settings_db():
             return await SettingsCatalogService().diagnostics(key=key)
@@ -354,7 +317,7 @@ async def validate_settings(
     payload: SettingsProposalRequest,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    rejected = _proposal_error(payload, user)
+    rejected = _proposal_error(payload)
     if rejected is not None:
         return rejected
     try:
@@ -378,7 +341,7 @@ async def preview_settings(
     payload: SettingsProposalRequest,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    rejected = _proposal_error(payload, user)
+    rejected = _proposal_error(payload)
     if rejected is not None:
         return rejected
     try:
@@ -402,9 +365,6 @@ async def github_token_probe(
     payload: GitHubTokenProbeRequest,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    denied = _require_permission(user, "settings.effective.read")
-    if denied is not None:
-        return denied
     connection_id = payload.connection_id
     connection = await _selected_probe_connection(connection_id, user=user)
     if connection is None:
@@ -448,15 +408,11 @@ async def get_settings_audit(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
-    denied = _require_permission(user, "settings.audit.read")
-    if denied is not None:
-        return denied
     try:
         async with db_base.async_session_maker() as session:
             service = SettingsCatalogService(session=session)
             return SettingsAuditResponse(
                 items=await service.list_audit_events(
-                    permissions=settings_permissions_for_user(user),
                     key=key,
                     limit=limit,
                 )
@@ -482,14 +438,6 @@ async def patch_settings(
         )
         return _error_response(status_code, error)
 
-    denied = _require_permission(user, _WRITE_PERMISSION)
-    if denied is not None:
-        await _record_rejected_write_audit(
-            changes=payload.changes,
-            reason=payload.reason,
-            request_id=request_id,
-        )
-        return denied
     if not payload.changes:
         return _error_response(
             400,
@@ -550,9 +498,6 @@ async def reset_setting(
     user: Any = Depends(SETTINGS_CURRENT_USER_DEP),
 ):
     service = SettingsCatalogService()
-    denied = _require_permission(user, _WRITE_PERMISSION)
-    if denied is not None:
-        return denied
     try:
         service.ensure_write_allowed(key)
     except KeyError:

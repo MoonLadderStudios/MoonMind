@@ -44,7 +44,6 @@ const uiInfo = {
       temporalDashboard: { actionsEnabled: true, listEnabled: false, workspaceShellEnabled: false, temporalWorkflowEditing: true },
     },
   },
-  settingsPermissions: [],
 };
 
 const payload: BootPayload = { page: 'dashboard', apiBase: '/api' };

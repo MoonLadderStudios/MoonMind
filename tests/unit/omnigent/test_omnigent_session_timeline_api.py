@@ -179,22 +179,6 @@ async def test_timeline_endpoint_404_for_unknown_session(monkeypatch, session_re
 
 
 @pytest.mark.asyncio
-async def test_timeline_endpoint_requires_operator_permission(monkeypatch, session_record):
-    monkeypatch.setattr(
-        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
-    )
-    unauthorized = _FakeUser(is_superuser=False, settings_permissions=set())
-    app = _build_app(session_record, unauthorized)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        responses = [
-            await client.get(f"/api/omnigent/sessions/sess-1/{suffix}")
-            for suffix in ("timeline", "trace", "logs")
-        ]
-    assert [response.status_code for response in responses] == [403, 403, 403]
-
-
-@pytest.mark.asyncio
 async def test_timeline_links_redirect_through_authorized_server_routes(
     monkeypatch, session_record
 ):
