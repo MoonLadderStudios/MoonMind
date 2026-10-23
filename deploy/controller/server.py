@@ -1073,8 +1073,10 @@ def operator_urls_for_target(target: dict, *, runner, base) -> list[str]:
             if int(binding.get("target", 0)) != 8000 or not binding.get("published"):
                 continue
             host = binding.get("host_ip") or ""
-            if not host or host in {"0.0.0.0", "::"}:
-                continue
+            if not host or host == "0.0.0.0":
+                host = "127.0.0.1"
+            elif host == "::":
+                host = "::1"
             if ":" in host:
                 host = f"[{host}]"
             origins.append(f"http://{host}:{binding['published']}")

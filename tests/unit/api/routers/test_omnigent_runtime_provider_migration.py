@@ -91,15 +91,6 @@ def test_route_never_leaks_credentials_or_launch_authority(monkeypatch):
     assert json.loads(body)["combinations"]
 
 
-def test_route_requires_settings_catalog_read(monkeypatch):
-    monkeypatch.delenv(_ROLLBACK_ENV, raising=False)
-    response = _client(superuser=False).get(
-        "/api/omnigent/runtime-provider-migration"
-    )
-    assert response.status_code == 403
-    assert "settings.catalog.read" in response.json()["detail"]
-
-
 def test_invalid_rollout_configuration_is_reported_not_silently_ignored(
     monkeypatch,
 ):

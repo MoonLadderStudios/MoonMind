@@ -10,9 +10,6 @@ with no manually managed test service (mirrors
 
 from __future__ import annotations
 
-from api_service.migrations.account_source import source_user_ids
-from tests.helpers.account_source import add_source_user
-
 import os
 import shutil
 import socket
@@ -50,10 +47,12 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from api_service.migrations.account_source import source_user_ids
 from api_service.services.single_user_conversion import SingleUserConversionRun
 from tests.helpers.account_source import (
     User,
     UserProfile,
+    add_source_user,
     create_source_schema,
     drop_source_schema,
 )
@@ -165,6 +164,7 @@ async def _mk_user(session, **kw):
 async def _served_product(app):
     """Serve the existing application on real sockets in the isolated test job."""
     import asyncio
+
     import uvicorn
 
     # Serve loopback and the workload address on one port, so the backend probe
@@ -430,12 +430,16 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
     """Already instance-scoped resources need preservation, not no-op plugins."""
     from api_service.services import single_user_conversion as suc
     from api_service.services.presets.catalog import PresetCatalogService
-    from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowsService,
+    )
     from api_service.services.secrets import SecretsService
     from api_service.services.settings_catalog import SettingsCatalogService
     from moonmind.statuses.workflow import MoonMindWorkflowState
     from moonmind.workflows.temporal.artifacts import (
-        LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService,
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
     )
     from moonmind.workflows.temporal.service import TemporalExecutionService
 
@@ -872,8 +876,10 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
     )
     from api_service.services import single_user_conversion as suc
     from moonmind.workflows.temporal.artifacts import (
-        LocalTemporalArtifactStore, TemporalArtifactAuthorizationError,
-        TemporalArtifactRepository, TemporalArtifactService,
+        LocalTemporalArtifactStore,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
     )
 
     monkeypatch.setenv("AUTH_PROVIDER", "oidc")
@@ -1116,6 +1122,7 @@ async def test_postgres_artifact_conversion_rollback_and_old_ledger(
 async def test_postgres_artifact_recovery_migration_grants_nothing(pg_maker):
     """Actual additive DDL preserves retained rows and defaults to no grant."""
     import importlib
+
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
     migration = importlib.import_module("api_service.migrations.versions.396_artifact_operator_recovery")
@@ -1173,8 +1180,10 @@ async def test_postgres_conversion_claim_ends_with_transaction(
 @pytest.mark.asyncio
 async def test_postgres_converted_recovery_refuses_schema_downgrade(pg_maker):
     import importlib
+
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
+
     from api_service.services import single_user_conversion as suc
     migration = importlib.import_module("api_service.migrations.versions.396_artifact_operator_recovery")
     async with pg_maker() as session:
@@ -1435,7 +1444,9 @@ async def account_free_product(pg_maker, monkeypatch, tmp_path, request):
     from api_service.services.single_user_conversion import run_guarded_upgrade
     from moonmind.config.settings import settings
     from moonmind.workflows.temporal.artifacts import (
-        LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService,
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
     )
 
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
@@ -1566,6 +1577,7 @@ async def test_postgres_recurrence_journey_needs_no_virtual_person(
     )
     assert denied.status_code == 401, denied.text
     import httpx
+
     import api_service.main as main
 
     async with httpx.AsyncClient(
@@ -1797,6 +1809,7 @@ async def test_postgres_compose_host_transport_uses_kernel_gateway(
     [
         "fresh",
         "populated",
+        "local_provenance",
         "refused",
         "before_mutation",
         "during_conversion",
@@ -1846,7 +1859,39 @@ async def test_postgres_controller_startup_conversion_recovery(
     ):
         monkeypatch.setattr(main, name, AsyncMock())
     owner_id = None
-    if scenario != "fresh":
+    audit_actor = uuid.uuid4()
+    if scenario == "local_provenance":
+        monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
+        async with pg_maker() as db:
+            for model in (TemporalExecutionRecord, TemporalExecutionCanonicalRecord):
+                db.add(
+                    model(
+                        workflow_id="local-workflow",
+                        run_id="local-run",
+                        entry="temporal",
+                        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                        owner_type=TemporalExecutionOwnerType.USER,
+                        owner_id=suc.DEPLOYMENT_SUBJECT_ID,
+                    )
+                )
+            db.add(
+                TemporalArtifact(
+                    artifact_id="controller-local",
+                    storage_key="local-key",
+                    created_by_principal=suc.DEPLOYMENT_SUBJECT_ID,
+                )
+            )
+            db.add(
+                SettingsAuditEvent(
+                    event_type="settings.override.rejected",
+                    key="skills.canary_percent",
+                    scope="workspace",
+                    actor_user_id=audit_actor,
+                    redacted=True,
+                )
+            )
+            await db.commit()
+    elif scenario != "fresh":
         async with pg_maker() as db:
             owner_id = (await _mk_user(db)).id
             db.add(
@@ -2024,6 +2069,20 @@ async def test_postgres_controller_startup_conversion_recovery(
                 if scenario == "refused"
                 else 2 if scenario == "during_conversion" else 1
             )
+            if scenario == "local_provenance":
+                assert await source_user_ids(db) == []
+                artifact = await db.get(TemporalArtifact, "controller-local")
+                assert artifact.created_by_principal == suc.DEPLOYMENT_SUBJECT_ID
+                assert not artifact.operator_recovery_granted
+                audit = (await db.scalars(select(SettingsAuditEvent))).one()
+                assert audit.actor_user_id == audit_actor
+                for model in (
+                    TemporalExecutionRecord,
+                    TemporalExecutionCanonicalRecord,
+                ):
+                    projection = await db.get(model, "local-workflow")
+                    assert projection.owner_id == suc.DEPLOYMENT_SUBJECT_ID
+                    assert projection.owner_type == TemporalExecutionOwnerType.USER
             if owner_id:
                 assert owner_id in await source_user_ids(db)
                 artifact = await db.get(TemporalArtifact, "controller-retained")
