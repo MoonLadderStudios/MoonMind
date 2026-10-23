@@ -963,6 +963,7 @@ jobs:
           cache-from: type=gha,scope=exact-artifact-api-runtime
       - name: Login to the release artifact registry
         if: matrix.suite != 'hermetic' && inputs.candidate_image != ''
+        timeout-minutes: 2
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1247,6 +1248,7 @@ jobs:
           cache-to: type=gha,scope=exact-artifact-api-runtime,mode=max
       - name: Login to the release artifact registry
         if: inputs.candidate_image != ''
+        timeout-minutes: 2
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
