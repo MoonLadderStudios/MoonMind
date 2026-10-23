@@ -181,14 +181,25 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
         published = await publisher.agent_runtime_publish_artifacts(result)
         if scenario in {"missing_output", "unsafe_output"}:
             assert "storyBreakdownArtifactRef" not in published.metadata
-            assert "storyBreakdownMarkdownArtifactRef" not in published.metadata
+            readable_refs = [
+                published.diagnostics_ref,
+                published.metadata["outputSummaryRef"],
+            ]
+            if scenario == "missing_output":
+                assert "storyBreakdownMarkdownArtifactRef" not in published.metadata
+            else:
+                markdown_ref = published.metadata["storyBreakdownMarkdownArtifactRef"]
+                assert (
+                    await service.read(
+                        artifact_id=markdown_ref, principal=f"workflow:{parent}",
+                    )
+                )[1] == b"# Durable story input"
+                readable_refs.append(markdown_ref)
+                assert "Skipping unreadable story breakdown handoff file" in caplog.text
             # Missing or unsafe story files do not suppress the generated
             # result/summary handoff, which still needs verified parent scope.
             workflow_service.describe_workflow_execution.assert_awaited_once()
-            for artifact_id in (
-                published.diagnostics_ref,
-                published.metadata["outputSummaryRef"],
-            ):
+            for artifact_id in readable_refs:
                 for workflow_id in (parent, child):
                     assert (
                         await service.read(
