@@ -179,6 +179,10 @@ artifact. Activity identity supplies the workflow and run receiving access.
 Retries reuse the links, while an authorized recovery execution can retain the
 same frozen inputs under its new identity.
 
+Child result publication links its generated summary and result envelopes to the
+parent verified against Temporal's recorded ancestry. Provider metadata or a
+returned artifact reference alone cannot grant another execution access.
+
 Existing signing, revocation, and credential-materialization mechanisms remain
 where they serve these machine contracts. Removing application login is not a
 blanket deletion of `auth` modules, JWT libraries, signing keys, OAuth workflows,
