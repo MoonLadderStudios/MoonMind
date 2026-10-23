@@ -77,7 +77,7 @@ export interface paths {
         };
         /**
          * List Tools
-         * @description Return all registered MCP tool definitions.
+         * @description Return the registered MCP tool definitions visible to the caller.
          */
         get: operations["list_tools_mcp_tools_get"];
         put?: never;

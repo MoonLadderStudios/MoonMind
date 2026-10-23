@@ -132,8 +132,12 @@ Example tool payload:
 When no native Jira tool is exposed but an authenticated MoonMind API endpoint is available, call:
 
 ```bash
+token="$(cat "${MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE:-/dev/null}" 2>/dev/null || true)"
+token="${token:-${MOONMIND_MCP_TOOLS_BEARER_TOKEN:-}}"
 curl -sS -X POST "$MOONMIND_URL/mcp/tools/call" \
   -H "Content-Type: application/json" \
+  -H "X-MoonMind-Mcp-Tools: v1" \
+  -H "Authorization: Bearer $token" \
   -d '{
     "tool": "jira.get_transitions",
     "arguments": {
