@@ -123,7 +123,7 @@ An approval or control observation without this evidence is diagnostic input onl
 
 ## Bundle and validation boundary
 
-Custom bundles are MoonMind artifacts with immutable content digest, content type, size, provenance, optional license, creator, schema version, and declared capabilities. Validation rejects traversal and forbidden paths, secrets, executable setup, Dockerfiles, privileged assumptions, and unsupported host capabilities. Publishing to an endpoint records its result without changing the profile-to-artifact relationship.
+Custom bundles are immutable MoonMind artifacts. Planning verifies the selected stored profile version before granting its bundle to the current Step Execution, including retained schedule occurrences; creator provenance and raw-content restrictions remain intact. Validation rejects traversal, secrets, executable setup, Dockerfiles, privileged assumptions, and unsupported host capabilities. Endpoint publication retains the profile-to-artifact relationship.
 
 Smoke validation is an operator-triggered bounded preflight. It checks endpoint, exact source, capabilities, Provider Profile readiness/capacity, compiled policy, host mode, image/network/workspace constraints, Skills/tools, capture settings, and the strongest safe session-start check. Diagnostics are bounded and secret-scanned. Cancellation, failure, and timeout release only validation-owned leases and resources. A pass is readiness evidence, not a workflow-success guarantee.
 

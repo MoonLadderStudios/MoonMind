@@ -1005,7 +1005,7 @@ async def test_bundle_source_reloads_artifact_receipt_and_import_projection() ->
     )
 
     class Artifacts:
-        async def read_bytes(self, ref):
+        async def read_selected_agent_source(self, ref, *, request):
             assert ref == "artifact:bundle-1"
             return bundle
 
@@ -1027,7 +1027,7 @@ async def test_bundle_source_reloads_artifact_receipt_and_import_projection() ->
     from api_service.db.models import OmnigentUpstreamAgentProjection
 
     await service._verify_agent_source(
-        Session(), profile, OmnigentUpstreamAgentProjection
+        Session(), profile, OmnigentUpstreamAgentProjection, request=_request()
     )
 
     changed = profile.model_copy(
@@ -1039,7 +1039,7 @@ async def test_bundle_source_reloads_artifact_receipt_and_import_projection() ->
     )
     with pytest.raises(HarnessPlatformError) as exc:
         await service._verify_agent_source(
-            Session(), changed, OmnigentUpstreamAgentProjection
+            Session(), changed, OmnigentUpstreamAgentProjection, request=_request()
         )
     assert exc.value.code == HarnessPlatformFailure.OMNIGENT_AGENT_SOURCE_UNAVAILABLE
 

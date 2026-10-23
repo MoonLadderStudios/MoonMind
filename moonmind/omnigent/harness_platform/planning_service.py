@@ -407,7 +407,7 @@ class OmnigentExecutionPlanningService:
             trust = self._trust_record(latest_catalog.trust_records, harness)
 
             await self._verify_agent_source(
-                session, profile, OmnigentUpstreamAgentProjection
+                session, profile, OmnigentUpstreamAgentProjection, request=request
             )
             provider_profile = await session.get(
                 ManagedAgentProviderProfile,
@@ -623,12 +623,17 @@ class OmnigentExecutionPlanningService:
         return trust
 
     async def _verify_agent_source(
-        self, session: Any, profile: OmnigentAgentProfileV2, projection_type: Any
+        self,
+        session: Any,
+        profile: OmnigentAgentProfileV2,
+        projection_type: Any,
+        *,
+        request: AgentExecutionRequest,
     ) -> None:
         if profile.source.kind != "upstream":
             try:
-                bundle = await self._artifacts.read_bytes(
-                    profile.source.bundleArtifactRef
+                bundle = await self._artifacts.read_selected_agent_source(
+                    profile.source.bundleArtifactRef, request=request
                 )
             except Exception as exc:
                 raise HarnessPlatformError(

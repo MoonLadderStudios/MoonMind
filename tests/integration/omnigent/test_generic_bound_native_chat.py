@@ -18,7 +18,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from api_service.api.routers import omnigent_bridge as bridge
 from api_service.api.routers import omnigent_native_ui as ui
@@ -34,7 +34,7 @@ from api_service.db.models import (
     OmnigentTurnAttempt,
     ProviderProfileSlotLease,
 )
-from api_service.services.single_user_conversion import SingleUserConversionRun
+from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
@@ -992,17 +992,8 @@ async def test_account_free_operator_uses_live_durable_binding(
     ):
         monkeypatch.delenv(key, raising=False)
     async with session_factory() as session:
-        session.add(
-            SingleUserConversionRun(
-                preflight_digest="native-chat-fresh",
-                status="complete",
-                result_json={
-                    "published": True,
-                    "decision": {"disposition": "fresh_init"},
-                },
-            )
-        )
-        await session.commit()
+        converted = await run_guarded_upgrade(session, operator_authorized=True)
+        assert converted.published, converted
     retained_owner = str(uuid4())
 
     async def active():
@@ -1039,4 +1030,7 @@ async def test_account_free_operator_uses_live_durable_binding(
 
     await _during_active_session(native_journey, active)
     async with session_factory() as session:
-        assert (await session.execute(select(User))).scalars().all() == []
+        connection = await session.connection()
+        assert not await connection.run_sync(
+            lambda conn: inspect(conn).has_table("user")
+        )
