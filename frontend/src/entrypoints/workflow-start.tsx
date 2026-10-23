@@ -33,6 +33,10 @@ import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDet
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
+  CreateSubmissionIntents, createSubmissionScope, createSubmissionDestination, createSubmissionResult, createAttachmentFingerprint,
+  type CreateSubmissionIntent,
+} from "../lib/createSubmissionIntent";
+import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from "../utils/dashboardPreferences";
@@ -4796,9 +4800,7 @@ async function responseErrorDetail(
       if (payload.detail && typeof payload.detail === "object") {
         const detailCode = String(payload.detail.code || "").trim() || null;
         const detailMessage = String(payload.detail.message || "").trim();
-        if (detailMessage) {
-          return { code: detailCode, message: detailMessage };
-        }
+        return { code: detailCode, message: detailMessage || fallback };
       }
     } catch {
       return { code: null, message: rawText };
@@ -4814,6 +4816,20 @@ async function responseErrorMessage(
   fallback: string,
 ): Promise<string> {
   return (await responseErrorDetail(response, fallback)).message;
+}
+
+function isPreHandlerAuthRejection(status: number, code: string | null): boolean {
+  // These codes come from authentication/admission dependencies, before the
+  // route runs. Artifact errors can instead come from post-commit metadata.
+  if (status === 503) return ["unavailable", "misconfigured"].includes(code || "");
+  if (status === 401) return [
+    "auth_required", "auth_invalid", "auth_conflict", "untrusted_ingress",
+    "duplicate_header", "missing_identity", "malformed_identity", "reserved_identity",
+    "email_only_requires_policy", "untrusted_forwarded",
+  ].includes(code || "");
+  return status === 403 && [
+    "inactive", "enrollment_required", "host_forbidden", "origin_forbidden",
+  ].includes(code || "");
 }
 
 async function readBranchResolve(
@@ -5304,10 +5320,14 @@ function stripOversizedInlineInstructions(
   }
 }
 
-async function linkInputArtifact(
+export async function linkInputArtifact(
   artifactId: string,
   execution: ExecutionCreateResponse,
-  options: { linkType?: string; label?: string } = {},
+  options: {
+    linkType?: string;
+    label?: string;
+    retry?: { intent: CreateSubmissionIntent; store: CreateSubmissionIntents } | undefined;
+  } = {},
 ): Promise<void> {
   const workflowId = String(execution.workflowId || "").trim();
   const runId = String(execution.runId || execution.temporalRunId || "").trim();
@@ -5315,7 +5335,53 @@ async function linkInputArtifact(
   if (!artifactId || !workflowId || !runId || !namespace) {
     return;
   }
-  const linkEndpoint = `/api/artifacts/${encodeURIComponent(artifactId)}/links`;
+  const artifactEndpoint = `/api/artifacts/${encodeURIComponent(artifactId)}`;
+  const linkEndpoint = `${artifactEndpoint}/links`;
+  const linkBody = {
+    namespace,
+    workflow_id: workflowId,
+    run_id: runId,
+    link_type: options.linkType || "input.instructions",
+    label: options.label || "Submitted Workflow Input",
+  };
+  const linkKey = JSON.stringify([
+    artifactId, namespace, workflowId, runId, linkBody.link_type, linkBody.label,
+  ]);
+  const retry = options.retry;
+  const attempt = retry?.store.beginArtifactLink(retry.intent, linkKey);
+  const progress = retry?.intent.artifactLinks?.[linkKey];
+  if (progress === "complete") return;
+  if (progress === "uncertain" && !attempt) {
+    // A failed acknowledgment may precede a delayed commit. Only the exact
+    // visible link confirms completion; its absence cannot authorize a new POST.
+    const metadataResponse = await fetch(artifactEndpoint, {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!metadataResponse.ok) {
+      throw new Error(await responseErrorMessage(
+        metadataResponse, "Failed to verify the previous input artifact link.",
+      ));
+    }
+    const links = recordValue(await metadataResponse.json()).links;
+    if (!Array.isArray(links) || links.some((value) => {
+      const link = recordValue(value);
+      return ["namespace", "workflow_id", "run_id", "link_type"].some(
+        (field) => typeof link[field] !== "string",
+      ) || (link.label != null && typeof link.label !== "string");
+    })) {
+      throw new Error("Artifact metadata did not identify existing links. Retry when the metadata is available.");
+    }
+    if (links.some((value) => Object.entries(linkBody).every(
+      ([field, expected]) => recordValue(value)[field] === expected,
+    ))) {
+      retry?.store.completeArtifactLink(retry.intent, linkKey);
+      return;
+    }
+    throw new Error(
+      "The previous artifact link is still unconfirmed. Open the accepted workflow or check again later; the link was not submitted again.",
+    );
+  }
   let response: Response;
   try {
     response = await fetch(linkEndpoint, {
@@ -5324,13 +5390,7 @@ async function linkInputArtifact(
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({
-        namespace,
-        workflow_id: workflowId,
-        run_id: runId,
-        link_type: options.linkType || "input.instructions",
-        label: options.label || "Submitted Workflow Input",
-      }),
+      body: JSON.stringify(linkBody),
     });
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
@@ -5349,13 +5409,13 @@ async function linkInputArtifact(
     throw error;
   }
   if (!response.ok) {
-    throw new Error(
-      await responseErrorMessage(
-        response,
-        "Failed to link input artifact to execution.",
-      ),
-    );
+    const detail = await responseErrorDetail(response, "Failed to link input artifact to execution.");
+    if (retry && attempt && isPreHandlerAuthRejection(response.status, detail.code)) {
+      retry.store.rejectArtifactLink(retry.intent, linkKey, attempt);
+    }
+    throw new Error(detail.message);
   }
+  retry?.store.completeArtifactLink(retry.intent, linkKey);
 }
 
 function ArrowUpIcon() {
@@ -5984,9 +6044,11 @@ function StepContextBar({
 function WorkflowStartPageContent({
   payload,
   searchString,
+  navigationKey = "",
 }: {
   payload: BootPayload;
   searchString: string;
+  navigationKey?: string;
 }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
@@ -6268,6 +6330,26 @@ function WorkflowStartPageContent({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitExpansionInFlightRef = useRef(false);
   const submitExpansionRequestIdRef = useRef(0);
+  const createIntentsRef = useRef<CreateSubmissionIntents | null>(null);
+  const createDraftRevisionRef = useRef(0);
+  const createMountedRef = useRef(true);
+  const [acceptedCreatePath, setAcceptedCreatePath] = useState<string | null>(null);
+  const attachmentUploadsRef = useRef(new WeakMap<File, Map<string, StepAttachmentRef>>());
+  useEffect(() => {
+    createMountedRef.current = true;
+    createIntentsRef.current = new CreateSubmissionIntents(`${createSubmissionScope()}:${navigationKey}`);
+    // Route changes invalidate responses even after Back returns to the old URL.
+    createDraftRevisionRef.current += 1;
+    setAcceptedCreatePath(null);
+    submitExpansionInFlightRef.current = false;
+    setIsSubmitting(false);
+    return () => {
+      createMountedRef.current = false;
+      createDraftRevisionRef.current += 1;
+      submitExpansionRequestIdRef.current += 1;
+    };
+  }, [searchString, navigationKey]);
+
   const [submitRippleKey, setSubmitRippleKey] = useState(0);
   const [submitRippleRect, setSubmitRippleRect] = useState<DOMRect | null>(null);
   const [isSubmitArrowExiting, setIsSubmitArrowExiting] = useState(false);
@@ -6352,15 +6434,17 @@ function WorkflowStartPageContent({
   // The URL this page last rendered. A history traversal has already changed
   // window.location when its popstate arrives, so this is what to restore.
   const renderedUrlRef = useRef("");
+  const renderedHistoryStateRef = useRef<unknown>(null);
   useEffect(() => {
     renderedUrlRef.current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    renderedHistoryStateRef.current = window.history.state;
   });
 
   useEffect(() => {
     const markDraftDirty = (event: Event) => {
       const target = event.target;
       if (target instanceof Element && target.closest("#queue-submit-form")) {
-        routeGuardDirtyRef.current = true;
+        markDraftEdited();
       }
     };
     const handleRouteChangeRequest = (event: Event) => {
@@ -6429,13 +6513,21 @@ function WorkflowStartPageContent({
         previous.search === window.location.search
       ) return;
       if (confirmDraftNavigation()) return;
-      window.history.pushState(window.history.state, "", rendered);
+      window.history.pushState(renderedHistoryStateRef.current, "", rendered);
       window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
     };
     window.addEventListener(
       WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
       handleRouteChangeRequest,
     );
+    const markCreateInteraction = (event: MouseEvent) => {
+      const target = event.target;
+      const button = target instanceof Element ? target.closest("button") : null;
+      if (button && button.closest("#queue-submit-form") && button.type !== "submit") {
+        createDraftRevisionRef.current += 1;
+      }
+    };
+    document.addEventListener("click", markCreateInteraction);
     document.addEventListener("input", markDraftDirty);
     document.addEventListener("change", markDraftDirty);
     document.addEventListener("click", handleDocumentNavigation);
@@ -6446,6 +6538,7 @@ function WorkflowStartPageContent({
         WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT,
         handleRouteChangeRequest,
       );
+      document.removeEventListener("click", markCreateInteraction);
       document.removeEventListener("input", markDraftDirty);
       document.removeEventListener("change", markDraftDirty);
       document.removeEventListener("click", handleDocumentNavigation);
@@ -7517,6 +7610,9 @@ function WorkflowStartPageContent({
     if (submitMessage === limitMessage) {
       setSubmitMessage(null);
     }
+    if (mergedFilesForBinding.length !== previousStepFiles.length) {
+      markDraftEdited();
+    }
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
       delete next[targetKey];
@@ -8361,6 +8457,16 @@ function WorkflowStartPageContent({
     updateStep(localId, { instructions: value });
   }
 
+  function handleStepSkillChange(localId: string, skillId: string) {
+    // Combobox option picks use pointerdown/Enter, not native change events.
+    markDraftEdited();
+    updateStep(localId, {
+      skillId,
+      skillInputContractDigest: skillsQuery.data?.detailsById[skillId]?.contractDigest || "",
+      skillInputContractNotice: null,
+    });
+  }
+
   function selectTrustedTool(localId: string, toolId: string) {
     const tool =
       (trustedToolsQuery.data || []).find(
@@ -8606,20 +8712,21 @@ function WorkflowStartPageContent({
     );
   }
 
-  // Step structure changes come from buttons, which the input/change listener
-  // behind the leave-page guard never sees.
-  function markStepsEdited() {
+  // Custom controls, file drops, and asynchronous authored mutations need the
+  // same draft ownership and leave-page protection as native input/change.
+  function markDraftEdited() {
     routeGuardDirtyRef.current = true;
+    createDraftRevisionRef.current += 1;
   }
 
   function addStep() {
-    markStepsEdited();
+    markDraftEdited();
     setSteps((current) => [...current, createStepStateEntry(nextStepNumber)]);
     setNextStepNumber((current) => current + 1);
   }
 
   function moveStep(index: number, direction: -1 | 1) {
-    markStepsEdited();
+    markDraftEdited();
     setSteps((current) => {
       const nextIndex = index + direction;
       if (
@@ -8643,7 +8750,7 @@ function WorkflowStartPageContent({
   }
 
   function removeStep(index: number) {
-    markStepsEdited();
+    markDraftEdited();
     const removedStep = steps[index];
     if (removedStep) {
       setSelectedStepAttachmentFiles((current) => {
@@ -8986,7 +9093,7 @@ function WorkflowStartPageContent({
     setMessage: (message: string) => void;
     replaceLocalId?: string;
   }) {
-    markStepsEdited();
+    markDraftEdited();
     const expandedSteps = expansion.expandedSteps.map((step, index) =>
       mapExpandedStepToState(nextStepNumber + index, step),
     );
@@ -9470,12 +9577,14 @@ function WorkflowStartPageContent({
     updateName,
     inputArtifactRef,
     parametersPatch,
+    isCurrentSubmission,
   }: {
     workflowId: string;
     updateName: "UpdateInputs" | "RequestRerun";
     inputArtifactRef: string | null;
     parametersPatch?: Record<string, unknown> | null;
-  }): Promise<void> {
+    isCurrentSubmission: () => boolean;
+  }): Promise<boolean> {
     const updatePayload = buildTemporalArtifactEditUpdatePayload({
       updateName,
       inputArtifactRef,
@@ -9534,6 +9643,7 @@ function WorkflowStartPageContent({
         result: "success",
         applied,
       });
+      if (!isCurrentSubmission()) return false;
       const statusText = isRerun
         ? applied === "continue_as_new"
           ? "Rerun was requested and the latest execution view is ready."
@@ -9558,6 +9668,7 @@ function WorkflowStartPageContent({
       navigateTo(
         `/workflows/${encodeURIComponent(redirectWorkflowId)}?source=temporal`,
       );
+      return true;
     } catch (error) {
       recordTemporalTaskEditingClientEvent({
         event: resultEvent,
@@ -9780,6 +9891,16 @@ function WorkflowStartPageContent({
     const requestSerial = submitExpansionRequestIdRef.current + 1;
     submitExpansionRequestIdRef.current = requestSerial;
     const requestId = `submit-${requestSerial}`;
+    const createRevision = createDraftRevisionRef.current;
+    const submissionHref = window.location.href;
+    const isCurrentSubmission = () => (
+      createMountedRef.current && window.location.href === submissionHref &&
+      submitExpansionRequestIdRef.current === requestSerial
+    );
+    const isCurrentCreate = () => (
+      isCurrentSubmission() &&
+      (pageMode.mode !== "create" || createDraftRevisionRef.current === createRevision)
+    );
     submitExpansionInFlightRef.current = true;
     setIsSubmitting(true);
     // Hold the check from the click itself: pre-request checks can await
@@ -9792,6 +9913,7 @@ function WorkflowStartPageContent({
     let submissionAppliedTemplates = appliedTemplates;
     let submitExpandedWorkflowPublish: Record<string, unknown> | null = null;
     const clearSubmitBusy = () => {
+      if (!createMountedRef.current || submitExpansionRequestIdRef.current !== requestSerial) return;
       submitExpansionInFlightRef.current = false;
       setIsSubmitting(false);
       releaseSubmitArrowExit();
@@ -9803,6 +9925,7 @@ function WorkflowStartPageContent({
       message: string,
       target: WorkflowStartFieldTarget | null = null,
     ) => {
+      if (!isCurrentCreate()) { clearSubmitBusy(); return; }
       setSubmitMessage(message);
       if (target) {
         setInvalidFieldTarget(target);
@@ -10466,7 +10589,7 @@ function WorkflowStartPageContent({
         return;
       }
       const scheduleDate = new Date(scheduledFor);
-      if (Number.isNaN(scheduleDate.getTime()) || scheduleDate <= new Date()) {
+      if (Number.isNaN(scheduleDate.getTime()) || (pageMode.mode !== "create" && scheduleDate <= new Date())) {
         rejectSubmit("Scheduled time must be a valid future date.", {
           control: "scheduledFor",
         });
@@ -10516,6 +10639,31 @@ function WorkflowStartPageContent({
       };
     }
 
+    if (!isCurrentCreate()) { clearSubmitBusy(); return; }
+    // Capture the history-entry owner before reading files or uploading them.
+    const attachmentIntentStore = pageMode.mode === "create" ? createIntentsRef.current : null;
+    const uploadAttachment = async (
+      file: File, context: { kind: "objective" } | { kind: "step"; stepLabel: string },
+    ) => {
+      const cacheKey = JSON.stringify([artifactCreateEndpoint, normalizedRepository, context]);
+      const cache = attachmentUploadsRef.current.get(file) ?? new Map<string, StepAttachmentRef>();
+      const fingerprint = attachmentIntentStore ? await createAttachmentFingerprint(file, cacheKey) : null;
+      const existing = fingerprint && attachmentIntentStore
+        ? attachmentIntentStore.attachment(fingerprint) : cache.get(cacheKey);
+      if (existing) return existing;
+      // Past retries may reuse prepared refs, but must never prepare a new
+      // upload before the final unchanged-intent check below.
+      if (scheduleMode === "once" && new Date(scheduledFor) <= new Date()) {
+        throw new Error("Scheduled time must be a valid future date.");
+      }
+      if (!isCurrentCreate()) throw new Error("Submission draft changed.");
+      const upload = () => createInputAttachmentArtifact(artifactCreateEndpoint, file, normalizedRepository, context);
+      if (fingerprint && attachmentIntentStore) return attachmentIntentStore.prepareAttachment(fingerprint, upload);
+      const ref = await upload();
+      cache.set(cacheKey, ref);
+      attachmentUploadsRef.current.set(file, cache);
+      return ref;
+    };
     const uploadedObjectiveAttachments: StepAttachmentRef[] = [];
     const uploadedStepAttachments: Record<string, StepAttachmentRef[]> = {};
     let didNavigateAfterSubmit = false;
@@ -10536,12 +10684,7 @@ function WorkflowStartPageContent({
         const uploadPromises: Promise<AttachmentUploadResult>[] =
           selectedObjectiveAttachmentFiles.map(async (file) => {
             try {
-              const ref = await createInputAttachmentArtifact(
-                artifactCreateEndpoint,
-                file,
-                normalizedRepository,
-                { kind: "objective" },
-              );
+              const ref = await uploadAttachment(file, { kind: "objective" });
               return {
                 ok: true,
                 targetKey: objectiveTargetKey,
@@ -10553,7 +10696,7 @@ function WorkflowStartPageContent({
                   ? error
                   : new Error("Failed to upload objective attachment.");
               const message = `Instructions: ${failure.message}`;
-              setAttachmentTargetErrors((current) => ({
+              if (isCurrentCreate()) setAttachmentTargetErrors((current) => ({
                 ...current,
                 [objectiveTargetKey]: message,
               }));
@@ -10571,12 +10714,7 @@ function WorkflowStartPageContent({
           uploadPromises.push(
             ...files.map(async (file) => {
               try {
-                const ref = await createInputAttachmentArtifact(
-                  artifactCreateEndpoint,
-                  file,
-                  normalizedRepository,
-                  { kind: "step", stepLabel: `Step ${index + 1}` },
-                );
+                const ref = await uploadAttachment(file, { kind: "step", stepLabel: `Step ${index + 1}` });
                 return {
                   ok: true,
                   targetKey,
@@ -10588,7 +10726,7 @@ function WorkflowStartPageContent({
                     ? error
                     : new Error("Failed to upload step attachment.");
                 const message = `Step ${index + 1}: ${failure.message}`;
-                setAttachmentTargetErrors((current) => ({
+                if (isCurrentCreate()) setAttachmentTargetErrors((current) => ({
                   ...current,
                   [targetKey]: message,
                 }));
@@ -10641,20 +10779,26 @@ function WorkflowStartPageContent({
       return;
     }
 
+    // Coalesced uploads and persisted refs may identify the same artifact.
+    // Keep one declaration per owning target without discarding another target.
+    const uniqueAttachmentRefs = (refs: StepAttachmentRef[]) =>
+      refs.filter((ref, index) =>
+        refs.findIndex((candidate) => candidate.artifactId === ref.artifactId) === index,
+      );
     const uploadedPrimaryAttachmentRefs = primaryStep
       ? uploadedStepAttachments[primaryStep.localId] || []
       : [];
     const persistedPrimaryStepAttachmentRefs = primaryStep
       ? primaryStep.inputAttachments || []
       : [];
-    const primaryStepAttachmentRefs = [
+    const primaryStepAttachmentRefs = uniqueAttachmentRefs([
       ...persistedPrimaryStepAttachmentRefs,
       ...uploadedPrimaryAttachmentRefs,
-    ];
-    const taskLevelAttachmentRefs = [
+    ]);
+    const taskLevelAttachmentRefs = uniqueAttachmentRefs([
       ...persistedObjectiveAttachments,
       ...uploadedObjectiveAttachments,
-    ];
+    ]);
     const objectiveInstructionsForSubmit = objectiveInstructions.trim();
     const primaryInstructionsForSubmit = primaryInstructions.trim();
 
@@ -10679,10 +10823,10 @@ function WorkflowStartPageContent({
     } of parsedAdditionalStepInputs) {
       const uploadedStepAttachmentsForStep =
         uploadedStepAttachments[step.localId] || [];
-      const stepAttachments = [
+      const stepAttachments = uniqueAttachmentRefs([
         ...(step.inputAttachments || []),
         ...uploadedStepAttachmentsForStep,
-      ];
+      ]);
       const stepInstructions = step.instructions.trim();
       if (!hasPreUploadStepContent && !stepInstructions) {
         continue;
@@ -10918,6 +11062,30 @@ function WorkflowStartPageContent({
           return submittedStep;
         })
       : [];
+
+    // API admission requires artifact IDs to be unique across all targets.
+    // Cross-target reuse is not redundant: dropping it would change which step
+    // receives the file, so leave the draft intact and ask for disambiguation.
+    const attachmentOwners = new Map<string, string>();
+    for (const { label, refs } of [
+      { label: "Instructions", refs: taskLevelAttachmentRefs },
+      { label: "Step 1", refs: primaryStepAttachmentRefs },
+      ...additionalSteps.map(({ sourceIndex, payload }) => ({
+        label: `Step ${sourceIndex + 1}`,
+        refs: (payload.inputAttachments || []) as StepAttachmentRef[],
+      })),
+    ]) {
+      for (const ref of refs) {
+        const owner = attachmentOwners.get(ref.artifactId);
+        if (owner) {
+          rejectSubmit(
+            `Attachment ${ref.filename} is assigned to both ${owner} and ${label}. Remove it from one target or upload a separate copy for each.`,
+          );
+          return;
+        }
+        attachmentOwners.set(ref.artifactId, label);
+      }
+    }
 
     const templateCapabilities = submissionAppliedTemplates.flatMap(
       (entry) => entry.capabilities || [],
@@ -11186,8 +11354,35 @@ function WorkflowStartPageContent({
         schedulePayload;
     }
 
+    let createIntent: CreateSubmissionIntent | null = null;
+    if (pageMode.mode === "create") {
+      if (!isCurrentCreate()) { clearSubmitBusy(); return; }
+      createIntentsRef.current ??= new CreateSubmissionIntents(`${createSubmissionScope()}:${navigationKey}`);
+      // Relative scheduling authors a delay, not a fresh timestamp on each retry.
+      const identityBody = scheduleMode === "deferred_minutes" ? {
+        ...requestBody,
+        payload: { ...recordValue(requestBody.payload), schedule: {
+          mode: "deferred_minutes", minutes: Number(scheduleDeferredMinutes.trim()),
+        } },
+      } : requestBody;
+      createIntent = createIntentsRef.current.forRequest(identityBody);
+      // An unchanged uncertain/accepted request must reach admission replay
+      // even when its original scheduled time passed while the response was lost.
+      if (scheduleMode === "once" && new Date(scheduledFor) <= new Date() &&
+        !createIntent.uncertain && !createIntent.accepted) {
+        rejectSubmit("Scheduled time must be a valid future date.", { control: "scheduledFor" });
+        return;
+      }
+      if (scheduleMode === "deferred_minutes" && schedulePayload) {
+        schedulePayload.scheduledFor = createIntentsRef.current.prepareScheduledFor(
+          createIntent, String(schedulePayload.scheduledFor),
+        );
+      }
+      taskPayload.idempotencyKey = createIntent.key;
+    }
+    const createIntentStore = createIntentsRef.current;
     try {
-      let inputArtifactRef: string | null = null;
+      let inputArtifactRef: string | null = createIntent?.inputArtifactRef ?? null;
       const submittedPayload = requestBody.payload as Record<string, unknown>;
       const temporalDraftData =
         pageMode.mode !== "create" ? temporalDraftQuery.data : undefined;
@@ -11330,7 +11525,7 @@ function WorkflowStartPageContent({
         !isExactRerun &&
         (taskInputArtifactBytes > INLINE_TASK_INPUT_LIMIT_BYTES ||
           (pageMode.mode !== "create" && Boolean(existingInputArtifactRef)));
-      if (shouldCreateInputArtifact) {
+      if (shouldCreateInputArtifact && !inputArtifactRef) {
         const sourceWorkflowId =
           pageMode.mode === "rerun" ? String(pageMode.executionId || "").trim() : null;
         const artifact = await createInputArtifact(
@@ -11340,10 +11535,18 @@ function WorkflowStartPageContent({
           { sourceWorkflowId },
         );
         inputArtifactRef = artifact.artifactId;
+        if (createIntent) {
+          createIntent.inputArtifactRef = inputArtifactRef;
+          createIntentStore?.save(createIntent);
+          inputArtifactRef = createIntent.inputArtifactRef;
+        }
+      }
+      if (inputArtifactRef) {
         artifactPayload.inputArtifactRef = inputArtifactRef;
         stripOversizedInlineInstructions({ payload: artifactPayload });
       }
 
+      if (!isCurrentCreate()) return;
       if (
         pageMode.mode === "edit" ||
         (pageMode.mode === "rerun" && pageMode.intent !== "comparison")
@@ -11356,39 +11559,72 @@ function WorkflowStartPageContent({
               : "Cannot save changes because the execution id is missing.",
           );
         }
-        await handleTemporalTaskEditingSubmit({
+        didNavigateAfterSubmit = await handleTemporalTaskEditingSubmit({
           workflowId,
           updateName:
             pageMode.mode === "rerun" ? "RequestRerun" : "UpdateInputs",
           inputArtifactRef: isExactRerun ? null : inputArtifactRef,
           parametersPatch: isExactRerun ? null : artifactPayload,
+          isCurrentSubmission: isCurrentCreate,
         });
-        didNavigateAfterSubmit = true;
         return;
       }
 
-      const response = await fetch(temporalCreateEndpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-      if (!response.ok) {
-        const detail = await responseErrorDetail(
-          response,
-          "Failed to start workflow.",
-        );
-        if (detail.code?.startsWith("dependency_")) {
-          setDependencyMessage(detail.message);
-          return;
+      const createAttempt = createIntent
+        ? createIntentStore?.beginSubmission(createIntent, scheduleMode === "recurring") : null;
+      let created = createIntent?.accepted;
+      if (!created) {
+        if (createIntent && !createAttempt && scheduleMode === "recurring") {
+          throw new Error("Schedule creation outcome is unknown. Check Schedules before starting another schedule.");
         }
-        throw new Error(detail.message);
+        const response = await fetch(temporalCreateEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+        if (!response.ok) {
+          const detail = await responseErrorDetail(response, "Failed to start workflow.");
+          // Even a generic 4xx can follow admission or a lost Temporal
+          // acknowledgment. Only proven pre-admission failures release retries;
+          // the owned transition also preserves any earlier unknown admission.
+          if (createIntent && (isPreHandlerAuthRejection(response.status, detail.code) ||
+            (response.status === 503 && detail.code === "temporal_submit_disabled") ||
+            (response.status === 422 && [
+              "schedule_in_past", "dependency_not_found", "dependency_unauthorized",
+              "dependency_invalid_identifier", "dependency_unsupported_workflow_type",
+              "dependency_self_reference", "dependency_limit_exceeded",
+            ].includes(detail.code || "")))) {
+            if (createAttempt) createIntentStore?.rejectSubmission(createIntent, createAttempt);
+          }
+          if (!isCurrentCreate()) return;
+          if (detail.code?.startsWith("dependency_")) {
+            setDependencyMessage(detail.message);
+            return;
+          }
+          throw new Error(detail.message);
+        }
+        created = createSubmissionResult((await response.json()) as ExecutionCreateResponse);
+        if (createIntent && !createSubmissionDestination(created)) {
+          throw new Error("Start acknowledgment did not identify a result. Retry to reconcile the same request.");
+        }
+        if (createIntent) {
+          // Admission is confirmed before optional artifact bookkeeping. Never
+          // turn a later linking failure into another Create request.
+          createIntent.accepted = created;
+          createIntent.uncertain = false;
+          createIntentStore?.save(createIntent);
+        }
       }
-      const created = (await response.json()) as ExecutionCreateResponse;
+      if (createIntent && isCurrentSubmission()) {
+        setAcceptedCreatePath(createSubmissionDestination(created) || null);
+        if (!isCurrentCreate()) {
+          setSubmitMessage("Earlier submission was accepted. Your current draft has been kept.", "ok");
+        }
+      }
+      if (!isCurrentCreate()) return;
+      const linkRetry = createIntent && createIntentStore ? { intent: createIntent, store: createIntentStore } : undefined;
       if (inputArtifactRef) {
-        await linkInputArtifact(inputArtifactRef, created);
+        await linkInputArtifact(inputArtifactRef, created, { retry: linkRetry });
       }
       for (const attachment of [
         ...uploadedObjectiveAttachments,
@@ -11397,19 +11633,15 @@ function WorkflowStartPageContent({
         await linkInputArtifact(attachment.artifactId, created, {
           linkType: "input.attachment",
           label: attachment.filename,
+          retry: linkRetry,
         });
       }
+      if (!isCurrentCreate()) return;
       if (remediationDraftIdRef.current) {
         clearRemediationCreateDraft(remediationDraftIdRef.current);
         remediationDraftIdRef.current = null;
       }
-      const redirectPath =
-        String(created.redirectPath || "").trim() ||
-        (created.definitionId
-          ? `/schedules/${encodeURIComponent(created.definitionId)}`
-          : created.workflowId
-            ? `/workflows/${encodeURIComponent(created.workflowId)}?source=temporal`
-            : "");
+      const redirectPath = createSubmissionDestination(created);
       if (!redirectPath) {
         throw new Error(
           "Workflow was started but no redirect path was returned.",
@@ -11423,8 +11655,19 @@ function WorkflowStartPageContent({
       navigateTo(redirectPath);
       didNavigateAfterSubmit = true;
     } catch (error) {
+      if (!isCurrentCreate()) return;
       const failure =
         error instanceof Error ? error : new Error("Failed to start workflow.");
+      if (createIntent?.uncertain && scheduleMode === "recurring") {
+        setSubmitMessage(`Schedule creation outcome is unknown. Check Schedules before starting another schedule. ${failure.message}`);
+        focusSubmitErrorRef.current = true;
+        return;
+      }
+      if (createIntent?.accepted) {
+        setSubmitMessage(`Workflow was started. Follow-up bookkeeping did not finish: ${failure.message} Retry safely or open the accepted result.`);
+        focusSubmitErrorRef.current = true;
+        return;
+      }
       // Detect network-level fetch failures (TypeError: "Failed to fetch")
       // and log additional diagnostics to help troubleshoot.
       if (
@@ -11681,7 +11924,7 @@ function WorkflowStartPageContent({
                   url.searchParams.delete("intent");
                   url.searchParams.delete("draftId");
                   window.history.replaceState(
-                    {},
+                    window.history.state,
                     "",
                     `${url.pathname}${url.search}${url.hash}`,
                   );
@@ -11721,7 +11964,7 @@ function WorkflowStartPageContent({
                   url.searchParams.delete("intent");
                   url.searchParams.delete("draftId");
                   window.history.replaceState(
-                    {},
+                    window.history.state,
                     "",
                     `${url.pathname}${url.search}${url.hash}`,
                   );
@@ -12724,13 +12967,7 @@ function WorkflowStartPageContent({
                               : "optional Skill name"
                           }
                           onChange={(nextValue) =>
-                            updateStep(step.localId, {
-                              skillId: nextValue,
-                              skillInputContractDigest:
-                                skillsQuery.data?.detailsById[nextValue]
-                                  ?.contractDigest || "",
-                              skillInputContractNotice: null,
-                            })
+                            handleStepSkillChange(step.localId, nextValue)
                           }
                         />
                       </div>
@@ -13798,6 +14035,9 @@ function WorkflowStartPageContent({
               {submitMessage}
             </p>
           ) : null}
+          {acceptedCreatePath ? (
+            <a href={acceptedCreatePath}>Open accepted result</a>
+          ) : null}
           {branchStatusMessage ? (
             <p className="queue-authoring-controls-status small">
               {branchStatusMessage}
@@ -14115,16 +14355,18 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 }
 
 function WorkflowStartPageWithRouterLocation({ payload }: { payload: BootPayload }) {
-  const { search: searchString } = useLocation();
-  return <WorkflowStartPageWithSearch payload={payload} searchString={searchString} />;
+  const { search: searchString, key, pathname } = useLocation();
+  return <WorkflowStartPageWithSearch payload={payload} searchString={searchString} navigationKey={`${pathname}:${key}`} />;
 }
 
 function WorkflowStartPageWithSearch({
   payload,
   searchString,
+  navigationKey = "",
 }: {
   payload: BootPayload;
   searchString: string;
+  navigationKey?: string;
 }) {
   const displayMode = readWorkflowListDisplayMode(payload);
   const search = useMemo(
@@ -14132,7 +14374,7 @@ function WorkflowStartPageWithSearch({
     [searchString],
   );
   if (displayMode === "table") {
-    return <WorkflowStartPageContent payload={payload} searchString={searchString} />;
+    return <WorkflowStartPageContent payload={payload} searchString={searchString} navigationKey={navigationKey} />;
   }
   const cfg = readWorkflowStartDashboardConfig(payload);
   const sidebarVisible = displayMode === "sidebar"
@@ -14150,7 +14392,7 @@ function WorkflowStartPageWithSearch({
         <div className="workflow-workspace-sidebar-slot" hidden aria-hidden="true" />
       )}
       <main className="workflow-start-primary" aria-label="Create workflow">
-        <WorkflowStartPageContent payload={payload} searchString={searchString} />
+        <WorkflowStartPageContent payload={payload} searchString={searchString} navigationKey={navigationKey} />
       </main>
     </div>
   );
