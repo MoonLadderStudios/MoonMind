@@ -324,6 +324,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
     TemporalExecutionTargetRunChangedError,
     TemporalExecutionValidationError,
+    TemporalExecutionStartUnconfirmedError,
 )
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
@@ -11551,6 +11552,7 @@ async def _create_execution_from_workflow_request(
             workflow_type="MoonMind.UserWorkflow",
         )
         if existing_execution is not None:
+            existing_execution = await service.ensure_create_started(existing_execution)
             return _serialize_execution(existing_execution, user=user)
     reserved_workflow_id = (
         f"mm:{uuid5(NAMESPACE_URL, f'{_execution_principal(user)}:user-workflow:{create_idempotency_key}')}"
@@ -11563,6 +11565,7 @@ async def _create_execution_from_workflow_request(
             reserved_workflow_id,
         )
         if existing_execution is not None:
+            existing_execution = await service.ensure_create_started(existing_execution)
             return _serialize_execution(existing_execution)
     try:
         inherited = await resolve_child_runtime_inheritance(
@@ -15150,6 +15153,10 @@ async def create_execution(
             start_delay=route.start_delay,
             scheduled_for=route.scheduled_for,
         )
+    except TemporalExecutionStartUnconfirmedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=exc.detail
+        ) from exc
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

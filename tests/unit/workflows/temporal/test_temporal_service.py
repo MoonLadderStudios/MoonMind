@@ -53,6 +53,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionRerunPlanError,
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
+    TemporalExecutionStartUnconfirmedError,
     TemporalExecutionValidationError,
     _get_managed_session_store_root,
     _visibility_runtime_from_parameters,
@@ -431,7 +432,8 @@ def test_visibility_helpers_ignore_empty_parameters() -> None:
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
-    adapter.start_workflow = AsyncMock()
+    adapter.start_workflow = AsyncMock(return_value=SimpleNamespace(run_id=str(uuid4())))
+    adapter.namespace_retention_seconds = AsyncMock(return_value=86400)
     adapter.describe_workflow = AsyncMock(return_value=None)
     adapter.update_workflow = AsyncMock()
     adapter.signal_workflow = AsyncMock()
@@ -1910,8 +1912,9 @@ async def test_remediation_relationship_projects_every_checkpoint_branch_turn(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fail_context_once", [False, True])
 async def test_create_execution_builds_remediation_context_before_dispatch(
-    tmp_path, mock_client_adapter, monkeypatch
+    tmp_path, mock_client_adapter, monkeypatch, fail_context_once
 ):
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
@@ -1930,17 +1933,22 @@ async def test_create_execution_builds_remediation_context_before_dispatch(
         original_builder = service._remediation_context_builder
 
         class RecordingBuilder:
+            def __init__(self, context_session):
+                self.context_session = context_session
+
             async def build_context(self, *, remediation_workflow_id: str):
                 build_calls.append(remediation_workflow_id)
+                if fail_context_once and len(build_calls) == 1:
+                    raise OSError("injected context persistence outage")
                 assert mock_client_adapter.start_workflow.await_count == 1
-                return await original_builder().build_context(
-                    remediation_workflow_id=remediation_workflow_id
-                )
+                return await original_builder(
+                    session=self.context_session
+                ).build_context(remediation_workflow_id=remediation_workflow_id)
 
         monkeypatch.setattr(
             service,
             "_remediation_context_builder",
-            lambda: RecordingBuilder(),
+            lambda *, session=None: RecordingBuilder(session),
         )
 
         target = await service.create_execution(
@@ -1955,15 +1963,15 @@ async def test_create_execution_builds_remediation_context_before_dispatch(
             idempotency_key=None,
         )
 
-        remediation = await service.create_execution(
-            workflow_type="MoonMind.UserWorkflow",
-            owner_id=owner_id,
-            title="Remediate target",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters={
+        remediation_request = {
+            "workflow_type": "MoonMind.UserWorkflow",
+            "owner_id": owner_id,
+            "title": "Remediate target",
+            "input_artifact_ref": None,
+            "plan_artifact_ref": None,
+            "manifest_artifact_ref": None,
+            "failure_policy": None,
+            "initial_parameters": {
                 "workflow": {
                     "instructions": "Investigate the target",
                     "remediation": {
@@ -1971,10 +1979,18 @@ async def test_create_execution_builds_remediation_context_before_dispatch(
                     },
                 }
             },
-            idempotency_key=None,
-        )
+            "idempotency_key": "recover-remediation-context",
+        }
 
-        assert build_calls == [remediation.workflow_id]
+        if fail_context_once:
+            with pytest.raises(TemporalExecutionStartUnconfirmedError):
+                await service.create_execution(**remediation_request)
+            assert mock_client_adapter.start_workflow.await_count == 1
+        remediation = await service.create_execution(**remediation_request)
+
+        assert build_calls == [remediation.workflow_id] * (
+            2 if fail_context_once else 1
+        )
         assert mock_client_adapter.start_workflow.await_count == 2
         link = await session.get(
             TemporalExecutionRemediationLink, remediation.workflow_id
@@ -2095,6 +2111,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
         await session.refresh(link)
         assert link.approval_state["artifactRefs"]["approvalDecision"] == decision_ref
         assert "ops@example.com" in audit[-1]["detail"]
+
 
 @pytest.mark.asyncio
 async def test_record_remediation_approval_decision_rejects_non_pending_target(
