@@ -1,0 +1,233 @@
+"""Exercise grace-expiry recovery through the actual managed-run boundary."""
+
+import asyncio
+import gzip
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
+from temporalio.client import WorkflowHistory
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
+
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    AgentRunStatus,
+)
+from moonmind.workflows.temporal.workflows import agent_run
+
+pytestmark = pytest.mark.asyncio
+
+PATCH = "agent-run-managed-no-progress-expiry-recovery-v1"
+
+
+def _clock(monkeypatch, *, enabled=True):
+    now = [datetime(2026, 10, 23, tzinfo=UTC)]
+    monkeypatch.setattr(agent_run.workflow, "now", lambda: now[0])
+    monkeypatch.setattr(
+        agent_run.workflow, "patched", lambda name: enabled or name != PATCH
+    )
+
+    async def wait(_predicate, *, timeout):
+        now[0] += timeout
+        raise TimeoutError
+
+    monkeypatch.setattr(agent_run.workflow, "wait_condition", wait)
+    return now
+
+
+def _request():
+    return AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        correlationId="corr",
+        idempotencyKey="idem",
+    )
+
+
+def _status(status):
+    return AgentRunStatus(
+        runId="run", agentKind="managed", agentId="claude_code", status=status
+    )
+
+
+@pytest.mark.parametrize("status", ["completed", "running"])
+async def test_grace_expiry_checks_completion_before_quota_recovery(
+    monkeypatch, status
+):
+    now = _clock(monkeypatch)
+    run = agent_run.MoonMindAgentRun()
+    result = AgentRunResult(summary="provider effect retained")
+    run._poll_managed_status = AsyncMock(return_value=_status(status))
+    run._fetch_managed_result = AsyncMock(return_value=result)
+    run._cancel_managed_no_progress_and_fetch_cooldown_result = AsyncMock(
+        return_value=result
+    )
+
+    actual = await run._reconcile_managed_no_progress(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 5},
+        poll_interval=10,
+        initial_status=_status("running"),
+        overall_start=now[0],
+        timeout_seconds=60,
+    )
+
+    assert actual is result
+    run._poll_managed_status.assert_awaited_once()
+    if status == "completed":
+        run._fetch_managed_result.assert_awaited_once()
+        run._cancel_managed_no_progress_and_fetch_cooldown_result.assert_not_awaited()
+    else:
+        run._fetch_managed_result.assert_not_awaited()
+        run._cancel_managed_no_progress_and_fetch_cooldown_result.assert_awaited_once()
+
+
+@pytest.mark.parametrize("enabled,budget", [(False, 60), (True, 5)])
+async def test_retained_path_and_exhausted_budget_emit_no_new_effects(
+    monkeypatch, enabled, budget
+):
+    now = _clock(monkeypatch, enabled=enabled)
+    run = agent_run.MoonMindAgentRun()
+    run._poll_managed_status = AsyncMock()
+    run._cancel_managed_no_progress_and_fetch_cooldown_result = AsyncMock()
+
+    actual = await run._reconcile_managed_no_progress(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 5},
+        poll_interval=10,
+        initial_status=_status("running"),
+        overall_start=now[0],
+        timeout_seconds=budget,
+    )
+
+    assert actual is None
+    run._poll_managed_status.assert_not_awaited()
+    run._cancel_managed_no_progress_and_fetch_cooldown_result.assert_not_awaited()
+
+
+@pytest.mark.parametrize("terminal", ["failed", "completed"])
+async def test_cancel_reconciliation_retains_terminal_result_at_its_deadline(
+    monkeypatch, terminal
+):
+    _clock(monkeypatch)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+    run._execute_routed_activity = AsyncMock()
+    run._poll_managed_status = AsyncMock(
+        side_effect=[_status("canceled"), _status(terminal)]
+    )
+    quota = (
+        AgentRunResult(
+            summary="quota", failureClass="integration_error", providerErrorCode="429"
+        )
+        if terminal == "failed"
+        else AgentRunResult(summary="completed")
+    )
+    run._fetch_managed_result = AsyncMock(
+        side_effect=[AgentRunResult(summary="canceled"), quota]
+    )
+
+    actual = await run._cancel_managed_no_progress_and_fetch_cooldown_result(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        poll_interval=10,
+        remaining_overall=60,
+    )
+
+    assert actual is quota
+    assert run._poll_managed_status.await_count == 2
+    assert run._fetch_managed_result.await_count == 2
+    run._execute_routed_activity.assert_awaited_once()
+
+
+async def test_cancel_cleanup_consumes_the_original_remaining_budget(monkeypatch):
+    now = _clock(monkeypatch)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+
+    async def cancel(*_args, **kwargs):
+        assert kwargs["start_to_close_timeout"].total_seconds() == 5
+        assert kwargs["schedule_to_close_timeout"].total_seconds() == 5
+        now[0] += timedelta(seconds=3)
+
+    run._execute_routed_activity = AsyncMock(side_effect=cancel)
+    run._poll_managed_status = AsyncMock()
+    actual = await run._cancel_managed_no_progress_and_fetch_cooldown_result(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        poll_interval=10,
+        remaining_overall=5,
+    )
+    assert actual is None
+    run._poll_managed_status.assert_not_awaited()
+
+
+async def test_cancellation_during_grace_starts_no_recovery(monkeypatch):
+    now = _clock(monkeypatch)
+    run = agent_run.MoonMindAgentRun()
+    run._poll_managed_status = AsyncMock()
+    run._cancel_managed_no_progress_and_fetch_cooldown_result = AsyncMock()
+
+    async def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(agent_run.workflow, "wait_condition", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await run._reconcile_managed_no_progress(
+            request=_request(),
+            adapter=object(),
+            uses_codex_session_adapter=False,
+            use_managed_status_activity=True,
+            resiliency_policy={"noProgressGraceSeconds": 5},
+            poll_interval=10,
+            initial_status=_status("running"),
+            overall_start=now[0],
+            timeout_seconds=60,
+        )
+    run._poll_managed_status.assert_not_awaited()
+    run._cancel_managed_no_progress_and_fetch_cooldown_result.assert_not_awaited()
+
+
+async def test_recorded_pre_recovery_grace_history_replays(monkeypatch):
+    # Recorded before this fix at ee53a90, using the production AgentRun under
+    # real Temporal and the documented short policy below. Never regenerate from
+    # the candidate: its absence of the new patch is the compatibility evidence.
+    fixture = (
+        Path(__file__).resolve().parents[4]
+        / "fixtures/temporal/managed_no_progress/grace-expired-before-recovery.json.gz"
+    )
+    history = WorkflowHistory.from_json(
+        "test-parent-managed-no-progress-grace:child",
+        gzip.decompress(fixture.read_bytes()).decode(),
+    )
+
+    def policy(request, **_options):
+        return {
+            "runtime": request.agent_id,
+            "noProgressTimeoutSeconds": 1,
+            "noProgressGraceSeconds": 5,
+            "stuckAction": "request_intervention",
+            "retryPolicy": "test_managed_grace_reconciliation",
+        }
+
+    monkeypatch.setattr(
+        agent_run.MoonMindAgentRun,
+        "_resiliency_policy_for_request",
+        staticmethod(policy),
+    )
+    await Replayer(
+        workflows=[agent_run.MoonMindAgentRun],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
