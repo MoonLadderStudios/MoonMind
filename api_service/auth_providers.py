@@ -1,6 +1,10 @@
 """Shared instance admission and provider credential composition."""
 
+import asyncio
 import logging
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from time import monotonic
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
 from api_service.operator_admission import require_operator
 from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
-from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.security.operator_admission import (
+    STREAM_REVALIDATION_SECONDS,
+    OperatorAdmission,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,7 @@ async def get_instance_access(
             status_code=401, detail={"code": "auth_invalid"}
         )
     admission = await require_operator(request)
+    request.state.operator_admitted_at = monotonic()
     from api_service.services.single_user_conversion import completed_guarded_upgrade
 
     try:
@@ -56,6 +64,37 @@ async def get_instance_access(
         raise HTTPException(status_code=503, detail="conversion_required")
     request.state._operator_admission = _OPERATOR_ADMISSION
     return admission
+
+
+async def bounded_operator_stream(
+    request: Request,
+    caller: OperatorAdmission,
+    stream: AsyncGenerator[str | bytes, None],
+) -> AsyncGenerator[str | bytes, None]:
+    """Expire cached admission even while a live source is idle or busy."""
+    async with aclosing(stream):
+        if not isinstance(caller, OperatorAdmission):
+            async for chunk in stream:
+                yield chunk
+            return
+        admitted_at = getattr(request.state, "operator_admitted_at", None)
+        while admitted_at is not None:
+            remaining = STREAM_REVALIDATION_SECONDS - (monotonic() - admitted_at)
+            if remaining <= 0:
+                return
+            deadline = asyncio.timeout(remaining)
+            try:
+                async with deadline:
+                    chunk = await anext(stream)
+            except StopAsyncIteration:
+                return
+            except TimeoutError:
+                if not deadline.expired():
+                    raise
+                return
+            if monotonic() - admitted_at >= STREAM_REVALIDATION_SECONDS:
+                return
+            yield chunk
 
 
 async def get_instance_access_optional(

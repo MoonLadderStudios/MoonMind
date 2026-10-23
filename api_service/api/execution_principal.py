@@ -3,8 +3,9 @@
 Task-spawning callers identify themselves with trusted transport headers
 (``X-MoonMind-Task-Workflow-Id`` / ``X-MoonMind-Agent-Run-Id`` /
 ``X-MoonMind-Agent-Run-Identifier``).  We refuse to honour those headers
-unless the executions service can confirm that the OIDC user owns the
-referenced workflow.  When that check passes the principal is granted the
+unless the caller is an admitted instance operator or the executions service
+can confirm the machine principal owns the referenced workflow. When that
+check passes the principal is granted the
 ``executions:create-child`` and ``executions:inherit-runtime`` scopes that
 the runtime inheritance contract requires.
 """
@@ -16,6 +17,7 @@ from typing import Any, Optional
 
 from fastapi import Header, Request
 
+from api_service.api.instance_access import is_instance_operator
 from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
@@ -64,6 +66,9 @@ async def _verify_task_workflow_ownership(
             exc_info=True,
         )
         return False
+
+    if is_instance_operator(user):
+        return True
 
     record_owner_id = _coerce_str(getattr(record, "owner_id", None))
     user_id = _owner_id(user)

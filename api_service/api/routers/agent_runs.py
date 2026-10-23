@@ -22,7 +22,7 @@ from api_service.api.routers.temporal_artifacts import (
     _resolve_recovery_principal,
     _serialize_metadata,
 )
-from api_service.auth_providers import get_instance_access
+from api_service.auth_providers import bounded_operator_stream, get_instance_access
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactMetadataModel,
     ArtifactRefModel,
@@ -1874,7 +1874,7 @@ async def stream_agent_run_live_logs(
             _emit_livelogs_metric_increment("livelogs.stream.disconnect", tags=tags)
 
     return StreamingResponse(
-        _instrumented_generator(),
+        bounded_operator_stream(request, _user, _instrumented_generator()),
         media_type="text/event-stream; charset=utf-8",
         headers={
             "Cache-Control": "no-cache",
