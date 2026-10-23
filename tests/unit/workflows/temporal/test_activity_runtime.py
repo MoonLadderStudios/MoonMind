@@ -4147,6 +4147,32 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                     workflow_run_id="child-run-assess",
                 ),
             )
+            from temporalio.api.workflowservice.v1 import (
+                DescribeWorkflowExecutionResponse,
+            )
+            from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
+                _recorded_server,
+            )
+
+            server, _calls = _recorded_server(
+                DescribeWorkflowExecutionResponse(
+                    workflow_execution_info={
+                        "execution": {
+                            "workflow_id": "parent-wf:agent:assess",
+                            "run_id": "child-run-assess",
+                        },
+                        "parent_execution": {
+                            "workflow_id": "parent-wf", "run_id": "parent-run",
+                        },
+                        "parent_namespace_id": "namespace-default",
+                    },
+                )
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "client",
+                lambda: SimpleNamespace(namespace="default", workflow_service=server),
+            )
 
             result = await activities.agent_runtime_publish_artifacts(
                 AgentRunResult(
