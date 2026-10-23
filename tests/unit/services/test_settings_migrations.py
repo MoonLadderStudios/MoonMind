@@ -37,7 +37,6 @@ from api_service.services.settings_migrations import (
 )
 
 
-_DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 
 
 @pytest.fixture
@@ -63,7 +62,6 @@ def _new_runtime_registry() -> tuple[SettingRegistryEntry, ...]:
             section="user-workspace",
             value_type="string",
             ui="text",
-            scopes=("workspace",),
             default_value="default-runtime",
             order=1,
             apply_mode="next_workflow",
@@ -81,7 +79,6 @@ def _retry_registry() -> tuple[SettingRegistryEntry, ...]:
             section="user-workspace",
             value_type="integer",
             ui="number",
-            scopes=("workspace",),
             default_value=0,
             order=1,
             apply_mode="next_workflow",
@@ -95,9 +92,9 @@ def _seed_override(
     *,
     key: str,
     value: object,
-    scope: str = "workspace",
-    user_id: UUID = _DEFAULT_SUBJECT_ID,
-    workspace_id: UUID = _DEFAULT_SUBJECT_ID,
+    scope: str | None = None,
+    user_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     schema_version: int = 1,
     value_version: int = 1,
 ) -> SettingsOverride:
@@ -197,10 +194,10 @@ async def test_rename_orchestrator_preserves_effective_value_across_cutover(
             session=session,
         )
         before = await catalog_before.effective_value_async(
-            "test.new_runtime", scope="workspace"
+            "test.new_runtime"
         )
         assert before.value == "preserved-runtime"
-        assert before.source == "workspace_override"
+        assert before.source == "instance_override"
         assert any(
             diag.code == "setting_renamed_override" for diag in before.diagnostics
         )
@@ -219,10 +216,10 @@ async def test_rename_orchestrator_preserves_effective_value_across_cutover(
             session=session,
         )
         after = await catalog_after.effective_value_async(
-            "test.new_runtime", scope="workspace"
+            "test.new_runtime"
         )
         assert after.value == "preserved-runtime"
-        assert after.source == "workspace_override"
+        assert after.source == "instance_override"
         # Diagnostic must disappear once the row has been migrated to the
         # new key — the renamed-override warning is only meaningful while
         # the legacy row is still being read.
@@ -232,11 +229,10 @@ async def test_rename_orchestrator_preserves_effective_value_across_cutover(
 
 
 @pytest.mark.asyncio
-async def test_rename_orchestrator_preserves_user_and_workspace_scoped_rows(
+async def test_rename_orchestrator_leaves_retained_personal_rows_for_conversion(
     settings_session_maker,
 ):
-    user_a = uuid4()
-    user_b = uuid4()
+    retained_user = uuid4()
     rule = SettingMigrationRule(
         old_key="test.old_runtime",
         new_key="test.new_runtime",
@@ -245,22 +241,14 @@ async def test_rename_orchestrator_preserves_user_and_workspace_scoped_rows(
     )
 
     async with settings_session_maker() as session:
-        _seed_override(
-            session, key="test.old_runtime", value="workspace-value", scope="workspace"
-        )
+        _seed_override(session, key="test.old_runtime", value="instance-value")
         _seed_override(
             session,
             key="test.old_runtime",
-            value="user-a-value",
+            value="personal-value",
             scope="user",
-            user_id=user_a,
-        )
-        _seed_override(
-            session,
-            key="test.old_runtime",
-            value="user-b-value",
-            scope="user",
-            user_id=user_b,
+            user_id=retained_user,
+            workspace_id=uuid4(),
         )
         await session.commit()
 
@@ -271,23 +259,19 @@ async def test_rename_orchestrator_preserves_user_and_workspace_scoped_rows(
         outcomes = await orchestrator.apply_rename(rule)
         await session.commit()
 
-        assert len(outcomes) == 3
         rows = (
             await session.execute(
                 select(SettingsOverride).order_by(SettingsOverride.value_json)
             )
         ).scalars().all()
-        assert [row.key for row in rows] == ["test.new_runtime"] * 3
-        # Every original row should now exist on the new key with its
-        # original scope and subject preserved.
-        triples = sorted((row.scope, str(row.user_id), row.value_json) for row in rows)
-        assert triples == sorted(
-            [
-                ("workspace", str(_DEFAULT_SUBJECT_ID), "workspace-value"),
-                ("user", str(user_a), "user-a-value"),
-                ("user", str(user_b), "user-b-value"),
-            ]
-        )
+        events = (await session.execute(select(SettingsAuditEvent))).scalars().all()
+
+    assert len(outcomes) == 1
+    assert [(row.key, row.scope, row.value_json) for row in rows] == [
+        ("test.new_runtime", None, "instance-value"),
+        ("test.old_runtime", "user", "personal-value"),
+    ]
+    assert [(event.scope, event.user_id) for event in events] == [(None, None)]
 
 
 @pytest.mark.asyncio
@@ -410,7 +394,7 @@ async def test_type_change_orchestrator_coerces_explicitly_and_bumps_schema(
             session=session,
         )
         before = await catalog_before.effective_value_async(
-            "test.retry_limit", scope="workspace"
+            "test.retry_limit"
         )
         # Pre-migration diagnostics MUST flag the schema mismatch so we
         # never silently reinterpret the stale string value.
@@ -450,7 +434,7 @@ async def test_type_change_orchestrator_coerces_explicitly_and_bumps_schema(
             session=session,
         )
         after = await catalog_after.effective_value_async(
-            "test.retry_limit", scope="workspace"
+            "test.retry_limit"
         )
         assert after.value == 3
         assert all(

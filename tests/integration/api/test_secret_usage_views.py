@@ -64,7 +64,7 @@ async def test_secret_usage_view_reports_settings_consumer_without_plaintext(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         stored = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "db://github-pat-main"},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -79,9 +79,9 @@ async def test_secret_usage_view_reports_settings_consumer_without_plaintext(
     assert body["usages"] == [
         {
             "consumerType": "setting_override",
-            "objectName": "Workspace setting integrations.github.token_ref",
+            "objectName": "Instance setting integrations.github.token_ref",
             "reference": "db://github-pat-main",
-            "scope": "workspace",
+            "scope": None,
             "settingKey": "integrations.github.token_ref",
         }
     ]
@@ -122,7 +122,7 @@ async def test_secret_usage_view_reports_empty_and_missing_without_plaintext(
     assert "plaintext" not in missing.text
 
 
-async def test_secret_usage_view_excludes_other_workspace_consumers(
+async def test_secret_usage_view_excludes_retained_predecessor_consumers(
     secret_usage_db,
 ):
     async with secret_usage_db() as session:

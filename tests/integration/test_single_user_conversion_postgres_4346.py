@@ -438,7 +438,8 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
         owner_id = owner.id
         source.add(ManagedSecret(slug="retained-binding", ciphertext="synthetic-credential",
                                  status=SecretStatus.ACTIVE))
-        source.add(SettingsOverride(scope="workspace", key="integrations.github.token_ref",
+        source.add(SettingsOverride(scope="user", user_id=owner_id,
+                                    key="integrations.github.token_ref",
                                     value_json="db://retained-binding"))
         preset = Preset(slug="retained-custom", scope_type=preset_scope,
             scope_ref=str(owner_id) if preset_scope == PresetScopeType.PERSONAL else None,
@@ -488,8 +489,9 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
     # No test-only conversion, authority object, dispatcher or service is used.
     async with pg_maker() as restarted:
         value = await SettingsCatalogService(session=restarted).effective_value_async(
-            "integrations.github.token_ref", scope="workspace")
+            "integrations.github.token_ref")
         assert value.value == "db://retained-binding"
+        assert value.inheritance_state == "overridden"
         assert await SecretsService.get_secret(restarted, "retained-binding") == "synthetic-credential"
         catalog = PresetCatalogService(restarted)
         found = await catalog.get_template(slug="retained-custom")
@@ -518,10 +520,11 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_surface", ["personal_setting", "context_setting"])
-async def test_postgres_default_still_refuses_unsupported_personal_data(
+async def test_postgres_default_converts_retained_personal_and_context_settings(
     pg_maker, legacy_surface,
 ) -> None:
     from api_service.services import single_user_conversion as suc
+    from api_service.services.settings_catalog import SettingsCatalogService
 
     async with pg_maker() as source:
         owner = await _mk_user(source)
@@ -530,13 +533,18 @@ async def test_postgres_default_still_refuses_unsupported_personal_data(
             user_id=owner.id if legacy_surface == "personal_setting" else uuid.UUID(suc.DEPLOYMENT_SUBJECT_ID),
             key="integrations.github.token_ref", value_json="db://retained-personal"))
         await source.commit()
-        tables = (User.__table__, SettingsOverride.__table__, Preset.__table__)
+        tables = (User.__table__, Preset.__table__)
         before = [(await source.execute(select(table))).all() for table in tables]
         result = await suc.run_guarded_upgrade(source, operator_authorized=True)
-        assert not result.published
-        assert result.decision.reason_code == "missing_transform_coverage"
+        assert result.published, result.to_sanitized_dict()
+        assert "db://retained-personal" not in str(result.to_sanitized_dict())
         assert [(await source.execute(select(table))).all() for table in tables] == before
-        assert (await source.execute(select(SingleUserConversionRun))).scalars().all() == []
+        [row] = (await source.execute(select(SettingsOverride))).scalars().all()
+        assert (row.scope, row.workspace_id, row.user_id) == (None, None, None)
+    async with pg_maker() as restarted:
+        value = await SettingsCatalogService(session=restarted).effective_value_async(
+            "integrations.github.token_ref")
+        assert (value.value, value.inheritance_state) == ("db://retained-personal", "overridden")
 
 
 @pytest.mark.asyncio
@@ -1189,7 +1197,7 @@ async def test_postgres_product_routes_enforce_local_operator_transport(
             hostile = await operator.get("/api/v1/settings/catalog",
                 headers={"Host": "foreign.example"})
             assert hostile.status_code in {401, 403}, hostile.text
-            hostile = await operator.patch("/api/v1/settings/workspace",
+            hostile = await operator.patch("/api/v1/settings",
                 headers={"Origin": "http://foreign.example"}, json={"changes": {}})
             assert hostile.status_code == 403, hostile.text
         # The workload peer claims both a loopback Host and forwarded identity.
@@ -1203,7 +1211,7 @@ async def test_postgres_product_routes_enforce_local_operator_transport(
             for headers in ({}, forged, machine):
                 denied = await internal.get("/api/v1/settings/catalog", headers=headers)
                 assert denied.status_code == 401, denied.text
-                denied = await internal.patch("/api/v1/settings/workspace",
+                denied = await internal.patch("/api/v1/settings",
                     headers=headers, json={"changes": {}})
                 assert denied.status_code == 401, denied.text
     finally:
@@ -1251,11 +1259,11 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
             ui = await client.get("/api/ui/info")
             assert ui.status_code == 200, ui.text
             assert ui.json()["features"]["workflowList"] is True
-            changed = await client.patch("/api/v1/settings/workspace", json={
+            changed = await client.patch("/api/v1/settings", json={
                 "changes": {"integrations.github.token_ref": "db://instance-binding"},
                 "expected_versions": {"integrations.github.token_ref": 1}})
             assert changed.status_code == 200, changed.text
-            assert changed.json()["change_events"][0]["actor_user_id"] is None
+            assert "actor_user_id" not in changed.json()["change_events"][0]
             created = await client.post("/api/presets", json={
                 "slug": "instance-authored", "title": "Custom instance preset",
                 "description": "Retain exact custom content and inputs",
@@ -1295,9 +1303,10 @@ async def test_postgres_instance_routes_need_no_virtual_person(pg_maker, monkeyp
             assert expanded.json()["steps"][0]["instructions"] == "Write for explicit operator input."
             recent = await restarted.get("/api/presets/instance-authored")
             assert recent.json()["recentAppliedAt"]
+            # No person scope remains to write under.
             denied = await restarted.patch("/api/v1/settings/user", json={
-                "changes": {"integrations.github.token_ref": "db://instance-binding"}})
-            assert denied.status_code == 403
+                "changes": {"integrations.github.token_ref": "db://other-binding"}})
+            assert denied.status_code == 405
             denied = await restarted.get("/api/presets?scope=personal&scopeRef=someone")
             assert denied.status_code == 422
         async with pg_maker() as db:

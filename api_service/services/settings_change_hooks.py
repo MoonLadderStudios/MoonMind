@@ -157,7 +157,6 @@ def make_worker_reload_broadcast_hook(
         payload = {
             "intent": intent.intent,
             "key": intent.key,
-            "scope": intent.scope,
             "apply_mode": intent.apply_mode,
             "refresh_target": intent.refresh_target,
             "affected_systems": tuple(intent.affected_systems),
@@ -188,7 +187,6 @@ def make_operational_mode_hook(
     async def _hook(intent: OperationalRefreshIntent) -> None:
         payload = {
             "key": intent.key,
-            "scope": intent.scope,
             "apply_mode": intent.apply_mode,
             "refresh_target": intent.refresh_target,
             "affected_systems": tuple(intent.affected_systems),

@@ -1,6 +1,5 @@
 """Saved execution defaults through the real settings persistence boundary."""
 
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -11,18 +10,14 @@ from api_service.db.models import Base, ManagedAgentProviderProfile, SettingsOve
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("principal_kind", ["system", "uuid_string", "uuid"])
-async def test_saved_profile_default_normalizes_settings_subjects(
-    tmp_path, principal_kind
-):
+async def test_saved_defaults_come_from_instance_configuration_only(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/settings.db")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
-    workspace_id, user_id = uuid4(), uuid4()
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with session_factory() as session:
-            for profile_id in ("workspace-default", "user-default"):
+            for profile_id in ("instance-default", "personal-default"):
                 session.add(
                     ManagedAgentProviderProfile(
                         profile_id=profile_id,
@@ -34,49 +29,31 @@ async def test_saved_profile_default_normalizes_settings_subjects(
             session.add_all(
                 [
                     SettingsOverride(
-                        scope="workspace",
-                        workspace_id=workspace_id,
                         key="workflow.default_runtime",
                         value_json="claude_code",
                     ),
                     SettingsOverride(
-                        scope="workspace",
-                        workspace_id=workspace_id,
                         key="workflow.default_provider_profile_ref",
-                        value_json="workspace-default",
+                        value_json="instance-default",
                     ),
+                    # Retained predecessor row awaiting guarded conversion.
                     SettingsOverride(
                         scope="user",
-                        workspace_id=workspace_id,
-                        user_id=user_id,
+                        workspace_id=uuid4(),
+                        user_id=uuid4(),
                         key="workflow.default_provider_profile_ref",
-                        value_json="user-default",
+                        value_json="personal-default",
                     ),
                 ]
             )
             await session.commit()
-            user = SimpleNamespace(
-                id=(
-                    "system"
-                    if principal_kind == "system"
-                    else str(user_id) if principal_kind == "uuid_string" else user_id
-                ),
-                workspace_id=(
-                    str(workspace_id)
-                    if principal_kind == "uuid_string"
-                    else workspace_id
-                ),
-            )
             selected = await _workflow_creation_defaults(
                 session=session,
-                user=user,
                 payloads=({},),
                 task_payload={},
                 parameter_payload={},
             )
-            assert selected.provider_profile_ref == (
-                "workspace-default" if principal_kind == "system" else "user-default"
-            )
+            assert selected.provider_profile_ref == "instance-default"
             assert selected.default_runtime == "claude_code"
     finally:
         await engine.dispose()
@@ -180,7 +157,6 @@ async def test_saved_profile_default_rejects_unavailable_account_before_effects(
             session.add_all(
                 [
                     SettingsOverride(
-                        scope="workspace",
                         key="workflow.default_provider_profile_ref",
                         value_json="saved-account-a",
                     ),

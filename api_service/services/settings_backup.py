@@ -54,12 +54,16 @@ class SettingsBackupViolation(ValueError):
 
 
 class SettingsBackupOverrideRecord(BaseModel):
-    """One row from ``settings_overrides`` formatted for backup export."""
+    """One row from ``settings_overrides`` formatted for backup export.
+
+    Instance rows have no subject. A retained predecessor row keeps its
+    original subject so a backup never loses data awaiting guarded conversion.
+    """
 
     key: str
-    scope: str
-    workspace_id: UUID
-    user_id: UUID
+    scope: str | None = None
+    workspace_id: UUID | None = None
+    user_id: UUID | None = None
     value_json: Any = None
     schema_version: int
     value_version: int
@@ -73,9 +77,9 @@ class SettingsBackupAuditRecord(BaseModel):
 
     event_type: str
     key: str
-    scope: str
-    workspace_id: UUID
-    user_id: UUID
+    scope: str | None = None
+    workspace_id: UUID | None = None
+    user_id: UUID | None = None
     actor_user_id: UUID | None = None
     old_value_json: Any = None
     new_value_json: Any = None
@@ -97,9 +101,6 @@ class SettingsBrokenReference(BaseModel):
     """A persisted override whose target dependency is missing or unusable."""
 
     key: str
-    scope: str
-    workspace_id: UUID
-    user_id: UUID
     value: Any
     code: Literal[
         "unresolved_secret_ref",
@@ -235,21 +236,23 @@ async def scan_broken_references(
     registry: SettingsRegistry | tuple[SettingRegistryEntry, ...],
     env: Mapping[str, str] | None = None,
 ) -> list[SettingsBrokenReference]:
-    """Return broken-reference diagnostics for every persisted override.
+    """Return broken-reference diagnostics for every instance override.
 
     The scan mirrors the per-request diagnostics produced by
-    :class:`SettingsCatalogService` but operates across every workspace and
-    user scope so operators can surface broken references after a partial
-    restore (settings restored without dependencies, or vice versa). The
-    returned list is sorted by ``(key, scope, user_id)`` for stable
-    operator-facing rendering.
+    :class:`SettingsCatalogService` so operators can surface broken
+    references after a partial restore (settings restored without
+    dependencies, or vice versa). A missing target is reported, never
+    replaced with another credential or profile. The returned list is sorted
+    by ``key`` for stable operator-facing rendering.
     """
 
     environment: Mapping[str, str] = env if env is not None else os.environ
     entries_by_key = _registry_entries(registry)
 
     override_rows = (
-        await session.execute(select(SettingsOverride))
+        await session.execute(
+            select(SettingsOverride).where(SettingsOverride.scope.is_(None))
+        )
     ).scalars().all()
 
     db_slugs: set[str] = set()
@@ -322,7 +325,7 @@ async def scan_broken_references(
             if diagnostic is not None:
                 broken.append(diagnostic)
 
-    broken.sort(key=lambda item: (item.key, item.scope, str(item.user_id)))
+    broken.sort(key=lambda item: (item.key, item.code))
     return broken
 
 
@@ -338,9 +341,6 @@ def _secret_ref_broken_reference(
         if not env_name or env_name not in environment:
             return SettingsBrokenReference(
                 key=row.key,
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 value=value,
                 code="unresolved_secret_ref",
                 message=(
@@ -358,9 +358,6 @@ def _secret_ref_broken_reference(
         if not slug:
             return SettingsBrokenReference(
                 key=row.key,
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 value=value,
                 code="invalid_secret_ref",
                 message=f"{row.key} carries an empty SecretRef slug.",
@@ -370,9 +367,6 @@ def _secret_ref_broken_reference(
         if status is None:
             return SettingsBrokenReference(
                 key=row.key,
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 value=value,
                 code="unresolved_secret_ref",
                 message=f"{row.key} references a managed secret that does not exist.",
@@ -385,9 +379,6 @@ def _secret_ref_broken_reference(
         if status != SecretStatus.ACTIVE.value:
             return SettingsBrokenReference(
                 key=row.key,
-                scope=row.scope,
-                workspace_id=row.workspace_id,
-                user_id=row.user_id,
                 value=value,
                 code="unresolved_secret_ref",
                 message=f"{row.key} references a managed secret that is {status}.",
@@ -401,9 +392,6 @@ def _secret_ref_broken_reference(
     if not _looks_like_secret_ref(value):
         return SettingsBrokenReference(
             key=row.key,
-            scope=row.scope,
-            workspace_id=row.workspace_id,
-            user_id=row.user_id,
             value=value,
             code="invalid_secret_ref",
             message=f"{row.key} is not a valid SecretRef.",
@@ -425,9 +413,6 @@ def _provider_profile_broken_reference(
     if enabled is None:
         return SettingsBrokenReference(
             key=row.key,
-            scope=row.scope,
-            workspace_id=row.workspace_id,
-            user_id=row.user_id,
             value=value,
             code="provider_profile_not_found",
             message=(
@@ -438,9 +423,6 @@ def _provider_profile_broken_reference(
     if enabled is False:
         return SettingsBrokenReference(
             key=row.key,
-            scope=row.scope,
-            workspace_id=row.workspace_id,
-            user_id=row.user_id,
             value=value,
             code="provider_profile_disabled",
             message=(

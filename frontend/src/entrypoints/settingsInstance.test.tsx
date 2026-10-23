@@ -50,7 +50,7 @@ describe('Instance settings page (account-free)', () => {
     expect(document.querySelectorAll('h1')).toHaveLength(1);
     expect(document.title).toBe('Instance | MoonMind');
     expect(document.body.textContent).not.toMatch(/MoonMind#\d+/);
-    expect(screen.getByText(/older per-user overrides are kept but not edited here/i)).toBeTruthy();
+    expect(screen.getByText(/guarded upgrade reconciles per-user overrides/i)).toBeTruthy();
   });
 
   it('sends no account, session, or profile bootstrap request', async () => {

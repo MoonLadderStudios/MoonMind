@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -19,6 +17,7 @@ from api_service.db.models import (
     SecretStatus,
 )
 from api_service.main import app
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -35,19 +34,10 @@ async def settings_contract_db(tmp_path):
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     original = db_base.async_session_maker
     db_base.async_session_maker = session_maker
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="settings-contract@example.com",
-        is_superuser=True,
-        settings_permissions={
-            "settings.catalog.read",
-            "settings.effective.read",
-            "settings.user.write",
-            "settings.workspace.write",
-        },
-        workspace_id=uuid4(),
+    # Admitted operator: no person, account row or synthetic subject.
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: OperatorAdmission(
+        via="loopback"
     )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
     try:
         yield session_maker
     finally:
@@ -63,67 +53,40 @@ async def test_settings_override_contract_round_trips_and_resets(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         inherited = await client.get(
-            "/api/v1/settings/effective/integrations.github.token_ref",
-            params={"scope": "user"},
+            "/api/v1/settings/effective/integrations.github.token_ref"
         )
-        workspace = await client.patch(
-            "/api/v1/settings/workspace",
+        instance = await client.patch(
+            "/api/v1/settings",
             json={
-                "changes": {"integrations.github.token_ref": "env://WORKSPACE_TOKEN"},
+                "changes": {"integrations.github.token_ref": "env://INSTANCE_TOKEN"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
-        user = await client.patch(
-            "/api/v1/settings/user",
-            json={
-                "changes": {"integrations.github.token_ref": "env://USER_TOKEN"},
-                "expected_versions": {"integrations.github.token_ref": 1},
-            },
-        )
-        workspace_reset = await client.delete(
-            "/api/v1/settings/workspace/integrations.github.token_ref"
-        )
-        user_after_workspace_reset = await client.get(
-            "/api/v1/settings/effective/integrations.github.token_ref",
-            params={"scope": "user"},
-        )
-        user_reset = await client.delete(
-            "/api/v1/settings/user/integrations.github.token_ref"
-        )
+        reset = await client.delete("/api/v1/settings/integrations.github.token_ref")
         absent_reset = await client.delete(
-            "/api/v1/settings/user/integrations.github.token_ref"
+            "/api/v1/settings/integrations.github.token_ref"
         )
 
+    inherited_sources = {"config_file", "environment", "default", "no_default"}
     assert inherited.status_code == 200
-    assert inherited.json()["source"] in {"config_file", "environment", "default"}
-    assert workspace.status_code == 200
-    assert workspace.json()["values"]["integrations.github.token_ref"]["source"] == (
-        "workspace_override"
+    assert inherited.json()["source"] in inherited_sources
+    assert instance.status_code == 200
+    assert instance.json()["values"]["integrations.github.token_ref"]["source"] == (
+        "instance_override"
     )
-    workspace_event = workspace.json()["change_events"][0]
-    assert workspace_event["event_type"] == "setting_changed"
-    assert workspace_event["key"] == "integrations.github.token_ref"
-    assert workspace_event["scope"] == "workspace"
-    assert workspace_event["source"] == "workspace_override"
-    assert workspace_event["apply_mode"] == "next_launch"
-    assert workspace_event["affected_systems"] == ["github", "integrations"]
-    assert workspace_event["refresh_targets"] == ["settings_catalog"]
-    assert workspace_event["changed_at"]
-    assert user.status_code == 200
-    assert user.json()["values"]["integrations.github.token_ref"]["source"] == (
-        "user_override"
-    )
-    assert workspace_reset.status_code == 200
-    assert user_after_workspace_reset.json()["value"] == "env://USER_TOKEN"
-    assert user_after_workspace_reset.json()["source"] == "user_override"
-    assert user_reset.status_code == 200
-    assert user_reset.json()["source"] in {"config_file", "environment", "default"}
+    event = instance.json()["change_events"][0]
+    assert event["event_type"] == "setting_changed"
+    assert event["key"] == "integrations.github.token_ref"
+    assert "scope" not in event
+    assert event["source"] == "instance_override"
+    assert event["apply_mode"] == "next_launch"
+    assert event["affected_systems"] == ["github", "integrations"]
+    assert event["refresh_targets"] == ["settings_catalog"]
+    assert event["changed_at"]
+    assert reset.status_code == 200
+    assert reset.json()["source"] in inherited_sources
     assert absent_reset.status_code == 200
-    assert absent_reset.json()["source"] in {
-        "config_file",
-        "environment",
-        "default",
-    }
+    assert absent_reset.json()["source"] == reset.json()["source"]
 
 
 async def test_settings_override_contract_rejects_stale_unsafe_and_oversized_writes(
@@ -133,7 +96,7 @@ async def test_settings_override_contract_rejects_stale_unsafe_and_oversized_wri
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_publish_mode": "branch",
@@ -146,7 +109,7 @@ async def test_settings_override_contract_rejects_stale_unsafe_and_oversized_wri
             },
         )
         conflict = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_publish_mode": "none",
@@ -159,14 +122,14 @@ async def test_settings_override_contract_rejects_stale_unsafe_and_oversized_wri
             },
         )
         oversized = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": "x" * 20000},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
             },
         )
         unsafe = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_provider_profile_ref": "oauth_session_blob={...}"
@@ -176,11 +139,9 @@ async def test_settings_override_contract_rejects_stale_unsafe_and_oversized_wri
         )
         publish_mode = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
-            params={"scope": "workspace"},
         )
         canary = await client.get(
             "/api/v1/settings/effective/skills.canary_percent",
-            params={"scope": "workspace"},
         )
 
     assert conflict.status_code == 409
@@ -221,21 +182,21 @@ async def test_mm656_settings_override_contract_rejects_invalid_references_and_p
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         invalid_secret = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "db://disabled-token"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
         missing_profile = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": "missing-profile"},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
             },
         )
         invalid_combo = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_runtime": "unsupported-runtime"},
                 "expected_versions": {"workflow.default_runtime": 1},
@@ -284,7 +245,7 @@ async def test_mm661_settings_override_contract_rejects_not_ready_provider_profi
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_provider_profile_ref": "enabled-not-ready-profile"

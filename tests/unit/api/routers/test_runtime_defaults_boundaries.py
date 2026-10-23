@@ -40,11 +40,9 @@ async def test_raw_saved_runtime_omission_matches_explicit(
 ):
     context = saved_profile_submission
     monkeypatch.setattr(settings.workflow, "default_runtime", process_default)
-    await context.catalog.reset_override(
-        "workflow.default_provider_profile_ref", scope="workspace"
-    )
+    await context.catalog.reset_override("workflow.default_provider_profile_ref")
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        changes={"workflow.default_runtime": "claude_code"},
     )
     body = raw_request("claude_code")
     del body["initialParameters"]["targetRuntime"]
@@ -71,11 +69,9 @@ async def test_raw_saved_runtime_retry_uses_recorded_authority(
 ):
     context = saved_profile_submission
     if not saved_account:
-        await context.catalog.reset_override(
-            "workflow.default_provider_profile_ref", scope="workspace"
-        )
+        await context.catalog.reset_override("workflow.default_provider_profile_ref")
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        changes={"workflow.default_runtime": "claude_code"},
     )
     body = raw_request("claude_code")
     del body["initialParameters"]["targetRuntime"]
@@ -84,7 +80,6 @@ async def test_raw_saved_runtime_retry_uses_recorded_authority(
     first = await context.client.post("/api/executions", json=body)
     first_parameters = copy.deepcopy(await stored_parameters(context, first))
     await context.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_runtime": "omnigent",
             "workflow.default_provider_profile_ref": "saved-codex_cli",
@@ -111,11 +106,9 @@ async def test_raw_saved_runtime_retry_uses_recorded_authority(
 @pytest_asyncio.fixture
 async def dedicated_context(saved_profile_submission):
     context = saved_profile_submission
-    await context.catalog.reset_override(
-        "workflow.default_provider_profile_ref", scope="workspace"
-    )
+    await context.catalog.reset_override("workflow.default_provider_profile_ref")
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        changes={"workflow.default_runtime": "claude_code"},
     )
     adapter = MagicMock()
     adapter.create_schedule = AsyncMock(return_value="mm-schedule:review")
@@ -173,11 +166,10 @@ async def test_tool_only_saved_runtime_matches_explicit_without_account_consumpt
     ctx = dedicated.context
     monkeypatch.setattr(settings.workflow, "default_runtime", process_runtime)
     await ctx.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": saved_runtime}
+        changes={"workflow.default_runtime": saved_runtime},
     )
     if missing_saved_account:
         await ctx.catalog.apply_overrides(
-            scope="workspace",
             changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
         )
         saved = await ctx.session.get(ManagedAgentProviderProfile, "saved-codex_cli")
@@ -336,7 +328,6 @@ async def test_recorded_schedule_refresh_ignores_new_saved_defaults(dedicated_co
         == "claude_code"
     )
     await context.context.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_runtime": "omnigent",
             "workflow.default_provider_profile_ref": "saved-codex_cli",
@@ -498,7 +489,6 @@ async def test_dedicated_recurring_api_rejects_saved_missing_account(
         )
         await session.commit()
         await SettingsCatalogService(session=session).apply_overrides(
-            scope="workspace",
             changes={
                 "workflow.default_runtime": "omnigent",
                 "workflow.default_provider_profile_ref": "saved-account-a",
@@ -559,7 +549,6 @@ async def test_dedicated_preserves_layered_account_intent(
 ):
     context = dedicated_context
     await context.context.catalog.apply_overrides(
-        scope="workspace",
         changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
     )
     body = dedicated_body()
@@ -600,7 +589,6 @@ async def test_recurring_untouched_runtime_with_saved_account_is_fallback(
 ):
     context = dedicated_context
     await context.context.catalog.apply_overrides(
-        scope="workspace",
         changes={"workflow.default_provider_profile_ref": "saved-claude_code"},
     )
     body = dedicated_body()
@@ -626,7 +614,7 @@ async def test_raw_saved_runtime_remains_fallback_below_account_intent(
 ):
     context = saved_profile_submission
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": default_runtime}
+        changes={"workflow.default_runtime": default_runtime},
     )
     body = raw_request()
     params = body["initialParameters"]
@@ -664,7 +652,6 @@ async def test_dedicated_saved_runtime_remains_fallback_below_account_intent(
     body = dedicated_body()
     if intent == "saved-profile":
         await context.context.catalog.apply_overrides(
-            scope="workspace",
             changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
         )
     else:
@@ -690,7 +677,7 @@ async def test_runtime_default_retirement_applies_before_effects(
 ):
     context = dedicated_context
     await context.context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "codex_cli"}
+        changes={"workflow.default_runtime": "codex_cli"},
     )
     monkeypatch.setattr(settings.workflow, "default_runtime", "claude_code")
     monkeypatch.setenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", "2020-01-01T00:00:00Z")
@@ -711,7 +698,7 @@ async def test_runtime_default_retirement_applies_before_effects(
 async def test_raw_saved_omnigent_default_keeps_plan_boundary(dedicated_context):
     context = dedicated_context.context
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "omnigent"}
+        changes={"workflow.default_runtime": "omnigent"},
     )
     context.settings_reads.clear()
     response = await context.client.post(
@@ -729,7 +716,6 @@ async def test_dedicated_mixed_steps_keep_saved_account_and_selected_pool(
 ):
     context = dedicated_context
     await context.context.catalog.apply_overrides(
-        scope="workspace",
         changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
     )
     body = dedicated_body()
@@ -767,11 +753,9 @@ async def test_raw_explicit_runtime_alias_reaches_dispatch(
     saved_profile_submission, layer, key
 ):
     context = saved_profile_submission
-    await context.catalog.reset_override(
-        "workflow.default_provider_profile_ref", scope="workspace"
-    )
+    await context.catalog.reset_override("workflow.default_provider_profile_ref")
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "codex_cli"}
+        changes={"workflow.default_runtime": "codex_cli"},
     )
     body = raw_request()
     params = body["initialParameters"]
@@ -803,11 +787,9 @@ async def test_raw_explicit_agent_profile_requires_product_boundary(
     saved_profile_submission, layer, empty_inner_runtime
 ):
     context = saved_profile_submission
-    await context.catalog.reset_override(
-        "workflow.default_provider_profile_ref", scope="workspace"
-    )
+    await context.catalog.reset_override("workflow.default_provider_profile_ref")
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        changes={"workflow.default_runtime": "claude_code"},
     )
     body = raw_request()
     params = body["initialParameters"]
@@ -838,9 +820,7 @@ async def test_raw_canonicalization_preserves_all_authored_runtime_validation(
     saved_profile_submission, conflict, expected
 ):
     context = saved_profile_submission
-    await context.catalog.reset_override(
-        "workflow.default_provider_profile_ref", scope="workspace"
-    )
+    await context.catalog.reset_override("workflow.default_provider_profile_ref")
     body = raw_request("claude_code")
     params = body["initialParameters"]
     params["targetRuntime"] = "omnigent" if conflict == "omnigent" else "codex_cli"
@@ -898,7 +878,6 @@ async def test_dedicated_saved_unavailable_pin_matches_explicit_without_substitu
         rows[0].auth_state = ProviderProfileAuthState.DISCONNECTED
     await ctx.session.commit()
     await ctx.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_runtime": "claude_code",
             "workflow.default_provider_profile_ref": "saved-codex_cli",
@@ -970,7 +949,7 @@ async def test_raw_configured_profile_keeps_omnigent_product_boundary(
 
     context = saved_profile_submission
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        changes={"workflow.default_runtime": "claude_code"},
     )
     profile = await context.session.get(ManagedAgentProviderProfile, "saved-codex_cli")
     if configuration == "pinned-missing":
@@ -1059,11 +1038,9 @@ async def test_cli_command_uses_saved_runtime_through_real_http_admission(
     from moonmind.workflow_cli import WorkflowApiClient
 
     context = saved_profile_submission
-    await context.catalog.reset_override(
-        "workflow.default_provider_profile_ref", scope="workspace"
-    )
+    await context.catalog.reset_override("workflow.default_provider_profile_ref")
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        changes={"workflow.default_runtime": "claude_code"},
     )
     loop = asyncio.get_running_loop()
     responses = []
@@ -1165,7 +1142,7 @@ async def test_raw_saved_unavailable_pin_matches_explicit_without_substitution(
         rows[0].auth_state = ProviderProfileAuthState.DISCONNECTED
     await ctx.session.commit()
     await ctx.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        changes={"workflow.default_runtime": "claude_code"},
     )
     responses = []
     for explicit in [False, True]:
@@ -1335,7 +1312,6 @@ async def test_ready_configuration_reaches_same_existing_admission_owner(
     await db.commit()
     assert provider_profile_launch_ready(row)
     await ctx.context.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_runtime": "omnigent",
             "workflow.default_provider_profile_ref": "saved-codex_cli",
@@ -1432,7 +1408,6 @@ async def test_dedicated_implicit_resolver_keeps_saved_account(
     ctx = dedicated_context
     monkeypatch.setattr(settings.feature_flags, "container_jobs_enabled", True)
     await ctx.context.catalog.apply_overrides(
-        scope="workspace",
         changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},
     )
     body = dedicated_body()
@@ -1481,7 +1456,6 @@ async def test_dedicated_agent_free_omnigent_keeps_plan_admission(
 
     ctx = dedicated_context
     await ctx.context.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_runtime": "omnigent",
             "workflow.default_provider_profile_ref": "saved-codex_cli",

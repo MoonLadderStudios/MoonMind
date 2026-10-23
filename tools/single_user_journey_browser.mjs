@@ -102,7 +102,7 @@ try {
     if (![401, 403].includes(hostileHost.status())) {
       throw new Error(`foreign Host reached operator settings: ${hostileHost.status()}`);
     }
-    const hostileOrigin = await page.request.patch(base + "/api/v1/settings/workspace", {
+    const hostileOrigin = await page.request.patch(base + "/api/v1/settings", {
       headers: { Origin: "http://foreign.invalid" },
       data: { changes: {} },
     });

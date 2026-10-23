@@ -10,7 +10,6 @@ registering a fresh set of default subscribers against it.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -21,6 +20,7 @@ from api_service.auth_providers import get_instance_access
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
+from moonmind.security.operator_admission import OperatorAdmission
 from api_service.services.settings_change_publisher import (
     get_settings_change_publisher,
     reset_default_settings_change_publisher,
@@ -54,19 +54,9 @@ async def settings_subscriber_env(tmp_path):
     original_session_maker = db_base.async_session_maker
     db_base.async_session_maker = session_maker
 
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="settings-subscribers@example.com",
-        is_superuser=True,
-        settings_permissions={
-            "settings.catalog.read",
-            "settings.effective.read",
-            "settings.user.write",
-            "settings.workspace.write",
-        },
-        workspace_id=uuid4(),
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: OperatorAdmission(
+        via="loopback"
     )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
 
     reset_default_settings_change_publisher()
     publisher = get_settings_change_publisher()
@@ -115,7 +105,7 @@ async def test_task_creation_defaults_subscriber_fires_on_next_task_setting(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_runtime": "claude_code"},
                 "expected_versions": {"workflow.default_runtime": 1},
@@ -142,7 +132,7 @@ async def test_worker_reload_subscriber_records_soft_reload_intent_for_worker_re
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"skills.policy_mode": "allowlist"},
                 "expected_versions": {"skills.policy_mode": 1},
@@ -170,7 +160,7 @@ async def test_provider_profile_manager_subscriber_fires_on_default_profile_chan
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": None},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
@@ -197,7 +187,7 @@ async def test_operational_controls_subscriber_fires_on_operation_mode_change(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.operation_mode": "maintenance"},
                 "expected_versions": {"workflow.operation_mode": 1},
@@ -222,7 +212,7 @@ async def test_multi_key_patch_fans_out_one_event_per_key(settings_subscriber_en
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_runtime": "claude_code",
@@ -269,7 +259,7 @@ async def test_subscriber_failure_does_not_change_http_response(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_runtime": "claude_code"},
                 "expected_versions": {"workflow.default_runtime": 1},
@@ -308,7 +298,7 @@ async def test_secret_ref_setting_change_does_not_publish_secret_payload(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/user",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": f"env://{env_alias}"},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -322,10 +312,8 @@ async def test_secret_ref_setting_change_does_not_publish_secret_payload(
     assert set(payload.keys()) == {
         "event_type",
         "key",
-        "scope",
         "source",
         "apply_mode",
-        "actor_user_id",
         "changed_at",
         "affected_systems",
         "refresh_targets",
@@ -358,19 +346,9 @@ async def settings_subscriber_env_with_hooks(tmp_path):
     original_session_maker = db_base.async_session_maker
     db_base.async_session_maker = session_maker
 
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="settings-subscribers-hooks@example.com",
-        is_superuser=True,
-        settings_permissions={
-            "settings.catalog.read",
-            "settings.effective.read",
-            "settings.user.write",
-            "settings.workspace.write",
-        },
-        workspace_id=uuid4(),
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: OperatorAdmission(
+        via="loopback"
     )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
 
     reset_default_settings_change_publisher()
     publisher = get_settings_change_publisher()
@@ -439,7 +417,7 @@ async def test_provider_profile_refresh_hook_signals_each_known_runtime_on_patch
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": None},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
@@ -470,7 +448,7 @@ async def test_worker_reload_hook_broadcasts_intent_on_patch(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"skills.policy_mode": "allowlist"},
                 "expected_versions": {"skills.policy_mode": 1},

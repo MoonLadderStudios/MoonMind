@@ -21,7 +21,6 @@ from typing import Literal
 
 from api_service.services.settings_catalog import (
     SettingApplyMode,
-    SettingScope,
     SettingsChangeEvent,
 )
 from api_service.services.settings_change_publisher import (
@@ -36,7 +35,6 @@ _LEDGER_MAXLEN = 128
 class WorkerReloadIntent:
     intent: Literal["soft_reload", "process_restart"]
     key: str
-    scope: SettingScope
     apply_mode: SettingApplyMode
     refresh_target: str
     affected_systems: tuple[str, ...]
@@ -46,7 +44,6 @@ class WorkerReloadIntent:
 @dataclass
 class ProviderProfileRefreshIntent:
     key: str
-    scope: SettingScope
     apply_mode: SettingApplyMode
     refresh_target: str
     affected_systems: tuple[str, ...]
@@ -56,7 +53,6 @@ class ProviderProfileRefreshIntent:
 @dataclass
 class OperationalRefreshIntent:
     key: str
-    scope: SettingScope
     apply_mode: SettingApplyMode
     refresh_target: str
     affected_systems: tuple[str, ...]
@@ -99,7 +95,6 @@ class WorkerReloadSubscriber:
         intent = WorkerReloadIntent(
             intent=kind,
             key=event.key,
-            scope=event.scope,
             apply_mode=event.apply_mode,
             refresh_target="worker_reloaders",
             affected_systems=tuple(event.affected_systems),
@@ -130,7 +125,6 @@ class ProviderProfileManagerSubscriber:
     async def __call__(self, event: SettingsChangeEvent) -> None:
         intent = ProviderProfileRefreshIntent(
             key=event.key,
-            scope=event.scope,
             apply_mode=event.apply_mode,
             refresh_target="provider_profile_manager",
             affected_systems=tuple(event.affected_systems),
@@ -161,7 +155,6 @@ class OperationalControlsSubscriber:
     async def __call__(self, event: SettingsChangeEvent) -> None:
         intent = OperationalRefreshIntent(
             key=event.key,
-            scope=event.scope,
             apply_mode=event.apply_mode,
             refresh_target="operational_controls",
             affected_systems=tuple(event.affected_systems),

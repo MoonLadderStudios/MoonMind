@@ -51,7 +51,7 @@ from typing import Any, Awaitable, Callable, Sequence
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select, update, Row, Text
+from sqlalchemy import func, select, update, Row, Text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,7 +66,6 @@ from api_service.db.models import (
 
 logger = structlog.get_logger(__name__)
 
-_DEFAULT_SETTINGS_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 
 # Bounded diagnostic codes. Messages carry slugs/revisions only.
 DIAGNOSTIC_CONFLICT = "secret_conflict"
@@ -224,7 +223,6 @@ class SecretsService:
         old_value: dict[str, Any],
         new_value: dict[str, Any],
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         reason: str | None = None,
         request_id: str | None = None,
     ) -> None:
@@ -238,8 +236,6 @@ class SecretsService:
                 event_type=event_type,
                 key=f"secrets.{slug}",
                 scope="system",
-                workspace_id=workspace_id or _DEFAULT_SETTINGS_SUBJECT_ID,
-                user_id=_DEFAULT_SETTINGS_SUBJECT_ID,
                 actor_user_id=actor_user_id,
                 old_value_json=old_value,
                 new_value_json=new_value,
@@ -557,7 +553,6 @@ class SecretsService:
         *,
         request_id: str | None = None,
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         reason: str | None = None,
         commit: bool = True,
     ) -> ManagedSecret:
@@ -624,7 +619,6 @@ class SecretsService:
             old_value={},
             new_value=_redacted_revision_json(secret),
             actor_user_id=actor_user_id,
-            workspace_id=workspace_id,
             reason=reason,
             request_id=request_id,
         )
@@ -665,7 +659,6 @@ class SecretsService:
         expected_policy_revision: int | None = None,
         request_id: str | None = None,
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         reason: str | None = None,
         commit: bool = True,
     ) -> ManagedSecret | None:
@@ -746,7 +739,6 @@ class SecretsService:
                 old_value=old_snapshot,
                 new_value=_redacted_revision_json(secret),
                 actor_user_id=actor_user_id,
-                workspace_id=workspace_id,
                 reason=reason,
                 request_id=request_id,
             )
@@ -799,7 +791,6 @@ class SecretsService:
         validator: Callable[[str], Awaitable[bool] | bool] | None = None,
         request_id: str | None = None,
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         reason: str | None = None,
         commit: bool = True,
     ) -> ManagedSecret | None:
@@ -913,7 +904,6 @@ class SecretsService:
                 old_value=old_snapshot,
                 new_value=_redacted_revision_json(secret),
                 actor_user_id=actor_user_id,
-                workspace_id=workspace_id,
                 reason=reason,
                 request_id=request_id,
             )
@@ -967,7 +957,6 @@ class SecretsService:
         *,
         request_id: str | None = None,
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         reason: str | None = None,
         commit: bool = True,
     ) -> ManagedSecret | None:
@@ -1026,7 +1015,6 @@ class SecretsService:
                 old_value=old_snapshot,
                 new_value=_redacted_revision_json(secret),
                 actor_user_id=actor_user_id,
-                workspace_id=workspace_id,
                 reason=reason or "reviewed repair of historical ROTATED record",
                 request_id=request_id,
             )
@@ -1076,7 +1064,6 @@ class SecretsService:
         status: SecretStatus,
         *,
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         reason: str | None = None,
         request_id: str | None = None,
         commit: bool = True,
@@ -1132,8 +1119,6 @@ class SecretsService:
                     event_type="secrets.status.changed",
                     key=f"secrets.{slug}",
                     scope="system",
-                    workspace_id=workspace_id or _DEFAULT_SETTINGS_SUBJECT_ID,
-                    user_id=_DEFAULT_SETTINGS_SUBJECT_ID,
                     actor_user_id=actor_user_id,
                     old_value_json=old_snapshot,
                     new_value_json=_redacted_revision_json(secret),
@@ -1187,7 +1172,6 @@ class SecretsService:
         *,
         request_id: str | None = None,
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         reason: str | None = None,
         strict: bool = False,
         commit: bool = True,
@@ -1240,7 +1224,6 @@ class SecretsService:
                     old_value=_redacted_revision_json(secret),
                     new_value=_redacted_revision_json(secret),
                     actor_user_id=actor_user_id,
-                    workspace_id=workspace_id,
                     reason=reason or "referenced by consumers",
                     request_id=request_id,
                 )
@@ -1265,7 +1248,6 @@ class SecretsService:
                 old_value=snapshot,
                 new_value={},
                 actor_user_id=actor_user_id,
-                workspace_id=workspace_id,
                 reason=reason,
                 request_id=request_id,
             )
@@ -1333,35 +1315,12 @@ class SecretsService:
         return result.all()
 
     @classmethod
-    async def _scoped_setting_rows(
-        cls,
-        db: AsyncSession,
-        *,
-        workspace_id: UUID | None,
-        user_id: UUID | None,
-    ):
-        resolved_workspace_id = workspace_id or _DEFAULT_SETTINGS_SUBJECT_ID
-        resolved_user_id = user_id or _DEFAULT_SETTINGS_SUBJECT_ID
-        usage_result = await db.execute(
-            select(
-                SettingsOverride.key,
-                SettingsOverride.scope,
-                SettingsOverride.value_json,
-            ).where(
-                SettingsOverride.workspace_id == resolved_workspace_id,
-                or_(
-                    and_(
-                        SettingsOverride.scope == "user",
-                        SettingsOverride.user_id == resolved_user_id,
-                    ),
-                    and_(
-                        SettingsOverride.scope != "user",
-                        SettingsOverride.user_id == _DEFAULT_SETTINGS_SUBJECT_ID,
-                    ),
-                ),
+    async def _instance_setting_rows(cls, db: AsyncSession):
+        return await db.execute(
+            select(SettingsOverride.key, SettingsOverride.value_json).where(
+                SettingsOverride.scope.is_(None)
             )
         )
-        return usage_result
 
     @staticmethod
     def _like_escape(value: str) -> str:
@@ -1544,9 +1503,6 @@ class SecretsService:
         cls,
         db: AsyncSession,
         slug: str,
-        *,
-        workspace_id: UUID | None = None,
-        user_id: UUID | None = None,
     ) -> dict[str, Any]:
         """List metadata-only consumers for a managed secret reference."""
         secret_ref = f"db://{slug}"
@@ -1567,21 +1523,15 @@ class SecretsService:
                 ],
             }
 
-        usage_result = await cls._scoped_setting_rows(
-            db, workspace_id=workspace_id, user_id=user_id
-        )
         usages = []
-        for key, scope, value_json in usage_result:
+        for key, value_json in await cls._instance_setting_rows(db):
             if not cls._value_references_secret(value_json, secret_ref):
                 continue
-            scope = str(scope)
-            scope_label = "Workspace" if scope == "workspace" else "User"
             usages.append(
                 {
                     "consumerType": "setting_override",
-                    "objectName": f"{scope_label} setting {key}",
+                    "objectName": f"Instance setting {key}",
                     "reference": secret_ref,
-                    "scope": scope,
                     "settingKey": key,
                 }
             )
@@ -1769,7 +1719,6 @@ class SecretsService:
         overwrite_active: bool = False,
         request_id: str | None = None,
         actor_user_id: UUID | None = None,
-        workspace_id: UUID | None = None,
         commit: bool = True,
     ) -> int:
         """
@@ -1818,7 +1767,6 @@ class SecretsService:
                         old_value=old_snapshot,
                         new_value=_redacted_revision_json(existing),
                         actor_user_id=actor_user_id,
-                        workspace_id=workspace_id,
                         reason="legacy .env import",
                         request_id=request_id,
                     )
@@ -1854,7 +1802,6 @@ class SecretsService:
                         old_value={},
                         new_value=_redacted_revision_json(fresh),
                         actor_user_id=actor_user_id,
-                        workspace_id=workspace_id,
                         reason="legacy .env import",
                         request_id=request_id,
                     )

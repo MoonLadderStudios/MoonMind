@@ -57,7 +57,7 @@ from api_service.db.models import Base, Uuid, mutable_json_dict
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_REVISION = "397_instance_preset_catalog"
+SCHEMA_REVISION = "398_instance_settings"
 
 DEPLOYMENT_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -837,47 +837,39 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         if not _is_absent_table_error(exc):
             _record_inventory_error(inv, "profile_secrets")
 
-    # Same-person settings collisions: one effective value context, several
-    # distinct values. A collision is about incompatible effective values,
-    # not any two raw values in separate valid contexts: rows that differ
-    # in (scope, workspace) resolve by override precedence, so only rows
-    # sharing (key, scope, workspace) with distinct values collide. Every
-    # row (including deployment-subject rows) still feeds the content
-    # tripwire so a same-count value edit changes the fingerprint.
+    # Settings collisions compare the explicit choices that were effective in
+    # each retained context (instance, workspace, or personal), not raw row
+    # counts. Every row still feeds the content tripwire so a same-count value
+    # edit changes the fingerprint.
     settings_content_entries: list[str] = []
     try:
         from api_service.db.models import SettingsOverride
 
         async with session.begin_nested():
             rows = (await session.execute(select(SettingsOverride))).scalars().all()
-        by_context: dict[tuple[str, str, str], dict[str, set[str]]] = {}
         for r in rows:
-            uid = _looks_like_uuid(getattr(r, "user_id", None))
             key = str(getattr(r, "key", "") or "")
-            scope = str(getattr(r, "scope", "") or "")
-            workspace = str(getattr(r, "workspace_id", "") or "")
-            canon = _canonical(getattr(r, "value_json", None))
             if key:
                 settings_content_entries.append(
                     "\x00".join(
                         (
-                            scope,
-                            workspace,
+                            str(getattr(r, "scope", "") or ""),
+                            str(getattr(r, "workspace_id", "") or ""),
                             str(getattr(r, "user_id", "") or ""),
                             key,
-                            canon,
+                            _canonical(getattr(r, "value_json", None)),
                         )
                     )
                 )
-            if uid is None or uid == DEPLOYMENT_SUBJECT_ID or not key:
-                continue
-            by_context.setdefault((key, scope, workspace), {}).setdefault(
-                uid, set()
-            ).add(canon)
         inv.settings_collisions = sorted(
             key
-            for (key, _scope, _workspace), per_user in by_context.items()
-            if len({v for vs in per_user.values() for v in vs}) > 1
+            for key, choices in _legacy_settings_choices(rows).items()
+            if len(choices) > 1
+        )
+        # Retained predecessor rows need the settings transform whatever
+        # subject columns they carry; instance rows are already converted.
+        resource_counts["settings_overrides.scope"] = sum(
+            1 for row in rows if row.scope is not None
         )
     except Exception as exc:
         # Same classification: an absent settings table holds no
@@ -1292,12 +1284,16 @@ async def _has_certified_instance_admission(
 ) -> bool:
     """Recognize account-free rows emitted after a proven instance cutover.
 
-    Revision 396 established operator admission before presets became nullable.
-    Its production certificate can explain predecessor global presets,
-    but cannot publish or bypass the current conversion.
-    Uncertified/custom completion and older unknown contracts grant nothing.
+    Revisions 396 and 397 established operator admission before presets and
+    then settings had their own transforms. Their production certificates can
+    explain predecessor instance rows, but cannot publish or bypass the
+    current conversion. Uncertified/custom completion and older unknown
+    contracts grant nothing.
     """
-    predecessor = "396_artifact_operator_recovery"
+    predecessors = {
+        "396_artifact_operator_recovery": ("profile_secrets", "artifacts"),
+        "397_instance_preset_catalog": ("profile_secrets", "artifacts", "presets"),
+    }
     ledger = _ledger_class()
     try:
         async with session.begin_nested():
@@ -1306,7 +1302,7 @@ async def _has_certified_instance_admission(
                     select(ledger.result_json).where(
                         ledger.status == "complete",
                         ledger.result_json["schema_revision"].as_string().in_(
-                            (predecessor, SCHEMA_REVISION)
+                            (*predecessors, SCHEMA_REVISION)
                         ),
                     )
                 )
@@ -1317,10 +1313,11 @@ async def _has_certified_instance_admission(
         return False
     return any(
         _is_production_completion(result)
-        or _is_production_completion(
-            result,
-            schema_revision=predecessor,
-            required_transforms=("profile_secrets", "artifacts"),
+        or any(
+            _is_production_completion(
+                result, schema_revision=revision, required_transforms=required
+            )
+            for revision, required in predecessors.items()
         )
         for result in results
     )
@@ -1369,7 +1366,7 @@ async def completed_guarded_upgrade(session: AsyncSession) -> ApplyResult | None
     if not _is_production_completion(result):
         return None
     if (await _has_pending_artifact_recovery(session)
-            or await _has_pending_preset_conversion(session)):
+            or await _has_pending_instance_conversion(session)):
         return None
     return _replay_stored_result(
         row.preflight_digest,
@@ -1391,8 +1388,21 @@ def _uses_production_transforms(transforms: dict[str, TransformFn]) -> bool:
     )
 
 
-async def _run_transform(fn: TransformFn, session: AsyncSession, eligible: list[str]):
-    result = fn(session, eligible)
+async def _run_transform(
+    fn: TransformFn,
+    session: AsyncSession,
+    eligible: list[str],
+    options: ConversionOptions,
+):
+    # Only a transform that owns collision dispositions receives them.
+    if "collision_resolutions" in inspect.signature(fn).parameters:
+        result = fn(
+            session,
+            eligible,
+            collision_resolutions=dict(options.collision_resolutions),
+        )
+    else:
+        result = fn(session, eligible)
     if inspect.isawaitable(result):
         return await result
     return result
@@ -1415,44 +1425,14 @@ def _scrub_outcome_keys(mapping: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _preserved_instance_subsystems(session: AsyncSession) -> set[str]:
+def _preserved_instance_subsystems() -> set[str]:
     """Identify retained resources already consumed without an owner predicate.
 
     Schedule and execution owners already treat historical human fields as
     provenance. Rewriting those rows would change accepted work needlessly.
-    Workspace settings likewise need no data conversion. Presets have their
-    own concrete transform, including retained global rows and preferences.
-    Legacy personal settings still need their owning conversion; a single
-    person alone does not make those settings visible to instance consumers.
-    Called only under the guarded apply's inventory locks with real defaults.
+    Presets and settings have their own concrete transforms.
     """
-    from api_service.db.models import SettingsOverride
-
-    async def has_rows(model, predicate) -> bool:
-        try:
-            async with session.begin_nested():
-                return (
-                    await session.execute(
-                        select(1).select_from(model).where(predicate).limit(1)
-                    )
-                ).first() is not None
-        except Exception as exc:
-            if _is_absent_table_error(exc):
-                return False
-            raise
-
-    preserved = {"schedules", "temporal"}
-    zero = UUID(DEPLOYMENT_SUBJECT_ID)
-    if not await has_rows(
-        SettingsOverride,
-        or_(
-            SettingsOverride.scope != "workspace",
-            SettingsOverride.user_id != zero,
-            SettingsOverride.workspace_id != zero,
-        ),
-    ):
-        preserved.add("settings")
-    return preserved
+    return {"schedules", "temporal"}
 
 
 async def apply_conversion(
@@ -1525,9 +1505,7 @@ async def apply_conversion(
             )
 
         preserved = (
-            await _preserved_instance_subsystems(session)
-            if production_transforms
-            else set()
+            _preserved_instance_subsystems() if production_transforms else set()
         )
         missing = [
             s
@@ -1566,7 +1544,7 @@ async def apply_conversion(
                     if not production_transforms or (
                         _is_production_completion(stored)
                         and not await _has_pending_artifact_recovery(session)
-                        and not await _has_pending_preset_conversion(session)
+                        and not await _has_pending_instance_conversion(session)
                     ):
                         return _replay_stored_result(
                             preflight_result.digest, decision, stored
@@ -1595,7 +1573,9 @@ async def apply_conversion(
             eligible_ids = sorted(set(fresh.user_ids) | set(fresh.secret_holders))
             outcomes: dict[str, Any] = {}
             for name in sorted(transforms):
-                outcome = await _run_transform(transforms[name], session, eligible_ids)
+                outcome = await _run_transform(
+                    transforms[name], session, eligible_ids, options
+                )
                 if isinstance(outcome, dict):
                     outcomes[name] = _scrub_outcome_keys(dict(outcome))
                     # Items nested under a transform are scrubbed the same
@@ -1656,7 +1636,7 @@ async def apply_conversion(
                     if not production_transforms or (
                         _is_production_completion(stored)
                         and not await _has_pending_artifact_recovery(session)
-                        and not await _has_pending_preset_conversion(session)
+                        and not await _has_pending_instance_conversion(session)
                     ):
                         return _replay_stored_result(
                             preflight_result.digest, decision, stored
@@ -2146,15 +2126,157 @@ async def presets_transform(
     }
 
 
+async def _has_pending_settings_conversion(session: AsyncSession) -> bool:
+    from api_service.db.models import SettingsOverride
+
+    try:
+        async with session.begin_nested():
+            return (
+                await session.execute(
+                    select(SettingsOverride.id)
+                    .where(SettingsOverride.scope.is_not(None))
+                    .limit(1)
+                )
+            ).first() is not None
+    except SQLAlchemyError as exc:
+        if _is_absent_table_error(exc):
+            return False
+        raise
+
+
+async def _has_pending_instance_conversion(session: AsyncSession) -> bool:
+    return await _has_pending_preset_conversion(
+        session
+    ) or await _has_pending_settings_conversion(session)
+
+
+def _legacy_settings_choices(rows) -> dict[str, dict[str, Any]]:
+    """The operator's previously effective choices for keys with retained rows.
+
+    A personal row overrode its workspace in that person's sessions, so once
+    one operator is proven it is that operator's effective choice. Shared
+    (instance or workspace) rows decide only keys without a personal row.
+    Equal choices agree however many rows hold them; distinct choices within
+    the deciding tier conflict, whichever row is newer.
+    """
+    pending = {row.key for row in rows if row.scope is not None}
+    personal: dict[str, dict[str, Any]] = {}
+    shared: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.key in pending:
+            tier = personal if row.scope == "user" else shared
+            tier.setdefault(row.key, {})[_canonical(row.value_json)] = row
+    return {key: personal.get(key) or shared[key] for key in pending}
+
+
+async def settings_transform(
+    session: AsyncSession,
+    eligible_ids: list[str],
+    *,
+    collision_resolutions: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reconcile retained settings into the instance configuration.
+
+    Runs under the shared attribution/writer lock after the disposition proved
+    one operator. The effective choice becomes one instance override.
+    Distinct choices need the operator's recorded disposition naming one of
+    them. Superseded values stay recoverable in the conversion audit event. Stored
+    values (SecretRefs and explicit nulls included) move unchanged, keys
+    without rows stay inherited, and no newest-row or default is substituted.
+    """
+    from api_service.db.models import SettingsAuditEvent, SettingsOverride, User
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    rows = await _preset_rows(session, SettingsOverride)
+    eligible = set(eligible_ids)
+    zero_user = (
+        await session.execute(
+            select(User.id).where(User.id == UUID(DEPLOYMENT_SUBJECT_ID)).limit(1)
+        )
+    ).scalar_one_or_none()
+    if zero_user is None:
+        eligible.add(DEPLOYMENT_SUBJECT_ID)
+    for row in rows:
+        if row.scope is not None and row.user_id is not None and (
+            str(row.user_id) not in eligible
+        ):
+            raise StaleAttributionError("settings owner is not proven eligible")
+
+    resolutions = collision_resolutions or {}
+    catalog = SettingsCatalogService()
+    converted = merged = resolved = 0
+    for key, choices in sorted(_legacy_settings_choices(rows).items()):
+        if len(choices) > 1:
+            chosen = _canonical(resolutions.get(key)) if key in resolutions else None
+            if chosen not in choices:
+                raise StaleAttributionError(
+                    "settings collision needs a disposition naming a retained choice"
+                )
+            resolved += 1
+        else:
+            chosen = next(iter(choices))
+        source = choices[chosen]
+        group = sorted(
+            (row for row in rows if row.key == key),
+            key=lambda row: (row.scope is not None, row is not source, str(row.id)),
+        )
+        superseded = {
+            _canonical(row.value_json): row.value_json
+            for row in group
+            if _canonical(row.value_json) != chosen
+        }
+        survivor = group[0]
+        if len(group) > 1:
+            # A client holding any pre-conversion version must re-read.
+            survivor.value_version = max(row.value_version for row in group) + 1
+        survivor.value_json = source.value_json
+        survivor.schema_version = source.schema_version
+        for duplicate in group[1:]:
+            await session.delete(duplicate)
+            merged += 1
+        await session.flush()
+        survivor.scope = None
+        survivor.workspace_id = None
+        survivor.user_id = None
+        discarded = [superseded[canon] for canon in sorted(superseded)] or None
+        entry = catalog._entries_by_key.get(key)
+        reason = "Reconciled retained settings into the instance configuration."
+        session.add(
+            catalog._audit_event(
+                entry,
+                event_type="settings.override.converted",
+                old_value=discarded,
+                new_value=source.value_json,
+                reason=reason,
+                request_id=None,
+            )
+            if entry is not None
+            else SettingsAuditEvent(
+                event_type="settings.override.converted",
+                key=key,
+                redacted=True,
+                reason=reason,
+            )
+        )
+        converted += 1
+    await session.flush()
+    return {
+        "converted_keys": converted,
+        "merged_rows": merged,
+        "resolved_collisions": resolved,
+    }
+
+
 #: Production subsystem transforms registered into the shared entrypoint.
-#: Only subsystems that mutate data need transforms. Existing instance-scoped
-#: workspace settings and owner-independent schedules/executions are preserved
-#: by the guarded entrypoint. All retained preset scopes use the real transform;
-#: personal settings and legacy workflow data still require their own conversion.
+#: Only subsystems that mutate data need transforms. Owner-independent
+#: schedules/executions are preserved by the guarded entrypoint. Retained
+#: preset and settings rows use their real transforms; legacy workflow data
+#: still requires its own conversion.
 DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
     "profile_secrets": profile_secrets_transform,
     "artifacts": artifacts_transform,
     "presets": presets_transform,
+    "settings": settings_transform,
 }
 
 

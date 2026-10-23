@@ -101,7 +101,6 @@ const userWorkspaceDescriptor = {
   section: 'user-workspace',
   type: 'enum',
   ui: 'select',
-  scopes: ['workspace'],
   default_value: 'pr',
   effective_value: 'pr',
   override_value: null,
@@ -175,7 +174,6 @@ function settingsFetch(url: string): Response | null {
   if (url.startsWith('/api/v1/settings/catalog')) {
     return ok({
       section: 'user-workspace',
-      scope: 'workspace',
       categories: { Workflow: [userWorkspaceDescriptor] },
     });
   }
@@ -370,7 +368,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
     it('keeps guarding departure after a failed save and still allows an explicit discard', async () => {
       fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url === '/api/v1/settings/workspace' && init?.method === 'PATCH') {
+        if (url === '/api/v1/settings' && init?.method === 'PATCH') {
           return Promise.resolve({
             ok: false,
             status: 500,
@@ -409,7 +407,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
     it('stops guarding departure after a successful save', async () => {
       fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url === '/api/v1/settings/workspace' && init?.method === 'PATCH') {
+        if (url === '/api/v1/settings' && init?.method === 'PATCH') {
           return Promise.resolve(ok({ applied: ['workflow.default_publish_mode'] }));
         }
         return Promise.resolve(settingsFetch(url) ?? notFound());

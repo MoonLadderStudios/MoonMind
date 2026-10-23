@@ -543,11 +543,13 @@ async def seed_instance_admission(session, schema_revision):
     result = await run_guarded_upgrade(session, operator_authorized=True)
     assert result.published
     row = (await session.execute(select(SingleUserConversionRun))).scalar_one()
-    if schema_revision != "397_instance_preset_catalog":
+    if schema_revision != "398_instance_settings":
         stored = deepcopy(row.result_json)
         stored["schema_revision"] = schema_revision
-        # Revision 396 predates the preset transform but certifies admission.
-        stored["transforms"].pop("presets")
+        # Predecessors predate later transforms but certify admission.
+        stored["transforms"].pop("settings")
+        if schema_revision == "396_artifact_operator_recovery":
+            stored["transforms"].pop("presets")
         row.result_json = stored
         await session.commit()
     return row.id
@@ -555,7 +557,12 @@ async def seed_instance_admission(session, schema_revision):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "schema_revision", ["396_artifact_operator_recovery", "397_instance_preset_catalog"]
+    "schema_revision",
+    [
+        "396_artifact_operator_recovery",
+        "397_instance_preset_catalog",
+        "398_instance_settings",
+    ],
 )
 async def test_certified_operator_global_preset_converts(
     preset_sessions, schema_revision
@@ -616,7 +623,12 @@ async def test_certified_operator_global_preset_converts(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "schema_revision", ["396_artifact_operator_recovery", "397_instance_preset_catalog"]
+    "schema_revision",
+    [
+        "396_artifact_operator_recovery",
+        "397_instance_preset_catalog",
+        "398_instance_settings",
+    ],
 )
 async def test_certified_ownerless_schedule_survives_preset_conversion(
     preset_sessions,
