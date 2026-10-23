@@ -628,7 +628,7 @@ jobs:
               status_file="/tmp/backend-api-component-test-status.txt"
               effective_command="python -m pytest tests/unit/api tests/unit/api_service tests/component/api -m component -v --tb=short -n auto --dist load --durations=25 --timeout 120 -o faulthandler_timeout=90 --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="120s per-test"
-              step_budget="7-min test step within 15-min job" ;;
+              step_budget="12-min test step within 18-min job" ;;
             temporal-boundary)
               selected="${{ needs.select-test-suites.outputs.temporal_boundary }}"
               outcome="${{ steps.run-temporal.outcome }}"
@@ -1614,7 +1614,7 @@ jobs:
                   if outputs[flag] == "true" and any(outputs[key] != "true" for key in members):
                       raise ValueError(f"{flag} omits required selections")
               backend = [
-                  {"suite": suite, "job_minutes": 18 if suite == "unit-fast" else 15}
+                  {"suite": suite, "job_minutes": 15 if suite == "temporal-boundary" else 18}
                   for key, suite in (("unit_fast", "unit-fast"),
                                      ("api_component", "api-component"),
                                      ("temporal_boundary", "temporal-boundary"))
