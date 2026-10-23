@@ -79,7 +79,11 @@ from api_service.api.workflow_chat_access import (
     workflow_chat_actor,
     workflow_chat_stream_timeout,
 )
-from api_service.auth_providers import get_instance_access, instance_operator_principal
+from api_service.auth_providers import (
+    bounded_operator_stream,
+    get_instance_access,
+    instance_operator_principal,
+)
 from api_service.db.base import get_async_session
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
 
@@ -2266,7 +2270,10 @@ async def stream_omnigent_bridge_session_events(
                 return
             await asyncio.sleep(_BRIDGE_STREAM_POLL_SECONDS)
 
-    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        bounded_operator_stream(request, user, _event_stream()),
+        media_type="text/event-stream",
+    )
 
 
 @router.post(
@@ -2945,7 +2952,10 @@ async def stream_upstream_omnigent_events(
             }
             yield f"event: error\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
-    return StreamingResponse(_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        bounded_operator_stream(_request, user, _stream()),
+        media_type="text/event-stream",
+    )
 
 
 async def _owned_resource(

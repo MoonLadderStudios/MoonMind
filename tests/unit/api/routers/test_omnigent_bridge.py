@@ -30,7 +30,8 @@ from api_service.api.routers.omnigent_bridge import (
     get_capability_registry,
     router,
 )
-from api_service.auth_providers import get_instance_access
+from api_service.auth_providers import get_instance_access, instance_operator_principal
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -695,6 +696,29 @@ def test_create_session_success_at_mount_path() -> None:
     assert binding.workflow_id == "mm:w1"
     assert binding.idempotency_key == "idem-1"
     assert binding.correlation_id == "corr-1"
+
+
+def test_instance_operator_can_create_control_and_read_retained_session() -> None:
+    client, proxy, store = _build(owner_id="retained-owner")
+    metadata = store._session().metadata_
+    metadata["callerAuthorities"] = {
+        instance_operator_principal(): {name: True for name in CAPABILITY_NAMES}
+    }
+    store._session_overrides["metadata_"] = metadata
+    client.app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="trusted_ingress"
+    )
+
+    created = client.post(_CREATE_PATH, json=_create_body())
+    assert created.status_code == 200, created.text
+    projected = client.get(
+        f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events"
+    )
+    assert projected.status_code == 200, projected.text
+    controlled = client.post(_EVENTS_PATH, json={"type": "stop"})
+    assert controlled.status_code == 200, controlled.text
+    assert len(proxy.created) == 1
+    assert len(proxy.posted_events) == 1
 
 
 def test_create_session_blocks_mode_transition_with_active_other_mode() -> None:

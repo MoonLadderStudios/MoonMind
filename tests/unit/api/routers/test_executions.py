@@ -57,7 +57,11 @@ from api_service.api.routers.executions import (
     update_execution as update_execution_route,
 )
 from api_service.api.schemas import CreateJobRequest
-from api_service.auth_providers import get_instance_access, get_instance_access_optional
+from api_service.auth_providers import (
+    get_instance_access,
+    get_instance_access_optional,
+    instance_operator_principal,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
@@ -100,6 +104,7 @@ from moonmind.schemas.temporal_models import (
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.services.control_stop_continuation import (
     ControlStopContinuationReservation,
 )
@@ -15006,7 +15011,9 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
             ],
         },
     )
-    user = _override_user_dependencies(app, is_superuser=True)
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
+    )
 
     async def _read_artifact(**kwargs):
         artifact_id = kwargs["artifact_id"]
@@ -15059,7 +15066,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     assert "summary" not in payload["stepExecutions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
         artifact_id="art-attempt-1",
-        principal=str(user.id),
+        principal=instance_operator_principal(),
         allow_restricted_raw=True,
     )
 
@@ -15183,7 +15190,9 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
             ],
         },
     )
-    _override_user_dependencies(app, is_superuser=True)
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
+    )
     payload = _step_execution_manifest_payload(
         artifact_ref="art-attempt-2",
         attempt=2,
@@ -15245,6 +15254,10 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
         "invalidatedStepRefs": ["art-attempt-2"]
     }
     assert "outputs" not in body
+    assert all(
+        item.kwargs["principal"] == instance_operator_principal()
+        for item in artifact_service.read.await_args_list
+    )
 
 
 def test_get_execution_step_executions_degraded_older_ref_uses_per_ref_ordinal() -> None:
@@ -16532,7 +16545,9 @@ def test_exact_rerun_restores_publish_policy_from_authoritative_snapshot(
     }
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
+    )
     session = AsyncMock()
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
@@ -16607,7 +16622,7 @@ def test_exact_rerun_restores_publish_policy_from_authoritative_snapshot(
     }
     artifact_service.read.assert_awaited_once_with(
         artifact_id="art-snapshot-source",
-        principal=str(user.id),
+        principal=instance_operator_principal(),
         allow_restricted_raw=True,
     )
     reuse_snapshot.assert_awaited_once()

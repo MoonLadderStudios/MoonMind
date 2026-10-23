@@ -10450,7 +10450,7 @@ async def _exact_rerun_parameters_from_snapshot(
         artifact_service = get_temporal_artifact_service(session)
         _artifact, body = await artifact_service.read(
             artifact_id=artifact_id,
-            principal=str(getattr(user, "id", "") or "system"),
+            principal=_execution_principal(user),
             allow_restricted_raw=True,
         )
         decoded = json.loads(body.decode("utf-8"))
@@ -16195,7 +16195,7 @@ async def describe_execution_step_executions(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     manifest_refs = _step_execution_manifest_refs(row)
     manifest_results = await asyncio.gather(
         *(
@@ -16295,7 +16295,7 @@ async def describe_execution_step_execution(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     manifest_refs = _step_execution_manifest_refs(row)
     manifest_results = await asyncio.gather(
         *(
@@ -18664,7 +18664,7 @@ async def download_workflow_captured_evidence(
         try:
             _artifact, payload = await artifact_service.read(
                 artifact_id=artifact_id,
-                principal=str(getattr(user, "id", "") or "system"),
+                principal=_execution_principal(user),
                 allow_restricted_raw=True,
                 recovery_principal=recovery_principal,
             )
@@ -18771,7 +18771,7 @@ async def _materialize_continuation_source_attachments(
     if not refs:
         return []
     artifact_service = get_temporal_artifact_service(session)
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     attachments: list[dict[str, Any]] = []
     for ref in refs:
         body = await _read_continuation_evidence_bytes(

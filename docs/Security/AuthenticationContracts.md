@@ -49,8 +49,9 @@ provider OAuth remains available through provider-profile/session APIs.
 
 HTTP, artifact access, SSE, native chat, WebSocket handshakes and reconnects use
 the same operator boundary. URL credentials are ignored. Stream admission is
-rechecked or expires within five minutes; a new request obtains a fresh ingress
-assertion. Local revalidation detects configuration changes and does not pretend
+rechecked or expires within five minutes, including busy and idle live-log and
+bridge event streams. A new request obtains a fresh ingress assertion.
+Local revalidation detects configuration changes and does not pretend
 to query an upstream identity provider's revocation state.
 
 Loss of browser admission closes the stream without canceling already-admitted
