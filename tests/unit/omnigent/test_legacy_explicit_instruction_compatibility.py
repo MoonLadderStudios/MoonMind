@@ -1,4 +1,4 @@
-"""Retained disabled-mode explicit prompts keep their existing consumer."""
+"""Retained explicit prompts stay recoverable without unscoped machine access."""
 
 from __future__ import annotations
 
@@ -13,13 +13,14 @@ from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.omnigent.execute import _build_omnigent_first_message
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
 
 
 @pytest.mark.asyncio
-async def test_retained_disabled_explicit_prompt_needs_no_fabricated_admission(
+async def test_retained_explicit_prompt_requires_admission_and_stays_recoverable(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
@@ -48,20 +49,33 @@ async def test_retained_disabled_explicit_prompt_needs_no_fabricated_admission(
                 content_type="text/plain",
             )
             ref = f"artifact:{artifact.artifact_id}"
-        # Existing histories have no prospective association. Do not fabricate
-        # a canonical Run, admission snapshot, or artifact grant to read them.
+        # An auth-mode environment value cannot admit a machine reader. Keep
+        # the unassociated capture available to the instance operator instead.
         request = AgentExecutionRequest(
             agentKind="external",
             agentId="omnigent",
             correlationId="historical",
             idempotencyKey="historical-step",
         )
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await _build_omnigent_first_message(
+                request=request,
+                prompt={"instructionRef": ref},
+                artifact_gateway=TemporalOmnigentArtifactGateway(sessions),
+            )
         message = await _build_omnigent_first_message(
             request=request,
             prompt={"instructionRef": ref},
-            artifact_gateway=TemporalOmnigentArtifactGateway(sessions),
+            artifact_gateway=TemporalOmnigentArtifactGateway(
+                sessions, principal="operator"
+            ),
         )
         assert message["data"]["content"][0]["text"] == body.decode()
+        async with sessions() as session:
+            repository = TemporalArtifactRepository(session)
+            retained = await repository.get_artifact(artifact.artifact_id)
+            assert retained.created_by_principal == "retained-capture-owner"
+            assert await repository.list_links(artifact.artifact_id) == []
     finally:
         await engine.dispose()
 

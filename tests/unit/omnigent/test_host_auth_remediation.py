@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.api.routers import omnigent_bridge as bridge_router
 from api_service.api.routers import omnigent_bridge_composition as bridge_composition
 from api_service.db.models import OmnigentHostAuthProfileRecord
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway, capture_artifact_json
 from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
@@ -163,7 +164,7 @@ async def test_operator_api_serialization_and_failures_never_return_secret_body(
         bridge_router.HostAuthProfilePutRequest(
             profileId="managed", currentSecretRef="env://HOST_ONE", currentGeneration=1
         ),
-        user=SimpleNamespace(is_superuser=True),
+        user=OperatorAdmission(via="loopback"),
     )
     assert sentinel not in str(result)
     assert "currentSecretRef" not in result
@@ -182,7 +183,7 @@ async def test_operator_api_serialization_and_failures_never_return_secret_body(
             bridge_router.HostAuthRotateRequest(
                 newSecretRef="env://HOST_TWO", overlapSeconds=60
             ),
-            user=SimpleNamespace(is_superuser=True),
+            user=OperatorAdmission(via="loopback"),
         )
     assert sentinel not in str(excinfo.value.detail)
     assert (await store.get_active()).current_generation == 1
@@ -206,7 +207,7 @@ async def test_operator_profile_put_is_initial_only(monkeypatch, host_auth_store
             bridge_router.HostAuthProfilePutRequest(
                 profileId="managed", currentSecretRef="env://HOST_STALE", currentGeneration=1
             ),
-            user=SimpleNamespace(is_superuser=True),
+            user=OperatorAdmission(via="loopback"),
         )
 
     assert excinfo.value.status_code == 409

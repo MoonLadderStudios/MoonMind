@@ -356,6 +356,12 @@ class OmnigentArtifactGateway:
         """Read the request's resolved Skill manifest before planning."""
         return await self.read_bytes(artifact_ref)
 
+    async def read_selected_agent_source(
+        self, artifact_ref: str, *, request: AgentExecutionRequest
+    ) -> bytes:
+        """Read the source selected by a verified immutable Agent Profile."""
+        return await self.read_bytes(artifact_ref)
+
     async def admit_execution_plan_inputs(self, *, request, plan) -> None:
         """Local gateways already own their readable input references."""
 
@@ -734,6 +740,34 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         if artifact_id not in admitted_ids:
             raise OmnigentArtifactError(
                 "artifact is not an admitted input of the execution plan"
+            )
+        return await self._read_for_execution(
+            artifact_id, workflow_id=identity.workflow_id
+        )
+
+    async def read_selected_agent_source(
+        self, artifact_ref: str, *, request: AgentExecutionRequest
+    ) -> bytes:
+        """Admit only the bundle the planner verified against its stored profile.
+
+        Selection can belong to a schedule definition rather than the current
+        occurrence. Link the selected source to this concrete execution, keeping
+        its original owner and the artifact service's raw-content restrictions.
+        """
+        identity = request.step_execution
+        if identity is None:
+            raise OmnigentArtifactError(
+                "Agent source read requires Step Execution authority"
+            )
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
+
+        artifact_id = self._artifact_id(artifact_ref)
+        async with self._session_factory() as session:
+            await _link_execution_input(
+                TemporalArtifactRepository(session),
+                artifact_id,
+                workflow_id=identity.workflow_id,
+                run_id=identity.run_id,
             )
         return await self._read_for_execution(
             artifact_id, workflow_id=identity.workflow_id

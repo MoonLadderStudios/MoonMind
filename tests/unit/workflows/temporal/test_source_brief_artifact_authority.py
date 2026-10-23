@@ -351,9 +351,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             else:
                 assert all(value in {None, "workflow:unrelated"} for value in read_scopes)
         gate = published.metadata["moonSpecVerify"]
-        if scope in {"own", "restricted", "temporary"} or (
-            scope in {"unrelated", "missing"}
-        ):
+        if scope in {"own", "restricted", "temporary"}:
             assert not gate.get("contractViolations")
             assert "acceptanceProjection" in gate["validatedRefs"]
             if scope == "temporary":
