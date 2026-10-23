@@ -104,7 +104,7 @@ async def test_online_host_needing_auth_fails_with_reauthentication_verdict(
     assert error.code == HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH
     assert "needs-auth" in str(error)
     assert "claude-native" in str(error)
-    assert remediation_for(error.code) == "reauthenticate_provider_profile"
+    assert remediation_for(error.code) == "reauthenticate"
     # The verdict arrives after one readiness settle window, not after the
     # whole registration budget.
     assert client.calls < 91

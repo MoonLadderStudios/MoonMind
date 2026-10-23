@@ -709,7 +709,9 @@ def _host_lease() -> OmnigentHostLease:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("login_session", ["ended", "active", "unknown"])
 async def test_credential_mount_preflight_runs_provider_login_without_execution_launch(
+    login_session: str,
 ) -> None:
     launch = {
         "hostImageRef": "example.invalid/omnigent-host@sha256:" + "a" * 64,
@@ -743,6 +745,16 @@ async def test_credential_mount_preflight_runs_provider_login_without_execution_
     runtime._container_present = AsyncMock(return_value=False)
     runtime._discover_upstream_path = AsyncMock(return_value="/usr/local/bin:/usr/bin")
     runtime._run = AsyncMock(return_value=(0, "Logged in", ""))
+    runtime.probe_login_session = AsyncMock(return_value=login_session)
+
+    if login_session == "ended":
+        with pytest.raises(OmnigentOAuthHostError) as failure:
+            await runtime.validate_credential_mount(
+                binding=binding, host_lease=lease, effective_launch=launch
+            )
+        assert failure.value.code == HostPreflightFailure.LOGIN_STATUS_FAILED.value
+        assert "ended" in str(failure.value)
+        return
 
     result = await runtime.validate_credential_mount(
         binding=binding,
@@ -758,6 +770,9 @@ async def test_credential_mount_preflight_runs_provider_login_without_execution_
         "loginStatus": "authenticated",
         "validationMode": "credential_only",
     }
+    runtime.probe_login_session.assert_awaited_once_with(
+        binding=binding, effective_launch=launch
+    )
     command = runtime._run.await_args.args
     assert command[:2] == ("docker", "run")
     assert "none" in command
