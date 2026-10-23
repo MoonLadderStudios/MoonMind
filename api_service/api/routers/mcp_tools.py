@@ -30,10 +30,7 @@ from moonmind.mcp.container_job_tool_registry import (
     classify_container_job_error,
 )
 from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
-from moonmind.mcp.jira_tool_registry import (
-    JiraToolExecutionContext,
-    JiraToolRegistry,
-)
+from moonmind.mcp.jira_tool_registry import JiraToolExecutionContext, JiraToolRegistry
 from moonmind.mcp.remediation_tool_registry import (
     RemediationToolExecutionContext,
     RemediationToolRegistry,
@@ -295,6 +292,7 @@ async def _dispatch_container_job_tool(
     session: AsyncSession,
     *,
     capability: ContainerJobSessionCapability | None = None,
+    operator: OperatorAdmission | None = None,
 ) -> Any:
     if not container_jobs_ready():
         raise HTTPException(
@@ -306,8 +304,10 @@ async def _dispatch_container_job_tool(
         )
     context = ContainerJobToolContext(
         service=ContainerJobService(
-            session, artifacts=get_temporal_artifact_service(session),
+            session,
+            artifacts=get_temporal_artifact_service(session),
             capability=capability,
+            operator=operator,
         ),
         owner=owner,
         transport="mcp",
@@ -350,7 +350,7 @@ async def _dispatch_tool_call(
                 },
             )
         return await _dispatch_container_job_tool(
-            payload, container_job_owner(caller), session
+            payload, container_job_owner(caller), session, operator=caller
         )
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(

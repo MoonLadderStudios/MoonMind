@@ -25,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     event,
+    false,
     func,
     literal_column,
     select,
@@ -4569,6 +4570,11 @@ class ContainerJobRecord(Base):
     )
     owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
     owner_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Granted only by the guarded converter for this retained job. Machine
+    # callers still use the original owner and session/source restrictions.
+    operator_access_granted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     source_json: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False

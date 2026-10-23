@@ -65,9 +65,14 @@ cannot authorize artifact recovery or mint operator permission. Parent/child,
 workflow/session, tool, job-owner, expiry, and action restrictions remain at the
 owning endpoint. A bare service principal is not a generic artifact-read grant.
 
-Historical execution and job owner values remain valid provenance and durable
-idempotency namespaces. Operator admission uses the retained local artifact/quota
-scope without resolving a person. New person-attribution fields stay null.
+Historical execution and job owner values retain their provenance and idempotency
+namespaces. The guarded converter grants operator access per eligible retained
+job; service-owned jobs and machine session restrictions remain separate.
+Operator reads, exact replay, and cancel preserve the recorded owner, including
+its evidence namespace. Ambiguous replay keys fail closed. Terminal replay returns
+the saved result without starting work again. New person-attribution stays null.
+Confirmed cancel signals retain their idempotency key and state across requests
+and restarts.
 Restricted raw artifacts, quarantine, redaction, linked-execution checks, and
 protected conversion recovery keep their own gates.
 
@@ -88,7 +93,7 @@ before publication. No preferred-account heuristic merges identities.
 
 Schema migration detaches person foreign keys from retained resource attribution
 without changing IDs or values. After credential, artifact, preset, and settings
-transforms succeed, the same conversion transaction renames account-era tables
+transforms and retained-job grants succeed, the same transaction renames account-era tables
 to `retired_*`. These inert archives preserve source records and encrypted bytes;
 they are outside live model metadata and have no account routes or resolver.
 Source descriptions used by conversion are isolated from live models, keeping

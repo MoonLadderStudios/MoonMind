@@ -52,6 +52,27 @@ def test_preserved_access_and_fresh_install(host):
     validate_access(candidate(host), [])
 
 
+@pytest.mark.parametrize("old_mode", [None, "", "disabled"])
+def test_default_upgrade_retires_ignored_selector_without_changing_access(old_mode):
+    old = installed()
+    old[0]["Config"]["Env"] = ["MOONMIND_TRUSTED_INGRESS=1"]
+    if old_mode is not None:
+        old[0]["Config"]["Env"].append(f"AUTH_PROVIDER={old_mode}")
+    proposed = candidate()
+    proposed["services"]["api"]["environment"].pop("AUTH_PROVIDER")
+    validate_access(proposed, old)
+
+
+@pytest.mark.parametrize("old_mode", ["accounts", "oidc", "header", "unknown"])
+def test_active_predecessor_login_cannot_be_silently_retired(old_mode):
+    old = installed()
+    old[0]["Config"]["Env"] = [f"AUTH_PROVIDER={old_mode}"]
+    proposed = candidate()
+    proposed["services"]["api"]["environment"] = {}
+    with pytest.raises(DeploymentAccessError, match="AUTH_PROVIDER"):
+        validate_access(proposed, old)
+
+
 @pytest.mark.parametrize("change", ["host", "port", "removed", "auth", "trust", "url"])
 def test_access_changes_require_explicit_migration(change):
     proposed = candidate()

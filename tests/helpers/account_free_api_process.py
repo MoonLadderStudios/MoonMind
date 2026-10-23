@@ -33,6 +33,24 @@ engine = create_async_engine(
 )
 base.async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
+# The isolated journey uses the production artifact repository/service with a
+# durable local store, so process restarts exercise real evidence authorization.
+if os.environ.get("GH4354_ARTIFACT_ROOT"):
+    from api_service.api.routers import container_jobs
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    def artifact_service(session):
+        return TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(os.environ["GH4354_ARTIFACT_ROOT"]),
+        )
+
+    container_jobs.get_temporal_artifact_service = artifact_service
+
 
 @asynccontextmanager
 async def lifespan(_app):

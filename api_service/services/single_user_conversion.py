@@ -57,7 +57,7 @@ from api_service.db.models import Base, Uuid, mutable_json_dict
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_REVISION = "399_retire_shared_accounts"
+SCHEMA_REVISION = "400_job_operator_access"
 
 DEPLOYMENT_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -287,6 +287,7 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
     ("temporal_executions", "owner_id", "user_temporal"),
     ("temporal_execution_sources", "owner_id", "user_temporal"),
     ("workflow_execution_source_mappings", "owner_id", "user_temporal"),
+    ("container_jobs", "owner_id", "user_job"),
     ("managed_agent_oauth_sessions", "requested_by_user_id", "uuid_text"),
     ("temporal_artifacts", "created_by_principal", "artifact_principal"),
     ("temporal_artifact_use_claims", "owner_principal", "active_artifact_claim"),
@@ -333,6 +334,7 @@ _SUBSYSTEM_BY_SURFACE: dict[str, str] = {
     "temporal_execution_sources": "temporal",
     "workflow_execution_source_mappings": "temporal",
     "workflow_runs": "workflows",
+    "container_jobs": "container_jobs",
 }
 
 
@@ -421,6 +423,13 @@ def _is_artifact_machine_principal(raw: Any) -> bool:
     )
 
 
+def _artifact_human_principal(raw: Any) -> str | None:
+    # Job evidence uses the owner's serialized type prefix. Preserve that raw
+    # namespace; only attribution inspection reads the UUID inside it.
+    value = str(raw or "")
+    return _looks_like_uuid(value[5:] if value.startswith("user:") else value)
+
+
 def _uses_reserved_disabled_artifact_scope() -> bool:
     """Recognize predecessor local scope during conversion, never as admission."""
     return (
@@ -459,7 +468,10 @@ async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
         if default_owner is not None:
             # The unchanged raw-owner equality already admits this exact
             # disabled request creator, even without a retained User row.
-            no_recovery_needed = or_(no_recovery_needed, creator == default_owner)
+            no_recovery_needed = or_(
+                no_recovery_needed,
+                creator.in_((default_owner, f"user:{default_owner}")),
+            )
     try:
         async with session.begin_nested():
             pending = (
@@ -585,7 +597,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             # Expired claims no longer protect retention or count quota. Their
             # owner, like pin/deletion actors, is preserved provenance only.
             stmt = stmt.where(table.c.expires_at > func.now())
-        if kind == "user_temporal" and "owner_type" in table.c:
+        if kind in {"user_temporal", "user_job"} and "owner_type" in table.c:
             stmt = stmt.where(func.lower(cast(table.c.owner_type, String)) == "user")
         try:
             async with session.begin_nested():
@@ -595,15 +607,23 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                 _record_inventory_error(inv, f"{table_name}.{column_name}")
             continue
         for (raw,) in rows:
+            artifact_owner = (
+                _artifact_human_principal(raw)
+                if kind in {"artifact_principal", "active_artifact_claim"}
+                else None
+            )
             if (
                 preserve_deployment_artifacts
-                and kind in {"artifact_principal", "active_artifact_claim"}
-                and raw == DEPLOYMENT_SUBJECT_ID
+                and kind in {"artifact_principal", "active_artifact_claim", "user_job"}
+                and (
+                    raw == DEPLOYMENT_SUBJECT_ID
+                    or (kind != "user_job" and raw == f"user:{DEPLOYMENT_SUBJECT_ID}")
+                )
             ):
                 # Built-in account-free scope is retained, not a person alias.
                 # A persisted zero User disables this classification entirely.
                 continue
-            norm = _looks_like_uuid(raw)
+            norm = artifact_owner or _looks_like_uuid(raw)
             if (
                 kind == "preset_scope"
                 and norm == DEPLOYMENT_SUBJECT_ID
@@ -614,7 +634,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                 principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
             elif kind == "preset_scope" and not norm:
                 _record_inventory_error(inv, "principal:presets.scope_ref")
-            elif kind in {"artifact_principal", "active_artifact_claim"} and not _is_artifact_machine_principal(raw):
+            elif kind == "user_job" or (
+                kind in {"artifact_principal", "active_artifact_claim"}
+                and not _is_artifact_machine_principal(raw)
+            ):
                 # Unknown text is not proof of a machine or a person.
                 _record_inventory_error(inv, f"principal:{table_name}.{column_name}")
         total = await _probe_count(
@@ -1272,8 +1295,9 @@ def _is_production_completion(
     ):
         return False
     artifact_outcome = outcomes["artifacts"]
+    # A serialized boolean is not a certified count.
     if any(
-        type(artifact_outcome.get(name)) is not int
+        type(artifact_outcome.get(name)) is not int  # noqa: E721
         for name in ("recovery_grants", "preserved")
     ):
         return False
@@ -1297,6 +1321,13 @@ async def _has_certified_instance_admission(
     contracts grant nothing.
     """
     predecessors = {
+        "399_retire_shared_accounts": (
+            "accounts",
+            "profile_secrets",
+            "artifacts",
+            "presets",
+            "settings",
+        ),
         "398_instance_settings": (
             "profile_secrets",
             "artifacts",
@@ -1862,7 +1893,9 @@ async def artifacts_transform(
         raise
     preserve_deployment_scope = False
     if _uses_reserved_disabled_artifact_scope() and any(
-        row.created_by_principal == DEPLOYMENT_SUBJECT_ID for row in rows
+        row.created_by_principal
+        in {DEPLOYMENT_SUBJECT_ID, f"user:{DEPLOYMENT_SUBJECT_ID}"}
+        for row in rows
     ):
         from api_service.migrations.account_source import source_user_ids
 
@@ -1877,13 +1910,13 @@ async def artifacts_transform(
     eligible = set(eligible_ids)
     granted = 0
     for row in rows:
-        if (
-            preserve_deployment_scope
-            and row.created_by_principal == DEPLOYMENT_SUBJECT_ID
-        ):
+        if preserve_deployment_scope and row.created_by_principal in {
+            DEPLOYMENT_SUBJECT_ID,
+            f"user:{DEPLOYMENT_SUBJECT_ID}",
+        }:
             # Preserve creator, quota, claims and any existing grant verbatim.
             continue
-        owner = _looks_like_uuid(row.created_by_principal)
+        owner = _artifact_human_principal(row.created_by_principal)
         if owner:
             if owner not in eligible:
                 raise StaleAttributionError("artifact creator is not proven eligible")
@@ -2348,8 +2381,46 @@ async def settings_transform(
 #: still requires its own conversion.
 from api_service.migrations.account_source import archive_accounts
 
+
+async def container_jobs_transform(
+    session: AsyncSession, eligible_ids: list[str]
+) -> dict:
+    """Grant the admitted operator this job, preserving its durable owner.
+
+    Eligibility and writer locks belong to the shared converter. This grant is
+    resource authority, never an identity alias or permission for machine calls.
+    """
+    from api_service.db.models import ContainerJobRecord
+
+    try:
+        async with session.begin_nested():
+            rows = (
+                await session.scalars(
+                    select(ContainerJobRecord).where(
+                        ContainerJobRecord.owner_type == "user"
+                    )
+                )
+            ).all()
+    except SQLAlchemyError as exc:
+        if _is_absent_table_error(exc):
+            return {"operator_grants": 0}
+        raise
+    eligible = set(eligible_ids)
+    granted = 0
+    for row in rows:
+        if (
+            _looks_like_uuid(row.owner_id) in eligible
+            and not row.operator_access_granted
+        ):
+            row.operator_access_granted = True
+            granted += 1
+    await session.flush()
+    return {"operator_grants": granted}
+
+
 DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
     "accounts": archive_accounts,
+    "container_jobs": container_jobs_transform,
     "profile_secrets": profile_secrets_transform,
     "artifacts": artifacts_transform,
     "presets": presets_transform,
