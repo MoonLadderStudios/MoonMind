@@ -14,6 +14,13 @@ _JIRA_API_HINT = (
     "`$MOONMIND_URL` for Jira operations; do not look for raw Jira "
     "credentials in the shell."
 )
+_JIRA_AUTH_HINT = (
+    "- Authenticate each call with this step's scoped Jira tool capability: "
+    "send `X-MoonMind-Mcp-Tools: v1` and `Authorization: Bearer <token>`, "
+    "reading the token from the file named by "
+    "`$MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE` (or from "
+    "`$MOONMIND_MCP_TOOLS_BEARER_TOKEN`); never print it."
+)
 _CREATE_METADATA_CALL_HINT = (
     "- Example create-metadata call: "
     '`{"tool":"jira.list_create_issue_types",'
@@ -109,6 +116,7 @@ def append_selected_jira_tool_hint(
         return instructions
     tool_lines = [
         _JIRA_API_HINT,
+        _JIRA_AUTH_HINT,
         "- List available tools with `GET $MOONMIND_URL/mcp/tools`.",
         "- Invoke Jira tools with `POST $MOONMIND_URL/mcp/tools/call`.",
     ]

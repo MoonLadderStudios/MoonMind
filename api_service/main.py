@@ -104,17 +104,12 @@ from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
 from api_service.api.routers.accounts_4122 import router as accounts_4122_router
 from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
-# NOTE (#4347, #4455 review): the operator-boundary demonstration routers
-# (api_service.api.routers.operator_boundary_4347) are intentionally NOT
-# mounted in production. They are test scaffolding exercising the shared
-# admission primitive (moonmind.security.operator_admission) across HTTP,
-# artifact, SSE, and WebSocket shapes. Mounting them beside the product
-# routes would create a parallel /operator/* API instead of migrating the
-# real workflow, artifact, stream, and chat consumers through one shared
-# boundary. No real consumer has migrated yet (#4347 closed without that
-# migration); this deployment keeps the existing product routes on their
-# current auth until each consumer migrates with its machine-authority
-# separation.
+# NOTE: the operator-boundary demonstration routers
+# (api_service.api.routers.operator_boundary_4347) are test scaffolding for the
+# shared admission primitive and are intentionally NOT mounted: a parallel
+# /operator/* API would compete with the product routes. Real consumers use
+# that boundary directly (get_instance_operator_access / require_operator),
+# while machine callers verify their own scoped capabilities at their routes.
 from api_service.db.base import get_async_session_context
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_dashboard_dist_root

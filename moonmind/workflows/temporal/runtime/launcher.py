@@ -36,6 +36,11 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
 )
+from moonmind.security.mcp_tool_capabilities import (
+    JIRA_TOOLS_PURPOSE,
+    mint_mcp_tool_capability,
+    requires_jira_tools,
+)
 from moonmind.workflows.executions.repository_contract import (
     AuthoredLoreRepositoryTarget,
     AuthoredRepositoryTarget,
@@ -1179,6 +1184,56 @@ class ManagedRuntimeLauncher:
                     + _EXECUTION_FANOUT_LAUNCH_GRACE_SECONDS
                 ),
             )
+        )
+
+    @staticmethod
+    def _materialize_mcp_tools_environment(
+        *,
+        environment: dict[str, str],
+        request: AgentExecutionRequest,
+        workflow_id: str | None,
+        run_id: str,
+        runtime_id: str,
+    ) -> None:
+        """Mint the step's trusted Jira tool authority when its Skill needs it."""
+
+        environment.pop("MOONMIND_MCP_TOOLS_BEARER_TOKEN", None)
+        environment.pop("MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE", None)
+        raw_capabilities = request.parameters.get("requiredCapabilities")
+        if not isinstance(raw_capabilities, (list, tuple)) or not requires_jira_tools(
+            raw_capabilities
+        ):
+            return
+        step_execution = request.step_execution
+        bound_workflow_id = str(
+            workflow_id
+            or (step_execution.workflow_id if step_execution is not None else "")
+            or ""
+        ).strip()
+        if not bound_workflow_id or not str(environment.get("MOONMIND_URL") or "").strip():
+            # Without a bound workflow or API endpoint the hinted Jira tool
+            # route is unreachable; never mint unbound authority.
+            return
+        from moonmind.config.settings import settings as _mm_settings
+
+        environment["MOONMIND_MCP_TOOLS_BEARER_TOKEN"] = mint_mcp_tool_capability(
+            secret=str(_mm_settings.security.JWT_SECRET_KEY or ""),
+            purpose=JIRA_TOOLS_PURPOSE,
+            workflow_id=bound_workflow_id,
+            agent_run_id=run_id,
+            step_id=(
+                step_execution.logical_step_id if step_execution is not None else None
+            ),
+            session_id=run_id,
+            runtime_id=str(runtime_id or "").strip() or "managed",
+            source_kind="managed_process",
+            lifetime_seconds=(
+                resolve_execution_budget(
+                    agent_kind=request.agent_kind,
+                    timeout_policy=request.timeout_policy,
+                ).max_seconds
+                + _EXECUTION_FANOUT_LAUNCH_GRACE_SECONDS
+            ),
         )
 
     @staticmethod
@@ -2705,6 +2760,13 @@ class ManagedRuntimeLauncher:
                 )
             )
             self._materialize_execution_fanout_environment(
+                environment=env_overrides,
+                request=request,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                runtime_id=normalize_runtime_id(profile.runtime_id),
+            )
+            self._materialize_mcp_tools_environment(
                 environment=env_overrides,
                 request=request,
                 workflow_id=workflow_id,

@@ -14,6 +14,8 @@ standalone checkout).
 
 ## Trusted Jira MCP path
 
+Inside a MoonMind managed step, authenticate each call with `X-MoonMind-Mcp-Tools: v1` and `Authorization: Bearer` using the step's scoped token from `MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE` (or `MOONMIND_MCP_TOOLS_BEARER_TOKEN`); never print it.
+
 1. List tools with `GET $MOONMIND_URL/mcp/tools`.
 2. Verify Jira authentication with `POST $MOONMIND_URL/mcp/tools/call` and JSON like `{"tool":"jira.verify_connection","arguments":{}}`.
 3. If authentication succeeds, fetch the issue with `POST $MOONMIND_URL/mcp/tools/call` and JSON like `{"tool":"jira.get_issue","arguments":{"issueKey":"KANDY-2558"}}`.

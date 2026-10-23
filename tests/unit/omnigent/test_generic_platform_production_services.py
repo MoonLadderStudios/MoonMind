@@ -108,6 +108,7 @@ from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
+from moonmind.security.mcp_tool_capabilities import verify_mcp_tool_capability
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -1582,6 +1583,7 @@ async def test_github_projection_failed_rewrite_keeps_live_same_owner_volume(
     [
         ("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "execution-fanout"),
         ("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN", "container-jobs"),
+        ("MOONMIND_MCP_TOOLS_BEARER_TOKEN", "mcp-tools"),
     ],
 )
 @pytest.mark.parametrize(
@@ -2115,6 +2117,57 @@ def test_generic_host_mints_scoped_fanout_from_step_authority(
     assert capability.session_id == "host-lease-1"
     assert capability.runtime_id == "opencode-native"
     assert capability.source_kind == "omnigent"
+
+
+def test_generic_host_mints_jira_tool_capability_only_for_jira_steps() -> None:
+    def _request(capabilities: list[str]) -> AgentExecutionRequest:
+        return AgentExecutionRequest.model_validate(
+            {
+                "agentKind": "external",
+                "agentId": "omnigent",
+                "correlationId": "workflow-1",
+                "idempotencyKey": "idem-1",
+                "parameters": {"requiredCapabilities": capabilities},
+                "stepExecution": {
+                    "workflowId": "workflow-1",
+                    "runId": "run-1",
+                    "logicalStepId": "node-1",
+                    "executionOrdinal": 1,
+                    "stepExecutionId": "workflow-1:run-1:node-1:execution:1",
+                    "runtimeContextPolicy": "fresh_agent_run",
+                },
+            }
+        )
+
+    service = OmnigentRuntimeEnvironmentService(
+        moonmind_url="http://api:8000", signing_secret="test_jwt_secret_key"
+    )
+    environment = service.build(
+        request=_request(["jira", "git"]),
+        plan=_plan("opencode/muse-spark-1.2-contributor-free"),
+        host_lease_ref="host-lease-1",
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+    )
+    capability = verify_mcp_tool_capability(
+        environment["MOONMIND_MCP_TOOLS_BEARER_TOKEN"], secret="test_jwt_secret_key"
+    )
+
+    assert environment["MOONMIND_URL"] == "http://api:8000"
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in environment
+    assert capability.purpose == "jira"
+    assert capability.workflow_id == "workflow-1"
+    assert capability.agent_run_id == "workflow-1:run-1:node-1:execution:1"
+    assert capability.session_id == "host-lease-1"
+    assert capability.source_kind == "omnigent"
+    assert capability.allows_tool("jira.get_issue")
+    assert not capability.allows_tool("container.submit")
+    assert "MOONMIND_MCP_TOOLS_BEARER_TOKEN" not in service.build(
+        request=_request(["git"]),
+        plan=_plan("opencode/muse-spark-1.2-contributor-free"),
+        host_lease_ref="host-lease-1",
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+    )
 
 
 @pytest.mark.asyncio
