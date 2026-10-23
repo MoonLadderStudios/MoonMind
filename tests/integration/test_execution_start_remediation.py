@@ -9,7 +9,10 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import TemporalExecutionRemediationLink
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
-from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.workflows.temporal.service import (
+    TemporalExecutionService,
+    TemporalExecutionStartUnconfirmedError,
+)
 from tests.integration import test_execution_input_admission_postgres as fixtures
 
 sessions = fixtures.sessions
@@ -128,3 +131,81 @@ async def test_concurrent_remediation_retry_does_not_overlap_context_producers(
             TemporalExecutionRemediationLink, results[0].workflow_id
         )
         assert link.context_artifact_ref == contexts[0]
+
+
+async def test_same_session_remediation_retry_reuses_saved_context(
+    sessions, monkeypatch
+):
+    starts = []
+    contexts = []
+    actual_create = TemporalArtifactService.create
+
+    async def artifact_create(self, **kwargs):
+        result = await actual_create(self, **kwargs)
+        if (
+            kwargs.get("metadata_json", {}).get("artifact_type")
+            == "remediation.context"
+        ):
+            contexts.append(result[0].artifact_id)
+        return result
+
+    monkeypatch.setattr(TemporalArtifactService, "create", artifact_create)
+
+    async def start(**kwargs):
+        starts.append(kwargs)
+        if len(starts) in {2, 3}:
+            raise ConnectionError("Injected nondelivery before remediation start")
+        return SimpleNamespace(run_id=f"actual-run-{len(starts)}")
+
+    adapter = SimpleNamespace(
+        start_workflow=AsyncMock(side_effect=start),
+        describe_workflow=AsyncMock(
+            side_effect=RPCError("Not delivered", RPCStatusCode.NOT_FOUND, b"")
+        ),
+        namespace_retention_seconds=AsyncMock(return_value=86400),
+    )
+    async with sessions() as session:
+        owner = TemporalExecutionService(session, client_adapter=adapter)
+        owner.check_system_paused = AsyncMock(return_value=False)
+        owner._enforce_worker_code_freshness = AsyncMock()
+        owner._sync_projection_best_effort = AsyncMock(side_effect=lambda r: r)
+        owner._query_step_ledger_rows = AsyncMock(return_value=[])
+        create = {
+            "workflow_type": "MoonMind.UserWorkflow",
+            "owner_id": None,
+            "title": "Target",
+            "input_artifact_ref": None,
+            "plan_artifact_ref": None,
+            "manifest_artifact_ref": None,
+            "failure_policy": None,
+            "initial_parameters": {"workflow": {"instructions": "Retain target"}},
+            "idempotency_key": None,
+        }
+        target = await owner.create_execution(**create)
+        request = {
+            **create,
+            "title": "Remediation",
+            "initial_parameters": {
+                "workflow": {
+                    "instructions": "Inspect target",
+                    "remediation": {"target": {"workflowId": target.workflow_id}},
+                }
+            },
+            "idempotency_key": "same-session-retry",
+        }
+        with pytest.raises(TemporalExecutionStartUnconfirmedError) as pending:
+            await owner.create_execution(**request)
+        assert pending.value.detail["reason"] == "start_not_confirmed"
+        assert len(contexts) == 1
+        remediation = await owner.create_execution(**request)
+        assert len(contexts) == 1
+        assert len(starts) == 4  # target, two failed attempts, one successful retry
+        assert {call["workflow_id"] for call in starts[1:]} == {remediation.workflow_id}
+        assert remediation.run_id == "actual-run-4"
+        link = await session.get(
+            TemporalExecutionRemediationLink,
+            remediation.workflow_id,
+            populate_existing=True,
+        )
+        assert link.context_artifact_ref == contexts[0]
+        assert link.remediation_run_id == remediation.run_id
