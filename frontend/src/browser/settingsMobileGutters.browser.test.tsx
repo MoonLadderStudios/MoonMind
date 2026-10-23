@@ -22,12 +22,6 @@ const payload: BootPayload = {
   page: 'settings-providers-secrets',
   apiBase: '/api',
   initialData: {
-    settingsPermissions: [
-      'provider_profiles.read',
-      'provider_profiles.write',
-      'secrets.metadata.read',
-      'secrets.write',
-    ],
   },
 } as unknown as BootPayload;
 

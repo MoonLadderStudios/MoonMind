@@ -247,7 +247,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     const { includeShardHealth = true } = options;
     renderWithClient(
       <OperationsSettingsSection
-        canInvokeOperations
+
         workerPauseConfig={{
           get: '/api/workers',
           post: '/api/worker-action',

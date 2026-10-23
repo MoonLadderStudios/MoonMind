@@ -18,7 +18,6 @@ from api_service.db.models import (
     SettingsOverride,
 )
 from api_service.services.settings_catalog import (
-    SETTINGS_PERMISSION_NAMES,
     SettingAuditPolicy,
     SettingDependency,
     SettingMigrationRule,
@@ -2127,54 +2126,6 @@ async def _reset_deletes_only_override_and_preserves_secret_and_audit(settings_s
     assert audit_count >= 2
 
 
-def test_settings_permission_taxonomy_includes_least_privilege_actions():
-    assert {
-        "settings.catalog.read",
-        "settings.effective.read",
-        "settings.workspace.write",
-        "settings.system.read",
-        "settings.system.write",
-        "secrets.metadata.read",
-        "secrets.value.write",
-        "secrets.rotate",
-        "secrets.disable",
-        "secrets.delete",
-        "provider_profiles.read",
-        "provider_profiles.write",
-        "operations.read",
-        "operations.invoke",
-        "settings.audit.read",
-    }.issubset(SETTINGS_PERMISSION_NAMES)
-    # No person scope exists to write.
-    assert "settings.user.write" not in SETTINGS_PERMISSION_NAMES
-
-
-@pytest.mark.asyncio
-async def test_audit_entries_redact_secret_ref_without_metadata_permission(
-    settings_session_maker,
-):
-    async with settings_session_maker() as settings_session:
-        service = SettingsCatalogService(env={}, session=settings_session)
-        await service.apply_overrides(
-            changes={"integrations.github.token_ref": "env://GITHUB_TOKEN"},
-            expected_versions={"integrations.github.token_ref": 1},
-            reason="configure integration",
-        )
-
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
-
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry.key == "integrations.github.token_ref"
-    assert entry.redacted is True
-    assert entry.old_value is None
-    assert entry.new_value is None
-    assert "descriptor_policy" in entry.redaction_reasons
-    assert "env://GITHUB_TOKEN" not in entry.model_dump_json()
-
-
 @pytest.mark.asyncio
 async def test_audit_entries_list_instance_history_without_retained_personal_events(
     settings_session_maker,
@@ -2202,15 +2153,13 @@ async def test_audit_entries_list_instance_history_without_retained_personal_eve
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert [entry.new_value for entry in entries] == ["branch"]
 
 
 @pytest.mark.asyncio
-async def test_audit_entries_expose_secret_ref_metadata_with_permission(
+async def test_audit_entries_expose_secret_ref_metadata(
     settings_session_maker,
 ):
     async with settings_session_maker() as settings_session:
@@ -2220,16 +2169,14 @@ async def test_audit_entries_expose_secret_ref_metadata_with_permission(
             expected_versions={"integrations.github.token_ref": 1},
         )
 
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read", "secrets.metadata.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert entries[0].new_value == "env://GITHUB_TOKEN"
     assert entries[0].redacted is False
 
 
 @pytest.mark.asyncio
-async def test_rejected_audit_entries_expose_safe_secret_ref_metadata_with_permission(
+async def test_rejected_audit_entries_expose_safe_secret_ref_metadata(
     settings_session_maker,
 ):
     async with settings_session_maker() as settings_session:
@@ -2240,9 +2187,7 @@ async def test_rejected_audit_entries_expose_safe_secret_ref_metadata_with_permi
             request_id="settings-rejected-1",
         )
 
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read", "secrets.metadata.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert entries[0].event_type == "settings.override.rejected"
     assert entries[0].new_value == "db://github-token"
@@ -2263,9 +2208,7 @@ async def test_audit_entries_keep_request_provenance_without_a_person(
             request_id="settings-request-1",
         )
 
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        entries = await service.list_audit_events()
         stored = (
             await settings_session.execute(select(SettingsAuditEvent))
         ).scalar_one()
@@ -2288,9 +2231,7 @@ async def test_audit_entries_expose_apply_mode_and_affected_systems(
             reason="configure publish mode",
         )
 
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert entries[0].event_type == "settings.override.updated"
     assert entries[0].key == "workflow.default_publish_mode"
@@ -2310,14 +2251,10 @@ async def test_audit_source_preserves_intentional_null_override(settings_session
             expected_versions={"integrations.github.token_ref": 1},
         )
 
-        updated_entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        updated_entries = await service.list_audit_events()
 
         await service.reset_override("integrations.github.token_ref")
-        reset_entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        reset_entries = await service.list_audit_events()
 
     assert updated_entries[0].event_type == "settings.override.updated"
     assert updated_entries[0].source == "instance_override"
@@ -2433,9 +2370,7 @@ async def test_audit_redactor_blocks_secret_like_values_even_without_descriptor(
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert entries[0].old_value == "branch"
     assert entries[0].new_value is None
@@ -2459,9 +2394,7 @@ async def test_audit_redactor_blocks_embedded_secret_prefixes(settings_session_m
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert entries[0].new_value is None
     assert "secret_like_value" in entries[0].redaction_reasons
@@ -2494,9 +2427,7 @@ async def test_audit_redactor_blocks_documented_sensitive_classes(
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert entries[0].new_value is None
     assert entries[0].redacted is True
@@ -2521,9 +2452,7 @@ async def test_audit_redactor_reports_stored_redacted_null_values(
         await settings_session.commit()
 
         service = SettingsCatalogService(env={}, session=settings_session)
-        entries = await service.list_audit_events(
-            permissions={"settings.audit.read"},
-        )
+        entries = await service.list_audit_events()
 
     assert entries[0].redacted is True
     assert "stored_redacted" in entries[0].redaction_reasons

@@ -39,10 +39,8 @@ interface SecretManagerProps {
   secrets: SecretMetadata[];
   onNotice: (notice: { level: 'ok' | 'error'; text: string } | null) => void;
   queryClient: QueryClient;
-  permissions?: ReadonlySet<string>;
 }
 
-const _RE_ENABLE_PERMISSIONS = ['secrets.disable', 'secrets.rotate'];
 const _BROKEN_REFERENCE_STATUSES = new Set([
   'disabled',
   'rotated',
@@ -64,12 +62,7 @@ export function SecretManager({
   secrets,
   onNotice,
   queryClient,
-  permissions,
 }: SecretManagerProps) {
-  const grantedPermissions = permissions ?? new Set<string>();
-  const canChangeStatus = _RE_ENABLE_PERMISSIONS.some((permission) =>
-    grantedPermissions.has(permission),
-  );
   const [slug, setSlug] = useState('');
   const [plaintext, setPlaintext] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -445,7 +438,7 @@ export function SecretManager({
                           >
                             Rotate
                           </Button>
-                          {secret.status === 'disabled' && canChangeStatus ? (
+                          {secret.status === 'disabled' ? (
                             <Button variant="secondary" size="sm"
                               type="button"
                               onClick={() =>
