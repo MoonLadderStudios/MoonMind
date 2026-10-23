@@ -25,6 +25,8 @@ from api_service.db.models import (
     RecurringWorkflowRun,
     MoonMindWorkflowState,
     RecurringWorkflowRunOutcome,
+    TemporalArtifact,
+    TemporalArtifactStatus,
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
@@ -105,6 +107,19 @@ async def recurring_db(tmp_path: Path):
         await conn.run_sync(Base.metadata.create_all)
 
     try:
+        # Compiler doubles below return these durable artifact identities.
+        # Keep their metadata real instead of bypassing target retention.
+        async with async_session_maker() as artifacts_session:
+            artifacts_session.add_all(
+                TemporalArtifact(
+                    artifact_id=artifact_id,
+                    storage_key=f"schedule-fixture/{artifact_id}",
+                    status=TemporalArtifactStatus.COMPLETE,
+                    created_by_principal="operator",
+                )
+                for artifact_id in ("art_plan", "art_task", "art_profile", "art_skills")
+            )
+            await artifacts_session.commit()
         yield async_session_maker
     finally:
         await engine.dispose()

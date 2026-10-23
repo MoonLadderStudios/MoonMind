@@ -28,7 +28,19 @@ if TYPE_CHECKING:
 
 import boto3
 from botocore.exceptions import ClientError
-from sqlalchemy import Select, delete, exists, func, insert, or_, select, update
+from sqlalchemy import (
+    Select,
+    case,
+    cast,
+    delete,
+    exists,
+    func,
+    insert,
+    or_,
+    select,
+    update,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 
@@ -45,6 +57,19 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_SCHEDULE_ARTIFACT_REF_PATHS = (
+    ("inputArtifactRef",),
+    ("planArtifactRef",),
+    ("manifestArtifactRef",),
+    ("initialParameters", "inputArtifactRef"),
+    ("initialParameters", "planArtifactRef"),
+    ("initialParameters", "manifestArtifactRef"),
+    ("initialParameters", "resolvedSkillsetRef"),
+    ("initialParameters", "omnigentExecutionPlan", "planArtifactRef"),
+    ("initialParameters", "omnigentExecutionPlan", "taskInputSnapshotRef"),
+)
+
+
 _MULTIPART_WRITE_CHUNK_BYTES = 8 * 1024 * 1024
 _RUN_DIGEST_PERSIST_TIMEOUT_SECONDS = 10
 _RUN_DIGEST_ARTIFACT_LINK_TYPE = "output.summary"
@@ -1004,6 +1029,26 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             )
         )
 
+
+def schedule_input_artifact_ids(target: Mapping[str, Any]) -> set[str]:
+    """Exact persisted schedule pointers, independent of its enabled state."""
+    authority_refs = target.get("omnigentAuthorityArtifactRefs")
+    refs = list(authority_refs) if isinstance(authority_refs, (list, tuple)) else []
+    for path in _SCHEDULE_ARTIFACT_REF_PATHS:
+        value: Any = target
+        for key in path:
+            value = value.get(key) if isinstance(value, Mapping) else None
+        refs.append(value)
+    ids = set()
+    for ref in refs:
+        if not isinstance(ref, str):
+            continue
+        artifact_id = ref.removeprefix("artifact://").removeprefix("artifact:")
+        if artifact_id.startswith("art_"):
+            ids.add(artifact_id)
+    return ids
+
+
 class TemporalArtifactRepository:
     """Persistence helper for Temporal artifacts and execution links."""
 
@@ -1131,7 +1176,12 @@ class TemporalArtifactRepository:
             .where(
                 db_models.TemporalArtifact.storage_backend == storage_backend,
                 db_models.TemporalArtifact.storage_key == storage_key,
-                db_models.TemporalArtifact.hard_deleted_at.is_(None),
+                or_(
+                    db_models.TemporalArtifact.hard_deleted_at.is_(None),
+                    self._schedule_reference_exists(
+                        db_models.TemporalArtifact.artifact_id
+                    ),
+                ),
             )
             .limit(1)
         )
@@ -1464,6 +1514,67 @@ class TemporalArtifactRepository:
             ),
         )
 
+    def _schedule_reference_exists(self, artifact_id: Any) -> Any:
+        """Saved definition fields retain bytes; arbitrary text does not."""
+        schedule = db_models.RecurringWorkflowDefinition
+
+        def matches(value):
+            return value.in_(
+                (artifact_id, "artifact:" + artifact_id, "artifact://" + artifact_id)
+            )
+
+        array = schedule.target["omnigentAuthorityArtifactRefs"]
+        if self._session.get_bind().dialect.name == "postgresql":
+            array = cast(array, JSONB)
+            safe_array = case(
+                (func.jsonb_typeof(array) == "array", array), else_=cast([], JSONB)
+            )
+            values = (
+                func.jsonb_array_elements_text(safe_array)
+                .table_valued("value")
+                .render_derived()
+            )
+        else:
+            safe_array = case(
+                (func.json_type(array) == "array", array), else_=func.json("[]")
+            )
+            values = func.json_each(safe_array).table_valued("value")
+        array_ref = exists(
+            select(1).select_from(values).where(matches(values.c.value))
+        ).correlate(schedule, db_models.TemporalArtifact)
+        return (
+            exists()
+            .where(
+                or_(
+                    *(
+                        matches(schedule.target[path].as_string())
+                        for path in _SCHEDULE_ARTIFACT_REF_PATHS
+                    ),
+                    array_ref,
+                )
+            )
+            .correlate(db_models.TemporalArtifact)
+        )
+
+    async def has_schedule_reference(self, artifact_id: str) -> bool:
+        return bool(
+            await self._session.scalar(
+                select(self._schedule_reference_exists(artifact_id))
+            )
+        )
+
+    async def retain_schedule_inputs(self, target: Mapping[str, Any]) -> None:
+        """Fence saved-pointer admission against GC until the caller commits."""
+        for artifact_id in sorted(schedule_input_artifact_ids(target)):
+            artifact = await self.get_artifact_for_update(artifact_id)
+            if (
+                artifact.status is not db_models.TemporalArtifactStatus.COMPLETE
+                or artifact.hard_deleted_at is not None
+            ):
+                raise TemporalArtifactStateError(
+                    f"Cannot retain schedule input {artifact_id}: artifact is not readable"
+                )
+
     async def has_active_journal_reference(self, artifact_id: str) -> bool:
         """The current journal remains recovery data until its bridge is terminal."""
         return bool(
@@ -1500,6 +1611,9 @@ class TemporalArtifactRepository:
                 ~self._active_journal_reference_exists(
                     db_models.TemporalArtifact.artifact_id
                 ).correlate(db_models.TemporalArtifact),
+                ~self._schedule_reference_exists(
+                    db_models.TemporalArtifact.artifact_id
+                ),
             )
             .order_by(
                 db_models.TemporalArtifact.expires_at.asc(),
@@ -1527,6 +1641,7 @@ class TemporalArtifactRepository:
                 ~self._active_journal_reference_exists(
                     db_models.TemporalArtifact.artifact_id
                 ).correlate(db_models.TemporalArtifact),
+                ~self._schedule_reference_exists(db_models.TemporalArtifact.artifact_id),
             )
             .order_by(db_models.TemporalArtifact.deleted_at.asc())
             .limit(max(1, int(limit)))
@@ -1568,6 +1683,7 @@ class TemporalArtifactRepository:
             # NULL); keep the tombstone as that run's diagnostic context.
             referenced(db_models.TemporalExecutionRemediationLink.context_artifact_ref),
             self._active_journal_reference_exists(artifact_id).correlate(artifact),
+            self._schedule_reference_exists(artifact_id),
         ]
 
     def _purge_eligibility(
@@ -1676,7 +1792,10 @@ class TemporalArtifactRepository:
             .where(
                 db_models.TemporalArtifact.storage_backend == storage_backend,
                 db_models.TemporalArtifact.storage_key.in_(storage_keys),
-                db_models.TemporalArtifact.hard_deleted_at.is_(None),
+                or_(
+                    db_models.TemporalArtifact.hard_deleted_at.is_(None),
+                    self._schedule_reference_exists(db_models.TemporalArtifact.artifact_id),
+                ),
             )
             .distinct()
         )
@@ -1713,6 +1832,10 @@ class TemporalArtifactRepository:
             select(db_models.TemporalArtifact)
             .where(db_models.TemporalArtifact.artifact_id == artifact_id)
             .with_for_update()
+            # A waiter may have loaded this row before another transaction
+            # deleted it. The lock must return the committed state, not that
+            # earlier identity-map copy.
+            .execution_options(populate_existing=True)
         )
         result = await self._session.execute(stmt)
         artifact = result.scalars().first()
@@ -1975,6 +2098,7 @@ class TemporalArtifactRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
 
 class TemporalArtifactService:
     """Service implementing Temporal artifact semantics for local/dev runtime."""
@@ -2646,6 +2770,10 @@ class TemporalArtifactService:
         )
         reference_now = datetime.now(UTC)
         availability = self.saved_work_availability_of(artifact, now=reference_now)
+        if availability == "expired" and await self._repository.has_schedule_reference(
+            artifact_id
+        ):
+            availability = "available"
         if availability == "expired" and any(
             claim.owner_principal == principal.strip()
             and claim.request_id == request_id.strip()
@@ -4009,6 +4137,10 @@ class TemporalArtifactService:
         # explicit administrator deletion with a stated reason.
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
+        if await self._repository.has_schedule_reference(artifact_id):
+            raise TemporalArtifactStateError(
+                f"SAVED_WORK_DELETE_BLOCKED: artifact {artifact_id} is retained by a saved schedule"
+            )
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             return artifact
         reference_now = datetime.now(UTC)
@@ -4187,6 +4319,10 @@ class TemporalArtifactService:
     ) -> db_models.TemporalArtifact:
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
+        if await self._repository.has_schedule_reference(artifact_id):
+            raise TemporalArtifactStateError(
+                f"SAVED_WORK_DELETE_BLOCKED: artifact {artifact_id} is retained by a saved schedule"
+            )
         if artifact.hard_deleted_at is not None:
             return artifact
         if artifact.status is not db_models.TemporalArtifactStatus.DELETED:
@@ -4362,10 +4498,14 @@ class TemporalArtifactService:
                 continue
             # Recheck protection at the sweep boundary: expiry eligibility
             # alone never removes content under a live claim or operator pin.
-            if await self._repository.has_live_use_claim(
-                artifact.artifact_id, now=sweep_now
-            ) or await self._repository.has_active_journal_reference(
-                artifact.artifact_id
+            if (
+                await self._repository.has_live_use_claim(
+                    artifact.artifact_id, now=sweep_now
+                )
+                or await self._repository.has_active_journal_reference(
+                    artifact.artifact_id
+                )
+                or await self._repository.has_schedule_reference(artifact.artifact_id)
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
@@ -4391,10 +4531,14 @@ class TemporalArtifactService:
                 storage_backend=artifact.storage_backend,
                 storage_key=artifact.storage_key,
             )
-            if await self._repository.has_live_use_claim(
-                artifact.artifact_id, now=sweep_now
-            ) or await self._repository.has_active_journal_reference(
-                artifact.artifact_id
+            if (
+                await self._repository.has_live_use_claim(
+                    artifact.artifact_id, now=sweep_now
+                )
+                or await self._repository.has_active_journal_reference(
+                    artifact.artifact_id
+                )
+                or await self._repository.has_schedule_reference(artifact.artifact_id)
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id

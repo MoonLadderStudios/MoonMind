@@ -485,6 +485,24 @@ class RecurringWorkflowsService:
         self._adapter = temporal_client_adapter or TemporalClientAdapter()
         self._artifact_service = artifact_service
 
+    async def _retain_target_artifacts(self, target: Mapping[str, Any]) -> None:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactError,
+            TemporalArtifactRepository,
+            schedule_input_artifact_ids,
+        )
+
+        if not schedule_input_artifact_ids(target):
+            return
+        try:
+            await TemporalArtifactRepository(self._session).retain_schedule_inputs(
+                target
+            )
+        except TemporalArtifactError as exc:
+            raise RecurringWorkflowValidationError(
+                f"Cannot retain schedule input: {exc}"
+            ) from exc
+
     async def _lock_definition_for_update(
         self,
         definition_id: UUID,
@@ -951,6 +969,7 @@ class RecurringWorkflowsService:
             previous=previous,
             snapshot=target["agentProfileSnapshot"],
         )
+        await self._retain_target_artifacts(target)
         definition.target = target
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -1007,6 +1026,7 @@ class RecurringWorkflowsService:
                 previous=advanced_from,
                 snapshot=admitted["agentProfileSnapshot"],
             )
+        await self._retain_target_artifacts(admitted)
         definition.target = admitted
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -1327,6 +1347,7 @@ class RecurringWorkflowsService:
             current_binding.task_input_snapshot_ref,
             *persisted_plan.artifact_refs,
         ]
+        await self._retain_target_artifacts(target)
         definition.target = target
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -1784,6 +1805,7 @@ class RecurringWorkflowsService:
         )
         if admitted_target is not None:
             target_payload = admitted_target
+        await self._retain_target_artifacts(target_payload)
         definition = RecurringWorkflowDefinition(
             id=definition_id,
             name=name_text,
@@ -1976,6 +1998,7 @@ class RecurringWorkflowsService:
             normalized_target is not None and normalized_target != definition.target
         )
         if normalized_target is not None:
+            await self._retain_target_artifacts(normalized_target)
             definition.target = normalized_target
 
         policy_obj = None
