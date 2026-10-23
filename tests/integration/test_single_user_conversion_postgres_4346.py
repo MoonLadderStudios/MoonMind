@@ -548,6 +548,90 @@ async def test_postgres_default_converts_retained_personal_and_context_settings(
 
 
 @pytest.mark.asyncio
+async def test_postgres_refused_window_route_write_is_not_replaced(
+    pg_maker, monkeypatch,
+) -> None:
+    """An operator write while conversion is refused outranks no retained row."""
+    import httpx
+    from api_service.db import base
+    from api_service.services import single_user_conversion as suc
+    from moonmind.config.settings import settings
+    from moonmind.security import auth_modes_4120
+    import api_service.main as main
+
+    token, canary = "integrations.github.token_ref", "skills.canary_percent"
+    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(settings.workflow, "test_mode", False)
+
+    async def database():
+        async with pg_maker() as db:
+            yield db
+
+    previous = dict(main.app.dependency_overrides)
+    main.app.dependency_overrides[base.get_async_session] = database
+    monkeypatch.setattr(base, "async_session_maker", pg_maker)
+    try:
+        async with pg_maker() as db:
+            # The predecessor (397) cutover already admitted the operator.
+            assert (await suc.run_guarded_upgrade(db, operator_authorized=True)).published
+            ledger = (await db.execute(select(SingleUserConversionRun))).scalar_one()
+            stored = dict(ledger.result_json)
+            stored["schema_revision"] = "397_instance_preset_catalog"
+            stored["transforms"] = {
+                k: v for k, v in stored["transforms"].items() if k != "settings"}
+            ledger.result_json = stored
+            owner = await _mk_user(db)
+            db.add_all([
+                ManagedSecret(slug="operator-new", ciphertext="synthetic-credential",
+                              status=SecretStatus.ACTIVE),
+                SettingsOverride(scope="user", user_id=owner.id, key=token,
+                                 value_json="db://stale-personal"),
+                SettingsOverride(scope="workspace", workspace_id=uuid.uuid4(),
+                                 key=canary, value_json=25),
+                SettingsOverride(scope="workspace", workspace_id=uuid.uuid4(),
+                                 key=canary, value_json=40),
+            ])
+            await db.commit()
+            refused = await suc.run_guarded_upgrade(db, operator_authorized=True)
+            assert refused.decision.reason_code == "settings_collision"
+        transport = httpx.ASGITransport(app=main.app, client=("127.0.0.1", 32000))
+        async with httpx.AsyncClient(transport=transport,
+                                     base_url="http://localhost:7000") as client:
+            changed = await client.patch("/api/v1/settings", json={
+                "changes": {token: "db://operator-new"}})
+            assert changed.status_code == 200, changed.text
+        async with pg_maker() as db:
+            still = await suc.run_guarded_upgrade(
+                db, operator_authorized=True, collision_resolutions={canary: 40})
+            assert not still.published
+            assert still.decision.reason_code == "settings_collision"
+            assert token in still.decision.detail
+            assert "db://" not in str(still.to_sanitized_dict())
+            resolved = await suc.run_guarded_upgrade(
+                db, operator_authorized=True,
+                collision_resolutions={canary: 40, token: "db://operator-new"})
+            assert resolved.published, resolved.to_sanitized_dict()
+        async with pg_maker() as db:
+            rows = (await db.execute(select(SettingsOverride))).scalars().all()
+            assert {(r.key, r.scope, r.value_json) for r in rows} == {
+                (token, None, "db://operator-new"), (canary, None, 40)}
+            [event] = (await db.execute(select(SettingsAuditEvent).where(
+                SettingsAuditEvent.key == token,
+                SettingsAuditEvent.event_type == "settings.override.converted",
+            ))).scalars().all()
+            assert event.old_value_json == ["db://stale-personal"]
+        async with httpx.AsyncClient(transport=transport,
+                                     base_url="http://localhost:7000") as client:
+            value = await client.get(f"/api/v1/settings/effective/{token}")
+            assert value.status_code == 200, value.text
+            assert value.json()["value"] == "db://operator-new", value.text
+    finally:
+        main.app.dependency_overrides.clear()
+        main.app.dependency_overrides.update(previous)
+
+
+@pytest.mark.asyncio
 async def test_postgres_migration_386_ledger_ddl(pg_maker) -> None:
     """Migration 386 revision chain is ledger-only and enforceable."""
     import importlib
