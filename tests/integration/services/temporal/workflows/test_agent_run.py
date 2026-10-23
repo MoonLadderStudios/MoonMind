@@ -27,10 +27,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     _SLOT_WAIT_TIMEOUT_SECONDS,
 )
 
-# NOTE: This test file is NOT marked integration_ci because the Temporal
-# time-skipping workflow tests consistently exceed CI timeout thresholds.
-# These tests remain available for local development verification only.
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +152,7 @@ async def mock_provider_profile_list(request: dict) -> dict:
         {
             "profile_id": "alternate-managed",
             "runtime_id": runtime_id,
-            "provider_id": "anthropic",
+            "provider_id": provider_id,
             "auth_mode": "volume",
             "volume_ref": "test-volume",
             "volume_mount_path": "/tmp/auth",
@@ -210,9 +207,21 @@ async def mock_provider_profile_list(request: dict) -> dict:
                 "enabled": True,
             }
         )
-    return {
-        "profiles": profiles
-    }
+    for profile in profiles:
+        profile.setdefault("credential_source", "oauth_volume")
+        profile.setdefault("runtime_materialization_mode", "oauth_home")
+        profile.setdefault("auth_state", "connected")
+        profile.setdefault("last_auth_method", "oauth")
+        policy = derive_isolation_policy(
+            runtime_id=runtime_id,
+            provider_id=profile["provider_id"],
+            authentication_method="oauth",
+            credential_source="oauth_volume",
+            runtime_materialization_mode="oauth_home",
+        )
+        if policy is not None:
+            profile["clear_env_keys"] = list(policy.keys)
+    return {"profiles": profiles}
 
 @_activity.defn(name="provider_profile.ensure_manager")
 async def mock_provider_profile_ensure_manager(request: dict) -> dict:
@@ -773,6 +782,13 @@ async def test_agent_run_workflow():
                 ).task_queue,
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
             ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
+            ),
         ):
             request = AgentExecutionRequest(
                 agent_kind="managed",
@@ -839,6 +855,13 @@ async def test_agent_run_workflow_cancellation():
                     "agent_runtime.launch"
                 ).task_queue,
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
             ),
         ):
             request = AgentExecutionRequest(
@@ -998,73 +1021,103 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
         mock_provider_profile_list,
         mock_provider_profile_ensure_manager,
         mock_provider_profile_reset_manager,
+        mock_provider_profile_manager_state,
         mock_agent_runtime_launch,
         mock_agent_runtime_build_launch_context,
         mock_agent_runtime_status_rate_limited,
         mock_agent_runtime_fetch_result_rate_limited,
     ]
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue="agent-run-task-queue",
-            workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
-            activities=rate_limited_activities,
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue",
+                workflows=[
+                    MoonMindAgentRun,
+                    MockProviderProfileManager,
+                    TestAgentRunParent,
+                ],
+                activities=rate_limited_activities,
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "provider_profile.list"
+                ).task_queue,
+                activities=rate_limited_activities,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.launch"
+                ).task_queue,
+                activities=rate_limited_activities,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
+            ),
         ):
-                request = AgentExecutionRequest(
-                    agent_kind="managed",
-                    agent_id="claude_code",
-                    execution_profile_ref="default-managed",
-                    correlation_id="corr-429",
-                    idempotency_key="idem-429",
-                )
+            request = AgentExecutionRequest(
+                agent_kind="managed",
+                agent_id="claude_code",
+                execution_profile_ref="default-managed",
+                correlation_id="corr-429",
+                idempotency_key="idem-429",
+            )
 
-                manager_id = "provider-profile-manager:claude_code"
-                await env.client.start_workflow(
-                    MockProviderProfileManager.run,
-                    {"runtime_id": "claude_code"},
-                    id=manager_id,
-                    task_queue="agent-run-task-queue",
-                )
+            manager_id = "provider-profile-manager:claude_code"
+            await env.client.start_workflow(
+                MockProviderProfileManager.run,
+                {"runtime_id": "claude_code"},
+                id=manager_id,
+                task_queue="agent-run-task-queue",
+            )
 
-                parent_handle = await env.client.start_workflow(
-                    TestAgentRunParent.run,
-                    request,
-                    id="test-parent-managed-429",
-                    task_queue="agent-run-task-queue",
-                )
-                child_handle = env.client.get_workflow_handle(
-                    "test-parent-managed-429:child"
-                )
-                manager_handle = env.client.get_workflow_handle(manager_id)
+            parent_handle = await env.client.start_workflow(
+                TestAgentRunParent.run,
+                request,
+                id="test-parent-managed-429",
+                task_queue="agent-run-task-queue",
+            )
+            child_handle = env.client.get_workflow_handle(
+                "test-parent-managed-429:child"
+            )
+            manager_handle = env.client.get_workflow_handle(manager_id)
 
-                # NOTE: AgentRun no longer sends profile_assigned to its parent
-                # (MoonLadderStudios/MoonMind#1089 R8); slot assignment is
-                # observed through the manager, and retry readiness through the
-                # cooldown/report loop below.
-                parent_state = {}
-                manager_state = {}
-                for _ in range(60):
-                    parent_state = await parent_handle.query(TestAgentRunParent.get_state)
-                    manager_state = await manager_handle.query(MockProviderProfileManager.get_state)
-                    if manager_state.get("cooldown_reports") and any(
-                        "retry scheduled" in change["reason"].lower()
-                        for change in parent_state.get("state_changes", [])
-                    ):
-                        break
-                    await asyncio.sleep(0.1)
-
-                assert manager_state["cooldown_reports"]
-                assert manager_state["cooldown_reports"][-1]["cooldown_seconds"] == 900
-                assert any(
+            # NOTE: AgentRun no longer sends profile_assigned to its parent
+            # (MoonLadderStudios/MoonMind#1089 R8); slot assignment is
+            # observed through the manager, and retry readiness through the
+            # cooldown/report loop below.
+            parent_state = {}
+            manager_state = {}
+            for _ in range(60):
+                parent_state = await parent_handle.query(TestAgentRunParent.get_state)
+                manager_state = await manager_handle.query(
+                    MockProviderProfileManager.get_state
+                )
+                if manager_state.get("cooldown_reports") and any(
                     "retry scheduled" in change["reason"].lower()
-                    and "900s cooldown" in change["reason"].lower()
-                    for change in parent_state["state_changes"]
-                )
+                    for change in parent_state.get("state_changes", [])
+                ):
+                    break
+                await env.sleep(10)
 
-                await parent_handle.cancel()
-                with pytest.raises(WorkflowFailureError):
-                    await parent_handle.result()
+            assert manager_state["cooldown_reports"], json.dumps(parent_state)
+            assert manager_state["cooldown_reports"][-1]["cooldown_seconds"] == 900
+            assert any(
+                "retry scheduled" in change["reason"].lower()
+                and "900s cooldown" in change["reason"].lower()
+                for change in parent_state["state_changes"]
+            )
+
+            await parent_handle.cancel()
+            with pytest.raises(WorkflowFailureError):
+                await asyncio.wait_for(parent_handle.result(), timeout=10)
 
 @pytest.mark.asyncio
 async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request():
@@ -1088,6 +1141,13 @@ async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request
                 env.client,
                 task_queue="mm.activity.agent_runtime",
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
             ),
         ):
             manager_id = "provider-profile-manager:claude_code"
@@ -1154,6 +1214,7 @@ async def test_managed_agent_runtime_selection_update_replaces_slot_wait_request
 async def test_managed_agent_runtime_selection_update_switches_runtime_manager():
     """Runtime edits while awaiting a slot must move the request to the new manager."""
     _managed_launch_requests.clear()
+    _managed_launch_requests.clear()
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with (
@@ -1173,6 +1234,13 @@ async def test_managed_agent_runtime_selection_update_switches_runtime_manager()
                 task_queue="mm.activity.agent_runtime",
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
             ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
+            ),
         ):
             claude_manager_id = "provider-profile-manager:claude_code"
             codex_manager_id = "provider-profile-manager:codex_cli"
@@ -1189,7 +1257,7 @@ async def test_managed_agent_runtime_selection_update_switches_runtime_manager()
                 RuntimeUpdateProviderProfileManager.run,
                 {
                     "runtime_id": "codex_cli",
-                    "assignable_profile_id": "codex-managed",
+                    "assignable_profile_id": "codex-not-yet-available",
                 },
                 id=codex_manager_id,
                 task_queue="agent-run-task-queue-runtime-manager-switch",
@@ -1259,6 +1327,8 @@ async def test_managed_agent_runtime_selection_update_switches_runtime_manager()
                 for payload in claude_state["release_payloads"]
             )
             assert codex_state["request_payloads"]
+            assert codex_state["pending_requests"]
+            assert not _managed_launch_requests
             codex_request = codex_state["request_payloads"][-1]
             assert codex_request["requester_workflow_id"] == child_id
             assert codex_request["runtime_id"] == "codex_cli"
@@ -1291,6 +1361,13 @@ async def test_managed_agent_runtime_switch_detaches_incompatible_session_before
                 env.client,
                 task_queue="mm.activity.agent_runtime",
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
             ),
         ):
             codex_manager_id = "provider-profile-manager:codex_cli"
@@ -1452,6 +1529,13 @@ async def test_managed_agent_profile_switch_detaches_existing_session_before_lau
                 task_queue="mm.activity.agent_runtime",
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
             ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
+            ),
         ):
             manager_id = "provider-profile-manager:codex_cli"
             await env.client.start_workflow(
@@ -1594,6 +1678,13 @@ async def test_managed_agent_model_update_keeps_simultaneously_assigned_slot():
                 task_queue="mm.activity.agent_runtime",
                 activities=_COMMON_AGENT_RUN_ACTIVITIES,
             ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
+            ),
         ):
             manager_id = "provider-profile-manager:claude_code"
             await env.client.start_workflow(
@@ -1650,29 +1741,52 @@ async def test_agent_run_binds_managed_launch_to_parent_workflow_for_new_histori
     _managed_launch_requests.clear()
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with Worker(
-            env.client,
-            task_queue="agent-run-task-queue",
-            workflows=[
-                MoonMindAgentRun,
-                MockProviderProfileManager,
-                TestAgentRunParent,
-            ],
-            activities=_COMMON_AGENT_RUN_ACTIVITIES,
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with (
+            Worker(
+                env.client,
+                task_queue="agent-run-task-queue",
+                workflows=[
+                    MoonMindAgentRun,
+                    MockProviderProfileManager,
+                    TestAgentRunParent,
+                ],
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "provider_profile.list"
+                ).task_queue,
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.launch"
+                ).task_queue,
+                activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            ),
+            Worker(
+                env.client,
+                task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.cancel"
+                ).task_queue,
+                activities=[mock_cancel],
+            ),
         ):
             request = AgentExecutionRequest(
                 agent_kind="managed",
-                agent_id="test_agent",
+                agent_id="claude_code",
                 execution_profile_ref="default-managed",
                 correlation_id="corr-parent-bind",
                 idempotency_key="idem-parent-bind",
             )
 
-            manager_id = "provider-profile-manager:test_agent"
+            manager_id = "provider-profile-manager:claude_code"
             await env.client.start_workflow(
                 MockProviderProfileManager.run,
-                {"runtime_id": "test_agent"},
+                {"runtime_id": "claude_code"},
                 id=manager_id,
                 task_queue="agent-run-task-queue",
             )
@@ -1719,7 +1833,7 @@ async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
     _managed_status_poll_count = 0
     _managed_fetch_result_count = 0
 
-    def test_policy(request: AgentExecutionRequest) -> dict[str, Any]:
+    def test_policy(request: AgentExecutionRequest, **_options) -> dict[str, Any]:
         return {
             "runtime": request.agent_id,
             "noProgressTimeoutSeconds": 1,
@@ -1754,6 +1868,7 @@ async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
                         mock_provider_profile_list,
                         mock_provider_profile_ensure_manager,
                         mock_provider_profile_reset_manager,
+                        mock_provider_profile_manager_state,
                     ],
                 ),
                 Worker(
@@ -1767,6 +1882,13 @@ async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
                         mock_publish_artifacts,
                         mock_cancel,
                     ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.cancel"
+                    ).task_queue,
+                    activities=[mock_cancel],
                 ),
             ):
                 manager_id = "provider-profile-manager:claude_code"
@@ -1849,6 +1971,13 @@ async def test_agent_run_relaunches_lost_managed_process_in_same_workspace():
                         mock_cancel,
                     ],
                 ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.cancel"
+                    ).task_queue,
+                    activities=[mock_cancel],
+                ),
             ):
                 manager_id = "provider-profile-manager:claude_code"
                 await env.client.start_workflow(
@@ -1909,7 +2038,7 @@ async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
     _managed_fetch_result_count = 0
     _managed_cancel_count = 0
 
-    def test_policy(request: AgentExecutionRequest) -> dict[str, Any]:
+    def test_policy(request: AgentExecutionRequest, **_options) -> dict[str, Any]:
         return {
             "runtime": request.agent_id,
             "noProgressTimeoutSeconds": 1,
@@ -1944,6 +2073,7 @@ async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
                         mock_provider_profile_list,
                         mock_provider_profile_ensure_manager,
                         mock_provider_profile_reset_manager,
+                        mock_provider_profile_manager_state,
                     ],
                 ),
                 Worker(
@@ -1957,6 +2087,13 @@ async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
                         mock_publish_artifacts,
                         mock_cancel,
                     ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.cancel"
+                    ).task_queue,
+                    activities=[mock_cancel],
                 ),
             ):
                 manager_id = "provider-profile-manager:claude_code"
@@ -2134,10 +2271,44 @@ async def test_cancellation_releases_provider_profile_slot():
 
 # ── OpenRouter-specific integration tests (Phase 2) ──
 
+
+def _complete_openrouter_profile_fixture(payload: dict) -> dict:
+    """Supply the registered composite credential contract used by real profiles."""
+    for profile in payload["profiles"]:
+        if profile["provider_id"] != "openrouter":
+            continue
+        profile.update(
+            {
+                "auth_state": "connected",
+                "last_auth_method": "api_key",
+                "env_template": {
+                    "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+                },
+                "file_templates": [
+                    {
+                        "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                        "format": "toml",
+                        "merge_strategy": "replace",
+                        "content_template": {"model_provider": "openrouter"},
+                    }
+                ],
+                "home_path_overrides": {
+                    "CODEX_HOME": "{{runtime_support_dir}}/codex-home"
+                },
+                "clear_env_keys": [
+                    "OPENAI_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENROUTER_API_KEY",
+                ],
+            }
+        )
+    return payload
+
+
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list_openrouter(request: dict) -> dict:
     """Return managed profiles including openrouter-shaped profiles for Phase 2 tests."""
-    return {
+    payload = {
         "profiles": [
             {
                 "profile_id": "test-openrouter-high-priority",
@@ -2148,7 +2319,11 @@ async def mock_provider_profile_list_openrouter(request: dict) -> dict:
                 "runtime_materialization_mode": "composite",
                 "default_model": "qwen/qwen3.6-plus",
                 "secret_refs": {"provider_api_key": "env://OPENROUTER_API_KEY"},
-                "clear_env_keys": ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENROUTER_API_KEY"],
+                "clear_env_keys": [
+                    "OPENAI_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENROUTER_API_KEY",
+                ],
                 "command_behavior": {"suppress_default_model_flag": True},
                 "max_parallel_runs": 2,
                 "cooldown_after_429_seconds": 300,
@@ -2190,11 +2365,12 @@ async def mock_provider_profile_list_openrouter(request: dict) -> dict:
             },
         ]
     }
+    return _complete_openrouter_profile_fixture(payload)
 
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list_openrouter_disabled_high(request: dict) -> dict:
     """Return openrouter profiles with high-priority disabled to test fallback."""
-    return {
+    payload = {
         "profiles": [
             {
                 "profile_id": "test-openrouter-high-priority",
@@ -2228,6 +2404,7 @@ async def mock_provider_profile_list_openrouter_disabled_high(request: dict) -> 
             },
         ]
     }
+    return _complete_openrouter_profile_fixture(payload)
 
 @pytest.mark.integration
 async def test_openrouter_profile_cooldown_attaches_to_profile():
@@ -2335,18 +2512,42 @@ async def test_openrouter_profile_slot_leasing():
                 mock_provider_profile_list_openrouter,
                 mock_provider_profile_ensure_manager,
                 mock_provider_profile_reset_manager,
+                mock_provider_profile_manager_state,
                 mock_agent_runtime_launch,
                 mock_agent_runtime_build_launch_context,
                 mock_agent_runtime_status,
                 mock_agent_runtime_fetch_result,
             ]
 
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=openrouter_activities,
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                    activities=openrouter_activities,
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "provider_profile.list"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.launch"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.cancel"
+                    ).task_queue,
+                    activities=[mock_cancel],
+                ),
             ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
@@ -2421,18 +2622,42 @@ async def test_openrouter_profile_cancellation_releases_slot():
                 mock_provider_profile_list_openrouter,
                 mock_provider_profile_ensure_manager,
                 mock_provider_profile_reset_manager,
+                mock_provider_profile_manager_state,
                 mock_agent_runtime_launch,
                 mock_agent_runtime_build_launch_context,
                 mock_agent_runtime_status,
                 mock_agent_runtime_fetch_result,
             ]
 
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=openrouter_activities,
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                    activities=openrouter_activities,
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "provider_profile.list"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.launch"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.cancel"
+                    ).task_queue,
+                    activities=[mock_cancel],
+                ),
             ):
                 request = AgentExecutionRequest(
                     agent_kind="managed",
@@ -2464,23 +2689,38 @@ async def test_openrouter_profile_cancellation_releases_slot():
                     task_queue="agent-run-task-queue",
                 )
 
-                await asyncio.sleep(0.5)
-
-                # Verify slot is leased before cancellation
-                manager_state_before = await manager_handle.query(MockProviderProfileManager.get_state)
+                # Wait for the actual lease instead of assuming one polling
+                # interval was sufficient on a loaded CI runner.
+                for _ in range(60):
+                    manager_state_before = await manager_handle.query(
+                        MockProviderProfileManager.get_state
+                    )
+                    if "test-openrouter-high-priority" in manager_state_before.get(
+                        "leases", {}
+                    ):
+                        break
+                    await asyncio.sleep(0.1)
                 assert "test-openrouter-high-priority" in manager_state_before.get("leases", {}), (
                     f"Expected slot leased before cancellation, leases={manager_state_before['leases']}"
                 )
 
                 # Cancel the workflow
                 await agent_handle.cancel()
-                await asyncio.sleep(0.5)
+                with pytest.raises(WorkflowFailureError):
+                    await asyncio.wait_for(agent_handle.result(), timeout=15)
 
-                # Verify slot is released after cancellation
-                try:
+                # A failed manager query is unavailable evidence, never proof
+                # of release. Observe its real state through bounded polling.
+                for _ in range(60):
                     manager_state_after = await manager_handle.query(MockProviderProfileManager.get_state)
-                except Exception:
-                    manager_state_after = {"leases": {}}
+                    if (
+                        manager_state_after.get("leases", {}).get(
+                            "test-openrouter-high-priority"
+                        )
+                        != "test-workflow-openrouter-cancel"
+                    ):
+                        break
+                    await asyncio.sleep(0.1)
 
                 assert "test-openrouter-high-priority" not in manager_state_after.get("leases", {}) or \
                        manager_state_after.get("leases", {}).get("test-openrouter-high-priority") != "test-workflow-openrouter-cancel", (
@@ -2515,12 +2755,35 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
                 mock_agent_runtime_fetch_result,
             ]
 
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=openrouter_activities,
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                    activities=openrouter_activities,
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "provider_profile.list"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.launch"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.cancel"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
             ):
                 # Test: profile_selector-based routing to openrouter (no explicit profile ref)
                 request = AgentExecutionRequest(
@@ -2592,12 +2855,35 @@ async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled(
                 mock_agent_runtime_fetch_result,
             ]
 
-            async with Worker(
-                env.client,
-                task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManager],
-                activities=openrouter_activities,
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                    activities=openrouter_activities,
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "provider_profile.list"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.launch"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
+                Worker(
+                    env.client,
+                    task_queue=DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "agent_runtime.cancel"
+                    ).task_queue,
+                    activities=openrouter_activities,
+                ),
             ):
                 # Test: profile_selector-based routing — when high-priority openrouter is disabled,
                 # the adapter should fall back to the lower-priority enabled openrouter profile.

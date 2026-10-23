@@ -20,6 +20,7 @@ pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,
     pytest.mark.temporal_boundary,
+    pytest.mark.integration_ci,
 ]
 
 

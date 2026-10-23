@@ -6,8 +6,7 @@ from datetime import datetime, timezone
 from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleSpec
 from temporalio.testing import WorkflowEnvironment
 
-# NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 @pytest.mark.asyncio
 @pytest.mark.integration
