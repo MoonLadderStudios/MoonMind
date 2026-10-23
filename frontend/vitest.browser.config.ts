@@ -36,6 +36,7 @@ export default defineConfig({
       commands: {
         replaceInputByKeyboard: async ({ iframe }, label: string, text: string) => {
           const input = iframe.getByLabel(label, { exact: true });
+          await input.click();
           await input.press('ControlOrMeta+A');
           await input.press('Backspace');
           await input.pressSequentially(text);
