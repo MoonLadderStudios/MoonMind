@@ -174,11 +174,8 @@ def test_policy_instance_visibility_preserves_versions_and_permissions():
     assert policy_router._can_read_policy(private_policy, None) is True
 
 
-def test_artifact_operator_visibility_and_machine_isolation(monkeypatch):
+def test_artifact_operator_visibility_and_machine_isolation():
     """R1/R5: operator sees instance artifacts; another execution is denied."""
-    from moonmind.workflows.temporal import artifacts as artifact_module
-
-    monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     service = TemporalArtifactService.__new__(TemporalArtifactService)
     assert service._is_instance_operator_principal("operator") is True
     # The bare system owner value is machine scope, never the HTTP operator.
@@ -198,11 +195,8 @@ def test_artifact_operator_visibility_and_machine_isolation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_artifact_operator_read_bypasses_legacy_owner(monkeypatch):
+async def test_artifact_operator_read_bypasses_legacy_owner():
     """R2: legacy human-owner strings do not hide artifacts from the operator."""
-    from moonmind.workflows.temporal import artifacts as artifact_module
-
-    monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     service = TemporalArtifactService.__new__(TemporalArtifactService)
     artifact = SimpleNamespace(
         artifact_id="a2", created_by_principal=str(uuid4())
@@ -487,12 +481,10 @@ async def test_recurring_cutover_preserves_cadence_and_frozen_inputs(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_machine_binding_success_and_cross_execution_deny(monkeypatch):
+async def test_machine_binding_success_and_cross_execution_deny():
     """R5: owning execution succeeds; another execution is denied; raw stays gated."""
-    from moonmind.workflows.temporal import artifacts as artifact_module
     from moonmind.workflows.temporal import artifacts as artifact_models
 
-    monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     service = TemporalArtifactService.__new__(TemporalArtifactService)
 
     owned = SimpleNamespace(
@@ -563,33 +555,28 @@ def test_github_claim_continuation_without_shared_user_service():
     assert "MoonMind.UserWorkflow" in recurring_module._SUPPORTED_RECURRING_WORKFLOW_TYPES
 
 
-def test_r1_preserved_restrictions_boundary_assignment():
-    """R1: sibling-owned gates stay enforced; this issue does not broaden them.
-
-    Credential-volume import stays superuser-only (machine-child credential
-    transport), settings keep their permission gates, and private agent
-    profiles keep owner checks. The shared admission boundary
-    (get_instance_access) still owns operator access.
-    """
+def test_r1_instance_operator_manages_resources_without_legacy_roles():
+    """R1: admitted operators manage retained resources; legacy roles grant no admission."""
     from fastapi import HTTPException
 
     from api_service.api.routers import provider_profiles as provider_router
     from api_service.api.routers import omnigent_agent_profiles as agent_router
     from api_service.services import settings_catalog
+    from moonmind.security.operator_admission import OperatorAdmission
 
-    # Credential transport: non-superuser import stays 403.
-    with pytest.raises(HTTPException):
-        provider_router._require_privileged_credential_volume_import(
-            SimpleNamespace(is_superuser=False)
-        )
-    provider_router._require_privileged_credential_volume_import(
-        SimpleNamespace(is_superuser=True)
-    )
+    operator = OperatorAdmission(via="loopback")
+    for is_superuser in (False, True):
+        with pytest.raises(HTTPException) as denied:
+            provider_router._require_privileged_credential_volume_import(
+                SimpleNamespace(is_superuser=is_superuser)
+            )
+        assert denied.value.status_code == 403
+    provider_router._require_privileged_credential_volume_import(operator)
 
-    # Settings: superuser keeps every permission; a plain operator keeps
-    # only explicitly granted ones (operational restrictions preserved).
+    # Admission grants instance settings access; legacy permission payloads
+    # remain bounded to their explicit grants.
     all_permissions = settings_catalog.settings_permissions_for_user(
-        SimpleNamespace(is_superuser=True, settings_permissions=set())
+        operator
     )
     assert set(settings_catalog.SETTINGS_PERMISSION_NAMES) <= set(all_permissions)
     limited = settings_catalog.settings_permissions_for_user(
@@ -597,10 +584,10 @@ def test_r1_preserved_restrictions_boundary_assignment():
     )
     assert limited == {"settings.catalog.read"}
 
-    # Agent policy permissions: a private profile owned by someone else
-    # stays forbidden for a non-superuser; ownerless workspace profiles
-    # remain operator-managed without broadening private visibility.
+    # Retained private profiles belong to the instance operator; a caller
+    # without admission or matching provenance still cannot manage them.
     private = SimpleNamespace(owner_id="owner-a", visibility="private")
+    agent_router._assert_owner(private, operator)
     with pytest.raises(HTTPException):
         agent_router._assert_owner(
             private, SimpleNamespace(id="owner-b", is_superuser=False)
@@ -759,11 +746,8 @@ async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_r5_artifact_control_and_raw_boundary(monkeypatch):
+async def test_r5_artifact_control_and_raw_boundary():
     """R5: owning-execution control succeeds; cross-execution control denied."""
-    from moonmind.workflows.temporal import artifacts as artifact_module
-
-    monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     service = TemporalArtifactService.__new__(TemporalArtifactService)
     service._repository = SimpleNamespace(
         principal_owns_linked_execution=AsyncMock(return_value=False)
