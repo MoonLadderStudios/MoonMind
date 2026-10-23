@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { page, userEvent } from 'vitest/browser';
+import { commands, page, userEvent } from 'vitest/browser';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import '../styles/dashboard.css';
+
+declare module 'vitest/browser' {
+  interface BrowserCommands {
+    replaceInputByKeyboard: (label: string, text: string) => Promise<void>;
+  }
+}
 
 // Real-browser Create journey for workspace source and publication intent
 // (MoonLadderStudios/MoonMind#2619). It mounts the production dashboard router
@@ -156,8 +162,8 @@ afterEach(async () => {
 });
 
 async function replaceWithKeyboard(input: HTMLInputElement, text: string) {
-  // Keep focus, selection and native typing in the same browser-provider action.
-  await userEvent.type(input, `{selectall}{Backspace}${text}`);
+  // Playwright owns the focused frame and sequential native key dispatch.
+  await commands.replaceInputByKeyboard(input.getAttribute('aria-label')!, text);
   await waitFor(() => {
     const active = document.activeElement;
     const state = JSON.stringify({
