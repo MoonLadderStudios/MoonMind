@@ -977,7 +977,7 @@ def test_every_stock_native_http_mutation_has_a_complete_durable_receipt(
         "moonmind.omnigent.mutation-receipt.v1"
     )
     assert receipt["controlType"] == operation
-    assert receipt["actor"] == str(_USER_ID)
+    assert receipt["actor"] == "operator"
     assert receipt["workflowId"] == "mm:w1"
     assert receipt["runId"] == "run-1"
     assert receipt["stepExecutionId"] == "step-1"
@@ -1316,7 +1316,7 @@ def test_resolve_elicitation_persists_scan_evidence_in_mutation_audit(
     assert metadata.get("scannerPolicyRef")
     assert metadata.get("highSecurityMode") is True
     assert metadata["receiptSchemaVersion"] == "moonmind.omnigent.mutation-receipt.v1"
-    assert metadata["actor"] == str(_USER_ID)
+    assert metadata["actor"] == "operator"
     assert metadata["workflowId"] == "mm:w1"
     assert metadata["runId"] == "run-1"
     assert metadata["stepExecutionId"] == "step-1"
@@ -2554,8 +2554,8 @@ def test_embedded_message_forwarded_with_actor() -> None:
 
     assert response.status_code == 200
     assert len(embedded.posted) == 1
-    # The embedded branch propagates the caller as actor (proxy mode does not).
-    assert embedded.posted[0]["actor"] == str(_USER_ID)
+    # The embedded branch records operator provenance (proxy mode omits it).
+    assert embedded.posted[0]["actor"] == "operator"
     assert embedded.posted[0]["session_id"] == _PROVIDER_SESSION_ID
 
 
@@ -2586,7 +2586,7 @@ def test_embedded_resolve_elicitation_propagates_actor() -> None:
             "session_id": _PROVIDER_SESSION_ID,
             "elicitation_id": "el-9",
             "payload": {"decision": "approve"},
-            "actor": str(_USER_ID),
+            "actor": "operator",
         }
     ]
 

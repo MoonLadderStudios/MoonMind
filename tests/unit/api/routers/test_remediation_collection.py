@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -22,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.executions import _get_service, router
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
@@ -31,13 +31,8 @@ from api_service.db.models import (
     TemporalExecutionRemediationLink,
     TemporalWorkflowType,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.service import TemporalExecutionService
-
-_USER_DEPENDENCY_NAMES = {
-    "_current_user_fallback",
-    "_strict_current_user",
-    "_optional_current_user",
-}
 
 
 class _OverlapDetectingService(TemporalExecutionService):
@@ -144,17 +139,9 @@ async def _get_collection(service: _OverlapDetectingService, db_session: AsyncSe
         yield db_session
 
     app.dependency_overrides[get_async_session] = _session_override
-    route = next(
-        route
-        for route in router.routes
-        if getattr(route, "path", None) == "/api/executions/remediations"
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
     )
-    operator = SimpleNamespace(
-        id=uuid4(), email="operator@example.com", is_active=True, is_superuser=True
-    )
-    for dependency in route.dependant.dependencies:
-        if getattr(dependency.call, "__name__", "") in _USER_DEPENDENCY_NAMES:
-            app.dependency_overrides[dependency.call] = lambda: operator
     async with AsyncClient(
         transport=ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://testserver",
