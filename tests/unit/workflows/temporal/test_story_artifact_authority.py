@@ -182,7 +182,26 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
         if scenario in {"missing_output", "unsafe_output"}:
             assert "storyBreakdownArtifactRef" not in published.metadata
             assert "storyBreakdownMarkdownArtifactRef" not in published.metadata
-            workflow_service.describe_workflow_execution.assert_not_awaited()
+            # Missing or unsafe story files do not suppress the generated
+            # result/summary handoff, which still needs verified parent scope.
+            workflow_service.describe_workflow_execution.assert_awaited_once()
+            for artifact_id in (
+                published.diagnostics_ref,
+                published.metadata["outputSummaryRef"],
+            ):
+                for workflow_id in (parent, child):
+                    assert (
+                        await service.read(
+                            artifact_id=artifact_id,
+                            principal=f"workflow:{workflow_id}",
+                        )
+                    )[1]
+                for workflow_id in ("sibling-parent", "forged-parent"):
+                    with pytest.raises(TemporalArtifactAuthorizationError):
+                        await service.read(
+                            artifact_id=artifact_id,
+                            principal=f"workflow:{workflow_id}",
+                        )
             return
         if scenario == "describe_unavailable":
             assert len(await service.list_for_execution(
