@@ -1269,6 +1269,33 @@ class DockerOmnigentHostAttestor:
             for attachment in handle.get("attachments", [])
             if _declared_access_is_writable(attachment.get("accessMode"))
         ]
+
+        async def verify_codex_login_session() -> None:
+            if not oauth_mounts or plan.payload.harnessId != "codex-native":
+                return
+            for handle, attachment in oauth_mounts:
+                code, verdict, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "/opt/venv/bin/python",
+                        "-c",
+                        CODEX_LOGIN_SESSION_PROBE,
+                        str(attachment["targetPath"]),
+                    ],
+                    timeout_seconds=10.0,
+                    check=False,
+                )
+                if code == 0 and verdict.strip() == "ended":
+                    profile_id = str(handle.get("providerProfileRef") or "")
+                    raise HarnessPlatformError(
+                        f"The ChatGPT login stored for Provider Profile {profile_id} "
+                        "has ended and cannot be refreshed. Reconnect OAuth in "
+                        "Settings, then retry the failed step.",
+                        code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
+                    )
+
         if oauth_mounts:
             harness_id = ""
             try:
@@ -1296,29 +1323,7 @@ class DockerOmnigentHostAttestor:
                         "OAuth credential login status failed on the exact host",
                         code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
                     )
-            if harness_id == "codex-native":
-                for handle, attachment in oauth_mounts:
-                    code, verdict, _err = await self._backend.run(
-                        [
-                            "docker",
-                            "exec",
-                            launch_result["containerName"],
-                            "/opt/venv/bin/python",
-                            "-c",
-                            CODEX_LOGIN_SESSION_PROBE,
-                            str(attachment["targetPath"]),
-                        ],
-                        timeout_seconds=10.0,
-                        check=False,
-                    )
-                    if code == 0 and verdict.strip() == "ended":
-                        profile_id = str(handle.get("providerProfileRef") or "")
-                        raise HarnessPlatformError(
-                            f"The ChatGPT login stored for Provider Profile {profile_id} "
-                            "has ended and cannot be refreshed. Reconnect OAuth in "
-                            "Settings, then retry the failed step.",
-                            code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
-                        )
+        await verify_codex_login_session()
         host_id = registration["omnigentHostId"]
         try:
 
@@ -1401,6 +1406,9 @@ class DockerOmnigentHostAttestor:
                 # Do not retain raw provider CLI diagnostics in evidence.
                 observation["errorCode"] = exc.code
             model_evidence["attempts"].append(observation)
+            # Refresh can first prove the session ended during this read,
+            # even when a bundled fallback includes the selected model.
+            await verify_codex_login_session()
             if observation["selectedModelPresent"]:
                 break
             if attempt < _MODEL_ATTESTATION_MAX_ATTEMPTS:
