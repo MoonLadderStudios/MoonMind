@@ -180,7 +180,7 @@ async def test_wildcard_operator_probe_preserves_real_compose_auth_startup(
     monkeypatch.setenv("AUTH_PROVIDER", str(None or ""))
     app = FastAPI()
     await api_main._initialize_operator_admission(app)
-    assert app.state.auth_production_mode == "disabled"
+    assert app.state.operator_admission_ready is True
 
 
 @pytest.mark.parametrize("public_url", ["", "https://ingress.example.invalid"])
