@@ -24,8 +24,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import container_jobs as http_router
 from api_service.api.routers import mcp_tools as mcp_tools_router
-from api_service.auth_providers import get_instance_access
-from moonmind.security.operator_admission import OperatorAdmission
+from api_service.auth_providers import get_instance_access, instance_operator_principal
 from api_service.db.models import Base, ContainerJobRecord
 from api_service.services.container_jobs import ContainerJobService
 from moonmind.schemas.container_job_models import (
@@ -34,6 +33,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobState,
     GpuObservation,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -94,8 +94,12 @@ def _install_real_service(monkeypatch, module, session_factory, temporal) -> Non
     monkeypatch.setattr(
         module,
         "ContainerJobService",
-        lambda session, artifacts=None, capability=None: ContainerJobService(
-            session, temporal=temporal, artifacts=None
+        lambda session, artifacts=None, capability=None, operator=None: ContainerJobService(
+            session,
+            temporal=temporal,
+            artifacts=None,
+            capability=capability,
+            operator=operator,
         ),
     )
     monkeypatch.setattr(
@@ -194,6 +198,7 @@ async def test_http_submit_persists_and_projects_the_gpu_resource(
         job_id = submitted.json()["jobId"]
 
         record = await _record(session_factory, job_id)
+        assert record.owner_id == instance_operator_principal()
         # The durable request is the caller's own semantic GPU request,
         # normalized to one canonical serialization.
         assert record.request_json["spec"]["resources"]["gpu"] == {
