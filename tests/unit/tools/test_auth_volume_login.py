@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.parametrize("runtime", ["codex", "claude"])
-def test_login_helper_uses_omnigent_host_service(tmp_path, runtime):
+@pytest.mark.parametrize("path_override", [None, "VOLUME_PATH", "HOME"])
+def test_login_helper_uses_omnigent_host_service(tmp_path, runtime, path_override):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -23,8 +24,13 @@ def test_login_helper_uses_omnigent_host_service(tmp_path, runtime):
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "DOCKER_CALL_LOG": str(log),
     }
-    for key in (f"{runtime.upper()}_AUTH_SERVICE", f"{runtime.upper()}_AUTH_PROFILE"):
-        env.pop(key, None)
+    prefix = runtime.upper()
+    for suffix in ("AUTH_SERVICE", "AUTH_PROFILE", "VOLUME_PATH", "HOME"):
+        env.pop(f"{prefix}_{suffix}", None)
+    auth_path = f"/custom/{runtime}" if path_override else f"/home/app/.{runtime}"
+    if path_override:
+        env[f"{prefix}_{path_override}"] = auth_path
+    env[f"{prefix}_VOLUME_NAME"] = f"selected-{runtime}-auth"
     env["CODEX_AUTH_COMMAND"] = "codex login --device-auth"
     master, slave = pty.openpty()
     try:
@@ -52,3 +58,10 @@ def test_login_helper_uses_omnigent_host_service(tmp_path, runtime):
     assert args[:4] == ["compose", "--profile", service, "run"]
     assert "temporal-worker-sandbox" not in args
     assert "1000:1000" in args
+    assert f"selected-{runtime}-auth:{auth_path}" in args
+    assert f"{prefix}_HOME={auth_path}" in args
+    if runtime == "codex":
+        assert f"CODEX_CONFIG_HOME={auth_path}" in args
+        assert f"CODEX_CONFIG_PATH={auth_path}/config.toml" in args
+    else:
+        assert f"CLAUDE_CONFIG_DIR={auth_path}" in args
