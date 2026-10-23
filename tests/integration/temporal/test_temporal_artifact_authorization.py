@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.auth_providers import instance_operator_principal
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
@@ -170,13 +171,16 @@ class TestArtifactAuthorizationBoundaries:
                 )
                 assert payload == b"owner-content"
 
-    async def test_auth_disabled_bypasses_all_checks(
+    @pytest.mark.parametrize("retired_auth_provider", ["disabled", "oidc"])
+    async def test_retired_auth_selector_preserves_artifact_scope(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        retired_auth_provider: str,
     ) -> None:
-        """When AUTH_PROVIDER=disabled, any principal can read/mutate."""
-        monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+        """Retired selectors grant no access; the admitted operator retains control."""
+        monkeypatch.setenv("AUTH_PROVIDER", retired_auth_provider)
+        operator = instance_operator_principal()
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -184,39 +188,53 @@ class TestArtifactAuthorizationBoundaries:
                     store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
                 )
                 artifact, _upload = await service.create(
-                    principal="owner",
+                    principal="workflow:owner",
                     content_type="text/plain",
                 )
                 await service.write_complete(
                     artifact_id=artifact.artifact_id,
-                    principal="owner",
+                    principal="workflow:owner",
                     payload=b"content",
                     content_type="text/plain",
                 )
 
-                # Any principal can read
+                with pytest.raises(
+                    TemporalArtifactAuthorizationError, match="cannot read"
+                ):
+                    await service.read(
+                        artifact_id=artifact.artifact_id,
+                        principal="anyone",
+                    )
+
                 _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
-                    principal="anyone",
+                    principal=operator,
                 )
                 assert payload == b"content"
 
-                # Any principal can mutate (write_complete on an already-COMPLETE artifact
-                # is a no-op in the service; to validate the auth-disabled mutation bypass,
-                # create a second artifact and have the non-owner write it before completion).
+                # Use an incomplete artifact so mutation authorization is exercised.
                 artifact2, _upload2 = await service.create(
-                    principal="anyone",
+                    principal="workflow:owner",
                     content_type="text/plain",
                 )
+                with pytest.raises(
+                    TemporalArtifactAuthorizationError, match="cannot mutate"
+                ):
+                    await service.write_complete(
+                        artifact_id=artifact2.artifact_id,
+                        principal="anyone",
+                        payload=b"tampered",
+                        content_type="text/plain",
+                    )
                 await service.write_complete(
                     artifact_id=artifact2.artifact_id,
-                    principal="anyone",
+                    principal=operator,
                     payload=b"updated",
                     content_type="text/plain",
                 )
                 _artifact2, payload2 = await service.read(
                     artifact_id=artifact2.artifact_id,
-                    principal="anyone",
+                    principal=operator,
                 )
                 assert payload2 == b"updated"
 
