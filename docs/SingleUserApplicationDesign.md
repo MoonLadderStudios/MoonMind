@@ -182,9 +182,10 @@ workflow and run receiving scheduled access. The original principal must retain
 read authority for frozen planning pointers. Retries reuse the links, and an
 authorized recovery execution can retain frozen inputs under its new identity.
 
-Child result publication links its generated summary and result envelopes to the
-parent verified against Temporal's recorded ancestry. Provider metadata or a
-returned artifact reference alone cannot grant another execution access.
+Child result publication links its generated summary, result envelopes, and
+declared assessment, issue-brief, and verifier outputs to the parent verified
+against Temporal's recorded ancestry. Provider metadata or a returned artifact
+reference alone cannot grant another execution access.
 An unreadable optional Story file is skipped with diagnostics while generated
 summary and result publication continues.
 
