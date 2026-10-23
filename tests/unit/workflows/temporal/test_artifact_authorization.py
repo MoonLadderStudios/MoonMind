@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, TemporalArtifactRedactionLevel
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
@@ -41,7 +40,7 @@ async def test_authenticated_mode_denies_cross_principal_read(
 ) -> None:
     """Authenticated mode should deny raw reads to non-owning principals."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -65,15 +64,17 @@ async def test_authenticated_mode_denies_cross_principal_read(
                 )
 
 @pytest.mark.parametrize("surface", ["read", "metadata", "list", "latest"])
-@pytest.mark.parametrize("principal", ["another-local-user", "service:legacy-reader", ""])
-async def test_legacy_disabled_mode_preserves_artifact_reads(
+@pytest.mark.parametrize(
+    "principal", ["another-local-user", "service:legacy-reader", ""]
+)
+async def test_retired_selector_cannot_bypass_artifact_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     surface: str,
     principal: str,
 ) -> None:
-    """Disabled mode retains the merged-main local artifact read behavior."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    """Old configuration grants neither browser nor machine artifact authority."""
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -94,24 +95,24 @@ async def test_legacy_disabled_mode_preserves_artifact_reads(
                 content_type="text/plain",
             )
 
-            if surface == "read":
-                _meta, payload = await service.read(
-                    artifact_id=artifact.artifact_id, principal=principal,
-                )
-                assert payload == b"local"
-            elif surface == "metadata":
-                row, _links, _pinned, policy = await service.get_metadata(
-                    artifact_id=artifact.artifact_id, principal=principal,
-                )
-                assert row.artifact_id == artifact.artifact_id
-                assert policy.raw_access_allowed
+            if surface in {"read", "metadata"}:
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    if surface == "read":
+                        await service.read(artifact_id=artifact.artifact_id, principal=principal)
+                    else:
+                        await service.get_metadata(artifact_id=artifact.artifact_id, principal=principal)
             else:
-                rows = await service.list_for_execution(
-                    namespace="default", workflow_id="local-run", run_id="local-run-1",
-                    link_type="input.test", principal=principal,
-                    latest_only=surface == "latest",
-                )
-                assert [row.artifact_id for row in rows] == [artifact.artifact_id]
+                async def listed():
+                    return await service.list_for_execution(
+                        namespace="default", workflow_id="local-run", run_id="local-run-1",
+                        link_type="input.test", principal=principal,
+                        latest_only=surface == "latest",
+                    )
+                if principal:
+                    assert await listed() == []
+                else:
+                    with pytest.raises(TemporalArtifactAuthorizationError):
+                        await listed()
 
 
 async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
@@ -120,7 +121,7 @@ async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
 ) -> None:
     """Authenticated mode should block restricted raw presign requests from non-owners."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -151,7 +152,7 @@ async def test_restricted_report_metadata_uses_preview_default_read_without_raw_
 ) -> None:
     """MM-463: Sensitive reports should expose preview/default-read without raw access."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -199,9 +200,12 @@ async def test_restricted_report_metadata_uses_preview_default_read_without_raw_
 @pytest.mark.parametrize("auth_mode", ["accounts", "oidc", "header"])
 @pytest.mark.parametrize("latest_only", [False, True])
 async def test_execution_list_requires_owner_or_admitted_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str, latest_only: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_mode: str,
+    latest_only: bool,
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     async with temporal_db(tmp_path) as sessions:
         async with sessions() as session:
             service = TemporalArtifactService(

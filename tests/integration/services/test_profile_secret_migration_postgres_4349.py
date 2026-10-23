@@ -32,6 +32,8 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedSecret,
     SecretStatus,
+)
+from tests.helpers.account_source import (
     User,
     UserProfile,
 )

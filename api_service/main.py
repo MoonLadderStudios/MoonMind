@@ -32,10 +32,12 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
-from api_service.api.routers.provider_profiles import router as provider_profiles_router
-from api_service.api.routers.omnigent_agent_profiles import (
-    router as omnigent_agent_profiles_router,
+from api_service.api.routers.agent_runs import router as agent_runs_router
+from api_service.api.routers.agent_runs import (
+    sessions_router as session_resources_router,
 )
+from api_service.api.routers.automation import router as automation_router
+from api_service.api.routers.container_jobs import router as container_jobs_router
 from api_service.api.routers.deployment_operations import (
     router as deployment_operations_router,
 )
@@ -43,35 +45,31 @@ from api_service.api.routers.execution_integrations import (
     router as execution_integrations_router,
 )
 from api_service.api.routers.executions import router as executions_router
-from api_service.api.routers.container_jobs import router as container_jobs_router
+from api_service.api.routers.github_event_webhook import (
+    router as github_event_webhook_router,
+)
+from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
-from api_service.api.routers.advanced_auth_4124 import router as advanced_auth_4124_router
-from api_service.api.routers.profile import router as profile_router
-from api_service.api.routers.recurring_workflows import (
-    router as recurring_workflows_router,
+from api_service.api.routers.omnigent_agent_profiles import (
+    router as omnigent_agent_profiles_router,
 )
-from api_service.api.routers.automation import router as automation_router
-
-from api_service.api.routers.workflow_console import router as workflow_console_router
-from api_service.dashboard_static import DashboardStaticFiles
-from api_service.response_compression import add_response_compression
-from api_service.api.routers.agent_runs import router as agent_runs_router
-from api_service.api.routers.agent_runs import (
-    sessions_router as session_resources_router,
+from api_service.api.routers.omnigent_bootstrap import (
+    router as omnigent_bootstrap_router,
 )
-from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
-    router as omnigent_bridge_router,
+)
+from api_service.api.routers.omnigent_bridge import router as omnigent_bridge_router
+from api_service.api.routers.omnigent_bridge import (
     workflow_chat_router as omnigent_workflow_chat_router,
 )
+from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_native_ui import (
     NATIVE_UI_MOUNT_PATH,
     native_ui_router,
 )
-from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
 from api_service.api.routers.omnigent_runtime_provider_migration import (
     router as omnigent_runtime_provider_migration_router,
@@ -79,38 +77,38 @@ from api_service.api.routers.omnigent_runtime_provider_migration import (
 from api_service.api.routers.omnigent_session_timeline import (
     router as omnigent_session_timeline_router,
 )
-from api_service.api.routers.omnigent_bootstrap import (
-    router as omnigent_bootstrap_router,
-)
 from api_service.api.routers.presets import (
     router as presets_router,
 )
-from api_service.api.routers.temporal_artifacts import (
-    router as temporal_artifacts_router,
+from api_service.api.routers.provider_profiles import router as provider_profiles_router
+from api_service.api.routers.proxy import router as proxy_router
+from api_service.api.routers.recurring_workflows import (
+    router as recurring_workflows_router,
 )
-from api_service.api.routers.workflows import router as workflows_router
-from api_service.api.routers.secrets import router as secrets_router
 from api_service.api.routers.repository_connections import (
     router as repository_connections_router,
 )
-from api_service.api.routers.github_event_webhook import (
-    router as github_event_webhook_router,
-)
+from api_service.api.routers.secrets import router as secrets_router
+from api_service.api.routers.sessions import router as sessions_router
 from api_service.api.routers.settings import router as settings_router
 from api_service.api.routers.system_operations import (
     router as system_operations_router,
 )
-from api_service.api.routers.proxy import router as proxy_router
-from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
-from api_service.api.routers.accounts_4122 import router as accounts_4122_router
-from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
+from api_service.api.routers.temporal_artifacts import (
+    router as temporal_artifacts_router,
+)
+from api_service.api.routers.workflow_console import router as workflow_console_router
+from api_service.api.routers.workflows import router as workflows_router
+from api_service.dashboard_static import DashboardStaticFiles
+
 # NOTE: the operator-boundary demonstration routers
-# (api_service.api.routers.operator_boundary_4347) are test scaffolding for the
+# (tests.helpers.operator_boundary) are test scaffolding for the
 # shared admission primitive and are intentionally NOT mounted: a parallel
 # /operator/* API would compete with the product routes. Real consumers use
-# that boundary directly (get_instance_operator_access / require_operator),
+# that boundary directly (get_instance_access / require_operator),
 # while machine callers verify their own scoped capabilities at their routes.
 from api_service.db.base import get_async_session_context
+from api_service.response_compression import add_response_compression
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_dashboard_dist_root
 from moonmind.config.settings import settings
@@ -229,11 +227,11 @@ async def _sweep_secret_invalidation_outbox() -> int:
     freshness after restarts or delivery failures.
     """
     try:
+        from api_service.db.base import get_async_session_context
         from api_service.services.secrets import (
             SecretsService,
             subscribe_secret_invalidations,
         )
-        from api_service.db.base import get_async_session_context
 
         async def _log_invalidation(event: dict) -> None:
             logger.info(
@@ -278,9 +276,8 @@ async def _run_guarded_single_user_upgrade() -> dict:
     CLI, worker, and HTTP startup routes all converge here instead of
     invoking subsystem conversions directly. Refusals (multi-person,
     unresolved evidence, missing transform coverage) perform no
-    conversion-side writes and preserve the serving release. Resilient by
-    design: conversion must never fail startup, so every failure is logged
-    and startup continues. Returns a metadata-only summary.
+    conversion-side writes. Startup records a redacted result for diagnostics;
+    product access requires certified completion. Returns a metadata-only summary.
     """
     try:
         from api_service.services.single_user_conversion import (
@@ -297,7 +294,7 @@ async def _run_guarded_single_user_upgrade() -> dict:
         except OperatorAdmissionError:
             logger.warning(
                 "Single-user guarded upgrade deferred: replacement_admission_unavailable; "
-                "retaining the installed access boundary."
+                "product access remains gated."
             )
             return {"deferred": True, "reason": "replacement_admission_unavailable"}
 
@@ -354,8 +351,8 @@ async def _run_guarded_single_user_upgrade() -> dict:
                     reason = f"{reason}: {result.decision.detail}"
                 logger.warning(
                     "Single-user guarded upgrade blocked (%s); preserving "
-                    "source data, serving release, and operator access "
-                    "without conversion-side mutation.",
+                    "source data without conversion-side mutation; "
+                    "product access remains gated.",
                     reason,
                 )
             return summary
@@ -876,293 +873,14 @@ async def _maintain_omnigent_inventory() -> None:
         await asyncio.sleep(_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS)
 
 
-async def _initialize_oidc_provider(app: FastAPI):
-    """Validate the authentication selector; generic OIDC discovery lives in #4124."""
-    # The bundled Keycloak integration was removed (#4129): retired selectors
-    # fail startup with migration guidance instead of attempting provider-specific
-    # discovery against a retired issuer. Generic external OIDC discovery is owned
-    # by the #4124 contract; this step performs no outbound DNS/connect attempt.
-    # Mode interpretation lives in moonmind.security.auth_modes_4120 (#4120).
-    from moonmind.security.auth_modes_4120 import (
-        MIGRATION_DECISION_ENV_VAR,
-        MIGRATION_DECISION_TABLE,
-        AuthMigrationDecision,
-        MigrationRequiredError,
-        auth_readiness_summary,
-        classify_deployment,
-        ensure_migration_decision_table_sql,
-        is_auth_provider_explicit,
-        is_missing_schema_error,
-        parse_migration_decision,
-        public_base_url_is_loopback,
-        redacted_diagnostics,
-        resolve_moonmind_auth_config,
-        resolve_session_secret,
-        default_session_key_path,
-        validate_public_base_url,
-        validate_publish_binding,
-        validate_trusted_proxy_config,
+async def _initialize_operator_admission(app: FastAPI):
+    """Validate the installed access boundary before retiring predecessor access."""
+    from moonmind.security.operator_admission import (
+        validate_replacement_operator_admission,
     )
 
-    # Blank/omitted must reach classification (#4120 req 3): validate the
-    # explicit selector only. Omitted never silently selects `disabled`.
-    explicit = is_auth_provider_explicit()
-    if explicit:
-        settings.oidc.validate_auth_provider()
-        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
-    else:
-        raw = ""
-    decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
-    # A malformed local principal ID is a deterministic configuration error:
-    # fail startup actionably instead of masking it as transient 503s on the
-    # request path.
-    try:
-        from uuid import UUID as _UUID
-
-        from api_service.auth import _DEFAULT_USER_ID as _fallback_user_id
-
-        _UUID(settings.oidc.DEFAULT_USER_ID or _fallback_user_id)
-    except Exception as exc:
-        raise RuntimeError(
-            "Invalid DEFAULT_USER_ID for disabled local mode: must parse "
-            f"as a UUID: {exc}"
-        ) from exc
-    has_users: bool | None = None
-    # Probe whenever the fresh/setup decision needs account state: omitted
-    # selectors (fresh vs. pre-cutover) and explicit `accounts` (fresh setup
-    # vs. established). Other explicit modes never derive setup from it.
-    if (not explicit and not raw) or (explicit and raw.lower() == "accounts"):
-        # Omitted selector: distinguish fresh vs. pre-cutover via a bounded
-        # users probe plus the versioned persisted migration decision (#4119
-        # contract). Fresh (no users) takes the accounts production path;
-        # populated without a decision stops actionably below.
-        try:
-            from api_service.db.base import get_async_session_context
-
-            async with get_async_session_context() as session:
-                result = await session.execute(text("SELECT COUNT(*) FROM users"))
-                count = int(result.scalar() or 0)
-                has_users = count > 0
-                # The persisted decision survives outside process env: ensure
-                # the table idempotently, then read the single recorded row.
-                # An explicit env decision takes precedence when present.
-                try:
-                    await session.execute(
-                        text(ensure_migration_decision_table_sql())
-                    )
-                    await session.commit()
-                except Exception:
-                    await session.rollback()
-                    logger.warning(
-                        "Auth-mode startup could not ensure the persisted "
-                        "migration-decision table; continuing with the "
-                        "operator-held env decision only."
-                    )
-                else:
-                    if decision is not None:
-                        # Persist an accepted operator-held decision so a later
-                        # deployment without the env var keeps working instead
-                        # of regressing to migration_required (#4119 contract).
-                        # Best-effort: the env decision stays authoritative.
-                        try:
-                            from datetime import datetime, timezone
-
-                            await session.execute(
-                                text(
-                                    f"INSERT INTO {MIGRATION_DECISION_TABLE} "
-                                    "(id, mode, version, decided_at) VALUES "
-                                    "(1, :mode, :version, :decided_at) "
-                                    "ON CONFLICT (id) DO UPDATE SET mode = "
-                                    "EXCLUDED.mode, version = EXCLUDED.version, "
-                                    "decided_at = EXCLUDED.decided_at"
-                                ),
-                                {
-                                    "mode": decision.mode,
-                                    "version": decision.version,
-                                    "decided_at": datetime.now(timezone.utc),
-                                },
-                            )
-                            await session.commit()
-                        except Exception:
-                            await session.rollback()
-                            logger.warning(
-                                "Auth-mode startup could not persist the accepted "
-                                "migration decision; continuing with the "
-                                "operator-held env decision only."
-                            )
-                    if decision is None:
-                        try:
-                            row = (
-                                await session.execute(
-                                    text(
-                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
-                                        "WHERE id = 1"
-                                    )
-                                )
-                            ).first()
-                        except Exception:
-                            logger.warning(
-                                "Auth-mode startup could not read the persisted "
-                                "migration decision; continuing with the "
-                                "operator-held env decision only."
-                            )
-                        else:
-                            if row is not None:
-                                try:
-                                    decision = AuthMigrationDecision(
-                                        mode=str(row[0]),
-                                        version=int(row[1]),
-                                    )
-                                except Exception as exc:
-                                    raise RuntimeError(
-                                        "Invalid persisted auth migration decision "
-                                        f"(mode={row[0]!r}, version={row[1]!r}): "
-                                        f"{exc}. Re-run migration preflight to record "
-                                        "a current decision."
-                                    ) from exc
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            if is_missing_schema_error(exc):
-                # Fresh database whose schema is not migrated yet: a missing
-                # users table (or database) means no users can exist.
-                has_users = False
-            else:
-                # Database unreachable or misconfigured: never guess fresh vs.
-                # upgrade. Abort so the orchestrator retries once the store is
-                # reachable; a failed probe must not cache a fresh-accounts
-                # classification that later masks a populated database.
-                raise RuntimeError(
-                    "Auth-mode startup could not probe user count; refusing to "
-                    f"guess fresh vs. upgrade: {exc}"
-                ) from exc
-    classification = classify_deployment(
-        raw_selector=raw if (explicit or raw) else None,
-        explicit=explicit,
-        has_users=bool(has_users),
-        migration_decision=decision,
-    )
-    if classification.migration_required:
-        raise RuntimeError(str(classification.detail))
-    production_mode = classification.production_mode or raw.lower() or "accounts"
-    # Durable signing secret: fresh local startup generates once; remote
-    # production requires explicit material; placeholders always rejected.
-    public_base = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
-    # Hostname-parsed, never substring-matched: `https://localhost.example.com`
-    # is remote while `http://[::1]:7000` is local. Blank stays local-only.
-    is_remote = bool(public_base) and not public_base_url_is_loopback(public_base)
-    try:
-        session_secret = resolve_session_secret(
-            # Compose renders omitted secret settings as empty strings.
-            # Preserve omission so the durable key owner can load or generate.
-            explicit_secret=os.environ.get("MOONMIND_SESSION_SECRET")
-            or os.environ.get("JWT_SECRET")
-            or None,
-            key_path=default_session_key_path(),
-            allow_generate=not is_remote,
-            for_remote_production=is_remote,
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Invalid MoonMind session secret: {exc}") from exc
-    # Control-plane settings are resolved explicitly from MoonMind-owned
-    # inputs and passed into the #4118 contract (#4120 req 2).
-    # OMNIGENT_AUTH_*/OMNIGENT_ACCOUNTS_*/OMNIGENT_OIDC_* ambient values --
-    # even contradictory ones -- cannot select MoonMind behavior; simultaneous
-    # same-origin use stays isolated through distinct cookies/keys/purposes.
-    try:
-        resolve_moonmind_auth_config(
-            mode=production_mode,
-            cookie_secret=session_secret,
-            require_secure_cookies=os.environ.get(
-                "MOONMIND_REQUIRE_SECURE_COOKIES", "1"
-            )
-            != "0",
-            environ=dict(os.environ),
-        )
-    except Exception as exc:
-        raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
-    # Advanced modes fail fast on missing explicit configuration (#4124):
-    # `oidc` needs issuer/client/callback material, `header` needs the
-    # explicitly trusted ingress plus its identity namespace. This keeps a
-    # half-configured deployment from serving an unauthenticated fallback.
-    if production_mode == "oidc":
-        try:
-            from moonmind.security.advanced_identity_4124 import (
-                resolve_oidc_provider_config,
-            )
-
-            resolve_oidc_provider_config()
-        except Exception as exc:
-            raise RuntimeError(f"Invalid generic OIDC configuration: {exc}") from exc
-    elif production_mode == "header":
-        try:
-            from moonmind.security.advanced_identity_4124 import (
-                resolve_trusted_proxy_config,
-            )
-
-            resolve_trusted_proxy_config()
-        except Exception as exc:
-            raise RuntimeError(f"Invalid trusted-proxy configuration: {exc}") from exc
-    # Disabled-mode exposure at the deployment boundary.
-    try:
-        validate_publish_binding(
-            mode=production_mode,
-            publish_host=os.environ.get("MOONMIND_API_PUBLISH_HOST")
-            or os.environ.get("MOONMIND_API_HOST"),
-            trusted_ingress=os.environ.get("MOONMIND_TRUSTED_INGRESS", "").lower()
-            in ("1", "true", "yes"),
-        )
-    except Exception as exc:
-        raise RuntimeError(str(exc)) from exc
-    # Base-URL / trusted-proxy validation when configured.
-    if public_base:
-        try:
-            proxies = validate_trusted_proxy_config(
-                os.environ.get("MOONMIND_TRUSTED_PROXIES", "")
-            )
-            validate_public_base_url(
-                public_base,
-                trusted_proxies=proxies,
-                forwarded_host=os.environ.get("MOONMIND_FORWARDED_HOST_HINT"),
-                forwarded_proto=os.environ.get("MOONMIND_FORWARDED_PROTO_HINT"),
-            )
-        except Exception as exc:
-            raise RuntimeError(str(exc)) from exc
-    # Advanced modes (#4124): shape-validate oidc/header operator config at
-    # startup (no outbound discovery fetch here; hermetic CI stays offline).
-    # Failures abort startup actionably instead of serving a half-configured
-    # login that would silently fall back to another mode.
-    if production_mode in ("oidc", "header"):
-        try:
-            from api_service.services.advanced_auth_service_4124 import (
-                validate_advanced_mode_config as _validate_advanced_config,
-            )
-
-            app.state.advanced_auth_config = _validate_advanced_config(
-                production_mode
-            )
-        except Exception as exc:
-            raise RuntimeError(str(exc)) from exc
-    app.state.auth_production_mode = production_mode
-    app.state.auth_classification = classification
-    from moonmind.security.auth_modes_4120 import set_active_production_mode as _set_active_mode
-
-    _set_active_mode(production_mode)
-    logger.info(
-        "Auth modes initialized: %s",
-        redacted_diagnostics(
-            {
-                "auth_mode": production_mode,
-                "explicit": explicit,
-                "fresh_install": classification.fresh_install,
-                "setup_required": classification.setup_required,
-                "auth_readiness": auth_readiness_summary(
-                    production_mode=production_mode,
-                    setup_required=classification.setup_required,
-                )["auth_readiness"],
-            }
-        ),
-    )
+    validate_replacement_operator_admission()
+    app.state.operator_admission_ready = True
 
 
 async def _observe_manual_schedule_requests():
@@ -1227,24 +945,9 @@ app = FastAPI(
     title="MoonMind API",
     description=(
         "API for MoonMind - LLM-powered documentation search and chat interface. "
-        "Application authentication is selected by AUTH_PROVIDER (accounts, "
-        "oidc, header, disabled; retired keycloak/default/google/local selectors "
-        "are rejected at startup). Documented error contract "
-        "(docs/Security/AuthenticationContracts.md §8): 401 auth_required "
-        "(missing credential at a strict boundary), 401 auth_invalid "
-        "(invalid/expired credential), 401 auth_conflict (cookie/bearer "
-        "mismatch), 410 worker_token_deprecated (removed legacy "
-        "worker-token path), 503 unavailable/setup_required (identity/store "
-        "outage or protected setup pending). Machine callers "
-        "(workers, MCP/container-job) use scoped service credentials on "
-        "authorized routes only — runtime, session, and worker tokens never "
-        "become browser credentials. Every user-facing path resolves its "
-        "principal through the qualified MoonMind session authority "
-        "(cookie and/or bearer session, single credential precedence; "
-        "legacy application JWTs are rejected as auth_invalid). Session "
-        "issuance journeys for accounts/oidc/header are owned by the "
-        "provider-route slices. Draft contract text pending #4128 "
-        "qualification."
+        "The operator interface uses transport and trusted-ingress admission. "
+        "Application-account login is retired. Machine and provider credentials "
+        "remain scoped to their owning endpoints."
     ),
     version="0.1.0",
     docs_url="/openapi",
@@ -1301,16 +1004,6 @@ except Exception:  # pragma: no cover - best-effort startup snapshot
 @health_router.get("/healthz")
 async def health_check():
     """Health endpoint with database probe and distinguishable auth readiness."""
-    from moonmind.security.auth_modes_4120 import (
-        MIGRATION_DECISION_TABLE,
-        AuthMigrationDecision,
-        auth_readiness_summary,
-        classify_deployment,
-        is_auth_provider_explicit,
-        parse_migration_decision,
-        MIGRATION_DECISION_ENV_VAR,
-    )
-
     uptime = int(time.monotonic() - _api_start_time)
     try:
         async with get_async_session_context() as session:
@@ -1320,72 +1013,14 @@ async def health_check():
     except Exception:
         db_status = "unreachable"
         db_reachable = False
-    # Auth readiness stays distinguishable from infrastructure readiness.
-    stored_mode = (getattr(app.state, "auth_production_mode", None) or "").strip()
-    classification = getattr(app.state, "auth_classification", None)
-    if classification is not None:
-        production_mode = stored_mode or classification.production_mode
-        setup_required = classification.setup_required
-        migration_required = classification.migration_required
-    else:
-        raw = (settings.oidc.AUTH_PROVIDER or "").strip()
-        explicit = is_auth_provider_explicit()
-        decision = parse_migration_decision(os.environ.get(MIGRATION_DECISION_ENV_VAR))
-        try:
-            fresh_probe = False
-            if not explicit and not raw and db_reachable:
-                from api_service.db.base import get_async_session_context as _ctx
-
-                async with _ctx() as session:
-                    result = await session.execute(text("SELECT COUNT(*) FROM users"))
-                    fresh_probe = int(result.scalar() or 0) == 0
-                    # Best-effort persisted decision so pre-startup readiness
-                    # agrees with the startup classifier (#4119 contract).
-                    if decision is None and not fresh_probe:
-                        try:
-                            row = (
-                                await session.execute(
-                                    text(
-                                        f"SELECT mode, version FROM {MIGRATION_DECISION_TABLE} "
-                                        "WHERE id = 1"
-                                    )
-                                )
-                            ).first()
-                        except Exception:
-                            row = None
-                        if row is not None:
-                            try:
-                                decision = AuthMigrationDecision(
-                                    mode=str(row[0]),
-                                    version=int(row[1]),
-                                )
-                            except Exception:
-                                decision = None
-            classification = classify_deployment(
-                raw_selector=raw if (explicit or raw) else None,
-                explicit=explicit,
-                has_users=not fresh_probe if (not explicit and not raw) else False,
-                migration_decision=decision,
-            )
-        except Exception:
-            classification = None
-        if classification is None:
-            production_mode, setup_required, migration_required = (
-                raw.lower() or "undecided",
-                False,
-                False,
-            )
-        else:
-            production_mode = classification.production_mode
-            setup_required = classification.setup_required
-            migration_required = classification.migration_required
-    readiness = auth_readiness_summary(
-        production_mode=production_mode,
-        migration_required=migration_required,
-        setup_required=setup_required,
-        db_reachable=db_reachable,
-        secret_ready=True,
-    )
+    conversion = getattr(app.state, "single_user_conversion", None) or {}
+    migration_required = not bool(conversion.get("published"))
+    readiness = {
+        "auth_readiness": "conversion_required" if migration_required else "ready",
+        "operator_admission_ready": bool(
+            getattr(app.state, "operator_admission_ready", False)
+        ),
+    }
     # Worker code freshness (MoonLadderStudios/MoonMind#4224): compare the
     # API process's startup-recorded identity and each reachable worker's
     # /readyz identity with the checkout on disk. A host `git pull` alone is
@@ -1478,17 +1113,10 @@ app.include_router(health_router, tags=["health"])
 # Include workflow-oriented and operational routers.
 app.include_router(mcp_tools_router)
 app.include_router(container_jobs_router)
-app.include_router(
-    profile_router, prefix="", tags=["Profile"]
-)  # Include profile router
 app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
 app.include_router(omnigent_agent_profiles_router)
 app.include_router(oauth_sessions_router, prefix="/api/v1")
-# Generic OIDC login/callback/logout for `oidc` mode plus the trusted-header
-# request identity for `header` mode (#4124). Mounted under /api/v1/oidc —
-# never /api/v1/auth/*, which stays unmounted per the #4129 removal manifest.
-app.include_router(advanced_auth_4124_router)
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(
     repository_connections_router, prefix="/api/v1/repository-connections"
@@ -1523,28 +1151,9 @@ app.include_router(omnigent_bootstrap_router)
 app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
-# Single-user operator-admission boundary (#4347): the shared primitive lives
-# in moonmind.security.operator_admission with its FastAPI adapter in
-# api_service.operator_admission. Demonstration routers are test-only (see
-# tests/unit/api/test_operator_boundary_mount_4347.py) and are not mounted
-# here. Remote disabled-mode product routes consume the shared ingress checks;
-# the permission-only handoff and local Compose transport migration remain open.
-# Advanced identity sources (#4124): generic OIDC + trusted-proxy journeys
-# through the shared auth boundary. Endpoints fail closed when the classified
-# production mode does not select them.
-app.include_router(auth_advanced_4124_router)
-# Built-in accounts lifecycle (#4122): protected first-owner setup,
-# invitation-only enrollment, password recovery, and administrator member
-# management through the shared #4121 session authority. Endpoints fail
-# closed unless the classified production mode is `accounts`.
-app.include_router(accounts_4122_router)
+# Every product router uses the shared instance admission boundary. Provider
+# OAuth and scoped machine endpoints retain their own authorities.
 
-# Legacy fastapi-users login/register/reset/verify/users routes were removed with
-# the bundled Keycloak integration (#4129). The only /api/v1/auth/* routes are
-# the #4124 advanced journeys above; supported modes authenticate through the
-# #4124-era contracts
-# (docs/Security/AuthenticationContracts.md), and `disabled` mode resolves the
-# persisted default user via get_current_user().
 
 def _resolve_cors_allowed_origins() -> list[str]:
     """Resolve explicit credentialed CORS origins (#4121 req 5).
@@ -1555,10 +1164,9 @@ def _resolve_cors_allowed_origins() -> list[str]:
     configured ``"*"`` with credentials fails closed at startup rather
     than silently allowing any site to issue credentialed mutations.
     """
-    from moonmind.security.session_authority_4121 import (
-        resolve_credentialed_cors_origins,
-    )
     from urllib.parse import urlsplit
+
+    from moonmind.security.operator_admission import resolve_credentialed_cors_origins
 
     raw = os.environ.get("MOONMIND_CORS_ALLOWED_ORIGINS", "")
     explicit = [part.strip() for part in raw.split(",") if part.strip()]
@@ -1823,17 +1431,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
     Returns the list of ``runtime_id`` values for profiles that were actually
     inserted, or an empty list when nothing was seeded.
     """
-    from api_service.db.base import get_async_session_context
     from sqlalchemy import select
+
+    from api_service.db.base import get_async_session_context
     from api_service.db.models import (
         ManagedAgentProviderProfile,
+        ManagedAgentRateLimitPolicy,
         ProviderCapacityScope,
         ProviderCredentialSource,
         ProviderProfileAuthMethod,
         ProviderProfileAuthState,
         ProviderProfileDisabledReason,
         RuntimeMaterializationMode,
-        ManagedAgentRateLimitPolicy,
     )
     from api_service.services.provider_profile_service import (
         normalize_runtime_default_profile,
@@ -2174,6 +1783,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
     # existing OpenCode/Omnigent disable controls stay authoritative.
     from moonmind.omnigent.settings import (
         generic_host_enabled as _openrouter_generic_host_enabled,
+    )
+    from moonmind.omnigent.settings import (
         opencode_support_enabled as _openrouter_opencode_enabled,
     )
 
@@ -2257,15 +1868,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
     # suppresses the default. OpenCode's built-in Contributor Free route does
     # not require an API key; deployment credentials remain scoped to the
     # separate opencode-go profile and must never be attached here implicitly.
-    from moonmind.omnigent.settings import (
-        generic_host_enabled,
-        opencode_support_enabled,
-    )
     from moonmind.omnigent.bootstrap.opencode import (
         DEFAULT_OPENCODE_MODEL_DISPLAY,
         DEFAULT_OPENCODE_QUALIFIED,
         ZEN_FREE_MODEL_DISPLAY,
         ZEN_FREE_QUALIFIED,
+    )
+    from moonmind.omnigent.settings import (
+        generic_host_enabled,
+        opencode_support_enabled,
     )
 
     opencode_defaults_enabled = opencode_support_enabled() and generic_host_enabled()
@@ -2944,17 +2555,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
 
 async def ensure_provider_profile_managers_started():
     """Ensure ProviderProfileManager workflows are running for all distinct runtime families."""
-    from api_service.db.base import get_async_session_context
     from sqlalchemy import select
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    from api_service.db.base import get_async_session_context
     from api_service.db.models import ManagedAgentProviderProfile
-    from moonmind.workflows.temporal.client import TemporalClientAdapter
     from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         WORKFLOW_NAME,
         ProviderProfileManagerInput,
         workflow_id_for_runtime,
     )
-    from temporalio.exceptions import WorkflowAlreadyStartedError
 
     # Auto-seed default profiles if table is empty.
     await _auto_seed_provider_profiles()
@@ -3261,7 +2873,7 @@ async def startup_event():
         app.state = State()
 
     _assert_omnigent_configuration_is_current()
-    await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
+    await _initialize_operator_admission(app)
     _register_settings_change_subscribers()
     # Single-user (#4346): conversion eligibility runs before the
     # deployment preset seed sync. The sync creates instance presets with

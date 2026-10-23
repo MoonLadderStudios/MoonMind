@@ -46,8 +46,8 @@ Boundary rules (exact, see ``docs/Security/AuthenticationContracts.md``
   401 ``auth_required``/``auth_invalid``. There is no default user,
   account fallback, or weakened access on any path.
 
-Stream policy reuses the existing session-authority bound
-(``SESSION_REVOCATION_INTERVAL_SECONDS``): reconnects are admitted again,
+Stream policy retains the existing five-minute revalidation bound:
+reconnects are admitted again,
 revoked admission closes streams within the bound, and losing browser
 admission never cancels already-admitted durable work.
 """
@@ -64,15 +64,8 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-try:  # Reuse the existing bound; never a second session authority.
-    from moonmind.security.session_authority_4121 import (
-        SESSION_REVOCATION_INTERVAL_SECONDS as _SESSION_BOUND,
-    )
-except Exception:  # pragma: no cover - import-time fallback only.
-    _SESSION_BOUND = 5 * 60
-
-#: Streams revalidate (or close after revocation) within this bound.
-STREAM_REVALIDATION_SECONDS = _SESSION_BOUND
+# Preserve the existing bounded revalidation journey without a session store.
+STREAM_REVALIDATION_SECONDS = 5 * 60
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
@@ -235,7 +228,7 @@ def _is_loopback_base_url(base_url: str) -> bool:
     if not text:
         return False
     try:
-        from moonmind.security.auth_modes_4120 import (
+        from moonmind.security.deployment_auth import (
             public_base_url_is_loopback as _authority_is_loopback,
         )
 
@@ -378,7 +371,7 @@ def validate_browser_host_and_origin(
 
 
 def _trusted_proxies(environ: Mapping | None = None) -> tuple[str, ...]:
-    from moonmind.security.auth_modes_4120 import validate_trusted_proxy_config
+    from moonmind.security.deployment_auth import validate_trusted_proxy_config
 
     source = environ if environ is not None else os.environ
     try:
@@ -425,22 +418,11 @@ def _approved_publication(source: Mapping) -> bool:
 def _client_matches_proxies(client_host: str | None, proxies: tuple[str, ...]) -> bool:
     """Whether a connecting peer matches the configured trusted proxies.
 
-    Reuses the existing trusted-proxy matcher
-    (``moonmind.security.trusted_proxy_4124._peer_is_trusted``), which pins
-    configured hostnames against numeric peers via DNS. A divergent local
-    implementation would skip hostname entries for numeric peers and force
-    ``auth_required`` on supported reverse-proxy configurations.
+    Configured hostnames resolve against numeric peers via DNS; resolution
+    failures never match.
     """
     if not client_host or not proxies:
         return False
-    try:
-        from moonmind.security.trusted_proxy_4124 import (
-            _peer_is_trusted as _existing_peer_is_trusted,
-        )
-
-        return bool(_existing_peer_is_trusted(client_host, tuple(proxies)))
-    except Exception:
-        pass
     text = client_host.strip().strip("[]").split("%")[0]
     try:
         client_ip = ipaddress.ip_address(text)
@@ -561,7 +543,7 @@ def validate_replacement_operator_admission(environ: Mapping | None = None) -> N
     This establishes configuration readiness, not proof of an external login or
     MFA. Those remain owned by the deployment's ingress and protected requests.
     """
-    from moonmind.security.auth_modes_4120 import validate_public_base_url
+    from moonmind.security.deployment_auth import validate_public_base_url
 
     source = environ if environ is not None else os.environ
     base_url = _public_base_url(source)
@@ -718,3 +700,15 @@ def resolve_operator_admission(
 def is_stream_authorization_stale(*, admitted_at: float, now: float) -> bool:
     """Return True when a stream must revalidate (or close) now."""
     return (now - admitted_at) >= STREAM_REVALIDATION_SECONDS
+
+
+def resolve_credentialed_cors_origins(
+    explicit_origins, *, allow_credentials: bool
+) -> list[str]:
+    """Credentialed browsers require explicit trusted origins."""
+    origins = [
+        str(origin).strip() for origin in explicit_origins or () if str(origin).strip()
+    ]
+    if allow_credentials and "*" in origins:
+        raise ValueError("credentialed CORS requires explicit trusted origins")
+    return origins

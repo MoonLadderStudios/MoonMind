@@ -10,16 +10,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
-    Base, TemporalArtifact, TemporalArtifactDeletionIntent, TemporalArtifactLink,
-    TemporalArtifactPin, TemporalArtifactRedactionLevel, TemporalArtifactUseClaim,
-    User, WorkflowArtifact, WorkflowArtifactType, WorkflowRun,
+    TemporalArtifact,
+    TemporalArtifactDeletionIntent,
+    TemporalArtifactLink,
+    TemporalArtifactPin,
+    TemporalArtifactRedactionLevel,
+    TemporalArtifactUseClaim,
+    WorkflowArtifact,
+    WorkflowArtifactType,
+    WorkflowRun,
 )
 from api_service.services import single_user_conversion as conversion
-from moonmind.security import auth_modes_4120
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore, TemporalArtifactAuthorizationError,
     TemporalArtifactRepository, TemporalArtifactService, TemporalArtifactStateError,
 )
+from tests.helpers.account_source import User, create_source_schema
 
 pytestmark = pytest.mark.asyncio
 
@@ -29,7 +35,7 @@ async def database(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/conversion.db")
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+        await connection.run_sync(create_source_schema)
     try:
         yield maker
     finally:
@@ -73,8 +79,10 @@ async def seed(session, tmp_path, *, quarantine=False):
     return artifact.artifact_id, owner
 
 
-async def test_guarded_conversion_preserves_recovery_and_restarts(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+async def test_guarded_conversion_preserves_recovery_and_restarts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path)
@@ -138,7 +146,7 @@ async def test_guarded_conversion_preserves_recovery_and_restarts(tmp_path, monk
 
 
 async def test_conversion_never_releases_quarantine(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path, quarantine=True)
@@ -156,11 +164,11 @@ async def test_conversion_never_releases_quarantine(tmp_path, monkeypatch):
             assert policy.raw_access_allowed is False
 
 
-async def test_unsupported_workflow_parent_refuses_without_artifact_mutation(tmp_path):
+async def test_unknown_workflow_parent_refuses_without_artifact_mutation(tmp_path):
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path)
-            run = WorkflowRun(feature_key="retained", requested_by_user_id=UUID(owner))
+            run = WorkflowRun(feature_key="retained", requested_by_user_id=uuid4())
             session.add(run)
             await session.flush()
             session.add(WorkflowArtifact(workflow_run_id=run.id,
@@ -168,8 +176,7 @@ async def test_unsupported_workflow_parent_refuses_without_artifact_mutation(tmp
             await session.commit()
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert result.published is False
-            assert result.decision.reason_code == "missing_transform_coverage"
-            assert "workflows" in result.decision.detail
+            assert result.decision.reason_code == "unknown_principal"
             assert not getattr(await session.get(TemporalArtifact, artifact_id),
                                "operator_recovery_granted", False)
             assert not (await session.execute(select(conversion.SingleUserConversionRun))).scalars().all()
@@ -204,7 +211,7 @@ async def test_same_count_artifact_authority_change_rejects_stale_preflight(tmp_
 
 
 async def test_old_published_ledger_preserves_admission_without_recovery_grant(tmp_path):
-    from api_service.auth_providers import _disabled_account_free_allowed
+    from api_service.services.single_user_conversion import completed_guarded_upgrade
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, _owner = await seed(session, tmp_path)
@@ -217,13 +224,13 @@ async def test_old_published_ledger_preserves_admission_without_recovery_grant(t
                     "decision": {"disposition": "eligible_conversion"}},
             ))
             await session.commit()
-            assert await _disabled_account_free_allowed(session) is True
+            assert await completed_guarded_upgrade(session) is None
             assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert result.published, result.to_sanitized_dict()
-            assert await _disabled_account_free_allowed(session) is True
+            assert await completed_guarded_upgrade(session) is not None
             assert (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
 
 
@@ -255,7 +262,7 @@ async def test_interrupted_real_conversion_rolls_back_grant_and_retries(tmp_path
 
 
 async def test_alias_recovery_preserves_claim_and_quota_scopes(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path)
@@ -299,9 +306,13 @@ async def test_unsupported_creator_refuses_even_with_deployment_attestation(tmp_
             assert not row.operator_recovery_granted
 
 
-@pytest.mark.parametrize("machine", ["workflow:retained", "system:agent_runtime", "agent_workflow"])
-async def test_machine_creator_and_caller_metadata_cannot_grant_recovery(tmp_path, monkeypatch, machine):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+@pytest.mark.parametrize(
+    "machine", ["workflow:retained", "system:agent_runtime", "agent_workflow"]
+)
+async def test_machine_creator_and_caller_metadata_cannot_grant_recovery(
+    tmp_path, monkeypatch, machine
+):
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, _owner = await seed(session, tmp_path)
@@ -318,7 +329,7 @@ async def test_machine_creator_and_caller_metadata_cannot_grant_recovery(tmp_pat
 
 
 async def test_old_fresh_admission_is_not_artifact_recovery_proof(tmp_path):
-    from api_service.auth_providers import _disabled_account_free_allowed
+    from api_service.services.single_user_conversion import completed_guarded_upgrade
     async with database(tmp_path) as maker:
         async with maker() as session:
             session.add(conversion.SingleUserConversionRun(
@@ -327,13 +338,13 @@ async def test_old_fresh_admission_is_not_artifact_recovery_proof(tmp_path):
             ))
             await session.commit()
             artifact_id, _owner = await seed(session, tmp_path)
-            assert await _disabled_account_free_allowed(session)
+            assert await completed_guarded_upgrade(session) is None
             assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
             assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
         async with maker() as restarted:
-            assert await _disabled_account_free_allowed(restarted)
+            assert await completed_guarded_upgrade(restarted) is not None
             assert (await restarted.get(TemporalArtifact, artifact_id)).operator_recovery_granted
 
 
@@ -357,7 +368,11 @@ async def test_live_machine_temporal_parent_is_preserved_by_conversion(tmp_path)
     # Execution owners treat historical owner fields as provenance, so accepted
     # work needs no rewrite; legacy workflow parents still refuse (see
     # test_old_admission_survives_unsupported_mixed_history_without_raw_grant).
-    from api_service.db.models import TemporalExecutionRecord, TemporalExecutionOwnerType, TemporalWorkflowType
+    from api_service.db.models import (
+        TemporalExecutionOwnerType,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+    )
     from moonmind.statuses.workflow import MoonMindWorkflowState
     async with database(tmp_path) as maker:
         async with maker() as session:
@@ -383,7 +398,7 @@ async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
     import importlib
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
-    from api_service.auth_providers import _disabled_account_free_allowed
+    from api_service.services.single_user_conversion import completed_guarded_upgrade
     migration = importlib.import_module("api_service.migrations.versions.396_artifact_operator_recovery")
 
     def migrate(connection, operation):
@@ -406,7 +421,7 @@ async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
             await session.rollback()
         async with maker() as restarted:
             assert (await restarted.get(TemporalArtifact, artifact_id)).operator_recovery_granted
-            assert await _disabled_account_free_allowed(restarted)
+            assert await completed_guarded_upgrade(restarted) is not None
 
 
 @pytest.mark.parametrize("authority", ["expired_claim", "pin", "deletion_intent"])

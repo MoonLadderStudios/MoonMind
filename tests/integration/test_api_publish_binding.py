@@ -11,7 +11,6 @@ from fastapi import FastAPI
 
 from api_service import main
 from moonmind.deployment_access import DeploymentAccessError, validate_access
-from moonmind.security import auth_modes_4120 as auth_modes
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 ROOT = Path(__file__).resolve().parents[2]
@@ -184,17 +183,16 @@ async def test_rendered_binding_matches_production_startup(
         "MOONMIND_AUTH_MIGRATION_DECISION",
     ):
         monkeypatch.setenv(name, environment.get(name, ""))
-    monkeypatch.setattr(main.settings.oidc, "AUTH_PROVIDER", "disabled")
-    monkeypatch.setattr(auth_modes, "_ACTIVE_PRODUCTION_MODE", None)
+    monkeypatch.setenv("AUTH_PROVIDER", str(None or ""))
     key_path = tmp_path / "session-key"
     monkeypatch.setenv("MOONMIND_SESSION_KEY_PATH", str(key_path))
     if not allowed:
         with pytest.raises(RuntimeError, match="trusted-ingress"):
-            await main._initialize_oidc_provider(FastAPI())
+            await main._initialize_operator_admission(FastAPI())
         return
     app = FastAPI()
-    await main._initialize_oidc_provider(app)
+    await main._initialize_operator_admission(app)
     assert app.state.auth_production_mode == "disabled"
     first_key = key_path.read_bytes()
-    await main._initialize_oidc_provider(FastAPI())
+    await main._initialize_operator_admission(FastAPI())
     assert key_path.read_bytes() == first_key

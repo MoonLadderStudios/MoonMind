@@ -13,11 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.operator_boundary_4347 import (
-    ADMITTED_WORK,
-    router,
-    ws_router,
-)
+from tests.helpers.operator_boundary import ADMITTED_WORK, router, ws_router
 
 
 def _remote_env(monkeypatch):

@@ -22,7 +22,7 @@ from moonmind.workflows.temporal.artifacts import (
 async def test_retained_disabled_explicit_prompt_needs_no_fabricated_admission(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
         settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")

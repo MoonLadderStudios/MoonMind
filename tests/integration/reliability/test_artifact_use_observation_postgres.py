@@ -16,7 +16,6 @@ import pytest_asyncio
 from sqlalchemy import select, text
 
 from api_service.db import models
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
@@ -39,7 +38,7 @@ _LOGGER = "moonmind.workflows.temporal.artifacts"
 
 @pytest_asyncio.fixture
 async def artifact_context(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     tables = [
         models.TemporalArtifact.__table__,
         models.TemporalArtifactLink.__table__,

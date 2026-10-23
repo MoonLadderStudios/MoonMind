@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
+from tests.helpers.account_source import create_source_schema
 
 
 def _factory(tmp_path, name="conv4346.db"):
@@ -22,7 +22,7 @@ def _factory(tmp_path, name="conv4346.db"):
 
 
 async def _mk_user(session, **kw):
-    from api_service.db.models import User
+    from tests.helpers.account_source import User
 
     u = User(id=uuid.uuid4(), email=kw.get("email", f"{uuid.uuid4().hex}@ex.com"))
     for k, v in kw.items():
@@ -39,7 +39,7 @@ async def test_fresh_empty_database_initializes(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         decision = await evaluate_disposition(session)
         assert decision.disposition == "fresh_init"
@@ -52,9 +52,9 @@ async def test_single_operator_is_eligible(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id))
@@ -70,9 +70,9 @@ async def test_proven_aliases_convert_but_matching_email_does_not(tmp_path):
 
     engine, factory = _factory(tmp_path, "alias.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u1 = await _mk_user(session, email="Same.Person@example.com")
         u2 = await _mk_user(session, email="same.person@EXAMPLE.com")
@@ -99,9 +99,9 @@ async def test_admin_flags_and_single_active_login_are_insufficient(tmp_path):
 
     engine, factory = _factory(tmp_path, "flags.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         admin = await _mk_user(session, is_superuser=True, is_active=False)
         plain = await _mk_user(session, is_superuser=False, is_active=True)
@@ -118,16 +118,16 @@ async def test_serialized_and_inflight_refs_attribute_owners(tmp_path):
 
     engine, factory = _factory(tmp_path, "ser.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import (
             TemporalArtifact,
             TemporalExecutionOwnerType,
             TemporalExecutionRecord,
             TemporalWorkflowType,
-            UserProfile,
         )
         from moonmind.statuses.workflow import MoonMindWorkflowState
+        from tests.helpers.account_source import UserProfile
 
         u1 = await _mk_user(session)
         u2 = await _mk_user(session)
@@ -163,12 +163,10 @@ async def test_missing_owner_and_unowned_rows_are_unresolved(tmp_path):
 
     engine, factory = _factory(tmp_path, "unowned.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import (
-            TemporalArtifact,
-            UserProfile,
-        )
+        from api_service.db.models import TemporalArtifact
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id))
@@ -191,9 +189,9 @@ async def test_concurrent_mutation_invalidates_preflight(tmp_path):
 
     engine, factory = _factory(tmp_path, "stale.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id))
@@ -219,11 +217,12 @@ async def test_refusal_performs_no_source_mutation(tmp_path):
 
     engine, factory = _factory(tmp_path, "refuse.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from sqlalchemy import select
 
-        from api_service.db.models import ManagedSecret, User, UserProfile
+        from api_service.db.models import ManagedSecret
+        from tests.helpers.account_source import User, UserProfile
 
         u1 = await _mk_user(session)
         u2 = await _mk_user(session)
@@ -252,9 +251,9 @@ async def test_eligible_apply_runs_transforms_and_reruns_idempotently(tmp_path):
 
     engine, factory = _factory(tmp_path, "apply.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id))
@@ -287,9 +286,9 @@ async def test_missing_transform_coverage_refuses(tmp_path):
 
     engine, factory = _factory(tmp_path, "cov.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(
@@ -311,9 +310,9 @@ async def test_reports_contain_no_credentials(tmp_path):
 
     engine, factory = _factory(tmp_path, "redact.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session, email="secret-person@example.com")
         session.add(
@@ -333,16 +332,16 @@ async def test_schedule_preset_settings_workflow_surfaces_attribute_owners(tmp_p
 
     engine, factory = _factory(tmp_path, "surfaces.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import (
             Preset,
             PresetScopeType,
             RecurringWorkflowDefinition,
             SettingsOverride,
-            UserProfile,
             WorkflowRun,
         )
+        from tests.helpers.account_source import UserProfile
 
         u1 = await _mk_user(session)
         u2 = await _mk_user(session)
@@ -383,20 +382,22 @@ async def test_schedule_preset_settings_workflow_surfaces_attribute_owners(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_single_operator_instance_resources_publish_without_noop_transforms(tmp_path):
+async def test_single_operator_instance_resources_publish_without_noop_transforms(
+    tmp_path,
+):
     """Instance resources preserve their existing owners' supported behavior."""
     from api_service.services import single_user_conversion as suc
 
     engine, factory = _factory(tmp_path, "single-surface.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import (
             Preset,
             PresetScopeType,
             RecurringWorkflowDefinition,
-            UserProfile,
         )
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id))
@@ -437,12 +438,13 @@ async def test_guarded_upgrade_converts_profile_secrets_with_real_transform(tmp_
     """Eligible conversion executes the real profile_secrets transform."""
     from sqlalchemy import select
 
-    from api_service.db.models import ManagedSecret, UserProfile
+    from api_service.db.models import ManagedSecret
     from api_service.services import single_user_conversion as suc
+    from tests.helpers.account_source import UserProfile
 
     engine, factory = _factory(tmp_path, "real-transform.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u = await _mk_user(session)
         session.add(
@@ -465,12 +467,11 @@ async def test_guarded_upgrade_converts_profile_secrets_with_real_transform(tmp_
 
 
 @pytest.mark.asyncio
-async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
+async def test_startup_refusal_log_names_unresolved_attribution(tmp_path):
     """The API startup route logs why the conversion did not publish.
 
-    Operators and the upgrade journey read this line to tell a refusal that
-    waits for subsystem transforms from an attribution refusal. It carries
-    the sanitized decision detail only, never resource content.
+    Operators and the upgrade journey read this line to diagnose attribution
+    refusals. It carries sanitized decision detail, never resource content.
     """
     import logging
 
@@ -480,7 +481,7 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
 
     engine, factory = _factory(tmp_path, "startup-refusal.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u = await _mk_user(session)
         session.add(
@@ -491,7 +492,7 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
                 value_json="setting-secret-value",
             )
         )
-        session.add(WorkflowRun(feature_key="feat-1", requested_by_user_id=u.id))
+        session.add(WorkflowRun(feature_key="feat-1", requested_by_user_id=uuid.uuid4()))
         await session.commit()
     records: list[str] = []
 
@@ -514,7 +515,7 @@ async def test_startup_refusal_log_names_the_uncovered_subsystems(tmp_path):
     logged = "\n".join(records)
     assert summary["published"] is False
     assert (
-        "Single-user guarded upgrade blocked (missing_transform_coverage: "
-        "retained subsystems lack registered transforms: workflows)"
+        "Single-user guarded upgrade blocked (unknown_principal: "
+        "retained references point at missing users; resolve attribution before conversion)"
     ) in logged
     assert "setting-secret-value" not in logged

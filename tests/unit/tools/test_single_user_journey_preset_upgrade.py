@@ -203,18 +203,13 @@ async def test_real_conversion_preserves_content_and_ids_with_exact_digest_trans
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
     from api_service.api.schemas import PresetExpandResponseSchema, PresetResponseSchema
-    from api_service.db.models import (
-        Base,
-        Preset,
-        PresetReleaseStatus,
-        PresetScopeType,
-        User,
-    )
+    from api_service.db.models import Base, Preset, PresetReleaseStatus, PresetScopeType
     from api_service.services.presets.catalog import (
         PresetCatalogService,
         _preset_digest,
     )
     from api_service.services.single_user_conversion import run_guarded_upgrade
+    from tests.helpers.account_source import User
 
     api = PresetJourneyApi()
     state = _populate(api)

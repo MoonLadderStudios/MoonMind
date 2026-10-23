@@ -18,7 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
+from tests.helpers.account_source import create_source_schema
 
 
 def _factory(tmp_path, name="conv4461.db"):
@@ -28,7 +28,7 @@ def _factory(tmp_path, name="conv4461.db"):
 
 
 async def _mk_user(session, **kw):
-    from api_service.db.models import User
+    from tests.helpers.account_source import User
 
     u = User(id=uuid.uuid4(), email=kw.get("email", f"{uuid.uuid4().hex}@ex.com"))
     for k, v in kw.items():
@@ -68,7 +68,7 @@ async def test_unreadable_inventory_refuses_as_unknown(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     # The table stays present but loses a column (schema drift), so the
     # full-row SELECT fails with a real database error while the table
     # itself still exists: this is unknown evidence, not an empty table.
@@ -93,9 +93,9 @@ async def test_alias_evidence_requires_operator_authorization(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u1 = await _mk_user(session)
         u2 = await _mk_user(session)
@@ -123,7 +123,7 @@ async def test_collision_resolution_requires_operator_authorization(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         with pytest.raises(ConversionAuthorizationError):
             await evaluate_disposition(
@@ -138,7 +138,7 @@ async def test_settings_same_key_different_scopes_is_not_a_collision(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import SettingsOverride
 
@@ -166,7 +166,7 @@ async def test_settings_same_context_distinct_values_collide(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import SettingsOverride
 
@@ -206,7 +206,7 @@ async def test_seeded_presets_carry_deployment_provenance(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import Preset, PresetScopeType
 
@@ -248,7 +248,7 @@ async def test_null_owner_workflow_runs_are_unowned(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import WorkflowRun
 
@@ -271,9 +271,9 @@ async def test_profile_transform_rewires_dangling_refs(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id, openai_api_key_encrypted="tok-live"))
@@ -307,9 +307,9 @@ async def test_profile_transform_keeps_working_env_refs(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-working")
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id, openai_api_key_encrypted="tok-stale"))
@@ -337,7 +337,7 @@ async def test_same_count_value_change_trips_staleness(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import SettingsOverride
 
@@ -364,7 +364,7 @@ async def test_interrupted_apply_leaves_nothing_and_retry_publishes(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     calls = {"n": 0}
 
     async def flaky(session, eligible):
@@ -413,7 +413,7 @@ async def test_stale_in_progress_fails_closed_without_claim(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         bound = await suc.preflight(session)
         session.add(
@@ -445,7 +445,7 @@ async def test_replay_never_defaults_missing_completion_to_success(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         bound = await suc.preflight(session)
         assert bound.decision.disposition == "fresh_init"
@@ -470,7 +470,7 @@ async def test_digest_binds_collision_resolution_values(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         first = await suc.preflight(
             session,
@@ -498,7 +498,7 @@ async def test_machine_owned_sources_are_not_principals(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         from api_service.db.models import WorkflowExecutionSourceMapping
 
@@ -535,7 +535,7 @@ async def test_stored_outcomes_scrub_sensitive_top_level_keys(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         bound = await suc.preflight(session)
 
@@ -572,13 +572,13 @@ async def test_profile_rewire_tolerates_absent_profile_table(tmp_path):
 
     engine, factory = _factory(tmp_path, name="conv4461-absent-profiles.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with engine.begin() as conn:
         await conn.run_sync(
             ManagedAgentProviderProfile.__table__.drop, checkfirst=True
         )
     async with factory() as session:
-        from api_service.db.models import UserProfile
+        from tests.helpers.account_source import UserProfile
 
         u = await _mk_user(session)
         session.add(UserProfile(user_id=u.id, openai_api_key_encrypted="tok-absent"))

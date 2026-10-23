@@ -106,17 +106,14 @@ async def test_save_uses_instance_preferences_without_identity(tmp_path):
 
 
 async def test_admitted_http_journey_does_not_load_person(tmp_path, monkeypatch):
-    from unittest.mock import AsyncMock
-
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
 
-    from api_service import auth_providers
     from api_service.api.routers.presets import router
     from api_service.db.base import get_async_session
-    from api_service.db.models import User
     from api_service.services.single_user_conversion import run_guarded_upgrade
     from moonmind.config.settings import settings
+    from api_service.migrations.account_source import source_user_ids
 
     monkeypatch.delenv("MOONMIND_PUBLIC_BASE_URL", raising=False)
     monkeypatch.setattr(settings.feature_flags, "preset_catalog", True)
@@ -146,15 +143,13 @@ async def test_admitted_http_journey_does_not_load_person(tmp_path, monkeypatch)
                 },
             )
             assert denied.status_code == 503
-            assert denied.json()["detail"] == "setup_required"
+            assert denied.json()["detail"] == "conversion_required"
             async with maker() as session:
                 assert not (await session.scalars(select(Preset))).all()
                 result = await run_guarded_upgrade(session, operator_authorized=True)
                 assert result.published
-                assert not (await session.scalars(select(User))).all()
+                assert await source_user_ids(session) == []
 
-            load_user = AsyncMock(side_effect=AssertionError("must not load a person"))
-            monkeypatch.setattr(auth_providers, "_load_disabled_user", load_user)
             response = await client.post(
                 "/api/presets",
                 json={
@@ -178,9 +173,8 @@ async def test_admitted_http_journey_does_not_load_person(tmp_path, monkeypatch)
             listed = await client.get("/api/presets", params={"favoritesOnly": "true"})
             assert [i["slug"] for i in listed.json()["items"]] == ["http-demo"]
             assert listed.json()["items"][0]["recentAppliedAt"]
-            load_user.assert_not_awaited()
             async with maker() as session:
-                assert not (await session.scalars(select(User))).all()
+                assert await source_user_ids(session) == []
         async with AsyncClient(
             transport=ASGITransport(app=app, client=("10.1.2.3", 12345)),
             base_url="http://localhost",

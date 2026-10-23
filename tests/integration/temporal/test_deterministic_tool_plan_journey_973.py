@@ -297,10 +297,9 @@ async def test_registered_document_discovery_business_failure_records_failed_ste
 async def test_registered_dispatch_cannot_read_another_execution_registry(
     tmp_path: Path, monkeypatch
 ):
-    from moonmind.config.settings import settings
     from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with _artifact_service(tmp_path) as service:
         bindings = _bindings(service)
         _, plan = await _admit(

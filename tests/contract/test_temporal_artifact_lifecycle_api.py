@@ -14,13 +14,9 @@ from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     router,
 )
-from api_service.auth_providers import (
-    get_current_user,
-    get_current_user_optional,
-    get_instance_access,
-    get_instance_access_optional,
-)
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db import models as db_models
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.schemas.temporal_artifact_models import ArtifactMetadataModel
 
 def _artifact() -> SimpleNamespace:
@@ -60,25 +56,8 @@ def _build_app() -> tuple[FastAPI, AsyncMock]:
     app.include_router(router)
     service = AsyncMock()
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
-    mock_user = SimpleNamespace(
-        id=uuid4(), email="lifecycle@example.com", is_active=True
-    )
-    user_dependencies = {
-        dep.call
-        for route_item in router.routes
-        if route_item.dependant is not None
-        for dep in route_item.dependant.dependencies
-        if dep.call.__name__ in {"_current_user_fallback", "_strict_current_user", "_optional_current_user"}
-    }
-    if not user_dependencies:
-        user_dependencies = {
-            get_current_user(),
-            get_current_user_optional(),
-            get_instance_access,
-            get_instance_access_optional,
-        }
-    for dependency in user_dependencies:
-        app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
+    for dependency in (get_instance_access, get_instance_access_optional):
+        app.dependency_overrides[dependency] = lambda: OperatorAdmission(via="loopback")
     return app, service
 
 def test_pin_unpin_delete_contracts() -> None:

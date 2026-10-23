@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -96,24 +97,14 @@ async def proxy_pass_through(
     # ingress-only transport claim: strip it (any casing) so an
     # ingress-injected X-Moonmind-User is never disclosed upstream, and
     # never let runtime credentials flow implicitly either.
-    headers = dict(request.headers)
-    headers.pop("host", None)
-    headers.pop("authorization", None)
-    headers.pop("x-api-key", None)
-    for _key in [k for k in headers if k.strip().lower() == "x-moonmind-user"]:
-        headers.pop(_key, None)
-    try:
-        from moonmind.security.trusted_proxy_4124 import safe_outbound_headers as _strip
-        from moonmind.security.trusted_proxy_4124 import (
-            DEFAULT_PROXY_HEADER as _proxy_header,
-        )
-
-        headers = _strip(headers, proxy_header=_proxy_header)
-    except Exception:
-        # Defense-in-depth only: the explicit pops above already removed
-        # the identity header and runtime credentials, so a helper-import
-        # failure must not break proxy forwarding.
-        pass
+    private_headers = {
+        "host", "authorization", "x-api-key", "cookie", "x-moonmind-user",
+        (os.environ.get("MOONMIND_PROXY_IDENTITY_HEADER") or "").strip().lower(),
+    }
+    headers = {
+        key: value for key, value in request.headers.items()
+        if key.strip().lower() not in private_headers
+    }
     
     header_key = config["auth_header_key"]
     header_val = config["auth_header_format"].format(token=provider_secret)

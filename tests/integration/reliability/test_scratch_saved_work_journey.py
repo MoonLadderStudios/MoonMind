@@ -135,7 +135,7 @@ async def _serialize_finalization_on_sqlite(sessions) -> None:
 
 
 async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
-    authority_context, monkeypatch, tmp_path, request, authenticated_mode  # noqa: F811
+    authority_context, monkeypatch, tmp_path, request  # noqa: F811
 ):
     sessions, _plan_artifacts, _plan_reader = authority_context
     await _serialize_finalization_on_sqlite(sessions)

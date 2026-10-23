@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import socket
@@ -9,12 +10,12 @@ from contextlib import closing
 import pytest
 import uvicorn
 
-from api_service.api.routers.workflow_console import _resolve_user_dependency_overrides
+from tests.helpers.route_dependencies import _resolve_user_dependency_overrides
 from api_service.db.base import get_async_session
-from api_service.db.models import User, Base
+from api_service.db.models import Base
 from api_service.main import app as main_app
 from moonmind.config.settings import settings
-import asyncio
+from tests.helpers.account_source import User
 
 if not os.getenv("RUN_E2E_TESTS"):
     pytest.skip("E2E tests disabled", allow_module_level=True)
@@ -40,8 +41,8 @@ def server():
     test_user = User(id=uuid.uuid4(), email="test@example.com")
     original_overrides = dict(main_app.dependency_overrides)
 
-    from sqlalchemy.pool import StaticPool
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
 
     for dependency in _resolve_user_dependency_overrides():
         main_app.dependency_overrides[dependency] = (

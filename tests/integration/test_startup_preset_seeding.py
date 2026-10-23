@@ -13,7 +13,7 @@ from api_service.services.presets.catalog import PresetCatalogService
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 @pytest.mark.asyncio
-async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path):
+async def test_startup_seeds_default_task_templates(provider_env_keys, tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
     db_base.DATABASE_URL = db_url
     db_base.engine = create_async_engine(db_url, future=True)
@@ -23,9 +23,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    with (
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     async with db_base.async_session_maker() as session:
@@ -884,7 +882,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
     [("previous-install/speckit-orchestrate.yaml", False), (None, True), ("", True)],
 )
 async def test_startup_deactivates_only_deployment_owned_legacy_presets(
-    disabled_env_keys, tmp_path, seed_source, expected_active
+    provider_env_keys, tmp_path, seed_source, expected_active
 ):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
     db_base.DATABASE_URL = db_url
@@ -913,10 +911,12 @@ async def test_startup_deactivates_only_deployment_owned_legacy_presets(
     # Exercise the real catalog startup while keeping unrelated workflow
     # scheduling off external Temporal services.
     with (
-        patch("api_service.main._initialize_oidc_provider"),
+        patch("api_service.main._initialize_operator_admission"),
         patch("api_service.main.ensure_provider_profile_managers_started"),
         patch("api_service.main.ensure_managed_session_reconcile_schedule_started"),
-        patch("api_service.main.ensure_managed_runtime_workspace_cleanup_schedule_started"),
+        patch(
+            "api_service.main.ensure_managed_runtime_workspace_cleanup_schedule_started"
+        ),
         patch("api_service.main.ensure_omnigent_oauth_host_janitor_schedule_started"),
         patch("api_service.main.ensure_recurring_workflow_schedules_reconciled"),
     ):

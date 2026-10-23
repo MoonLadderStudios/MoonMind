@@ -6,15 +6,13 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import omnigent_bridge as bridge
 from api_service.api.routers import omnigent_native_ui as ui
 from api_service.db.base import get_async_session
-from api_service.db.models import Base, User
-from api_service.services.single_user_conversion import SingleUserConversionRun
-from moonmind.security import auth_modes_4120
+from api_service.db.models import Base
+from tests.helpers.account_source import User
 from tests.unit.api.routers.test_omnigent_native_ui import _INDEX_HTML, _FakeUpstream
 from tests.unit.api.routers.test_omnigent_workflow_chat import (
     _fake_registry,
@@ -30,7 +28,6 @@ BASE = f"/api/workflow-chat-bindings/{BINDING}/omnigent/v1/sessions/{BINDING}"
 
 @pytest_asyncio.fixture
 async def chat(tmp_path, monkeypatch):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
     for key in (
         "MOONMIND_PUBLIC_BASE_URL",
         "MOONMIND_TRUSTED_INGRESS",
@@ -43,17 +40,10 @@ async def chat(tmp_path, monkeypatch):
         await conn.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        session.add(
-            SingleUserConversionRun(
-                preflight_digest="chat-fresh",
-                status="complete",
-                result_json={
-                    "published": True,
-                    "decision": {"disposition": "fresh_init"},
-                },
-            )
-        )
-        await session.commit()
+        from api_service.services.single_user_conversion import run_guarded_upgrade
+
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+        assert result.published
 
     async def sessions():
         async with factory() as session:
@@ -142,7 +132,7 @@ async def test_account_free_bootstrap_messages_reconnect_and_interrupt(chat, ret
         if item["metadata"] and "actor" in item["metadata"]
     )
     async with chat.factory() as session:
-        assert (await session.execute(select(User))).scalars().all() == []
+        assert "user" not in Base.metadata.tables
 
 
 @pytest.mark.parametrize(

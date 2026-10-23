@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, TemporalArtifactRedactionLevel
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -35,7 +34,7 @@ async def test_preview_metadata_is_exposed_for_restricted_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalArtifactService(

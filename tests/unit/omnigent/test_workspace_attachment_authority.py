@@ -25,7 +25,7 @@ from moonmind.workflows.temporal.artifacts import (
 
 @pytest_asyncio.fixture
 async def artifacts(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
         settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")

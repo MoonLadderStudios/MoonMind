@@ -57,7 +57,7 @@ from api_service.db.models import Base, Uuid, mutable_json_dict
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_REVISION = "398_instance_settings"
+SCHEMA_REVISION = "399_retire_shared_accounts"
 
 DEPLOYMENT_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -422,13 +422,12 @@ def _is_artifact_machine_principal(raw: Any) -> bool:
 
 
 def _uses_reserved_disabled_artifact_scope() -> bool:
-    """Identify the built-in disabled actor; callers must rule out a real User."""
-    from moonmind.config.settings import settings
-    from moonmind.security.auth_modes_4120 import is_disabled_local_mode
-
-    return is_disabled_local_mode() and _looks_like_uuid(
-        settings.oidc.DEFAULT_USER_ID or DEPLOYMENT_SUBJECT_ID
-    ) == DEPLOYMENT_SUBJECT_ID
+    """Recognize predecessor local scope during conversion, never as admission."""
+    return (
+        os.environ.get("AUTH_PROVIDER", "disabled").strip().lower() == "disabled"
+        and _looks_like_uuid(os.environ.get("DEFAULT_USER_ID") or DEPLOYMENT_SUBJECT_ID)
+        == DEPLOYMENT_SUBJECT_ID
+    )
 
 
 async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
@@ -439,8 +438,6 @@ async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
     The probe never supplies attribution or grants recovery.
     """
     from api_service.db.models import TemporalArtifact
-    from moonmind.config.settings import settings
-    from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 
     def stripped(value):
         return func.ltrim(
@@ -457,10 +454,8 @@ async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
             stripped(func.substr(normalized, len(prefix) + 1)) != "",
         ) for prefix in _ARTIFACT_MACHINE_PREFIXES),
     )
-    if is_disabled_local_mode():
-        default_owner = _looks_like_uuid(
-            settings.oidc.DEFAULT_USER_ID or DEPLOYMENT_SUBJECT_ID
-        )
+    if _uses_reserved_disabled_artifact_scope():
+        default_owner = DEPLOYMENT_SUBJECT_ID
         if default_owner is not None:
             # The unchanged raw-owner equality already admits this exact
             # disabled request creator, even without a retained User row.
@@ -503,7 +498,14 @@ async def _lock_conversion_evidence(session: AsyncSession) -> None:
 
     connection = await session.connection()
     present = set(await connection.run_sync(lambda c: sa_inspect(c).get_table_names()))
-    names = {"user", "user_profile", "settings_overrides", "single_user_conversion_runs"}
+    names = {
+        "user",
+        "user_profile",
+        "retired_user",
+        "retired_user_profile",
+        "settings_overrides",
+        "single_user_conversion_runs",
+    }
     names.update(t for t, _c, _k in _PRINCIPAL_SURFACES)
     names.update(t for t, _c in _UNOWNED_TRACKED)
     names.update(_UNOWNED_CONJUNCTIONS)
@@ -543,14 +545,14 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     Never records emails, names, secret values, or resource content —
     only UUID principals, counts, and collision keys.
     """
-    from api_service.db.models import User
+    from api_service.migrations.account_source import source_tables, source_user_ids
 
     inv = ConversionInventory()
     # Certificate-dependent exemptions are bound by the unowned-row counts in
     # the fingerprint. Hashing the ledger itself would invalidate our own
     # completed conversion's idempotent replay even when no row relies on it.
     instance_admitted = await _has_certified_instance_admission(session, inv)
-    users = (await session.execute(select(User.id))).scalars().all()
+    users = await source_user_ids(session)
     inv.user_ids = sorted(str(u) for u in users)
     user_set = set(inv.user_ids)
     preserve_deployment_artifacts = (
@@ -558,15 +560,15 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         and DEPLOYMENT_SUBJECT_ID not in user_set
     )
 
-    from api_service.db.models import User as _U
+    from api_service.db.models import Base
 
-    metadata = _U.__table__.metadata
+    tables = {**Base.metadata.tables, **await source_tables(session)}
     principals: dict[str, set[str]] = {}
     unowned: dict[str, int] = {}
     resource_counts: dict[str, int] = {}
 
     for table_name, column_name, kind in _PRINCIPAL_SURFACES:
-        table = metadata.tables.get(table_name)
+        table = tables.get(table_name)
         if table is None or column_name not in table.c:
             continue
         col = table.c[column_name]
@@ -630,7 +632,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             # can hold startup for minutes on a large refused source. Keep the
             # original error and leave source values untouched.
             break
-        table = metadata.tables.get(table_name)
+        table = tables.get(table_name)
         if table is None:
             continue
         # Conversion-owned output is not source attribution. Everything else,
@@ -662,10 +664,12 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     # their optional human owner columns are empty. Historical artifact links
     # alone do not invent a parent or an unrelated transform requirement.
     for table_name in (
-        "temporal_executions", "temporal_execution_sources",
-        "workflow_execution_source_mappings", "workflow_runs",
+        "temporal_executions",
+        "temporal_execution_sources",
+        "workflow_execution_source_mappings",
+        "workflow_runs",
     ):
-        table = metadata.tables.get(table_name)
+        table = tables.get(table_name)
         if table is not None:
             total = await _probe_count(
                 session, table, next(iter(table.primary_key.columns)),
@@ -680,7 +684,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
 
     # Unowned rows: resource exists without attribution in tracked tables.
     for table_name, column_name in _UNOWNED_TRACKED:
-        table = metadata.tables.get(table_name)
+        table = tables.get(table_name)
         if table is None or column_name not in table.c:
             continue
         col = table.c[column_name]
@@ -760,7 +764,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             unowned[f"{table_name}.{column_name}"] = int(nulls)
 
     for table_name, column_names in _UNOWNED_CONJUNCTIONS.items():
-        table = metadata.tables.get(table_name)
+        table = tables.get(table_name)
         if table is None or any(c not in table.c for c in column_names):
             continue
         cols = [table.c[c] for c in column_names]
@@ -800,16 +804,16 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     # are unchanged. Only hashes are retained, never plaintext.
     profile_content_entries: list[str] = []
     try:
-        from api_service.db.models import UserProfile
+        from api_service.migrations.account_source import source_profiles
         from api_service.services.profile_secret_migration import LEGACY_FIELDS
 
         async with session.begin_nested():
-            secret_rows = (await session.execute(select(UserProfile))).scalars().all()
+            secret_rows = await source_profiles(session)
         holders = set()
         for p in secret_rows:
             for column, _short in LEGACY_FIELDS:
                 try:
-                    value = getattr(p, column, None)
+                    value = p.get(column)
                 except Exception:
                     # An unreadable legacy ciphertext is unknown evidence:
                     # record which column failed and keep the holders found
@@ -817,10 +821,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                     _record_inventory_error(inv, f"profile_secrets:{column}")
                     continue
                 if isinstance(value, str) and value.strip():
-                    uid = _looks_like_uuid(getattr(p, "user_id", None))
+                    uid = _looks_like_uuid(p.get("user_id"))
                     if uid:
                         holders.add(uid)
-                    user_hex = str(getattr(p, "user_id", "") or "")
+                    user_hex = str(p.get("user_id", "") or "")
                     ciphertext_hash = hashlib.sha256(
                         value.encode()
                     ).hexdigest()
@@ -894,7 +898,7 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             # Refused attribution cannot be repaired by hashing more content.
             # Preserve the same bounded startup path as artifact inventory.
             break
-        table = metadata.tables.get(table_name)
+        table = tables.get(table_name)
         if table is None:
             continue
         try:
@@ -1281,7 +1285,8 @@ def _is_production_completion(
 
 
 async def _has_certified_instance_admission(
-    session: AsyncSession, inventory: ConversionInventory,
+    session: AsyncSession,
+    inventory: ConversionInventory,
 ) -> bool:
     """Recognize account-free rows emitted after a proven instance cutover.
 
@@ -1292,6 +1297,12 @@ async def _has_certified_instance_admission(
     contracts grant nothing.
     """
     predecessors = {
+        "398_instance_settings": (
+            "profile_secrets",
+            "artifacts",
+            "presets",
+            "settings",
+        ),
         "396_artifact_operator_recovery": ("profile_secrets", "artifacts"),
         "397_instance_preset_catalog": ("profile_secrets", "artifacts", "presets"),
     }
@@ -1429,11 +1440,12 @@ def _scrub_outcome_keys(mapping: dict[str, Any]) -> dict[str, Any]:
 def _preserved_instance_subsystems() -> set[str]:
     """Identify retained resources already consumed without an owner predicate.
 
-    Schedule and execution owners already treat historical human fields as
-    provenance. Rewriting those rows would change accepted work needlessly.
+    Schedule, execution, and read-only workflow history consumers already treat
+    historical human fields as provenance. Rewriting those rows would change
+    accepted work needlessly.
     Presets and settings have their own concrete transforms.
     """
-    return {"schedules", "temporal"}
+    return {"schedules", "temporal", "workflows"}
 
 
 async def apply_conversion(
@@ -1573,7 +1585,11 @@ async def apply_conversion(
 
             eligible_ids = sorted(set(fresh.user_ids) | set(fresh.secret_holders))
             outcomes: dict[str, Any] = {}
-            for name in sorted(transforms):
+            # Archive only after every subsystem has preserved its data.
+            ordered = sorted(name for name in transforms if name != "accounts")
+            if "accounts" in transforms:
+                ordered.append("accounts")
+            for name in ordered:
                 outcome = await _run_transform(
                     transforms[name], session, eligible_ids, options
                 )
@@ -1848,13 +1864,15 @@ async def artifacts_transform(
     if _uses_reserved_disabled_artifact_scope() and any(
         row.created_by_principal == DEPLOYMENT_SUBJECT_ID for row in rows
     ):
-        from api_service.db.models import User
+        from api_service.migrations.account_source import source_user_ids
 
         # The owning apply holds the User-table lock. eligible_ids also carries
         # secret holders, so it cannot establish whether a real zero User exists.
-        zero_user = (await session.execute(
-            select(User.id).where(User.id == UUID(DEPLOYMENT_SUBJECT_ID)).limit(1)
-        )).scalar_one_or_none()
+        zero_user = (
+            UUID(DEPLOYMENT_SUBJECT_ID)
+            if UUID(DEPLOYMENT_SUBJECT_ID) in await source_user_ids(session)
+            else None
+        )
         preserve_deployment_scope = zero_user is None
     eligible = set(eligible_ids)
     granted = 0
@@ -1930,18 +1948,19 @@ async def presets_transform(
         PresetRecent,
         PresetScopeType,
         RecurringWorkflowDefinition,
-        User,
     )
 
     rows = await _preset_rows(session, Preset)
     eligible = set(eligible_ids)
     # The old disabled local operator has no stored User. A real zero User
     # remains a person and must have passed the same attribution boundary.
+    from api_service.migrations.account_source import source_user_ids
+
     zero_user = (
-        await session.execute(
-            select(User.id).where(User.id == UUID(DEPLOYMENT_SUBJECT_ID)).limit(1)
-        )
-    ).scalar_one_or_none()
+        UUID(DEPLOYMENT_SUBJECT_ID)
+        if UUID(DEPLOYMENT_SUBJECT_ID) in await source_user_ids(session)
+        else None
+    )
     if zero_user is None:
         eligible.add(DEPLOYMENT_SUBJECT_ID)
     legacy = [row for row in rows if row.scope_type is not None]
@@ -2236,16 +2255,18 @@ async def settings_transform(
     values (SecretRefs and explicit nulls included) move unchanged, keys
     without rows stay inherited, and no newest-row or default is substituted.
     """
-    from api_service.db.models import SettingsAuditEvent, SettingsOverride, User
+    from api_service.db.models import SettingsAuditEvent, SettingsOverride
     from api_service.services.settings_catalog import SettingsCatalogService
 
     rows = await _preset_rows(session, SettingsOverride)
     eligible = set(eligible_ids)
+    from api_service.migrations.account_source import source_user_ids
+
     zero_user = (
-        await session.execute(
-            select(User.id).where(User.id == UUID(DEPLOYMENT_SUBJECT_ID)).limit(1)
-        )
-    ).scalar_one_or_none()
+        UUID(DEPLOYMENT_SUBJECT_ID)
+        if UUID(DEPLOYMENT_SUBJECT_ID) in await source_user_ids(session)
+        else None
+    )
     if zero_user is None:
         eligible.add(DEPLOYMENT_SUBJECT_ID)
     for row in rows:
@@ -2325,7 +2346,10 @@ async def settings_transform(
 #: schedules/executions are preserved by the guarded entrypoint. Retained
 #: preset and settings rows use their real transforms; legacy workflow data
 #: still requires its own conversion.
+from api_service.migrations.account_source import archive_accounts
+
 DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
+    "accounts": archive_accounts,
     "profile_secrets": profile_secrets_transform,
     "artifacts": artifacts_transform,
     "presets": presets_transform,

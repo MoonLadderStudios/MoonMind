@@ -16,12 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedSecret, User, UserProfile
+from api_service.db.models import ManagedSecret
 from api_service.main import health_check, startup_event
 
 # Registers the conversion ledger on ``Base.metadata`` (Alembic 386 creates it
 # in production); without it a fresh process defers conversion on startup.
 from api_service.services.single_user_conversion import SingleUserConversionRun
+from tests.helpers.account_source import User, UserProfile, create_source_schema
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -34,7 +35,7 @@ async def _seed_db(tmp_path, name="guard4346.db"):
         db_base.engine, class_=AsyncSession, expire_on_commit=False
     )
     async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
 
 
 async def _reported_conversion():
@@ -46,7 +47,7 @@ async def _reported_conversion():
 
 @pytest.mark.parametrize("base_url", ["", "https://operator.example"])
 async def test_startup_keeps_retained_access_until_replacement_is_configured(
-    disabled_env_keys, tmp_path, monkeypatch, base_url
+    provider_env_keys, tmp_path, monkeypatch, base_url
 ):
     from api_service.main import _run_guarded_single_user_upgrade
 
@@ -73,7 +74,7 @@ async def test_startup_keeps_retained_access_until_replacement_is_configured(
 
 @pytest.mark.parametrize("base_url", ["", "https://operator.example"])
 async def test_startup_converts_under_an_approved_publication(
-    disabled_env_keys, tmp_path, monkeypatch, base_url
+    provider_env_keys, tmp_path, monkeypatch, base_url
 ):
     """The approved binding admits before and after conversion, so it may run."""
     from api_service.main import _run_guarded_single_user_upgrade
@@ -93,13 +94,15 @@ async def test_startup_converts_under_an_approved_publication(
 
 @pytest.mark.asyncio
 async def test_startup_seeds_no_default_user_on_fresh_database(
-    disabled_env_keys, tmp_path
+    provider_env_keys, tmp_path
 ):
     await _seed_db(tmp_path, "fresh.db")
-    with (patch("api_service.main._initialize_oidc_provider"),):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
     async with db_base.async_session_maker() as session:
-        assert (await session.execute(select(User))).scalars().all() == []
+        from api_service.migrations.account_source import source_user_ids
+
+        assert await source_user_ids(session) == []
     assert await _reported_conversion() == {
         "published": True,
         "disposition": "fresh_init",
@@ -110,7 +113,7 @@ async def test_startup_seeds_no_default_user_on_fresh_database(
 
 @pytest.mark.asyncio
 async def test_startup_preserves_refused_multi_person_source(
-    disabled_env_keys, tmp_path
+    provider_env_keys, tmp_path
 ):
     await _seed_db(tmp_path, "refused.db")
     async with db_base.async_session_maker() as session:
@@ -127,7 +130,7 @@ async def test_startup_preserves_refused_multi_person_source(
 
     collect = AsyncMock(wraps=conversion.collect_inventory)
     with (
-        patch("api_service.main._initialize_oidc_provider"),
+        patch("api_service.main._initialize_operator_admission"),
         patch.object(conversion, "collect_inventory", collect),
     ):
         await startup_event()
@@ -160,7 +163,7 @@ async def test_startup_preserves_refused_multi_person_source(
 
 @pytest.mark.asyncio
 async def test_refused_release_workflows_and_operator_access_still_function(
-    disabled_env_keys, tmp_path
+    provider_env_keys, tmp_path
 ):
     """Release-level refusal: old workflows readable, guard reports redacted."""
     from api_service.db.models import TemporalArtifact, WorkflowRun
@@ -183,7 +186,7 @@ async def test_refused_release_workflows_and_operator_access_still_function(
         )
         await session.commit()
 
-    with (patch("api_service.main._initialize_oidc_provider"),):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     async with db_base.async_session_maker() as session:
@@ -214,36 +217,64 @@ async def test_refused_release_workflows_and_operator_access_still_function(
 
 @pytest.mark.asyncio
 async def test_disabled_boundary_serves_after_proven_fresh_conversion(
-    disabled_env_keys, tmp_path
+    provider_env_keys, tmp_path
 ):
     """Ledger-proven fresh state serves without minting a User row."""
-    from api_service.auth_providers import _load_disabled_user
+    from fastapi import Request
+
+    from api_service.auth_providers import get_instance_access
     from api_service.services.single_user_conversion import run_guarded_upgrade
+    from moonmind.security.operator_admission import OperatorAdmission
 
     await _seed_db(tmp_path, "boundary-fresh.db")
     async with db_base.async_session_maker() as session:
         result = await run_guarded_upgrade(session, operator_authorized=True)
         assert result.published is True
     async with db_base.async_session_maker() as session:
-        user = await _load_disabled_user(session)
-        assert user.is_superuser is True
-        assert user.is_active is True
+        user = await get_instance_access(
+            Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": "/",
+                    "headers": [(b"host", b"localhost")],
+                    "client": ("127.0.0.1", 1234),
+                }
+            ),
+            session,
+        )
+        assert isinstance(user, OperatorAdmission)
         # No synthetic account was minted to satisfy the boundary.
-        assert (await session.execute(select(User))).scalars().all() == []
+        from api_service.migrations.account_source import source_user_ids
+
+        assert await source_user_ids(session) == []
 
 
 @pytest.mark.asyncio
 async def test_disabled_boundary_stays_setup_required_without_conversion(
-    disabled_env_keys, tmp_path
+    provider_env_keys, tmp_path
 ):
     """Failed/missing conversion must not expose account-free data."""
-    from fastapi import HTTPException
+    from fastapi import HTTPException, Request
 
-    from api_service.auth_providers import _load_disabled_user
+    from api_service.auth_providers import get_instance_access
 
     await _seed_db(tmp_path, "boundary-blocked.db")
     async with db_base.async_session_maker() as session:
         with pytest.raises(HTTPException) as exc:
-            await _load_disabled_user(session)
+            await get_instance_access(
+                Request(
+                    {
+                        "type": "http",
+                        "method": "GET",
+                        "scheme": "http",
+                        "path": "/",
+                        "headers": [(b"host", b"localhost")],
+                        "client": ("127.0.0.1", 1234),
+                    }
+                ),
+                session,
+            )
         assert exc.value.status_code == 503
-        assert exc.value.detail == "setup_required"
+        assert exc.value.detail == "conversion_required"

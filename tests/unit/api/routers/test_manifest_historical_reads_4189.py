@@ -45,8 +45,6 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
         router,
     )
     from api_service.auth_providers import (
-        get_current_user,
-        get_current_user_optional,
         get_instance_access,
         get_instance_access_optional,
     )
@@ -114,8 +112,8 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
             # Routes that reach Temporal directly (reschedule) or through the
             # adapter dependency (retry-publication) share the recorded adapter.
             app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
-            app.dependency_overrides[get_current_user()] = lambda: principal["user"]
-            app.dependency_overrides[get_current_user_optional()] = (
+            app.dependency_overrides[get_instance_access] = lambda: principal["user"]
+            app.dependency_overrides[get_instance_access_optional] = (
                 lambda: principal["user"]
             )
             app.dependency_overrides[get_instance_access] = lambda: principal["user"]

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from moonmind.schemas.workflow_control_models import WorkflowControlTarget
-
 from types import SimpleNamespace
 from typing import Iterator
 from uuid import uuid4
@@ -18,7 +16,7 @@ from api_service.api.routers.system_operations import (
 from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import Base
-from moonmind.config.settings import settings
+from moonmind.schemas.workflow_control_models import WorkflowControlTarget
 
 
 class FakeTemporalService:
@@ -151,7 +149,7 @@ def test_missing_operations_invoke_is_rejected_without_subsystem_invocation(
 ) -> None:
     client, temporal = system_operations_client
     _override_user(client.app, is_superuser=False)
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
 
     response = client.post(
         "/api/system/worker-pause",
@@ -179,7 +177,7 @@ def test_missing_operations_read_is_rejected(
         is_superuser=False,
         settings_permissions={"operations.invoke"},
     )
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
 
     response = client.get("/api/system/worker-pause")
 
@@ -197,7 +195,7 @@ def test_non_superuser_with_operations_permissions_can_read_and_invoke(
         is_superuser=False,
         settings_permissions={"operations.read", "operations.invoke"},
     )
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
 
     snapshot = client.get("/api/system/worker-pause")
     command = client.post(

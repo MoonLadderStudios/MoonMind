@@ -1,4 +1,3 @@
-import uuid
 from unittest.mock import patch
 
 import pytest
@@ -6,14 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.auth import _DEFAULT_USER_ID
+_DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
-    ProviderCredentialSource,
-    ProviderProfileAuthState,
-    UserProfile,
 )
 from api_service.main import startup_event
 
@@ -21,7 +17,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 
 @pytest.mark.asyncio
-async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
+async def test_startup_profile_seeding(provider_env_keys, tmp_path):
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
     db_base.DATABASE_URL = db_url
     db_base.engine = create_async_engine(db_url, future=True)
@@ -31,7 +27,7 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    with (patch("api_service.main._initialize_oidc_provider"),):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     async with db_base.async_session_maker() as session:
@@ -40,43 +36,15 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
         # from explicit provider profiles + managed-secret references;
         # legacy UserProfile-held values convert via
         # profile_secret_migration, never via seeding here.
-        result = await session.execute(
-            select(UserProfile).where(
-                UserProfile.user_id == uuid.UUID(_DEFAULT_USER_ID)
-            )
-        )
-        profile = result.scalars().first()
-        assert profile is None
-        zen = await session.get(
-            ManagedAgentProviderProfile,
-            "opencode-zen-free",
-        )
-        assert zen is not None
-        assert zen.enabled is True
-        assert zen.auth_state == ProviderProfileAuthState.CONNECTED
-        assert zen.credential_source == ProviderCredentialSource.NONE
-        assert zen.secret_refs == {}
-        assert zen.default_model == "opencode/muse-spark-1.3-contributor-free"
-        assert zen.default_effort == "xhigh"
-        # MoonLadderStudios/MoonMind#3877: the credentialless Zen seed holds
-        # runtime-default authority for `opencode` straight out of startup.
-        assert zen.is_default is True
-        opencode_defaults = list(
-            (
-                await session.execute(
-                    select(ManagedAgentProviderProfile.profile_id).where(
-                        ManagedAgentProviderProfile.runtime_id == "opencode",
-                        ManagedAgentProviderProfile.is_default.is_(True),
-                    )
-                )
-            ).scalars()
-        )
-        assert opencode_defaults == ["opencode-zen-free"]
+        from sqlalchemy import inspect
+        connection = await session.connection()
+        tables = await connection.run_sync(lambda c: inspect(c).get_table_names())
+        assert "user_profile" not in tables
 
 
 @pytest.mark.asyncio
 async def test_startup_reclaims_a_released_opencode_runtime_default(
-    disabled_env_keys, tmp_path
+    provider_env_keys, tmp_path
 ):
     """Replay coverage for the persisted ``is_default`` flag at real startup.
 
@@ -98,7 +66,7 @@ async def test_startup_reclaims_a_released_opencode_runtime_default(
     async with db_base.engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    with (patch("api_service.main._initialize_oidc_provider"),):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     # Model the pre-change persisted state: the Zen row exists but does not
@@ -110,7 +78,7 @@ async def test_startup_reclaims_a_released_opencode_runtime_default(
         zen.default_selected_by_operator = False
         await session.commit()
 
-    with (patch("api_service.main._initialize_oidc_provider"),):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     async with db_base.async_session_maker() as session:

@@ -110,8 +110,6 @@ async def _insert_historical_manifest_record(session, *, state=None) -> object:
 
 def _override_user(app: FastAPI, *, is_superuser: bool = True) -> SimpleNamespace:
     from api_service.auth_providers import (
-        get_current_user,
-        get_current_user_optional,
         get_instance_access,
         get_instance_access_optional,
     )
@@ -123,8 +121,8 @@ def _override_user(app: FastAPI, *, is_superuser: bool = True) -> SimpleNamespac
         is_superuser=is_superuser,
         roles=[],
     )
-    app.dependency_overrides[get_current_user()] = lambda: user
-    app.dependency_overrides[get_current_user_optional()] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
+    app.dependency_overrides[get_instance_access_optional] = lambda: user
     app.dependency_overrides[get_instance_access] = lambda: user
     app.dependency_overrides[get_instance_access_optional] = lambda: user
     return user
@@ -447,8 +445,8 @@ async def test_trigger_retired_schedule_rejected_before_adapter_trigger(
     """create_manual_run on a ManifestIngest definition never triggers Temporal."""
     from api_service.db.models import RecurringWorkflowDefinition
     from api_service.services.recurring_workflows_service import (
-        RecurringWorkflowValidationError,
         RecurringWorkflowsService,
+        RecurringWorkflowValidationError,
     )
 
     async with _recurring_db(tmp_path) as maker:
@@ -485,8 +483,8 @@ async def test_update_and_unpause_retired_schedule_rejected(tmp_path: Path) -> N
     """Retired-target updates and unpause/resume never reach the adapter."""
     from api_service.db.models import RecurringWorkflowDefinition
     from api_service.services.recurring_workflows_service import (
-        RecurringWorkflowValidationError,
         RecurringWorkflowsService,
+        RecurringWorkflowValidationError,
     )
 
     async with _recurring_db(tmp_path) as maker:

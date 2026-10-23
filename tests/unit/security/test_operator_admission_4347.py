@@ -79,6 +79,30 @@ def test_replacement_cannot_use_a_machine_or_forwarding_header(header):
         oa.validate_replacement_operator_admission(env)
 
 
+def test_ingress_hostname_resolves_against_the_numeric_peer(monkeypatch):
+    import socket
+
+    from moonmind.security import operator_admission as oa
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.10", 0))
+    ])
+    env = {
+        "MOONMIND_PUBLIC_BASE_URL": "https://operator.example",
+        "MOONMIND_TRUSTED_INGRESS": "1",
+        "MOONMIND_TRUSTED_PROXIES": "ingress.internal",
+    }
+    assert oa.resolve_operator_admission(
+        client_host="192.0.2.10", host_header="operator.example",
+        headers={"X-Moonmind-User": "ingress-proof"}, environ=env,
+    ).via == "trusted_ingress"
+    with pytest.raises(oa.OperatorAdmissionError):
+        oa.resolve_operator_admission(
+            client_host="192.0.2.11", host_header="operator.example",
+            headers={"X-Moonmind-User": "ingress-proof"}, environ=env,
+        )
+
+
 _APPROVED_PUBLICATION = {
     "MOONMIND_API_PUBLISH_HOST": "0.0.0.0",
     "MOONMIND_TRUSTED_INGRESS": "1",
@@ -439,9 +463,8 @@ def test_http_admission_outage_preserves_code_and_message_before_handler(
 
 def test_stream_revalidation_bound_reuses_existing_bound():
     from moonmind.security import operator_admission as oa
-    from moonmind.security import session_authority_4121 as s
 
-    assert oa.STREAM_REVALIDATION_SECONDS == s.SESSION_REVOCATION_INTERVAL_SECONDS
+    assert oa.STREAM_REVALIDATION_SECONDS == 5 * 60
     now = time.time()
     assert oa.is_stream_authorization_stale(
         admitted_at=now - oa.STREAM_REVALIDATION_SECONDS - 1, now=now

@@ -27,7 +27,6 @@ from api_service.db.models import (
     RecurringWorkflowRunTrigger,
     RecurringWorkflowScopeType,
     TemporalExecutionRecord,
-    User,
 )
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
@@ -47,28 +46,26 @@ from moonmind.runtime_intent import (
     model_selection_fields,
     validate_model_selection_submission,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.statuses.workflow import workflow_objective_outcome
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
     strip_absent_vector_fields,
 )
-from moonmind.workflows.executions.runtime_target_selection import (
-    AuthoringSurface,
-    resolve_runtime_target_selection,
-)
 from moonmind.workflows.executions.provider_profile_projection import (
     PROVIDER_PROFILE_MEMO_KEY,
     PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
     build_provider_profile_projection,
 )
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+)
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
     parse_cron_expression,
     validate_timezone_name,
-)
-from moonmind.workflows.temporal.schedule_mapping import (
-    make_scheduled_workflow_id_base,
 )
 from moonmind.workflows.temporal.client import (
     ScheduleTriggerResult,
@@ -80,6 +77,9 @@ from moonmind.workflows.temporal.schedule_errors import (
     ScheduleAlreadyExistsError,
     ScheduleNotFoundError,
     ScheduleOperationError,
+)
+from moonmind.workflows.temporal.schedule_mapping import (
+    make_scheduled_workflow_id_base,
 )
 
 logger = logging.getLogger(__name__)
@@ -1470,7 +1470,7 @@ class RecurringWorkflowsService:
         definition_id: UUID,
         target: Mapping[str, Any],
         agent_profile_selection: Mapping[str, Any] | None,
-        actor: User | None,
+        actor: OperatorAdmission | None,
         require_actor: bool = True,
         advanced_from: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
@@ -1735,7 +1735,7 @@ class RecurringWorkflowsService:
         target: Mapping[str, Any],
         policy: Mapping[str, Any] | None,
         agent_profile_selection: Mapping[str, Any] | None = None,
-        actor: User | None = None,
+        actor: OperatorAdmission | None = None,
     ) -> RecurringWorkflowDefinition:
         schedule_kind = _normalize_schedule_type(schedule_type)
         cron_normalized = str(cron or "").strip()
@@ -1855,7 +1855,7 @@ class RecurringWorkflowsService:
         policy: Mapping[str, Any] | None = None,
         scope_ref: str | None = None,
         expected_version: int | None = None,
-        actor: User | None = None,
+        actor: OperatorAdmission | None = None,
     ) -> RecurringWorkflowDefinition:
         definition = await self._lock_definition_for_update(definition.id)
         if expected_version is not None and int(definition.version or 0) != int(

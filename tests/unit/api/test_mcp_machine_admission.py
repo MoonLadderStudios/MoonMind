@@ -20,7 +20,6 @@ from api_service.api.routers import mcp_tools
 from moonmind.mcp.jira_tool_registry import JiraToolRegistry
 from moonmind.mcp.skills_on_demand_registry import SkillsOnDemandToolRegistry
 from moonmind.schemas.container_job_models import OwnerIdentity
-from moonmind.security import auth_modes_4120
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
@@ -69,8 +68,8 @@ def _machine_headers(token: str) -> dict[str, str]:
 
 
 @pytest.fixture
-def mcp_app(monkeypatch: pytest.MonkeyPatch, disabled_env_keys):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+def mcp_app(monkeypatch: pytest.MonkeyPatch, provider_env_keys):
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     for key in (
         "MOONMIND_PUBLIC_BASE_URL",
         "MOONMIND_TRUSTED_INGRESS",
@@ -91,12 +90,13 @@ def mcp_app(monkeypatch: pytest.MonkeyPatch, disabled_env_keys):
         "_skills_on_demand_registry",
         SkillsOnDemandToolRegistry(expose_commands=False),
     )
-    # Account-free conversion is complete; operators are admitted, never a User.
+    from api_service.services import single_user_conversion
+
     monkeypatch.setattr(
-        providers, "_disabled_account_free_allowed", AsyncMock(return_value=True)
+        single_user_conversion,
+        "completed_guarded_upgrade",
+        AsyncMock(return_value=object()),
     )
-    load_user = AsyncMock(side_effect=AssertionError("no person resolution"))
-    monkeypatch.setattr(providers, "_load_disabled_user", load_user)
     record = SimpleNamespace(state=MoonMindWorkflowState.EXECUTING)
     session = SimpleNamespace(get=AsyncMock(return_value=record), record=record)
     app = FastAPI()
@@ -113,9 +113,9 @@ def _client(app: FastAPI, peer=_MACHINE_PEER, base=_MACHINE_BASE) -> AsyncClient
 async def test_managed_jira_caller_succeeds_without_a_person(
     mcp_app, monkeypatch, mode
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(mode or ""))
     operator = AsyncMock(side_effect=AssertionError("no operator resolution"))
-    monkeypatch.setattr(mcp_tools, "get_instance_operator_access", operator)
+    monkeypatch.setattr(mcp_tools, "get_instance_access", operator)
     async with _client(mcp_app.app) as client:
         listed = await client.get(
             "/api/mcp/tools", headers=_machine_headers(_capability())
@@ -224,7 +224,7 @@ async def test_invalid_capability_is_rejected_without_fallback(
     mcp_app, monkeypatch, token, code
 ):
     operator = AsyncMock(side_effect=AssertionError("no operator fallback"))
-    monkeypatch.setattr(mcp_tools, "get_instance_operator_access", operator)
+    monkeypatch.setattr(mcp_tools, "get_instance_access", operator)
     # A loopback peer could otherwise be an admitted operator.
     async with _client(
         mcp_app.app, peer=("127.0.0.1", 1), base="http://localhost:5000"

@@ -37,7 +37,6 @@ from api_service.db.models import (
     TemporalArtifactRedactionLevel,
     TemporalArtifactStatus,
 )
-from moonmind.config.settings import settings
 from moonmind.schemas import saved_work_retention as retention
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -103,7 +102,7 @@ async def test_owner_restores_after_source_removal_guesses_denied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Owner reads without any source credential; guesses confer nothing."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -141,7 +140,7 @@ async def test_manifest_graph_validation_auth_cycles_and_bounds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Required/optional graph: auth, cycles, bounds, reachability evidence."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -218,7 +217,7 @@ async def test_independent_use_claims_and_operator_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """One operation's release never erases another's protection or a pin."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -279,7 +278,7 @@ async def test_use_admission_races_delete_without_premature_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Live claims block soft/hard delete and the sweep; release converges."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -353,7 +352,7 @@ async def test_readmitted_operation_keeps_expired_content_and_refreshes_its_clai
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A long operation outlives expiry and its first TTL; others stay refused."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -406,7 +405,7 @@ async def test_shared_blob_keeps_logical_ownership_and_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Dedup shares physical bytes; logical charges stay per owner reference."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -451,7 +450,7 @@ async def test_deletion_failures_converge_without_false_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Failed deletes, lost acks, and restarts reconcile to truthful states."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -505,7 +504,7 @@ async def test_signed_download_bounded_with_honest_revocation(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Restricted links use the short bound; URLs never reach logs/history."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path, presign_ttl_seconds=7200)
@@ -547,7 +546,7 @@ async def test_quotas_bound_concurrent_admission_and_failed_saves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Logical/physical quotas bound admission; failed saves stay distinct."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     ledger = retention.SavedWorkQuotaLedger(
         quotas={
             "max_logical_bytes_per_scope": 100,
@@ -596,7 +595,7 @@ async def test_availability_states_come_from_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every lifecycle state has an explicit evidence-based outcome."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -624,7 +623,7 @@ async def test_sweep_bounded_paginated_idempotent_observable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Sweeps honor page bounds, prune stale claims, and converge idempotently."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(
@@ -683,7 +682,7 @@ async def test_legacy_disabled_mode_preserves_saved_work_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Local saved-work access keeps its merged-main disabled-mode behavior."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -703,7 +702,7 @@ async def test_service_principal_carries_admitted_scope_for_saved_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str
 ) -> None:
     """A bare service principal is not a generic saved-work permission."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -760,7 +759,7 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, auth_mode: str
 ) -> None:
     """Authenticated scope checks and all-mode quarantine keep separate owners."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
@@ -887,7 +886,7 @@ async def test_phantom_insert_blocked_across_transactions_during_hard_delete(
     reconciles; the retry then re-uploads bytes instead of pointing at
     removed objects.
     """
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     db_path = tmp_path / "phantom_race.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
     engine_a = create_async_engine(db_url, future=True)
@@ -986,7 +985,7 @@ async def test_expired_query_skips_deleted_rows_for_bounded_pages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Bounded expiry pages must not stall on already-deleted rows."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(
@@ -1034,7 +1033,7 @@ async def test_sweep_hard_delete_commits_tombstone_before_object_delete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed sweep object delete leaves a committed tombstone + intent."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     db_path = tmp_path / "sweep_tombstone.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
     engine_a = create_async_engine(db_url, future=True)
@@ -1107,7 +1106,7 @@ async def test_serving_boundaries_observe_consumer_use_for_sweeper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Signed downloads hold a live claim the sweeper must respect."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)

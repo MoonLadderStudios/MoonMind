@@ -19,7 +19,6 @@ from api_service.api.routers import (
     repository_connections,
 )
 from api_service.db.base import get_async_session
-from moonmind.security import auth_modes_4120
 from moonmind.security.operator_admission import OperatorAdmission
 
 ADMISSION = OperatorAdmission(via="loopback")
@@ -29,7 +28,6 @@ ADMISSION = OperatorAdmission(via="loopback")
 def converted_instance(monkeypatch):
     """Account-free local install whose guarded conversion has published."""
 
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
     for name in (
         "MOONMIND_PUBLIC_BASE_URL",
         "MOONMIND_API_PUBLISH_HOST",
@@ -37,6 +35,13 @@ def converted_instance(monkeypatch):
         "MOONMIND_DEPLOYMENT_PROJECT_NAME",
     ):
         monkeypatch.delenv(name, raising=False)
+    from api_service.services import single_user_conversion
+
+    monkeypatch.setattr(
+        single_user_conversion,
+        "completed_guarded_upgrade",
+        AsyncMock(return_value=object()),
+    )
     ledger = MagicMock()
     ledger.scalars.return_value.all.return_value = [
         SimpleNamespace(

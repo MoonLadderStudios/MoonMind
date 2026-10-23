@@ -488,10 +488,8 @@ cross-component realization. Under the
 backlogs are derived from that desired state and cannot require a contradictory
 multi-user product.
 
-The application-account target in
-[Authentication Contracts](Security/AuthenticationContracts.md) and its
-[Omnigent auth adapter](Security/OmnigentAuthAdapterContract.md) is superseded for
-this design. Account enrollment, identity mapping, user ownership, and role
+[Authentication Contracts](Security/AuthenticationContracts.md) describes the
+operator and scoped machine boundaries for this design. Account enrollment, identity mapping, user ownership, and role
 matrices are not prerequisites to complete before adopting the single-user
 architecture. Existing implementation guidance remains applicable to releases
 that still contain those mechanisms until a protected cutover is implemented.

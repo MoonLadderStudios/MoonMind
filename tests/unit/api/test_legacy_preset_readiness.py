@@ -7,13 +7,14 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from api_service.db.models import Preset, PresetScopeType, User
+from api_service.db.models import Preset, PresetScopeType
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.services.single_user_conversion import (
     SingleUserConversionRun,
     run_guarded_upgrade,
 )
 from moonmind.workflows.executions.preset_readiness import SavedPresetCapabilitiesInput
+from tests.helpers.account_source import User
 from tests.unit.api.test_presets_service import template_db
 
 pytestmark = pytest.mark.asyncio

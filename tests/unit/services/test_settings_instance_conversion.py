@@ -17,9 +17,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, SettingsAuditEvent, SettingsOverride, User
+from api_service.db.models import SettingsAuditEvent, SettingsOverride
 from api_service.services import single_user_conversion as suc
 from api_service.services.settings_catalog import SettingsCatalogService
+from tests.helpers.account_source import User, create_source_schema
 
 TOKEN = "integrations.github.token_ref"
 PROFILE = "workflow.default_provider_profile_ref"
@@ -34,7 +35,7 @@ pytestmark = pytest.mark.asyncio
 async def factory(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/settings-conv.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     yield sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     await engine.dispose()
 
