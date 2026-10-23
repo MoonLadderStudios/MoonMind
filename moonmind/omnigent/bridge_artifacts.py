@@ -260,14 +260,25 @@ def _skill_manifest_id(plan, *, strict: bool = True) -> str | None:
     return next(iter(ids), None)
 
 
-async def _skill_content_ids(service, manifest_id: str, *, workflow_id: str):
+async def _skill_content_ids(
+    service,
+    manifest_id: str,
+    *,
+    workflow_id: str | None = None,
+    principal: str = _GATEWAY_PRINCIPAL,
+    expected_digest: str | None = None,
+):
     """Content refs named by an admitted, immutable resolved Skill manifest."""
 
     _artifact, payload = await service.read(
         artifact_id=manifest_id,
-        principal=_GATEWAY_PRINCIPAL,
-        admitted_principal=f"workflow:{workflow_id}",
+        principal=principal,
+        admitted_principal=f"workflow:{workflow_id}" if workflow_id else None,
     )
+    if expected_digest is not None and (
+        "sha256:" + hashlib.sha256(payload).hexdigest() != expected_digest
+    ):
+        raise OmnigentArtifactError("admitted Skill manifest digest mismatch")
     try:
         skills = json.loads(payload.decode("utf-8")).get("skills") or []
     except (UnicodeDecodeError, ValueError, AttributeError) as exc:
