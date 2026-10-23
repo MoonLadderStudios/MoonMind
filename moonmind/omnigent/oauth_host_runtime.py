@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from moonmind.config.settings import settings
+from moonmind.omnigent.codex_login import CODEX_LOGIN_SESSION_PROBE
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
 from moonmind.omnigent.git_identity import (
     ensure_workspace_git_identity,
@@ -277,28 +278,6 @@ _ATTACHMENT_ARTIFACT_PRINCIPAL = "service:omnigent_workspace_attachment"
 # Stream restore bytes from the artifact service in bounded chunks so an oversized
 # payload is rejected mid-stream instead of after full in-memory materialization.
 _RESTORE_STREAM_CHUNK_BYTES = 1024 * 1024
-
-# Run as ``python3 -c <probe> <codex home>`` inside a network-less, read-only
-# host-image container. It prints exactly one verdict word and never token
-# material. ``ended`` means OpenAI minted the stored ChatGPT access token with
-# no lifetime (``exp <= iat``): the login session itself is over and no
-# refresh can extend it. ``active`` covers every other readable token,
-# including one that merely aged out and may still refresh. ``unknown`` covers
-# API-key auth and unreadable or unexpected layouts.
-CODEX_LOGIN_SESSION_PROBE = """\
-import base64, json, sys, time
-try:
-    with open(sys.argv[1] + "/auth.json", encoding="utf-8") as handle:
-        token = json.load(handle)["tokens"]["access_token"]
-    claims = token.split(".")[1]
-    claims += "=" * (-len(claims) % 4)
-    claims = json.loads(base64.urlsafe_b64decode(claims))
-    expires_at = float(claims["exp"])
-    ended = expires_at <= float(claims["iat"]) and expires_at <= time.time()
-    print("ended" if ended else "active")
-except Exception:
-    print("unknown")
-"""
 
 _RUNTIME_ADAPTERS = {
     "codex_cli": {
@@ -616,6 +595,15 @@ class OmnigentOAuthHostRuntime:
                     if result[0] == 1
                     else HostPreflightFailure.VALIDATION_UNAVAILABLE.value
                 ),
+            )
+        if (
+            await self.probe_login_session(binding=binding, effective_launch=launch)
+            == "ended"
+        ):
+            raise OmnigentOAuthHostError(
+                "The stored ChatGPT login has ended and cannot be refreshed; "
+                "re-authenticate the Provider Profile.",
+                code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
             )
         return {
             "status": "ready",
