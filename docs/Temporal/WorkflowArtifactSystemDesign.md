@@ -775,14 +775,11 @@ durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
-Each sweep processes bounded pages of expired and soft-deleted artifacts,
-pending deletion intents and purgeable tombstones, and keeps paging for up to 40 minutes while pages
-still make progress. The Activity heartbeats while database or object-store
-operations are pending, before each candidate and after each page. A page that makes no progress ends the pass instead of
-repeating protected or stalled candidates. A short deletion-intent page still
-reports a backlog if any intent remains unresolved after reconciliation. The
-result reports whether a backlog remains; the next hourly pass resumes it, so
-removal keeps pace with creation rather than one page per hour.
+Each sweep pages through expired and soft-deleted artifacts, deletion intents,
+and tombstones for up to 40 minutes while progress continues. It heartbeats
+during pending operations and between candidates and pages. A stalled page ends
+the pass; unresolved intents still report a backlog. The next hourly pass
+resumes remaining work.
 
 Retention class is assigned when an artifact is created or linked. When the
 mapping shortens a link type's class, a migration applies the new class to
@@ -791,10 +788,15 @@ evidence does not keep its longer expiry. As with linking, the new expiry
 counts from the latest such link, never earlier than creation. Such migrations
 only change expiry; the sweep still enforces every protection before deleting.
 
-The current raw and normalized journals referenced by a non-terminal Omnigent
-bridge session remain recovery data and are excluded from expiry and destructive
-deletion. Once that session is terminal, ordinary retention applies. Pins and
-live use claims continue to protect all artifact classes.
+Saved schedules retain their exact input, plan, manifest, and recorded execution
+authority references, including while paused or disabled. Unreferenced inputs
+return to ordinary retention. Admission and lifecycle deletion share artifact
+row locks, so a schedule cannot commit an input that cleanup already removed.
+This protection neither grants read access nor creates operator pins.
+
+Current raw and normalized journals referenced by non-terminal Omnigent bridge
+sessions remain recovery data. Their ordinary retention resumes when the
+session ends. Pins and live use claims protect all artifact classes.
 
 Read-use observations isolate optional claim writes in savepoints. A recoverable
 database write failure preserves the caller's work and artifact data; failed
