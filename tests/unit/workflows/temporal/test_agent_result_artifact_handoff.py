@@ -1,6 +1,7 @@
 """The real child publisher delegates generated envelopes to its proven parent."""
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,7 +10,7 @@ from temporalio import activity
 from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
 from temporalio.workflow import ParentInfo
 
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.schemas.temporal_activity_models import ArtifactReadInput
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalog,
@@ -27,6 +28,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from tests.unit.workflows.temporal.test_acceptance_boundary_regressions import _request
@@ -169,16 +171,75 @@ async def test_generated_result_and_summary_reach_actual_parent_reader_only(
             )
 
 
-async def test_forged_parent_does_not_gain_generated_result_or_summary(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("sidecar", [None, "assessment", "brief", "legacy_verifier"])
+@pytest.mark.parametrize("claimed_parent", ["victim", "parent"])
+async def test_generated_outputs_require_the_recorded_parent(
+    tmp_path, monkeypatch, sidecar, claimed_parent
 ):
-    execution_context(monkeypatch)
+    calls = execution_context(monkeypatch)
+    workspace = tmp_path / "workspace"
+    (workspace / "artifacts").mkdir(parents=True)
+    run_store = ManagedRunStore(tmp_path / "runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="handoff-run",
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="completed",
+            startedAt=datetime.now(UTC),
+            workspacePath=str(workspace),
+        )
+    )
+    metadata = {
+        "agentRunId": "handoff-run",
+        "parentWorkflowId": claimed_parent,
+        "parentRunId": f"{claimed_parent}-run",
+        "childWorkflowId": "victim",
+    }
+    if sidecar:
+        path = f"artifacts/{sidecar}.json"
+        (workspace / path).write_text(
+            json.dumps(
+                {
+                    "issue_provider": "github",
+                    "issue_ref": "example/repo#1",
+                    "verdict": (
+                        "FULLY_IMPLEMENTED"
+                        if sidecar == "legacy_verifier"
+                        else "NOT_IMPLEMENTED"
+                    ),
+                    "mode": "main",
+                    "requirements": [],
+                    "schemaVersion": 1,
+                    "recommendedNextAction": "advance",
+                    "recoverableInCurrentRuntime": True,
+                    "remainingWork": [],
+                }
+            )
+        )
+        metadata[
+            {
+                "assessment": "assessment_artifact_path",
+                "brief": "brief_artifact_path",
+                "legacy_verifier": "verificationArtifactPath",
+            }[sidecar]
+        ] = path
+        if sidecar == "legacy_verifier":
+            metadata["moonmind"] = {
+                "remediationCadence": {
+                    "role": "moonspec-verification-gate",
+                    "attempt": 1,
+                    "maxAttempts": 3,
+                }
+            }
     async with temporal_db(tmp_path) as session:
         service = TemporalArtifactService(
             TemporalArtifactRepository(session),
             store=LocalTemporalArtifactStore(tmp_path / "blobs"),
         )
-        publisher = TemporalAgentRuntimeActivities(artifact_service=service)
+        publisher = TemporalAgentRuntimeActivities(
+            artifact_service=service, run_store=run_store
+        )
         monkeypatch.setattr(
             publisher,
             "execution_notify_completion",
@@ -187,25 +248,52 @@ async def test_forged_parent_does_not_gain_generated_result_or_summary(
         published = await publisher.agent_runtime_publish_artifacts(
             AgentRunResult(
                 summary="Child evidence survives refused delegation",
-                metadata={
-                    "parentWorkflowId": "victim",
-                    "parentRunId": "victim-run",
-                    "childWorkflowId": "victim",
-                },
+                metadata=metadata,
             )
         )
-        for artifact_id in (
+        refs = [
             published.diagnostics_ref,
             published.metadata["outputSummaryRef"],
-        ):
+        ]
+        if sidecar:
+            refs.append(
+                published.metadata[
+                    {
+                        "assessment": "assessmentArtifactRef",
+                        "brief": "briefArtifactRef",
+                        "legacy_verifier": "moonSpecVerifyArtifactRef",
+                    }[sidecar]
+                ]
+            )
+            if sidecar == "legacy_verifier":
+                refs.append(published.metadata["sourceMoonSpecVerifyArtifactRef"])
+                assert published.metadata["remediationVerificationArtifactRef"] in refs
+                assert len(set(refs)) == 4
+        for artifact_id in refs:
             assert (
                 await service.read(
                     artifact_id=artifact_id, principal="workflow:parent:agent:verify"
                 )
             )[1]
-            for reader in ("workflow:victim", "workflow:unrelated"):
+            if claimed_parent == "parent":
+                assert (
+                    await service.read(
+                        artifact_id=artifact_id, principal="workflow:parent"
+                    )
+                )[1]
+            denied_readers = ["workflow:victim", "workflow:unrelated"]
+            if claimed_parent != "parent":
+                denied_readers.append("workflow:parent")
+            for reader in denied_readers:
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await service.read(artifact_id=artifact_id, principal=reader)
+        assert (
+            sum(
+                call.kwargs["rpc"] == "describe_workflow_execution"
+                for call in calls.await_args_list
+            )
+            == 1
+        )
 
 
 async def test_unavailable_parent_proof_retries_publication_instead_of_incomplete_success(
